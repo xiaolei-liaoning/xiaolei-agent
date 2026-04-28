@@ -1,0 +1,342 @@
+{
+  "timestamp": 1777082922.942867,
+  "metrics": {
+    "cpu": [
+      {
+        "timestamp": 1777082876.931211,
+        "value": 15.7
+      },
+      {
+        "timestamp": 1777082882.035409,
+        "value": 16.5
+      },
+      {
+        "timestamp": 1777082887.1439471,
+        "value": 5.8
+      },
+      {
+        "timestamp": 1777082892.2464662,
+        "value": 5.9
+      },
+      {
+        "timestamp": 1777082897.34915,
+        "value": 7.8
+      },
+      {
+        "timestamp": 1777082902.453279,
+        "value": 15.0
+      },
+      {
+        "timestamp": 1777082907.561124,
+        "value": 5.0
+      },
+      {
+        "timestamp": 1777082912.666961,
+        "value": 8.7
+      },
+      {
+        "timestamp": 1777082917.777906,
+        "value": 7.8
+      }
+    ],
+    "memory": [
+      {
+        "timestamp": 1777082876.931211,
+        "value": 70.0,
+        "available": 5147279360,
+        "total": 17179869184
+      },
+      {
+        "timestamp": 1777082882.035409,
+        "value": 70.5,
+        "available": 5066047488,
+        "total": 17179869184
+      },
+      {
+        "timestamp": 1777082887.1439471,
+        "value": 70.8,
+        "available": 5012684800,
+        "total": 17179869184
+      },
+      {
+        "timestamp": 1777082892.2464662,
+        "value": 69.5,
+        "available": 5248253952,
+        "total": 17179869184
+      },
+      {
+        "timestamp": 1777082897.34915,
+        "value": 69.5,
+        "available": 5248106496,
+        "total": 17179869184
+      },
+      {
+        "timestamp": 1777082902.453279,
+        "value": 70.3,
+        "available": 5106991104,
+        "total": 17179869184
+      },
+      {
+        "timestamp": 1777082907.561124,
+        "value": 69.4,
+        "available": 5259886592,
+        "total": 17179869184
+      },
+      {
+        "timestamp": 1777082912.666961,
+        "value": 69.7,
+        "available": 5211799552,
+        "total": 17179869184
+      },
+      {
+        "timestamp": 1777082917.777906,
+        "value": 70.1,
+        "available": 5136547840,
+        "total": 17179869184
+      }
+    ],
+    "disk": [
+      {
+        "timestamp": 1777082876.931211,
+        "value": 10.3,
+        "free": 106239565824,
+        "total": 245107195904
+      },
+      {
+        "timestamp": 1777082882.035409,
+        "value": 10.3,
+        "free": 106238582784,
+        "total": 245107195904
+      },
+      {
+        "timestamp": 1777082887.1439471,
+        "value": 10.3,
+        "free": 106235244544,
+        "total": 245107195904
+      },
+      {
+        "timestamp": 1777082892.2464662,
+        "value": 10.3,
+        "free": 106249822208,
+        "total": 245107195904
+      },
+      {
+        "timestamp": 1777082897.34915,
+        "value": 10.3,
+        "free": 106248732672,
+        "total": 245107195904
+      },
+      {
+        "timestamp": 1777082902.453279,
+        "value": 10.3,
+        "free": 106247299072,
+        "total": 245107195904
+      },
+      {
+        "timestamp": 1777082907.561124,
+        "value": 10.3,
+        "free": 106245644288,
+        "total": 245107195904
+      },
+      {
+        "timestamp": 1777082912.666961,
+        "value": 10.3,
+        "free": 106244333568,
+        "total": 245107195904
+      },
+      {
+        "timestamp": 1777082917.777906,
+        "value": 10.3,
+        "free": 106243411968,
+        "total": 245107195904
+      }
+    ],
+    "network": [
+      {
+        "timestamp": 1777082876.931211,
+        "bytes_sent": 392189952,
+        "bytes_recv": 307686400
+      },
+      {
+        "timestamp": 1777082882.035409,
+        "bytes_sent": 392360960,
+        "bytes_recv": 307867648
+      },
+      {
+        "timestamp": 1777082887.1439471,
+        "bytes_sent": 392463360,
+        "bytes_recv": 307980288
+      },
+      {
+        "timestamp": 1777082892.2464662,
+        "bytes_sent": 392609792,
+        "bytes_recv": 308118528
+      },
+      {
+        "timestamp": 1777082897.34915,
+        "bytes_sent": 392706048,
+        "bytes_recv": 308226048
+      },
+      {
+        "timestamp": 1777082902.453279,
+        "bytes_sent": 392802304,
+        "bytes_recv": 308315136
+      },
+      {
+        "timestamp": 1777082907.561124,
+        "bytes_sent": 392918016,
+        "bytes_recv": 308451328
+      },
+      {
+        "timestamp": 1777082912.666961,
+        "bytes_sent": 393082880,
+        "bytes_recv": 308612096
+      },
+      {
+        "timestamp": 1777082917.777906,
+        "bytes_sent": 393193472,
+        "bytes_recv": 308732928
+      }
+    ],
+    "tasks": [
+      {
+        "timestamp": 1777082880.9347498,
+        "task_type": "scraper_scrape",
+        "status": "completed",
+        "duration": 2.001231624999491
+      },
+      {
+        "timestamp": 1777082882.9377038,
+        "task_type": "data_analysis_analyze",
+        "status": "completed",
+        "duration": 2.0011850409991894
+      },
+      {
+        "timestamp": 1777082884.440041,
+        "task_type": "data_analysis_visualize",
+        "status": "completed",
+        "duration": 1.5011066249990108
+      },
+      {
+        "timestamp": 1777082885.442101,
+        "task_type": "nlp_sentiment",
+        "status": "completed",
+        "duration": 1.0012531249994936
+      },
+      {
+        "timestamp": 1777082886.445437,
+        "task_type": "summarizer_summary",
+        "status": "completed",
+        "duration": 1.00042645800022
+      },
+      {
+        "timestamp": 1777082901.938991,
+        "task_type": "nlp_sentiment",
+        "status": "completed",
+        "duration": 1.000707749999492
+      },
+      {
+        "timestamp": 1777082902.942561,
+        "task_type": "summarizer_summary",
+        "status": "completed",
+        "duration": 1.0012628749991563
+      },
+      {
+        "timestamp": 1777082911.940413,
+        "task_type": "nlp_ner",
+        "status": "completed",
+        "duration": 1.000374416998966
+      },
+      {
+        "timestamp": 1777082912.9437351,
+        "task_type": "summarizer_summary",
+        "status": "completed",
+        "duration": 1.0012793329988199
+      }
+    ],
+    "responses": [],
+    "agents": [
+      {
+        "timestamp": 1777082880.935893,
+        "agent_id": "scraper",
+        "status": "active",
+        "active_tasks": 0
+      },
+      {
+        "timestamp": 1777082882.9380329,
+        "agent_id": "data_analysis",
+        "status": "active",
+        "active_tasks": 0
+      },
+      {
+        "timestamp": 1777082884.4402251,
+        "agent_id": "data_analysis",
+        "status": "active",
+        "active_tasks": 0
+      },
+      {
+        "timestamp": 1777082885.442893,
+        "agent_id": "nlp",
+        "status": "active",
+        "active_tasks": 0
+      },
+      {
+        "timestamp": 1777082886.445868,
+        "agent_id": "summarizer",
+        "status": "active",
+        "active_tasks": 0
+      },
+      {
+        "timestamp": 1777082901.9399722,
+        "agent_id": "nlp",
+        "status": "active",
+        "active_tasks": 0
+      },
+      {
+        "timestamp": 1777082902.9433641,
+        "agent_id": "summarizer",
+        "status": "active",
+        "active_tasks": 0
+      },
+      {
+        "timestamp": 1777082911.9414132,
+        "agent_id": "nlp",
+        "status": "active",
+        "active_tasks": 0
+      },
+      {
+        "timestamp": 1777082912.944459,
+        "agent_id": "summarizer",
+        "status": "active",
+        "active_tasks": 0
+      }
+    ],
+    "system": [],
+    "errors": [],
+    "alarms": []
+  },
+  "summary": {
+    "cpu": {
+      "average": 9.8,
+      "max": 16.5,
+      "min": 5.0
+    },
+    "memory": {
+      "average": 69.97777777777777,
+      "max": 70.8,
+      "min": 69.4,
+      "available": 5136547840
+    },
+    "disk": {
+      "usage": 10.3,
+      "free": 106243411968,
+      "total": 245107195904
+    },
+    "tasks": {
+      "total": 9,
+      "success": 9,
+      "failure": 0,
+      "avg_duration": 1.2787585832215376
+    }
+  }
+}

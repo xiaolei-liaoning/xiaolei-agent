@@ -1,0 +1,37 @@
+[
+  {
+    "timestamp": "2026-04-20T12:57:09.686320",
+    "original": "你好",
+    "translated": "Hello",
+    "source_lang": "zh",
+    "target_lang": "en"
+  },
+  {
+    "timestamp": "2026-04-20T12:57:10.857440",
+    "original": "世界",
+    "translated": "World",
+    "source_lang": "zh",
+    "target_lang": "en"
+  },
+  {
+    "timestamp": "2026-04-20T12:57:13.004373",
+    "original": "机器学习",
+    "translated": "Machine Learning",
+    "source_lang": "zh",
+    "target_lang": "en"
+  },
+  {
+    "timestamp": "2026-04-20T15:24:07.078547",
+    "original": "你好",
+    "translated": "Hello",
+    "source_lang": "zh",
+    "target_lang": "en"
+  },
+  {
+    "timestamp": "2026-04-20T15:24:08.134739",
+    "original": "世界",
+    "translated": "World",
+    "source_lang": "zh",
+    "target_lang": "en"
+  }
+]

@@ -1,0 +1,34 @@
+﻿排名,仓库名,描述,语言,Stars,Forks,链接
+1,"Fincept-Corporation /
+
+      FinceptTerminal","FinceptTerminal is a modern finance application offering advanced market analytics, investment research, and economic data tools, designed for interactive exploration and data-driven decision-making in a user-friendly environment.",Python,"8,231","1,182",https://github.com/Fincept-Corporation/FinceptTerminal
+2,"paperless-ngx /
+
+      paperless-ngx","A community-supported supercharged document management system: scan, index and archive all your documents",Python,"39,164","2,515",https://github.com/paperless-ngx/paperless-ngx
+3,"openai /
+
+      openai-agents-python","A lightweight, powerful framework for multi-agent workflows",Python,"23,659","3,670",https://github.com/openai/openai-agents-python
+4,"alexzhang13 /
+
+      rlm","General plug-and-play inference library for Recursive Language Models (RLMs), supporting various sandboxes.",Python,"3,468",630,https://github.com/alexzhang13/rlm
+5,"barry-far /
+
+      V2ray-Config","Free V2ray Configs, Updating Every 15 minutes. 🚀🌐",Python,"1,507",226,https://github.com/barry-far/V2ray-Config
+6,"sansan0 /
+
+      TrendRadar","⭐AI-driven public opinion & trend monitor with multi-platform aggregation, RSS, and smart alerts.🎯 告别信息过载，你的 AI 舆情监控助手与热点筛选工具！聚合多平台热点 + RSS 订阅，支持关键词精准筛选。AI 智能筛选新闻 + AI 翻译 + AI 分析简报直推手机，也支持接入 MCP 架构，赋能 AI 自然语言对话分析、情感洞察与趋势预测等。支持 Docker ，数据本地/云端自持。集成微信/飞书/钉钉/Telegram/邮件/ntfy/bark/slack 等渠道智能推送。",Python,"52,741","23,406",https://github.com/sansan0/TrendRadar
+7,"home-assistant /
+
+      core",🏡 Open source home automation that puts local control and privacy first.,Python,"86,110","37,280",https://github.com/home-assistant/core
+8,"zhinianboke /
+
+      xianyu-auto-reply",闲鱼自动回复管理系统是一个基于 Python + FastAPI 开发的自动化客服系统，专为闲鱼平台设计。系统通过 WebSocket 连接闲鱼服务器，实时接收和处理消息，提供智能化的自动回复服务。,Python,"4,153","1,194",https://github.com/zhinianboke/xianyu-auto-reply
+9,"kyegomez /
+
+      swarms",The Enterprise-Grade Production-Ready Multi-Agent Orchestration Framework. Website: https://swarms.ai,Python,"6,297",816,https://github.com/kyegomez/swarms
+10,"HKUDS /
+
+      RAG-Anything","""RAG-Anything: All-in-One RAG Framework""",Python,"16,358","1,956",https://github.com/HKUDS/RAG-Anything
+11,"TheAlgorithms /
+
+      Python",All Algorithms implemented in Python,Python,"219,907","50,367",https://github.com/TheAlgorithms/Python

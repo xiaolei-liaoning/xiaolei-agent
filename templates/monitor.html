@@ -1,0 +1,728 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>小雷版小龙虾Agent监控中心</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <div class="container mx-auto px-4 py-8">
+        <header class="mb-8">
+            <div class="flex justify-between items-center">
+                <div>
+                    <h1 class="text-3xl font-bold text-blue-600">小雷版小龙虾Agent监控中心</h1>
+                    <p class="text-gray-600 mt-1">实时监控Agent系统运行状态</p>
+                </div>
+                <div class="flex space-x-4">
+                    <a href="/" class="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 transition duration-200 flex items-center">
+                        <i class="fa fa-home mr-2"></i> 首页
+                    </a>
+                    <a href="/" class="bg-gray-200 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-300 transition duration-200 flex items-center">
+                        <i class="fa fa-comments mr-2"></i> 聊天
+                    </a>
+                </div>
+            </div>
+        </header>
+
+        <!-- 导航栏 -->
+        <nav class="bg-white rounded-lg shadow-md p-4 mb-6">
+            <ul class="flex space-x-6 overflow-x-auto">
+                <li><a href="#agent-status" class="font-medium text-blue-600 border-b-2 border-blue-600 pb-2 whitespace-nowrap">Agent状态</a></li>
+                <li><a href="#task-list" class="text-gray-600 hover:text-blue-600 hover:border-b-2 hover:border-blue-600 pb-2 whitespace-nowrap">任务列表</a></li>
+                <li><a href="#system-monitor" class="text-gray-600 hover:text-blue-600 hover:border-b-2 hover:border-blue-600 pb-2 whitespace-nowrap">系统监控</a></li>
+                <li><a href="#task-submit" class="text-gray-600 hover:text-blue-600 hover:border-b-2 hover:border-blue-600 pb-2 whitespace-nowrap">任务提交</a></li>
+                <li><a href="#skill-status" class="text-gray-600 hover:text-blue-600 hover:border-b-2 hover:border-blue-600 pb-2 whitespace-nowrap">Skill状态</a></li>
+            </ul>
+        </nav>
+
+        <!-- 系统概览 -->
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+            <div class="bg-white rounded-lg shadow-md p-4">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-gray-500 text-sm">总Agent数</p>
+                        <h3 class="text-2xl font-bold text-gray-800" id="total-agents">0</h3>
+                    </div>
+                    <div class="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center">
+                        <i class="fa fa-cogs text-blue-600 text-xl"></i>
+                    </div>
+                </div>
+            </div>
+            <div class="bg-white rounded-lg shadow-md p-4">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-gray-500 text-sm">总任务数</p>
+                        <h3 class="text-2xl font-bold text-gray-800" id="total-tasks">0</h3>
+                    </div>
+                    <div class="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center">
+                        <i class="fa fa-tasks text-green-600 text-xl"></i>
+                    </div>
+                </div>
+            </div>
+            <div class="bg-white rounded-lg shadow-md p-4">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-gray-500 text-sm">运行中任务</p>
+                        <h3 class="text-2xl font-bold text-gray-800" id="running-tasks">0</h3>
+                    </div>
+                    <div class="w-12 h-12 bg-yellow-100 rounded-full flex items-center justify-center">
+                        <i class="fa fa-spinner text-yellow-600 text-xl"></i>
+                    </div>
+                </div>
+            </div>
+            <div class="bg-white rounded-lg shadow-md p-4">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-gray-500 text-sm">系统负载</p>
+                        <h3 class="text-2xl font-bold text-gray-800" id="system-load">0%</h3>
+                    </div>
+                    <div class="w-12 h-12 bg-purple-100 rounded-full flex items-center justify-center">
+                        <i class="fa fa-tachometer text-purple-600 text-xl"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Agent状态面板 -->
+        <section id="agent-status" class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-xl font-semibold flex items-center">
+                    <i class="fa fa-cogs mr-2 text-blue-600"></i> Agent状态
+                </h2>
+                <button id="refresh-agents" class="bg-gray-200 text-gray-700 px-3 py-1 rounded-md hover:bg-gray-300 transition duration-200 flex items-center text-sm">
+                    <i class="fa fa-refresh mr-1"></i> 刷新
+                </button>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4" id="agent-cards">
+                <!-- Agent状态卡片将通过JavaScript动态生成 -->
+            </div>
+        </section>
+
+        <!-- 任务列表 -->
+        <section id="task-list" class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-xl font-semibold flex items-center">
+                    <i class="fa fa-tasks mr-2 text-blue-600"></i> 任务列表
+                </h2>
+                <div class="flex space-x-2">
+                    <select id="task-filter" class="border border-gray-300 rounded-md px-3 py-1 text-sm">
+                        <option value="all">所有任务</option>
+                        <option value="pending">等待中</option>
+                        <option value="running">执行中</option>
+                        <option value="completed">已完成</option>
+                        <option value="failed">失败</option>
+                    </select>
+                    <button id="refresh-tasks" class="bg-gray-200 text-gray-700 px-3 py-1 rounded-md hover:bg-gray-300 transition duration-200 flex items-center text-sm">
+                        <i class="fa fa-refresh mr-1"></i> 刷新
+                    </button>
+                </div>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="min-w-full">
+                    <thead>
+                        <tr class="bg-gray-100">
+                            <th class="py-2 px-4 border-b text-left">任务ID</th>
+                            <th class="py-2 px-4 border-b text-left">Agent类型</th>
+                            <th class="py-2 px-4 border-b text-left">任务类型</th>
+                            <th class="py-2 px-4 border-b text-left">状态</th>
+                            <th class="py-2 px-4 border-b text-left">创建时间</th>
+                            <th class="py-2 px-4 border-b text-left">完成时间</th>
+                            <th class="py-2 px-4 border-b text-left">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="task-table-body">
+                        <!-- 任务列表将通过JavaScript动态生成 -->
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- 系统监控 -->
+        <section id="system-monitor" class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-xl font-semibold flex items-center">
+                    <i class="fa fa-line-chart mr-2 text-blue-600"></i> 系统监控
+                </h2>
+                <div class="flex space-x-2">
+                    <select id="chart-time-range" class="border border-gray-300 rounded-md px-3 py-1 text-sm">
+                        <option value="30">30秒</option>
+                        <option value="60">1分钟</option>
+                        <option value="300">5分钟</option>
+                    </select>
+                    <button id="refresh-system" class="bg-gray-200 text-gray-700 px-3 py-1 rounded-md hover:bg-gray-300 transition duration-200 flex items-center text-sm">
+                        <i class="fa fa-refresh mr-1"></i> 刷新
+                    </button>
+                </div>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
+                    <h3 class="text-lg font-medium mb-2">CPU使用率</h3>
+                    <div class="bg-gray-50 p-4 rounded-lg">
+                        <canvas id="cpu-chart" height="200"></canvas>
+                    </div>
+                </div>
+                <div>
+                    <h3 class="text-lg font-medium mb-2">内存使用率</h3>
+                    <div class="bg-gray-50 p-4 rounded-lg">
+                        <canvas id="memory-chart" height="200"></canvas>
+                    </div>
+                </div>
+                <div>
+                    <h3 class="text-lg font-medium mb-2">磁盘使用率</h3>
+                    <div class="bg-gray-50 p-4 rounded-lg">
+                        <canvas id="disk-chart" height="200"></canvas>
+                    </div>
+                </div>
+                <div>
+                    <h3 class="text-lg font-medium mb-2">网络流量</h3>
+                    <div class="bg-gray-50 p-4 rounded-lg">
+                        <canvas id="network-chart" height="200"></canvas>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- 任务提交 -->
+        <section id="task-submit" class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <h2 class="text-xl font-semibold mb-4 flex items-center">
+                <i class="fa fa-plus-circle mr-2 text-blue-600"></i> 任务提交
+            </h2>
+            <form id="task-form" class="space-y-4">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">任务类型</label>
+                        <select id="task-type" class="w-full p-2 border border-gray-300 rounded-md">
+                            <option value="check">检查任务</option>
+                            <option value="scrape">爬虫任务</option>
+                            <option value="vulnerability">漏洞扫描</option>
+                            <option value="summarize">总结任务</option>
+                            <option value="bestfriend">知心闺蜜</option>
+                            <option value="first_love">温柔初恋</option>
+                            <option value="goddess">高冷女神</option>
+                            <option value="john_carmack">约翰·卡马克</option>
+                            <option value="libai">诗仙李白</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">优先级</label>
+                        <select id="task-priority" class="w-full p-2 border border-gray-300 rounded-md">
+                            <option value="low">低</option>
+                            <option value="medium">中</option>
+                            <option value="high">高</option>
+                        </select>
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">任务参数</label>
+                    <textarea id="task-params" class="w-full p-2 border border-gray-300 rounded-md" rows="4" placeholder='例如: {"url": "https://example.com"}'></textarea>
+                </div>
+                <div class="flex justify-end">
+                    <button type="submit" class="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 transition duration-200 flex items-center">
+                        <i class="fa fa-paper-plane mr-2"></i> 提交任务
+                    </button>
+                </div>
+            </form>
+            <div id="task-submit-result" class="mt-4 p-4 rounded-md hidden"></div>
+        </section>
+
+        <!-- Skill状态 -->
+        <section id="skill-status" class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-xl font-semibold flex items-center">
+                    <i class="fa fa-magic mr-2 text-blue-600"></i> Skill状态
+                </h2>
+                <button id="refresh-skills" class="bg-gray-200 text-gray-700 px-3 py-1 rounded-md hover:bg-gray-300 transition duration-200 flex items-center text-sm">
+                    <i class="fa fa-refresh mr-1"></i> 刷新
+                </button>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" id="skill-cards">
+                <!-- Skill状态卡片将通过JavaScript动态生成 -->
+            </div>
+        </section>
+
+        <!-- 页脚 -->
+        <footer class="text-center text-gray-600 mt-8">
+            <p>© 2026 小雷版小龙虾Agent系统 | 监控中心</p>
+        </footer>
+    </div>
+
+    <script>
+        // 全局变量
+        let cpuChart, memoryChart, diskChart, networkChart;
+        let cpuData = Array(30).fill(0);
+        let memoryData = Array(30).fill(0);
+        let diskData = Array(30).fill(0);
+        let networkSentData = Array(30).fill(0);
+        let networkRecvData = Array(30).fill(0);
+        let labels = Array(30).fill('');
+
+        // 初始化图表
+        function initCharts() {
+            // CPU图表
+            const cpuCtx = document.getElementById('cpu-chart').getContext('2d');
+            cpuChart = new Chart(cpuCtx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'CPU使用率(%)',
+                        data: cpuData,
+                        borderColor: 'rgb(75, 192, 192)',
+                        backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                        tension: 0.4,
+                        fill: true
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            max: 100
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            display: false
+                        }
+                    }
+                }
+            });
+
+            // 内存图表
+            const memoryCtx = document.getElementById('memory-chart').getContext('2d');
+            memoryChart = new Chart(memoryCtx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: '内存使用率(%)',
+                        data: memoryData,
+                        borderColor: 'rgb(255, 99, 132)',
+                        backgroundColor: 'rgba(255, 99, 132, 0.2)',
+                        tension: 0.4,
+                        fill: true
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            max: 100
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            display: false
+                        }
+                    }
+                }
+            });
+
+            // 磁盘图表
+            const diskCtx = document.getElementById('disk-chart').getContext('2d');
+            diskChart = new Chart(diskCtx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: '磁盘使用率(%)',
+                        data: diskData,
+                        borderColor: 'rgb(54, 162, 235)',
+                        backgroundColor: 'rgba(54, 162, 235, 0.2)',
+                        tension: 0.4,
+                        fill: true
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            max: 100
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            display: false
+                        }
+                    }
+                }
+            });
+
+            // 网络图表
+            const networkCtx = document.getElementById('network-chart').getContext('2d');
+            networkChart = new Chart(networkCtx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        {
+                            label: '发送(MB)',
+                            data: networkSentData,
+                            borderColor: 'rgb(153, 102, 255)',
+                            backgroundColor: 'rgba(153, 102, 255, 0.2)',
+                            tension: 0.4,
+                            fill: true
+                        },
+                        {
+                            label: '接收(MB)',
+                            data: networkRecvData,
+                            borderColor: 'rgb(255, 159, 64)',
+                            backgroundColor: 'rgba(255, 159, 64, 0.2)',
+                            tension: 0.4,
+                            fill: true
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true
+                        }
+                    }
+                }
+            });
+        }
+
+        // 更新图表数据
+        function updateCharts() {
+            fetch('/api/monitor/system/status')
+                .then(response => response.json())
+                .then(data => {
+                    // 更新CPU数据
+                    cpuData.shift();
+                    cpuData.push(data.cpu_percent);
+
+                    // 更新内存数据
+                    memoryData.shift();
+                    memoryData.push(data.memory.percent);
+
+                    // 更新磁盘数据
+                    diskData.shift();
+                    diskData.push(data.disk.percent);
+
+                    // 更新网络数据
+                    networkSentData.shift();
+                    networkSentData.push(data.network.bytes_sent / 1024 / 1024); // 转换为MB
+                    networkRecvData.shift();
+                    networkRecvData.push(data.network.bytes_recv / 1024 / 1024); // 转换为MB
+
+                    // 更新系统负载
+                    document.getElementById('system-load').textContent = `${data.cpu_percent}%`;
+
+                    // 更新图表
+                    cpuChart.update();
+                    memoryChart.update();
+                    diskChart.update();
+                    networkChart.update();
+                })
+                .catch(error => {
+                    console.error('获取系统状态失败:', error);
+                });
+        }
+
+        // Agent名称映射
+        const agentNameMap = {
+            'checker': '检查Checker',
+            'scraper': '爬虫Scraper',
+            'vulnerability': '漏洞Vulnerability',
+            'summarizer': '总结Summarizer',
+            'data_analysis': '数据分析DataAnalysis',
+            'nlp': '自然语言处理NLP',
+            'text_analyzer': '文本分析TextAnalyzer'
+        };
+
+        // 更新Agent状态
+        function updateAgentStatus() {
+            fetch('/api/monitor/agents')
+                .then(response => response.json())
+                .then(data => {
+                    const agentCards = document.getElementById('agent-cards');
+                    agentCards.innerHTML = '';
+
+                    const agentCount = Object.keys(data.agents).length;
+                    document.getElementById('total-agents').textContent = agentCount;
+
+                    let totalTasks = 0;
+                    let runningTasks = 0;
+
+                    Object.entries(data.agents).forEach(([agentType, info]) => {
+                        const statusClass = info.running ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800';
+                        const statusText = info.running ? '运行中' : '已停止';
+                        const iconClass = info.running ? 'fa-check-circle' : 'fa-times-circle';
+
+                        totalTasks += info.task_count;
+
+                        // 获取格式化后的Agent名称
+                        const formattedName = agentNameMap[agentType] || agentType;
+
+                        const card = document.createElement('div');
+                        card.className = 'bg-white p-4 rounded-lg shadow hover:shadow-md transition duration-200 border border-gray-100';
+                        card.innerHTML = `
+                            <div class="flex justify-between items-center mb-2">
+                                <h3 class="font-medium text-lg">${formattedName}</h3>
+                                <span class="${statusClass} px-3 py-1 rounded-full text-sm flex items-center">
+                                    <i class="fa ${iconClass} mr-1"></i> ${statusText}
+                                </span>
+                            </div>
+                            <div class="space-y-2">
+                                <div class="flex justify-between">
+                                    <span class="text-gray-600">工作线程数:</span>
+                                    <span class="font-medium">${info.max_workers}</span>
+                                </div>
+                                <div class="flex justify-between">
+                                    <span class="text-gray-600">队列长度:</span>
+                                    <span class="font-medium">${info.queue_length}</span>
+                                </div>
+                                <div class="flex justify-between">
+                                    <span class="text-gray-600">任务数:</span>
+                                    <span class="font-medium">${info.task_count}</span>
+                                </div>
+                            </div>
+                            <div class="mt-3 pt-3 border-t border-gray-100">
+                                <a href="#task-list" class="text-blue-600 hover:text-blue-800 text-sm flex items-center" onclick="filterTasksByAgent('${agentType}')">
+                                    <i class="fa fa-eye mr-1"></i> 查看任务
+                                </a>
+                            </div>
+                        `;
+                        agentCards.appendChild(card);
+                    });
+
+                    document.getElementById('total-tasks').textContent = totalTasks;
+                })
+                .catch(error => {
+                    console.error('获取Agent状态失败:', error);
+                });
+        }
+
+        // 更新任务列表
+        function updateTaskList() {
+            fetch('/api/monitor/tasks')
+                .then(response => response.json())
+                .then(data => {
+                    const taskTableBody = document.getElementById('task-table-body');
+                    taskTableBody.innerHTML = '';
+
+                    let rowCount = 0;
+                    let runningCount = 0;
+
+                    Object.entries(data.tasks).forEach(([agentType, tasks]) => {
+                        tasks.forEach(task => {
+                            if (task.status === 'running') {
+                                runningCount++;
+                            }
+
+                            const row = document.createElement('tr');
+                            row.className = rowCount % 2 === 0 ? 'bg-white' : 'bg-gray-50';
+                            
+                            let statusClass = '';
+                            let statusText = '';
+                            switch (task.status) {
+                                case 'pending':
+                                    statusClass = 'bg-yellow-100 text-yellow-800';
+                                    statusText = '等待中';
+                                    break;
+                                case 'running':
+                                    statusClass = 'bg-blue-100 text-blue-800';
+                                    statusText = '执行中';
+                                    break;
+                                case 'completed':
+                                    statusClass = 'bg-green-100 text-green-800';
+                                    statusText = '已完成';
+                                    break;
+                                case 'failed':
+                                    statusClass = 'bg-red-100 text-red-800';
+                                    statusText = '失败';
+                                    break;
+                            }
+
+                            const createdAt = task.created_at ? new Date(task.created_at * 1000).toLocaleString() : '-';
+                            const completedAt = task.completed_at ? new Date(task.completed_at * 1000).toLocaleString() : '-';
+
+                            // 获取格式化后的Agent名称
+                            const formattedAgentName = agentNameMap[agentType] || agentType;
+
+                            row.innerHTML = `
+                                <td class="py-3 px-4 border-b">${task.task_id}</td>
+                                <td class="py-3 px-4 border-b">${formattedAgentName}</td>
+                                <td class="py-3 px-4 border-b">${task.type}</td>
+                                <td class="py-3 px-4 border-b">
+                                    <span class="${statusClass} px-2 py-1 rounded text-xs">${statusText}</span>
+                                </td>
+                                <td class="py-3 px-4 border-b">${createdAt}</td>
+                                <td class="py-3 px-4 border-b">${completedAt}</td>
+                                <td class="py-3 px-4 border-b">
+                                    <button class="text-blue-600 hover:text-blue-800 text-sm mr-2">
+                                        <i class="fa fa-eye"></i> 查看
+                                    </button>
+                                    <button class="text-red-600 hover:text-red-800 text-sm">
+                                        <i class="fa fa-times"></i> 取消
+                                    </button>
+                                </td>
+                            `;
+                            taskTableBody.appendChild(row);
+                            rowCount++;
+                        });
+                    });
+
+                    document.getElementById('running-tasks').textContent = runningCount;
+
+                    if (rowCount === 0) {
+                        const emptyRow = document.createElement('tr');
+                        emptyRow.innerHTML = `
+                            <td colspan="7" class="py-4 px-4 text-center text-gray-500">
+                                暂无任务
+                            </td>
+                        `;
+                        taskTableBody.appendChild(emptyRow);
+                    }
+                })
+                .catch(error => {
+                    console.error('获取任务列表失败:', error);
+                });
+        }
+
+        // 提交任务
+        function setupTaskForm() {
+            const taskForm = document.getElementById('task-form');
+            const taskSubmitResult = document.getElementById('task-submit-result');
+
+            taskForm.addEventListener('submit', async (e) => {
+                e.preventDefault();
+
+                const taskType = document.getElementById('task-type').value;
+                const taskPriority = document.getElementById('task-priority').value;
+                const taskParams = document.getElementById('task-params').value;
+
+                try {
+                    const params = JSON.parse(taskParams);
+
+                    const response = await fetch('/api/monitor/tasks', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            type: taskType,
+                            params: params,
+                            priority: taskPriority
+                        })
+                    });
+
+                    const result = await response.json();
+
+                    taskSubmitResult.className = 'mt-4 p-4 rounded-md bg-green-100 text-green-800 border border-green-200';
+                    taskSubmitResult.innerHTML = `
+                        <div class="flex items-center">
+                            <i class="fa fa-check-circle mr-2 text-green-600"></i>
+                            <div>
+                                <p class="font-medium">任务提交成功</p>
+                                <p class="text-sm">任务ID: ${result.task_id}</p>
+                                <p class="text-sm">分配到: ${result.agent_type} Agent</p>
+                            </div>
+                        </div>
+                    `;
+                    taskSubmitResult.classList.remove('hidden');
+
+                    // 清空表单
+                    document.getElementById('task-params').value = '';
+
+                    // 刷新任务列表
+                    setTimeout(updateTaskList, 1000);
+                } catch (error) {
+                    taskSubmitResult.className = 'mt-4 p-4 rounded-md bg-red-100 text-red-800 border border-red-200';
+                    taskSubmitResult.innerHTML = `
+                        <div class="flex items-center">
+                            <i class="fa fa-times-circle mr-2 text-red-600"></i>
+                            <div>
+                                <p class="font-medium">任务提交失败</p>
+                                <p class="text-sm">错误: ${error.message}</p>
+                            </div>
+                        </div>
+                    `;
+                    taskSubmitResult.classList.remove('hidden');
+                }
+            });
+        }
+
+        // 更新Skill状态
+        function updateSkillStatus() {
+            // 模拟Skill数据
+            const skills = [
+                { name: 'weather', status: 'active', description: '天气查询工具' },
+                { name: 'web_scraper', status: 'active', description: '网页爬虫工具' },
+                { name: 'translator', status: 'active', description: '翻译工具' },
+                { name: 'data_analysis', status: 'active', description: '数据分析工具' },
+                { name: 'gui_automation', status: 'active', description: 'GUI自动化工具' },
+                { name: 'advanced_automation', status: 'active', description: '高级自动化工具' },
+                { name: 'system_toolbox', status: 'active', description: '系统工具箱' },
+                { name: 'doubao_chat', status: 'active', description: '豆包聊天工具' },
+                { name: 'search_engine', status: 'active', description: '搜索引擎工具' }
+            ];
+
+            const skillCards = document.getElementById('skill-cards');
+            skillCards.innerHTML = '';
+
+            skills.forEach(skill => {
+                const statusClass = skill.status === 'active' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800';
+                const statusText = skill.status === 'active' ? '活跃' : '未激活';
+                const iconClass = skill.status === 'active' ? 'fa-check-circle' : 'fa-circle-o';
+
+                const card = document.createElement('div');
+                card.className = 'bg-white p-4 rounded-lg shadow hover:shadow-md transition duration-200 border border-gray-100';
+                card.innerHTML = `
+                    <div class="flex justify-between items-center mb-2">
+                        <h3 class="font-medium text-lg">${skill.name}</h3>
+                        <span class="${statusClass} px-3 py-1 rounded-full text-sm flex items-center">
+                            <i class="fa ${iconClass} mr-1"></i> ${statusText}
+                        </span>
+                    </div>
+                    <p class="text-gray-600 text-sm mb-3">${skill.description}</p>
+                    <div class="mt-3 pt-3 border-t border-gray-100">
+                        <button class="text-blue-600 hover:text-blue-800 text-sm flex items-center">
+                            <i class="fa fa-info-circle mr-1"></i> 详情
+                        </button>
+                    </div>
+                `;
+                skillCards.appendChild(card);
+            });
+        }
+
+        // 按Agent过滤任务
+        function filterTasksByAgent(agentType) {
+            // 实现过滤逻辑
+            console.log('Filter tasks by agent:', agentType);
+        }
+
+        // 初始化
+        document.addEventListener('DOMContentLoaded', function() {
+            initCharts();
+            updateAgentStatus();
+            updateTaskList();
+            updateSkillStatus();
+            setupTaskForm();
+
+            // 定时更新
+            setInterval(updateCharts, 2000);
+            setInterval(updateAgentStatus, 5000);
+            setInterval(updateTaskList, 5000);
+
+            // 绑定刷新按钮
+            document.getElementById('refresh-agents').addEventListener('click', updateAgentStatus);
+            document.getElementById('refresh-tasks').addEventListener('click', updateTaskList);
+            document.getElementById('refresh-system').addEventListener('click', updateCharts);
+            document.getElementById('refresh-skills').addEventListener('click', updateSkillStatus);
+        });
+    </script>
+</body>
+</html>

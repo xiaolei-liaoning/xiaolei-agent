@@ -1,0 +1,1926 @@
+"""小雷版小龙虾 AI Agent 系统 - 主入口
+
+工业级 FastAPI 应用，提供：
+- RESTful API 端点（健康检查 / 工具列表 / 角色管理 / 核心聊天）
+- 用户认证（登录 / 注册 / 个人资料 / 修改密码）
+- 聊天历史记录（按用户/角色分页查询）
+- 任务日志（按用户/状态分页查询）
+- 角色完整 CRUD（创建 / 读取 / 更新 / 删除）
+- WebSocket 实时通信
+- 请求日志中间件
+- 系统指标监控
+
+Version: 3.3.1
+"""
+
+import asyncio
+import os
+import sys
+import time
+import logging
+from datetime import datetime
+from typing import Dict, Any, Optional
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
+
+# ---------------------------------------------------------------------------
+# 日志配置
+# ---------------------------------------------------------------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# FastAPI 应用
+# ---------------------------------------------------------------------------
+app = FastAPI(
+    title="小雷版小龙虾 AI Agent",
+    version="3.3.1",
+    description="工业级 AI Agent 系统 - 意图识别 / 多步任务 / 工作流自动化 / 用户管理",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ---------------------------------------------------------------------------
+# 全局状态
+# ---------------------------------------------------------------------------
+_dispatcher: Optional[Any] = None
+_processor: Optional[Any] = None
+_planner: Optional[Any] = None
+_db_initialized: bool = False
+_startup_time: float = 0.0
+
+
+# ---------------------------------------------------------------------------
+# 请求日志中间件
+# ---------------------------------------------------------------------------
+@app.middleware("http")
+async def request_logging_middleware(request: Request, call_next):
+    """记录每个 HTTP 请求的方法、路径和耗时。"""
+    start = time.time()
+    method: str = request.method
+    path: str = request.url.path
+
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        elapsed = time.time() - start
+        logger.error("请求异常 %s %s (%.3fs): %s", method, path, elapsed, exc)
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "内部服务器错误"},
+        )
+
+    elapsed = time.time() - start
+    logger.info(
+        "%s %s → %d (%.3fs)",
+        method,
+        path,
+        response.status_code,
+        elapsed,
+    )
+    return response
+
+
+# ---------------------------------------------------------------------------
+# 系统初始化
+# ---------------------------------------------------------------------------
+def init_system() -> None:
+    """初始化系统核心组件。
+
+    流程：
+    1. register_all_skills() 注册所有技能到 ToolManager
+    2. 初始化 SkillDispatcher（意图识别与路由）
+    3. 初始化 ConcurrentTaskProcessor（并发任务处理）
+    4. 初始化 TaskPlanner（多步任务规划）
+    5. 初始化 MySQL 数据库（失败仅 warning，不崩溃）
+    """
+    global _dispatcher, _processor, _planner, _db_initialized, _startup_time
+    _startup_time = time.time()
+
+    # 1. 注册所有技能
+    try:
+        from tools.tool_manager import register_all_skills
+        register_all_skills()
+        logger.info("技能注册完成")
+    except Exception as e:
+        logger.error("技能注册失败: %s", e, exc_info=True)
+
+    # 2. 初始化 SkillDispatcher
+    try:
+        from core.skill_dispatcher import SkillDispatcher
+        _dispatcher = SkillDispatcher()
+        # 注册第三方应用技能
+        try:
+            from skills.third_party.handler import register_third_party_skills
+            register_third_party_skills(_dispatcher)
+            logger.info("第三方应用技能注册完成")
+        except Exception as e:
+            logger.warning("第三方应用技能注册失败: %s", e)
+        logger.info("SkillDispatcher 初始化完成")
+    except Exception as e:
+        logger.error("SkillDispatcher 初始化失败: %s", e, exc_info=True)
+
+    # 3. 初始化 ConcurrentTaskProcessor
+    try:
+        from core.concurrent_processor import ConcurrentTaskProcessor
+        _processor = ConcurrentTaskProcessor()
+        logger.info("ConcurrentTaskProcessor 初始化完成")
+    except Exception as e:
+        logger.error("ConcurrentTaskProcessor 初始化失败: %s", e, exc_info=True)
+
+    # 4. 初始化 TaskProcessor（统一任务处理器）
+    try:
+        from core.task_processor import task_processor
+        logger.info("TaskProcessor 初始化完成")
+    except Exception as e:
+        logger.error("TaskProcessor 初始化失败: %s", e, exc_info=True)
+
+    # 5. 初始化深度思考引擎
+    try:
+        from core.reasoning_engine import get_reasoning_engine
+        get_reasoning_engine()
+        logger.info("深度思考引擎初始化完成")
+    except Exception as e:
+        logger.error("深度思考引擎初始化失败: %s", e, exc_info=True)
+
+    # 6. 初始化自主搜索引擎
+    try:
+        from core.search_engine import get_self_search_engine
+        get_self_search_engine()
+        logger.info("自主搜索引擎初始化完成")
+    except Exception as e:
+        logger.error("自主搜索引擎初始化失败: %s", e, exc_info=True)
+
+    # 7. 初始化消息总线
+    try:
+        from core.message_bus import message_bus
+        logger.info("消息总线初始化完成")
+    except Exception as e:
+        logger.error("消息总线初始化失败: %s", e, exc_info=True)
+
+    # 8. 初始化任务调度器
+    try:
+        from core.task_scheduler import task_scheduler
+        import asyncio
+        asyncio.create_task(task_scheduler.start())
+        logger.info("任务调度器初始化完成")
+    except Exception as e:
+        logger.error("任务调度器初始化失败: %s", e, exc_info=True)
+
+    # 9. 初始化边界管理器
+    try:
+        from core.boundary_manager import boundary_manager
+        logger.info("边界管理器初始化完成")
+    except Exception as e:
+        logger.error("边界管理器初始化失败: %s", e, exc_info=True)
+
+    # 10. 初始化异常处理器
+    try:
+        from core.exception_handler import exception_handler
+        logger.info("异常处理器初始化完成")
+    except Exception as e:
+        logger.error("异常处理器初始化失败: %s", e, exc_info=True)
+
+    # 11. 初始化响应管理器
+    try:
+        from core.response_manager import response_manager
+        logger.info("响应管理器初始化完成")
+    except Exception as e:
+        logger.error("响应管理器初始化失败: %s", e, exc_info=True)
+
+    # 12. 初始化Agent协调器
+    try:
+        from core.agent_coordinator import agent_coordinator
+        logger.info("Agent协调器初始化完成")
+    except Exception as e:
+        logger.error("Agent协调器初始化失败: %s", e, exc_info=True)
+
+    # 13. 初始化持久化管理器
+    try:
+        from core.persistence import persistence_manager
+        logger.info("持久化管理器初始化完成")
+    except Exception as e:
+        logger.error("持久化管理器初始化失败: %s", e, exc_info=True)
+
+    # 14. 初始化监控管理器
+    try:
+        from core.monitoring import monitoring_manager
+        monitoring_manager.start()
+        logger.info("监控管理器初始化完成")
+    except Exception as e:
+        logger.error("监控管理器初始化失败: %s", e, exc_info=True)
+
+    # 15. 初始化内存优化器
+    try:
+        from core.memory_optimizer import memory_optimizer
+        memory_optimizer.start()
+        logger.info("内存优化器初始化完成")
+    except Exception as e:
+        logger.error("内存优化器初始化失败: %s", e, exc_info=True)
+
+    # 16. 初始化缓存管理器
+    try:
+        from core.cache_manager import get_cache_manager
+        cache_manager = get_cache_manager()
+        logger.info("缓存管理器初始化完成")
+    except Exception as e:
+        logger.error("缓存管理器初始化失败: %s", e, exc_info=True)
+
+    # 17. 初始化定时任务
+    try:
+        from core.scheduled_tasks import init_scheduled_tasks
+        init_scheduled_tasks()
+        logger.info("定时任务初始化完成")
+    except Exception as e:
+        logger.error("定时任务初始化失败: %s", e, exc_info=True)
+
+    # 18. 初始化数据库（允许失败）
+    try:
+        from core.database import init_db
+        init_db()
+        _db_initialized = True
+        logger.info("MySQL 数据库初始化完成")
+    except Exception as e:
+        _db_initialized = False
+        logger.warning("MySQL 数据库初始化失败（系统仍可运行）: %s", e)
+
+    # 19. 注入全局引用到 handlers 模块
+    try:
+        from core.handlers import set_global_refs
+        set_global_refs(_dispatcher, _processor, _planner, _db_initialized)
+        logger.info("Handlers 全局引用设置完成")
+    except Exception as e:
+        logger.error("Handlers 全局引用设置失败: %s", e, exc_info=True)
+
+    # 20. 注入全局引用到 system 路由模块
+    try:
+        from api.routes.system import set_system_refs
+        set_system_refs(_db_initialized, _startup_time, _processor)
+        logger.info("System 路由全局引用设置完成")
+    except Exception as e:
+        logger.error("System 路由全局引用设置失败: %s", e, exc_info=True)
+
+    uptime = time.time() - _startup_time
+    logger.info("=" * 60)
+    logger.info("  小雷版小龙虾 AI Agent v3.3.1 启动成功！")
+    logger.info("  初始化耗时: %.2fs | DB: %s", uptime, "OK" if _db_initialized else "OFF")
+    logger.info("=" * 60)
+
+
+@app.on_event("startup")
+async def startup_event() -> None:
+    """FastAPI 启动事件。"""
+    init_system()
+    
+    # 异步初始化Agent协调器
+    try:
+        from core.agent_coordinator import get_agent_coordinator
+        agent_coordinator = get_agent_coordinator()
+        await agent_coordinator.start()
+        logger.info("Agent协调器初始化完成")
+    except Exception as e:
+        logger.error("Agent协调器初始化失败: %s", e, exc_info=True)
+    
+    # 启动Agent调度器（用于监控面板）
+    try:
+        from core.multi_agent_system import agent_scheduler
+        await agent_scheduler.start()
+        logger.info("Agent调度器已启动")
+    except Exception as e:
+        logger.error("Agent调度器启动失败: %s", e, exc_info=True)
+
+
+# ---------------------------------------------------------------------------
+# 注册路由模块
+# ---------------------------------------------------------------------------
+
+# 注册聊天相关路由
+try:
+    from api.routes.chat import router as chat_router
+    app.include_router(chat_router)
+    logger.info("聊天API路由已注册")
+except Exception as e:
+    logger.warning(f"聊天API路由注册失败: {e}")
+
+# 注册历史记录相关路由
+try:
+    from api.routes.history import router as history_router
+    app.include_router(history_router)
+    logger.info("历史记录API路由已注册")
+except Exception as e:
+    logger.warning(f"历史记录API路由注册失败: {e}")
+
+# 注册系统相关路由
+try:
+    from api.routes.system import router as system_router
+    app.include_router(system_router)
+    logger.info("系统API路由已注册")
+except Exception as e:
+    logger.warning(f"系统API路由注册失败: {e}")
+
+# 注册工作流API路由
+try:
+    from api.workflow import router as workflow_router
+    app.include_router(workflow_router)
+    logger.info("工作流API路由已注册")
+except Exception as e:
+    logger.warning(f"工作流API路由注册失败: {e}")
+
+# 注册定时任务API路由
+try:
+    from api.schedule import router as schedule_router
+    app.include_router(schedule_router)
+    logger.info("定时任务API路由已注册")
+except Exception as e:
+    logger.warning(f"定时任务API路由注册失败: {e}")
+
+# 注册监控API路由
+try:
+    from api.monitor import router as monitor_router
+    app.include_router(monitor_router)
+    logger.info("监控API路由已注册")
+except Exception as e:
+    logger.warning(f"监控API路由注册失败: {e}")
+
+
+# ---------------------------------------------------------------------------
+# 启动定时任务调度器
+# ---------------------------------------------------------------------------
+@app.on_event("startup")
+async def start_scheduler():
+    """启动定时任务调度器"""
+    try:
+        from core.task_scheduler import task_scheduler
+        task_scheduler.start()
+        logger.info("定时任务调度器已启动")
+    except Exception as e:
+        logger.warning(f"定时任务调度器启动失败: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Web 界面路由
+# ---------------------------------------------------------------------------
+@app.get("/", response_class=HTMLResponse, summary="系统首页")
+async def index_page():
+    """返回系统首页 HTML 页面"""
+    templates_dir = Path(__file__).parent / "templates"
+    index_html = templates_dir / "index.html"
+    
+    if index_html.exists():
+        with open(index_html, "r", encoding="utf-8") as f:
+            return f.read()
+    else:
+        return """
+        <html>
+        <head><title>系统首页</title></head>
+        <body>
+            <h1>系统首页文件不存在</h1>
+            <p>请确保 templates/index.html 文件存在</p>
+        </body>
+        </html>
+        """
+
+@app.get("/chat", response_class=HTMLResponse, summary="聊天界面")
+async def chat_page():
+    """返回聊天界面 HTML 页面"""
+    templates_dir = Path(__file__).parent / "templates"
+    chat_html = templates_dir / "chat.html"
+    
+    if chat_html.exists():
+        with open(chat_html, "r", encoding="utf-8") as f:
+            return f.read()
+    else:
+        return """
+        <html>
+        <head><title>聊天界面</title></head>
+        <body>
+            <h1>聊天界面文件不存在</h1>
+            <p>请确保 templates/chat.html 文件存在</p>
+        </body>
+        </html>
+        """
+
+@app.get("/monitor", response_class=HTMLResponse, summary="监控界面")
+async def monitor_page():
+    """返回监控界面 HTML 页面"""
+    templates_dir = Path(__file__).parent / "templates"
+    monitor_html = templates_dir / "monitor.html"
+    
+    if monitor_html.exists():
+        with open(monitor_html, "r", encoding="utf-8") as f:
+            return f.read()
+    else:
+        return """
+        <html>
+        <head><title>监控界面</title></head>
+        <body>
+            <h1>监控界面文件不存在</h1>
+            <p>请确保 templates/monitor.html 文件存在</p>
+        </body>
+        </html>
+        """
+
+@app.get("/coze", response_class=HTMLResponse, summary="AI Agent低代码平台")
+async def coze_page():
+    """返回AI Agent低代码平台 HTML 页面"""
+    templates_dir = Path(__file__).parent / "templates"
+    coze_html = templates_dir / "coze.html"
+    
+    if coze_html.exists():
+        with open(coze_html, "r", encoding="utf-8") as f:
+            return f.read()
+    else:
+        return """
+        <html>
+        <head><title>AI Agent低代码平台</title></head>
+        <body>
+            <h1>AI Agent低代码平台文件不存在</h1>
+            <p>请确保 templates/coze.html 文件存在</p>
+        </body>
+        </html>
+        """
+
+
+# ---------------------------------------------------------------------------
+# 启动入口
+# ---------------------------------------------------------------------------
+if __name__ == "__main__":
+    import uvicorn
+
+    port: int = int(os.getenv("AGENT_PORT", "8001"))
+    host: str = os.getenv("AGENT_HOST", "0.0.0.0")
+    log_level: str = os.getenv("LOG_LEVEL", "info")
+
+    logger.info("启动 Agent 服务，地址: %s:%d", host, port)
+    uvicorn.run(app, host=host, port=port, log_level=log_level)
+
+            app_name = skill_name.replace("third_party_", "")
+            
+            # 根据应用名称和消息内容提取操作类型和参数
+            action = params.get("action")
+            if not action:
+                # 根据消息内容自动提取操作类型
+                if app_name == "github":
+                    if "仓库" in message or "repo" in message.lower():
+                        # 提取仓库信息，格式如 "查看 octocat/Hello-World 仓库"
+                        import re
+                        repo_match = re.search(r'(?:查看|查询|获取)\s*(\w+)/([\w-]+)\s*(?:仓库|repo)', message)
+                        if repo_match:
+                            action = "get_repo"
+                            params["owner"] = repo_match.group(1)
+                            params["repo"] = repo_match.group(2)
+                        else:
+                            action = "get_info"
+                    elif "用户" in message or "user" in message.lower():
+                        # 提取用户信息
+                        import re
+                        user_match = re.search(r'(?:查看|查询|获取)\s*(?:用户|user)\s*(\w+)', message)
+                        if user_match:
+                            action = "get_user"
+                            params["username"] = user_match.group(1)
+                        else:
+                            action = "get_info"
+                    else:
+                        action = "get_info"
+                elif app_name == "twitter":
+                    if "用户" in message or "user" in message.lower():
+                        import re
+                        user_match = re.search(r'(?:查看|查询|获取)\s*(?:用户|user)\s*(\w+)', message)
+                        if user_match:
+                            action = "get_user"
+                            params["username"] = user_match.group(1)
+                        else:
+                            action = "get_info"
+                    elif "推文" in message or "tweet" in message.lower():
+                        import re
+                        user_match = re.search(r'(?:查看|查询|获取)\s*(\w+)\s*(?:的|\'s)\s*(?:推文|tweet)', message)
+                        if user_match:
+                            action = "get_tweets"
+                            params["username"] = user_match.group(1)
+                        else:
+                            action = "get_info"
+                    else:
+                        action = "get_info"
+                else:
+                    action = "get_info"
+            
+            result = await app_manager.execute(app_name, action, params)
+            # 处理第三方应用的执行结果
+            if not result.get("success"):
+                # 如果执行失败，返回错误消息
+                error_msg = result.get('error', result.get('data', {}).get('error', '未知错误'))
+                
+                # 关键修复：如果是API密钥未配置的错误，提供更友好的提示
+                if '密钥未配置' in error_msg or 'API key' in error_msg.lower() or 'token' in error_msg.lower():
+                    result["reply"] = f"⚠️ {app_name} 功能需要配置API密钥才能使用。\n\n" \
+                                    f"您可以在 skills/third_party/config.yml 中配置 {app_name} 的API密钥，\n" \
+                                    f"或者尝试其他不需要API的功能。"
+                else:
+                    result["reply"] = f"{app_name} 应用执行失败: {error_msg}"
+            else:
+                # 如果执行成功，返回数据
+                data = result.get("data", {})
+                if isinstance(data, dict):
+                    # 格式化字典数据
+                    if data.get('success') is False:
+                        error_msg = data.get('error', '未知错误')
+                        # 同样处理API密钥错误
+                        if '密钥未配置' in error_msg or 'API key' in error_msg.lower():
+                            result["reply"] = f"⚠️ {app_name} 功能需要配置API密钥才能使用。\n\n" \
+                                            f"您可以在 skills/third_party/config.yml 中配置 {app_name} 的API密钥，\n" \
+                                            f"或者尝试其他不需要API的功能。"
+                        else:
+                            result["reply"] = f"{app_name} 应用执行失败: {error_msg}"
+                    else:
+                        result["reply"] = f"{app_name} 应用执行成功:\n" + "\n".join([f"{k}: {v}" for k, v in data.items()])
+                else:
+                    result["reply"] = f"{app_name} 应用执行成功: {data}"
+        except Exception as e:
+            logger.error("第三方应用 %s 执行异常: %s", skill_name, e)
+            result = {"success": False, "error": str(e), "reply": f"第三方应用执行异常: {str(e)}"}
+    # 处理批量操作
+    elif skill_name == "batch_operations":
+        try:
+            from skills.third_party.batch_operations import batch_manager
+            operation_type = params.get("operation_type", "execute_batch")
+            
+            if operation_type == "execute_batch":
+                operations = params.get("operations", [])
+                result = await batch_manager.execute_batch(operations)
+                # 格式化批量操作结果
+                success_count = sum(1 for r in result if r.get('success'))
+                failure_count = len(result) - success_count
+                result["reply"] = f"批量操作完成: 成功 {success_count} 个, 失败 {failure_count} 个"
+            elif operation_type == "sync_data":
+                source_app = params.get("source_app")
+                target_apps = params.get("target_apps", [])
+                data_type = params.get("data_type")
+                sync_params = params.get("params", {})
+                result = await batch_manager.sync_data(source_app, target_apps, data_type, sync_params)
+                result["reply"] = f"数据同步完成: 成功 {result.get('success_count', 0)} 个, 失败 {result.get('failure_count', 0)} 个"
+            elif operation_type == "compare_data":
+                apps = params.get("apps", [])
+                data_type = params.get("data_type")
+                compare_params = params.get("params", {})
+                result = await batch_manager.compare_data(apps, data_type, compare_params)
+                result["reply"] = f"数据比较完成: 所有应用都有数据: {result.get('all_have_data', False)}"
+            else:
+                result = {"success": False, "error": f"未知操作类型: {operation_type}", "reply": f"未知操作类型: {operation_type}"}
+        except Exception as e:
+            logger.error("批量操作执行异常: %s", e)
+            result = {"success": False, "error": str(e), "reply": f"批量操作执行异常: {str(e)}"}
+    # 处理文本分析
+    elif skill_name == "text_analyzer":
+        try:
+            from core.multi_agent_system import TextAnalyzerAgent
+            from core.keyword_extractor import get_keyword_extractor
+            
+            analyzer = TextAnalyzerAgent()
+            
+            # 提取文本内容（去掉"文本分析:"前缀）
+            text_content = message.replace("文本分析:", "").strip()
+            
+            # 1. 使用关键词提取器提取关键信息
+            extractor = get_keyword_extractor()
+            extraction = await extractor.extract(text_content)
+            
+            # 2. 拆解文本为段落
+            paragraphs = analyzer._split_into_paragraphs(text_content)
+            
+            # 3. 为每个段落生成概要
+            summaries = []
+            for i, paragraph in enumerate(paragraphs):
+                summary = analyzer._generate_summary(paragraph)
+                summaries.append({
+                    "paragraph_index": i,
+                    "content": paragraph,
+                    "summary": summary
+                })
+            
+            # 4. 生成标题
+            title = analyzer._generate_title(text_content)
+            
+            # 5. 构建内容树
+            tree = analyzer._build_content_tree(title, paragraphs, summaries)
+            
+            # 6. 更新上下文记忆
+            analyzer._update_context_memory(tree)
+            
+            # 7. 基于提取的关键词进行智能检索
+            keywords = [kw.word for kw in extraction.keywords[:5]] if extraction.keywords else []
+            
+            if keywords:
+                # 使用智能关键词检索
+                relevant_nodes = analyzer.search_by_keywords(keywords, top_n=5)
+                
+                # 8. 构建人性化回复
+                reply = f"📊 **文本分析完成**\n\n"
+                reply += f"**标题**: {title}\n"
+                reply += f"**段落数**: {len(paragraphs)}\n"
+                reply += f"**主要意图**: {extraction.main_intent}\n"
+                reply += f"**置信度**: {extraction.confidence:.2%}\n\n"
+                
+                # 显示提取的关键词
+                if keywords:
+                    reply += f"🔑 **提取的关键词**: {', '.join(keywords)}\n\n"
+                
+                # 显示相关节点
+                if relevant_nodes:
+                    reply += f"🔍 **找到 {len(relevant_nodes)} 个相关段落**:\n\n"
+                    
+                    for i, item in enumerate(relevant_nodes, 1):
+                        node = item['node']
+                        score = item['score']
+                        matched = item['matched_keywords']
+                        
+                        reply += f"**{i}. [{node['type']}]** (相关度: {score:.1f})\n"
+                        reply += f"   - 匹配关键词: {', '.join(matched)}\n"
+                        
+                        # 截取内容预览
+                        content_preview = node['content'][:100].replace('\n', ' ')
+                        if len(node['content']) > 100:
+                            content_preview += '...'
+                        reply += f"   - 内容: {content_preview}\n\n"
+                else:
+                    reply += "⚠️ 未找到相关段落\n\n"
+                
+                # 显示段落概要
+                reply += f"📝 **段落概要**:\n"
+                for i, item in enumerate(summaries[:5], 1):  # 只显示前5个
+                    reply += f"  {i}. {item.get('summary', '无')[:80]}...\n"
+                
+                if len(summaries) > 5:
+                    reply += f"  ... 还有 {len(summaries) - 5} 个段落\n"
+            else:
+                # 降级方案：简单展示
+                reply = f"📊 **文本分析完成**\n\n"
+                reply += f"**标题**: {title}\n"
+                reply += f"**段落数**: {len(paragraphs)}\n\n"
+                
+                reply += f"📝 **段落概要**:\n"
+                for i, item in enumerate(summaries, 1):
+                    reply += f"  {i}. {item.get('summary', '无')}\n"
+            
+            result = {"success": True, "reply": reply}
+            
+        except Exception as e:
+            logger.error("文本分析执行异常: %s", e)
+            import traceback
+            traceback.print_exc()
+            result = {"success": False, "error": str(e), "reply": f"❌ 文本分析失败: {str(e)}"}
+    # 通过 ToolManager 执行
+    else:
+        try:
+            from tools.tool_manager import ToolManager
+            tm = ToolManager.get_instance()
+            result = tm.execute(skill_name, **params)
+        except Exception as e:
+            logger.error("工具 %s 执行异常: %s", skill_name, e)
+            result = {"success": False, "error": str(e)}
+
+    if not isinstance(result, dict):
+        result = {"success": True, "result": str(result)}
+
+    result["tool_call"] = {"name": skill_name, "params": params}
+    
+    # ✅ 新增：智能总结技能执行结果
+    if result.get("success", False) and skill_name != "chat":
+        try:
+            from core.result_summarizer import get_result_summarizer
+            summarizer = get_result_summarizer()
+            
+            # 生成智能总结回复
+            summarized_reply = await summarizer.summarize(
+                skill_name=skill_name,
+                result=result,
+                user_message=message
+            )
+            
+            # 替换原始回复为智能总结
+            result["reply"] = summarized_reply
+            result["original_data"] = result.get("result")  # 保留原始数据
+            
+            logger.info(f"技能 [{skill_name}] 已应用智能总结")
+        except Exception as e:
+            logger.warning(f"智能总结失败，使用原始回复: {e}")
+            # 如果总结失败，保持原有逻辑
+    
+    return result
+
+
+# ---------------------------------------------------------------------------
+# 内部处理器：闲聊
+# ---------------------------------------------------------------------------
+async def _handle_chat(
+    message: str, user_id: int, agent_id: str
+) -> Dict[str, Any]:
+    """处理闲聊对话（GLM 后端 + 角色扮演）。
+
+    Args:
+        message: 用户消息
+        user_id: 用户ID
+        agent_id: Agent ID
+
+    Returns:
+        包含 reply 和 success 的字典
+    """
+    system_prompt: str = _get_system_prompt(agent_id)
+
+    try:
+        from core.llm_backend import get_llm_router
+        router = get_llm_router()
+        reply: str = await router.simple_chat(message, system_prompt=system_prompt)
+        return {
+            "reply": reply,
+            "success": True,
+            "tool_call": {"name": "chat", "params": {}},
+        }
+    except Exception as e:
+        logger.warning("LLM 对话失败: %s", e)
+        return {
+            "reply": f"你好！有什么可以帮你的吗？（LLM 未配置: {e}）",
+            "success": True,
+            "tool_call": {"name": "chat", "params": {}},
+        }
+
+
+def _get_system_prompt(agent_id: str) -> str:
+    """获取Agent的 system_prompt。优先从数据库读取。
+
+    Args:
+        agent_id: Agent ID
+
+    Returns:
+        系统提示词字符串
+    """
+    # 内置 fallback
+    _builtin_prompts: Dict[str, str] = {
+        "default": "你是小雷版小龙虾AI助手，友好、专业、高效。简洁回答用户问题。",
+        "first_love": "你是温柔体贴的初恋角色，说话温柔，善解人意。",
+        "bestfriend": "你是用户的知心闺蜜，可以畅所欲言。",
+        "goddess": "你是高冷女神，说话简洁有力。",
+        "libai": "你是诗仙李白，性格豪放，说话常带诗意。",
+    }
+
+    if not _db_initialized:
+        return _builtin_prompts.get(agent_id, _builtin_prompts["default"])
+
+    try:
+        from core.database import get_session, Character
+        session = get_session()
+        try:
+            character = session.query(Character).filter_by(
+                character_id=agent_id
+            ).first()
+            if character and character.system_prompt:
+                return character.system_prompt
+        finally:
+            session.close()
+    except Exception as e:
+        logger.warning("读取Agent system_prompt 失败: %s", e)
+
+    return _builtin_prompts.get(agent_id, _builtin_prompts["default"])
+
+
+# ---------------------------------------------------------------------------
+# WebSocket 端点：实时聊天
+# ---------------------------------------------------------------------------
+@app.websocket("/ws/chat")
+async def websocket_chat(websocket: WebSocket) -> None:
+    """WebSocket 实时聊天端点。
+
+    协议：
+    - 接收 JSON: {"message": str, "user_id": int, "character_id": str}
+    - 发送 JSON: {"reply": str, "skill": str, "success": bool}
+    - 心跳: 每 30s ping，客户端需 pong
+    """
+    await websocket.accept()
+    client_id: str = f"ws_{id(websocket)}"
+    logger.info("WebSocket 客户端已连接: %s", client_id)
+
+    if _dispatcher is None:
+        await websocket.send_json({
+            "reply": "系统尚未初始化完成，请稍后重试",
+            "skill": "error",
+            "success": False,
+        })
+        await websocket.close(code=1013, reason="Service Unavailable")
+        return
+
+    try:
+        while True:
+            # 带超时接收，支持心跳
+            try:
+                data: str = await asyncio.wait_for(websocket.receive_text(), timeout=60)
+            except asyncio.TimeoutError:
+                # 发送心跳 ping
+                try:
+                    await websocket.send_json({"type": "ping"})
+                except Exception:
+                    break
+                continue
+
+            # 解析请求
+            try:
+                request: Dict[str, Any] = json.loads(data)
+                message: str = request.get("message", "")
+                user_id: int = request.get("user_id", 1)
+                agent_id: str = request.get("agent_id", "default")
+            except (json.JSONDecodeError, TypeError):
+                message = data
+                user_id = 1
+                agent_id = "default"
+
+            if not message.strip():
+                await websocket.send_json({
+                    "reply": "消息不能为空",
+                    "skill": "error",
+                    "success": False,
+                })
+                continue
+
+            # 意图识别与分发
+            skill_name: str = _dispatcher.match_skill(message)
+
+            try:
+                if skill_name == "advanced_automation":
+                    result = await _handle_automation_workflow(message, user_id)
+                    await websocket.send_json({
+                        "reply": result.get("reply", "处理完成"),
+                        "skill": skill_name,
+                        "success": result.get("success", True),
+                    })
+                elif skill_name == "multi_step":
+                    # 多步任务：逐个发送JSON响应
+                    sub_results = await _handle_multi_step_streaming(message, user_id, websocket)
+                    # 最后发送聚合结果
+                    await websocket.send_json({
+                        "reply": sub_results.get("reply", "多步任务完成"),
+                        "skill": "multi_step",
+                        "success": sub_results.get("success", True),
+                        "is_aggregated": True,
+                    })
+                else:
+                    result = await _handle_single_step(
+                        message, user_id, skill_name, agent_id
+                    )
+
+                    await websocket.send_json({
+                        "reply": result.get("reply", "处理完成"),
+                        "skill": skill_name,
+                        "success": result.get("success", True),
+                    })
+            except Exception as e:
+                logger.error("WebSocket 消息处理失败: %s", e)
+                await websocket.send_json({
+                    "reply": f"处理失败: {e}",
+                    "skill": "error",
+                    "success": False,
+                })
+
+    except WebSocketDisconnect:
+        logger.info("WebSocket 客户端断开: %s", client_id)
+    except Exception as e:
+        logger.info("WebSocket 连接异常关闭: %s (%s)", client_id, e)
+    finally:
+        logger.info("WebSocket 连接清理完成: %s", client_id)
+
+
+# ---------------------------------------------------------------------------
+# 数据持久化辅助函数
+# ---------------------------------------------------------------------------
+def _save_chat_history(
+    user_id: int,
+    character_id: str,
+    role: str,
+    content: str,
+    tool_call: Optional[Dict[str, Any]] = None,
+) -> None:
+    """异步保存聊天记录到 MySQL（失败静默，不影响用户体验）。
+
+    Args:
+        user_id: 用户ID
+        character_id: 角色ID
+        role: 角色 (user / assistant)
+        content: 消息内容
+        tool_call: 工具调用信息（可选）
+    """
+    if not _db_initialized:
+        return
+    try:
+        from core.database import get_session, ChatHistory
+        session = get_session()
+        try:
+            record = ChatHistory(
+                user_id=user_id,
+                character_id=character_id,
+                role=role,
+                content=content[:5000],
+                tool_call=tool_call,
+            )
+            session.add(record)
+            session.commit()
+        finally:
+            session.close()
+    except Exception as e:
+        logger.debug("保存聊天历史失败: %s", e)
+
+
+def _save_task_log(
+    user_id: int,
+    task_type: str,
+    success: bool,
+    params: Optional[Dict[str, Any]] = None,
+    result: Optional[Dict[str, Any]] = None,
+    duration: float = 0.0,
+) -> None:
+    """异步保存任务日志到 MySQL（失败静默）。
+
+    Args:
+        user_id: 用户ID
+        task_type: 任务类型（技能名）
+        success: 是否成功
+        params: 任务参数
+        result: 任务结果
+        duration: 耗时（秒）
+    """
+    if not _db_initialized:
+        return
+    try:
+        from core.database import get_session, TaskLog
+        session = get_session()
+        try:
+            log = TaskLog(
+                user_id=user_id,
+                task_type=task_type,
+                status="success" if success else "failed",
+                params=params,
+                result=_safe_json(result),
+                duration=round(duration, 3),
+            )
+            session.add(log)
+            session.commit()
+        finally:
+            session.close()
+    except Exception as e:
+        logger.debug("保存任务日志失败: %s", e)
+
+
+def _safe_json(data: Any) -> Optional[Dict[str, Any]]:
+    """安全地序列化数据为 JSON 可存储的字典。"""
+    if data is None:
+        return None
+    try:
+        if isinstance(data, dict):
+            return {
+                str(k): str(v)[:2000] if not isinstance(v, (int, float, bool, type(None))) else v
+                for k, v in data.items()
+            }
+        return {"raw": str(data)[:2000]}
+    except Exception:
+        return {"raw": "unserializable"}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# API 端点：用户认证
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.post("/auth/login", summary="用户登录")
+async def auth_login(request: LoginRequest) -> Dict[str, Any]:
+    """用户登录验证。
+
+    验证用户名密码，成功后返回 JWT token 和用户基本信息。
+    数据库不可用时使用内置管理员账号 (admin/admin123) 兜底。
+    """
+    if not _db_initialized:
+        logger.warning("数据库未初始化，使用内置管理员验证")
+        if request.username == "admin" and request.password == "admin123":
+            import datetime as _dt
+            import jwt as _jwt
+            payload = {
+                "sub": "1",
+                "username": "admin",
+                "exp": _dt.datetime.utcnow() + _dt.timedelta(hours=168),
+                "iat": _dt.datetime.utcnow(),
+            }
+            secret = os.getenv("JWT_SECRET", "xiaolei-jwt-secret-2024")
+            token = _jwt.encode(payload, secret, algorithm="HS256")
+            return {
+                "success": True,
+                "token": token,
+                "user": {"id": 1, "username": "admin", "display_name": "管理员"},
+            }
+        return {"success": False, "detail": "数据库未初始化，仅支持 admin/admin123 登录"}
+
+    try:
+        from core.database import get_session, User
+        from passlib.context import CryptContext
+        pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
+        
+        session = get_session()
+        try:
+            user = session.query(User).filter_by(name=request.username).first()
+            if not user:
+                return {"success": False, "detail": "用户名或密码错误"}
+            if not pwd_context.verify(request.password, user.password):
+                return {"success": False, "detail": "用户名或密码错误"}
+
+            import datetime as _dt
+            import jwt as _jwt
+            payload = {
+                "sub": str(user.id),
+                "username": user.name,
+                "exp": _dt.datetime.utcnow() + _dt.timedelta(hours=168),
+                "iat": _dt.datetime.utcnow(),
+            }
+            secret = os.getenv("JWT_SECRET", "xiaolei-jwt-secret-2024")
+            token = _jwt.encode(payload, secret, algorithm="HS256")
+            logger.info("用户登录成功: %s (id=%d)", user.name, user.id)
+            return {
+                "success": True,
+                "token": token,
+                "user": {
+                    "id": user.id,
+                    "username": user.name,
+                    "display_name": user.name,
+                    "email": user.email,
+                },
+            }
+        finally:
+            session.close()
+    except Exception as e:
+        logger.error("登录失败: %s", e)
+        return {"success": False, "detail": f"登录失败: {e}"}
+
+
+@app.post("/auth/register", summary="用户注册")
+async def auth_register(request: RegisterRequest) -> Dict[str, Any]:
+    """用户注册。
+
+    创建新用户，自动密码哈希。数据库不可用时返回错误。
+    """
+    if not _db_initialized:
+        return {"success": False, "detail": "数据库未初始化，无法注册"}
+
+    try:
+        from core.database import get_session, User
+        from passlib.context import CryptContext
+        pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
+        
+        session = get_session()
+        try:
+            existing = session.query(User).filter_by(name=request.username).first()
+            if existing:
+                return {"success": False, "detail": "用户名已存在"}
+
+            user = User(
+                name=request.username,
+                password=pwd_context.hash(request.password),
+                email=f"{request.username}@example.com",
+            )
+            session.add(user)
+            session.commit()
+            logger.info("新用户注册成功: %s (id=%d)", user.name, user.id)
+            return {
+                "success": True,
+                "user": {
+                    "id": user.id,
+                    "username": user.name,
+                    "display_name": user.name,
+                },
+            }
+        except Exception as e:
+            session.rollback()
+            raise e
+        finally:
+            session.close()
+    except Exception as e:
+        logger.error("注册失败: %s", e)
+        return {"success": False, "detail": f"注册失败: {e}"}
+
+
+@app.get("/auth/users", summary="获取用户列表")
+async def list_users() -> Dict[str, Any]:
+    """获取所有用户列表（不含密码）。"""
+    if not _db_initialized:
+        return {"users": []}
+    try:
+        from core.database import get_session, User
+        session = get_session()
+        try:
+            users = session.query(User).all()
+            return {
+                "users": [
+                    {
+                        "id": u.id,
+                        "username": u.username,
+                        "display_name": u.display_name,
+                        "created_at": u.created_at.isoformat() if u.created_at else None,
+                    }
+                    for u in users
+                ]
+            }
+        finally:
+            session.close()
+    except Exception as e:
+        logger.error("获取用户列表失败: %s", e)
+        return {"users": [], "error": str(e)}
+
+
+@app.put("/auth/profile", summary="更新个人资料")
+async def update_profile(request: UpdateProfileRequest) -> Dict[str, Any]:
+    """更新用户显示名称等个人资料。"""
+    if not _db_initialized:
+        return {"success": False, "detail": "数据库未初始化"}
+    try:
+        from core.database import get_session, User
+        session = get_session()
+        try:
+            user = session.query(User).filter_by(id=request.user_id).first()
+            if not user:
+                return {"success": False, "detail": "用户不存在"}
+            if request.display_name:
+                user.display_name = request.display_name
+            session.commit()
+            return {"success": True, "display_name": user.display_name}
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+    except Exception as e:
+        logger.error("更新资料失败: %s", e)
+        return {"success": False, "detail": str(e)}
+
+
+@app.put("/auth/password", summary="修改密码")
+async def change_password(request: ChangePasswordRequest) -> Dict[str, Any]:
+    """修改用户密码。需验证旧密码。"""
+    if not _db_initialized:
+        return {"success": False, "detail": "数据库未初始化"}
+    try:
+        from core.database import get_session, User, verify_password, hash_password
+        session = get_session()
+        try:
+            user = session.query(User).filter_by(id=request.user_id).first()
+            if not user:
+                return {"success": False, "detail": "用户不存在"}
+            if not verify_password(request.old_password, user.password_hash):
+                return {"success": False, "detail": "旧密码错误"}
+            user.password_hash = hash_password(request.new_password)
+            session.commit()
+            logger.info("用户 %s (id=%d) 修改密码成功", user.username, user.id)
+            return {"success": True}
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+    except Exception as e:
+        logger.error("修改密码失败: %s", e)
+        return {"success": False, "detail": str(e)}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# API 端点：聊天历史
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.get("/api/history", summary="获取聊天历史")
+async def get_chat_history(
+    user_id: int = 1,
+    character_id: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+    search: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    group_by_session: bool = False,
+) -> Dict[str, Any]:
+    """获取用户聊天历史记录，支持分页、搜索、筛选和按会话分组。
+
+    Args:
+        user_id: 用户ID
+        character_id: 角色ID筛选（可选）
+        limit: 每页条数，最大 200
+        offset: 偏移量
+        search: 搜索关键词（在内容中搜索）
+        start_date: 开始日期 (YYYY-MM-DD)
+        end_date: 结束日期 (YYYY-MM-DD)
+        group_by_session: 是否按会话分组返回
+    """
+    if not _db_initialized:
+        return {"history": [], "total": 0}
+    limit = min(max(limit, 1), 200)
+    offset = max(offset, 0)
+    try:
+        from core.database import get_session, ChatHistory
+        from sqlalchemy import and_, desc
+        session = get_session()
+        try:
+            # 构建基础查询
+            query = session.query(ChatHistory).filter_by(user_id=user_id)
+            
+            # 角色筛选
+            if character_id:
+                query = query.filter_by(character_id=character_id)
+            
+            # 关键词搜索
+            if search:
+                query = query.filter(ChatHistory.content.like(f"%{search}%"))
+            
+            # 日期范围筛选
+            if start_date:
+                try:
+                    from datetime import datetime as dt
+                    start_dt = dt.strptime(start_date, "%Y-%m-%d")
+                    query = query.filter(ChatHistory.created_at >= start_dt)
+                except ValueError:
+                    pass
+            
+            if end_date:
+                try:
+                    from datetime import datetime as dt, timedelta
+                    end_dt = dt.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
+                    query = query.filter(ChatHistory.created_at < end_dt)
+                except ValueError:
+                    pass
+            
+            total = query.count()
+            
+            # 按会话分组模式
+            if group_by_session:
+                # 获取所有记录并按时间排序
+                records = query.order_by(desc(ChatHistory.created_at)).all()
+                
+                # 按角色和时间窗口分组为会话
+                sessions = {}
+                for r in records:
+                    # 使用角色ID作为会话标识的一部分
+                    session_key = f"{r.character_id}"
+                    
+                    if session_key not in sessions:
+                        sessions[session_key] = {
+                            "session_id": session_key,
+                            "character_id": r.character_id,
+                            "messages": [],
+                            "first_message_time": r.created_at,
+                            "last_message_time": r.created_at,
+                            "message_count": 0
+                        }
+                    
+                    sessions[session_key]["messages"].append({
+                        "id": r.id,
+                        "role": r.role,
+                        "content": r.content,
+                        "tool_call": r.tool_call,
+                        "created_at": r.created_at.isoformat() if r.created_at else None,
+                    })
+                    sessions[session_key]["message_count"] += 1
+                    
+                    # 更新时间范围
+                    if r.created_at < sessions[session_key]["first_message_time"]:
+                        sessions[session_key]["first_message_time"] = r.created_at
+                    if r.created_at > sessions[session_key]["last_message_time"]:
+                        sessions[session_key]["last_message_time"] = r.created_at
+                
+                # 转换为列表并排序
+                session_list = list(sessions.values())
+                session_list.sort(key=lambda x: x["last_message_time"], reverse=True)
+                
+                # 分页
+                paged_sessions = session_list[offset:offset+limit]
+                
+                # 格式化输出
+                formatted_sessions = []
+                for s in paged_sessions:
+                    # 提取第一条用户消息作为预览
+                    preview_msg = ""
+                    for msg in s["messages"]:
+                        if msg["role"] == "user":
+                            preview_msg = msg["content"][:100]
+                            break
+                    
+                    formatted_sessions.append({
+                        "session_id": s["session_id"],
+                        "character_id": s["character_id"],
+                        "preview": preview_msg,
+                        "message_count": s["message_count"],
+                        "first_message_time": s["first_message_time"].isoformat() if s["first_message_time"] else None,
+                        "last_message_time": s["last_message_time"].isoformat() if s["last_message_time"] else None,
+                        "messages": s["messages"][:10],  # 只返回前10条消息作为预览
+                    })
+                
+                return {
+                    "sessions": formatted_sessions,
+                    "total": len(session_list),
+                    "limit": limit,
+                    "offset": offset,
+                }
+            
+            # 普通模式：返回单条消息
+            records = (
+                query.order_by(desc(ChatHistory.created_at))
+                .offset(offset)
+                .limit(limit)
+                .all()
+            )
+            return {
+                "history": [
+                    {
+                        "id": r.id,
+                        "character_id": r.character_id,
+                        "role": r.role,
+                        "content": r.content,
+                        "tool_call": r.tool_call,
+                        "created_at": r.created_at.isoformat() if r.created_at else None,
+                    }
+                    for r in reversed(records)
+                ],
+                "total": total,
+                "limit": limit,
+                "offset": offset,
+            }
+        finally:
+            session.close()
+    except Exception as e:
+        logger.error("获取聊天历史失败: %s", e)
+        return {"history": [], "total": 0, "error": str(e)}
+
+
+@app.get("/api/history/session/{session_id}", summary="获取会话历史")
+async def get_session_history(
+    session_id: str,
+    user_id: int = 1,
+) -> Dict[str, Any]:
+    """获取指定会话的聊天历史记录。
+
+    Args:
+        session_id: 会话ID（格式：character_id）
+        user_id: 用户ID
+    """
+    if not _db_initialized:
+        return {"messages": []}
+    
+    try:
+        from core.database import get_session, ChatHistory
+        from sqlalchemy import desc
+        session = get_session()
+        try:
+            # 从session_id中提取character_id
+            character_id = session_id
+            
+            # 查询该角色的聊天记录
+            records = (
+                session.query(ChatHistory)
+                .filter_by(user_id=user_id, character_id=character_id)
+                .order_by(desc(ChatHistory.created_at))
+                .limit(100)
+                .all()
+            )
+            
+            messages = [
+                {
+                    "id": r.id,
+                    "role": r.role,
+                    "content": r.content,
+                    "tool_call": r.tool_call,
+                    "created_at": r.created_at.isoformat() if r.created_at else None,
+                }
+                for r in reversed(records)
+            ]
+            
+            return {"messages": messages}
+        finally:
+            session.close()
+    except Exception as e:
+        logger.error("获取会话历史失败: %s", e)
+        return {"messages": []}
+
+
+@app.get("/api/history/{history_id}", summary="获取单条历史记录详情")
+async def get_chat_history_detail(
+    history_id: int,
+    user_id: int = 1,
+) -> Dict[str, Any]:
+    """获取单条聊天记录的详细信息。
+
+    Args:
+        history_id: 历史记录ID
+        user_id: 用户ID（用于权限验证）
+    """
+    if not _db_initialized:
+        return {"detail": None}
+    
+    try:
+        from core.database import get_session, ChatHistory
+        session = get_session()
+        try:
+            record = session.query(ChatHistory).filter_by(
+                id=history_id,
+                user_id=user_id
+            ).first()
+            
+            if not record:
+                return {"detail": None, "error": "记录不存在"}
+            
+            return {
+                "detail": {
+                    "id": record.id,
+                    "user_id": record.user_id,
+                    "character_id": record.character_id,
+                    "role": record.role,
+                    "content": record.content,
+                    "tool_call": record.tool_call,
+                    "created_at": record.created_at.isoformat() if record.created_at else None,
+                }
+            }
+        finally:
+            session.close()
+    except Exception as e:
+        logger.error("获取历史记录详情失败: %s", e)
+        return {"detail": None, "error": str(e)}
+
+
+@app.delete("/api/history/{history_id}", summary="删除单条历史记录")
+async def delete_chat_history_item(
+    history_id: int,
+    user_id: int = 1,
+) -> Dict[str, Any]:
+    """删除单条聊天记录。
+
+    Args:
+        history_id: 历史记录ID
+        user_id: 用户ID（用于权限验证）
+    """
+    if not _db_initialized:
+        return {"success": False, "detail": "数据库未初始化"}
+    
+    try:
+        from core.database import get_session, ChatHistory
+        session = get_session()
+        try:
+            record = session.query(ChatHistory).filter_by(
+                id=history_id,
+                user_id=user_id
+            ).first()
+            
+            if not record:
+                return {"success": False, "detail": "记录不存在"}
+            
+            session.delete(record)
+            session.commit()
+            logger.info("删除聊天记录: history_id=%d, user_id=%d", history_id, user_id)
+            return {"success": True, "deleted_id": history_id}
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+    except Exception as e:
+        logger.error("删除聊天记录失败: %s", e)
+        return {"success": False, "detail": str(e)}
+
+
+@app.delete("/api/history", summary="清空聊天历史")
+async def clear_chat_history(
+    user_id: int = 1,
+    character_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """清空用户聊天历史。可按角色筛选删除。
+
+    Args:
+        user_id: 用户ID
+        character_id: 角色ID筛选（可选，为空则清空全部）
+    """
+    if not _db_initialized:
+        return {"success": False, "detail": "数据库未初始化"}
+    try:
+        from core.database import get_session, ChatHistory
+        session = get_session()
+        try:
+            query = session.query(ChatHistory).filter_by(user_id=user_id)
+            if character_id:
+                query = query.filter_by(character_id=character_id)
+            deleted = query.delete()
+            session.commit()
+            logger.info("清空聊天历史: user_id=%d, character_id=%s, deleted=%d",
+                        user_id, character_id, deleted)
+            return {"success": True, "deleted": deleted}
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+    except Exception as e:
+        logger.error("清空聊天历史失败: %s", e)
+        return {"success": False, "detail": str(e)}
+
+
+@app.get("/api/history/stats", summary="获取聊天历史统计")
+async def get_chat_history_stats(
+    user_id: int = 1,
+) -> Dict[str, Any]:
+    """获取用户聊天历史的统计信息。
+
+    Args:
+        user_id: 用户ID
+    
+    Returns:
+        包含总消息数、各角色消息数、时间分布等统计信息
+    """
+    if not _db_initialized:
+        return {"stats": {}}
+    
+    try:
+        from core.database import get_session, ChatHistory
+        from sqlalchemy import func, extract
+        session = get_session()
+        try:
+            # 总消息数
+            total_count = session.query(func.count(ChatHistory.id)).filter_by(
+                user_id=user_id
+            ).scalar() or 0
+            
+            # 用户消息数和助手消息数
+            user_count = session.query(func.count(ChatHistory.id)).filter_by(
+                user_id=user_id,
+                role="user"
+            ).scalar() or 0
+            
+            assistant_count = session.query(func.count(ChatHistory.id)).filter_by(
+                user_id=user_id,
+                role="assistant"
+            ).scalar() or 0
+            
+            # 各角色的消息数
+            character_stats = session.query(
+                ChatHistory.character_id,
+                func.count(ChatHistory.id).label('count')
+            ).filter_by(
+                user_id=user_id
+            ).group_by(
+                ChatHistory.character_id
+            ).all()
+            
+            character_breakdown = {
+                row.character_id: row.count 
+                for row in character_stats
+            }
+            
+            # 最近7天的消息趋势
+            from datetime import datetime, timedelta
+            seven_days_ago = datetime.now() - timedelta(days=7)
+            
+            daily_stats = session.query(
+                func.date(ChatHistory.created_at).label('date'),
+                func.count(ChatHistory.id).label('count')
+            ).filter(
+                ChatHistory.user_id == user_id,
+                ChatHistory.created_at >= seven_days_ago
+            ).group_by(
+                func.date(ChatHistory.created_at)
+            ).order_by(
+                func.date(ChatHistory.created_at)
+            ).all()
+            
+            daily_breakdown = {
+                str(row.date): row.count 
+                for row in daily_stats
+            }
+            
+            # 最早和最晚的消息时间
+            earliest = session.query(func.min(ChatHistory.created_at)).filter_by(
+                user_id=user_id
+            ).scalar()
+            
+            latest = session.query(func.max(ChatHistory.created_at)).filter_by(
+                user_id=user_id
+            ).scalar()
+            
+            return {
+                "stats": {
+                    "total_messages": total_count,
+                    "user_messages": user_count,
+                    "assistant_messages": assistant_count,
+                    "character_breakdown": character_breakdown,
+                    "daily_trend": daily_breakdown,
+                    "earliest_message": earliest.isoformat() if earliest else None,
+                    "latest_message": latest.isoformat() if latest else None,
+                    "conversation_days": len(daily_breakdown),
+                }
+            }
+        finally:
+            session.close()
+    except Exception as e:
+        logger.error("获取聊天历史统计失败: %s", e)
+        return {"stats": {}, "error": str(e)}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# API 端点：任务日志
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.get("/api/task-logs", summary="获取任务日志")
+async def get_task_logs(
+    user_id: Optional[int] = None,
+    status: Optional[str] = None,
+    task_type: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> Dict[str, Any]:
+    """获取任务执行日志，支持多维筛选和分页。
+
+    Args:
+        user_id: 按用户筛选（可选）
+        status: 按状态筛选 success/failed（可选）
+        task_type: 按任务类型（技能名）筛选（可选）
+        limit: 每页条数，最大 200
+        offset: 偏移量
+    """
+    if not _db_initialized:
+        return {"logs": [], "total": 0}
+    limit = min(max(limit, 1), 200)
+    offset = max(offset, 0)
+    try:
+        from core.database import get_session, TaskLog
+        session = get_session()
+        try:
+            query = session.query(TaskLog)
+            if user_id is not None:
+                query = query.filter_by(user_id=user_id)
+            if status:
+                query = query.filter_by(status=status)
+            if task_type:
+                query = query.filter_by(task_type=task_type)
+            total = query.count()
+            logs = (
+                query.order_by(TaskLog.id.desc())
+                .offset(offset)
+                .limit(limit)
+                .all()
+            )
+            return {
+                "logs": [
+                    {
+                        "id": lg.id,
+                        "user_id": lg.user_id,
+                        "task_type": lg.task_type,
+                        "status": lg.status,
+                        "duration": lg.duration,
+                        "params": lg.params,
+                        "result": lg.result,
+                        "created_at": lg.created_at.isoformat() if lg.created_at else None,
+                    }
+                    for lg in logs
+                ],
+                "total": total,
+                "limit": limit,
+                "offset": offset,
+            }
+        finally:
+            session.close()
+    except Exception as e:
+        logger.error("获取任务日志失败: %s", e)
+        return {"logs": [], "total": 0, "error": str(e)}
+
+
+@app.get("/api/task-logs/stats", summary="任务统计")
+async def get_task_stats(user_id: Optional[int] = None) -> Dict[str, Any]:
+    """获取任务执行统计（成功率、各技能调用次数等）。
+
+    Args:
+        user_id: 按用户筛选（可选）
+    """
+    if not _db_initialized:
+        return {"total": 0, "success": 0, "failed": 0, "by_type": {}}
+    try:
+        from core.database import get_session, TaskLog, func
+        session = get_session()
+        try:
+            query = session.query(TaskLog)
+            if user_id is not None:
+                query = query.filter_by(user_id=user_id)
+            total = query.count()
+            success = query.filter_by(status="success").count()
+            failed = query.filter_by(status="failed").count()
+
+            by_type = {}
+            type_groups = session.query(
+                TaskLog.task_type, func.count(TaskLog.id)
+            )
+            if user_id is not None:
+                type_groups = type_groups.filter_by(user_id=user_id)
+            type_groups = type_groups.group_by(TaskLog.task_type).all()
+            for task_type, count in type_groups:
+                if task_type:
+                    by_type[task_type] = count
+
+            return {
+                "total": total,
+                "success": success,
+                "failed": failed,
+                "success_rate": round(success / total * 100, 1) if total > 0 else 0,
+                "by_type": by_type,
+            }
+        finally:
+            session.close()
+    except Exception as e:
+        logger.error("获取任务统计失败: %s", e)
+        return {"total": 0, "error": str(e)}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# API 端点：角色 CRUD
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.post("/api/characters", summary="创建角色")
+async def create_character(request: CharacterCreateRequest) -> Dict[str, Any]:
+    """创建新的 AI 角色。
+
+    Args:
+        request: 角色创建请求体
+    """
+    if not _db_initialized:
+        return {"success": False, "detail": "数据库未初始化"}
+    try:
+        from core.database import get_session, Character
+        session = get_session()
+        try:
+            existing = session.query(Character).filter_by(
+                character_id=request.character_id
+            ).first()
+            if existing:
+                return {"success": False, "detail": f"角色ID '{request.character_id}' 已存在"}
+            character = Character(
+                character_id=request.character_id,
+                name=request.name,
+                description=request.description or "",
+                system_prompt=request.system_prompt or "",
+                avatar_url=request.avatar_url,
+                is_default=request.is_default,
+            )
+            session.add(character)
+            session.commit()
+            logger.info("角色创建成功: %s (%s)", request.name, request.character_id)
+            return {
+                "success": True,
+                "character": {
+                    "character_id": character.character_id,
+                    "name": character.name,
+                    "description": character.description,
+                    "system_prompt": character.system_prompt,
+                    "avatar_url": character.avatar_url,
+                    "is_default": character.is_default,
+                },
+            }
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+    except Exception as e:
+        logger.error("创建角色失败: %s", e)
+        return {"success": False, "detail": str(e)}
+
+
+@app.put("/api/characters/{character_id}", summary="更新角色")
+async def update_character(character_id: str, request: CharacterCreateRequest) -> Dict[str, Any]:
+    """更新现有角色的信息。
+
+    Args:
+        character_id: 角色ID
+        request: 角色更新请求体
+    """
+    if not _db_initialized:
+        return {"success": False, "detail": "数据库未初始化"}
+    try:
+        from core.database import get_session, Character
+        session = get_session()
+        try:
+            character = session.query(Character).filter_by(
+                character_id=character_id
+            ).first()
+            if not character:
+                return {"success": False, "detail": f"角色 '{character_id}' 不存在"}
+            character.name = request.name
+            character.description = request.description or character.description
+            character.system_prompt = request.system_prompt or character.system_prompt
+            if request.avatar_url is not None:
+                character.avatar_url = request.avatar_url
+            character.is_default = request.is_default
+            session.commit()
+            logger.info("角色更新成功: %s", character_id)
+            return {"success": True, "character_id": character_id}
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+    except Exception as e:
+        logger.error("更新角色失败: %s", e)
+        return {"success": False, "detail": str(e)}
+
+
+@app.delete("/api/characters/{character_id}", summary="删除角色")
+async def delete_character(character_id: str) -> Dict[str, Any]:
+    """删除指定角色（不可删除默认角色 default）。
+
+    Args:
+        character_id: 角色ID
+    """
+    if character_id == "default":
+        return {"success": False, "detail": "默认角色不可删除"}
+    if not _db_initialized:
+        return {"success": False, "detail": "数据库未初始化"}
+    try:
+        from core.database import get_session, Character
+        session = get_session()
+        try:
+            character = session.query(Character).filter_by(
+                character_id=character_id
+            ).first()
+            if not character:
+                return {"success": False, "detail": f"角色 '{character_id}' 不存在"}
+            session.delete(character)
+            session.commit()
+            logger.info("角色删除成功: %s", character_id)
+            return {"success": True, "deleted": character_id}
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+    except Exception as e:
+        logger.error("删除角色失败: %s", e)
+        return {"success": False, "detail": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# API 端点：系统指标
+# ---------------------------------------------------------------------------
+@app.get("/api/metrics", summary="系统指标")
+async def system_metrics() -> Dict[str, Any]:
+    """返回系统运行指标，包含并发处理器状态。"""
+    metrics: Dict[str, Any] = {
+        "version": "3.3.0",
+        "db_initialized": _db_initialized,
+        "uptime_seconds": round(time.time() - _startup_time, 2) if _startup_time else 0,
+        "timestamp": datetime.now().isoformat(),
+    }
+
+    # 并发处理器指标
+    if _processor is not None:
+        try:
+            metrics["processor"] = _processor.get_metrics()
+        except Exception as e:
+            metrics["processor_error"] = str(e)
+
+    # 工具数量
+    try:
+        from tools.tool_manager import ToolManager
+        tm = ToolManager.get_instance()
+        metrics["tools_count"] = len(tm._tools)
+    except Exception:
+        metrics["tools_count"] = 0
+
+    # Redis 状态
+    try:
+        from core.redis_pool import RedisPoolManager
+        rpm = RedisPoolManager.get_instance()
+        metrics["redis"] = rpm.health_check_all()
+    except Exception:
+        metrics["redis"] = {"status": "unavailable"}
+
+    return metrics
+
+
+# ---------------------------------------------------------------------------
+# 启动入口
+# ---------------------------------------------------------------------------
+if __name__ == "__main__":
+    import uvicorn
+
+    port: int = int(os.getenv("AGENT_PORT", "8001"))
+    host: str = os.getenv("AGENT_HOST", "0.0.0.0")
+    log_level: str = os.getenv("LOG_LEVEL", "info")
+
+    logger.info("启动 Agent 服务，地址: %s:%d", host, port)
+    uvicorn.run(app, host=host, port=port, log_level=log_level)

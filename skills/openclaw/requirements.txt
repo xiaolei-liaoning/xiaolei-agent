@@ -1,0 +1,11 @@
+# OpenClaw网格工作流引擎增强技能依赖
+# 本技能使用Python标准库,无需额外依赖
+
+# Python >= 3.8
+# 标准库:
+# - asyncio (异步支持)
+# - json (数据序列化)
+# - logging (日志记录)
+# - pathlib (路径操作)
+# - datetime (时间处理)
+# - xml.etree.ElementTree (XML处理)

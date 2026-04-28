@@ -1,0 +1,1016 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>小雷版小龙虾AI助手 - 智能对话</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        /* 自定义滚动条 */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #888;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #555;
+        }
+        
+        /* 消息动画 */
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .message-animation {
+            animation: fadeIn 0.3s ease-out;
+        }
+        
+        /* 打字机光标 */
+        .typing-cursor::after {
+            content: '|';
+            animation: blink 1s infinite;
+        }
+        @keyframes blink {
+            0%, 50% { opacity: 1; }
+            51%, 100% { opacity: 0; }
+        }
+        
+        /* 角色选中效果 */
+        .character-selected {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            transform: scale(1.05);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+        
+        /* 快捷指令面板 */
+        .quick-command {
+            transition: all 0.2s;
+        }
+        .quick-command:hover {
+            transform: translateX(5px);
+            background-color: #ebf8ff;
+        }
+        
+        /* 加载动画 */
+        .loading-dots span {
+            animation: loading 1.4s infinite;
+            display: inline-block;
+        }
+        .loading-dots span:nth-child(2) { animation-delay: 0.2s; }
+        .loading-dots span:nth-child(3) { animation-delay: 0.4s; }
+        @keyframes loading {
+            0%, 80%, 100% { transform: scale(0); }
+            40% { transform: scale(1); }
+        }
+        
+        /* 历史记录项动画 */
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateX(-10px); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+        .history-session-item {
+            animation: slideIn 0.3s ease-out;
+        }
+        
+        /* 文本截断 */
+        .line-clamp-2 {
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+        
+        /* 淡入动画 */
+        @keyframes fadeIn {
+            from { opacity: 0; transform: scale(0.95); }
+            to { opacity: 1; transform: scale(1); }
+        }
+        .animate-fadeIn {
+            animation: fadeIn 0.2s ease-out;
+        }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-blue-50 via-purple-50 to-pink-50 min-h-screen">
+    <div class="container mx-auto px-4 py-6 max-w-7xl">
+        <!-- 顶部状态栏 -->
+        <header class="mb-6 bg-white/80 backdrop-blur-sm rounded-xl shadow-lg p-4">
+            <div class="flex justify-between items-center">
+                <div class="flex items-center space-x-4">
+                    <div class="w-12 h-12 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center shadow-lg">
+                        <i class="fa fa-robot text-white text-2xl"></i>
+                    </div>
+                    <div>
+                        <h1 class="text-2xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
+                            小雷版小龙虾AI助手
+                        </h1>
+                        <p class="text-sm text-gray-600 flex items-center">
+                            <span id="connection-status" class="inline-block w-2 h-2 bg-green-500 rounded-full mr-2 animate-pulse"></span>
+                            <span id="status-text">已连接</span>
+                        </p>
+                    </div>
+                </div>
+                <div class="flex space-x-3">
+                    <button onclick="showHistory()" class="bg-gray-100 hover:bg-gray-200 px-4 py-2 rounded-lg transition duration-200 flex items-center text-sm">
+                        <i class="fa fa-history mr-2"></i> 历史记录
+                    </button>
+                    <button onclick="clearChat()" class="bg-gray-100 hover:bg-gray-200 px-4 py-2 rounded-lg transition duration-200 flex items-center text-sm">
+                        <i class="fa fa-trash-o mr-2"></i> 清空对话
+                    </button>
+                    <button onclick="exportChat()" class="bg-gray-100 hover:bg-gray-200 px-4 py-2 rounded-lg transition duration-200 flex items-center text-sm">
+                        <i class="fa fa-download mr-2"></i> 导出
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <div class="flex flex-col lg:flex-row gap-6">
+            <!-- 左侧聊天区域 -->
+            <div class="lg:w-3/4 bg-white rounded-2xl shadow-xl overflow-hidden">
+                <!-- 聊天头部 -->
+                <div class="bg-gradient-to-r from-blue-600 to-purple-600 text-white p-4 flex justify-between items-center">
+                    <div>
+                        <h2 class="font-semibold text-lg flex items-center">
+                            <i class="fa fa-comments mr-2"></i> 
+                            <span id="current-character-name">智能对话</span>
+                        </h2>
+                        <p class="text-sm opacity-90 mt-1" id="character-description">与AI助手交流</p>
+                    </div>
+                    <div class="flex items-center space-x-2">
+                        <div id="agent-indicator" class="hidden bg-white/20 px-3 py-1 rounded-full text-xs">
+                            <i class="fa fa-cogs mr-1"></i>
+                            <span id="agent-name">Agent</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 聊天内容 -->
+                <div id="chat-messages" class="p-6 h-[500px] overflow-y-auto space-y-4 bg-gradient-to-b from-gray-50 to-white">
+                    <!-- 欢迎消息 -->
+                    <div class="flex message-animation">
+                        <div class="w-10 h-10 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center mr-3 flex-shrink-0">
+                            <i class="fa fa-robot text-white"></i>
+                        </div>
+                        <div class="bg-white rounded-2xl rounded-tl-none p-4 max-w-[80%] shadow-md border border-gray-100">
+                            <p class="text-gray-800 leading-relaxed">你好！我是小雷版小龙虾AI助手 👋</p>
+                            <p class="text-gray-600 text-sm mt-2">我可以帮助你：</p>
+                            <ul class="text-gray-600 text-sm mt-1 space-y-1 ml-4 list-disc">
+                                <li>🌤️ 查询天气信息</li>
+                                <li>🔍 搜索网络资讯</li>
+                                <li>📊 数据分析与总结</li>
+                                <li>💬 多角色智能对话</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 快捷指令面板 -->
+                <div id="quick-commands" class="px-6 py-3 bg-gray-50 border-t border-gray-200 hidden">
+                    <p class="text-xs text-gray-500 mb-2">💡 快捷指令：</p>
+                    <div class="flex flex-wrap gap-2">
+                        <button onclick="sendQuickCommand('查询北京今天的天气')" class="quick-command bg-white px-3 py-1.5 rounded-lg text-sm border border-gray-200 hover:border-blue-400">
+                            🌤️ 北京天气
+                        </button>
+                        <button onclick="sendQuickCommand('帮我搜索人工智能最新进展')" class="quick-command bg-white px-3 py-1.5 rounded-lg text-sm border border-gray-200 hover:border-blue-400">
+                            🔍 AI进展
+                        </button>
+                        <button onclick="sendQuickCommand('总结一下今天的新闻')" class="quick-command bg-white px-3 py-1.5 rounded-lg text-sm border border-gray-200 hover:border-blue-400">
+                            📰 今日新闻
+                        </button>
+                        <button onclick="sendQuickCommand('分析一下Python异步编程')" class="quick-command bg-white px-3 py-1.5 rounded-lg text-sm border border-gray-200 hover:border-blue-400">
+                            💻 Python分析
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 聊天输入 -->
+                <div class="p-4 border-t bg-white">
+                    <form id="chat-form" class="flex space-x-3">
+                        <div class="flex-1 relative">
+                            <input type="text" id="message-input" placeholder="输入消息... (Enter发送)" 
+                                   class="w-full p-3 pr-12 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all">
+                            <button type="button" onclick="toggleQuickCommands()" class="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-blue-600 transition">
+                                <i class="fa fa-bolt"></i>
+                            </button>
+                        </div>
+                        <button type="submit" id="send-button" class="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-6 py-3 rounded-xl hover:shadow-lg transition duration-200 flex items-center">
+                            <i class="fa fa-paper-plane mr-2"></i>
+                            <span>发送</span>
+                        </button>
+                    </form>
+                </div>
+            </div>
+
+            <!-- 右侧边栏 -->
+            <div class="lg:w-1/4 space-y-6">
+                <!-- 角色选择 -->
+                <div class="bg-white rounded-2xl shadow-lg p-5">
+                    <h3 class="font-semibold mb-4 flex items-center text-lg">
+                        <i class="fa fa-user-circle mr-2 text-blue-600"></i> 
+                        角色选择
+                    </h3>
+                    <div class="space-y-3">
+                        <button class="w-full text-left p-3 rounded-xl hover:bg-gray-50 flex items-center transition-all character-btn character-selected" 
+                                data-character="default" data-name="小龙虾助手" data-desc="智能对话助手">
+                            <div class="w-10 h-10 bg-gradient-to-br from-blue-400 to-blue-600 rounded-full flex items-center justify-center mr-3 shadow-md">
+                                <i class="fa fa-robot text-white"></i>
+                            </div>
+                            <div>
+                                <span class="font-medium block">小龙虾助手</span>
+                                <span class="text-xs text-gray-500">通用AI助手</span>
+                            </div>
+                        </button>
+                        
+                        <button class="w-full text-left p-3 rounded-xl hover:bg-gray-50 flex items-center transition-all character-btn" 
+                                data-character="first_love" data-name="温柔初恋" data-desc="温柔体贴的初恋女友">
+                            <div class="w-10 h-10 bg-gradient-to-br from-pink-400 to-pink-600 rounded-full flex items-center justify-center mr-3 shadow-md">
+                                <i class="fa fa-heart text-white"></i>
+                            </div>
+                            <div>
+                                <span class="font-medium block">温柔初恋</span>
+                                <span class="text-xs text-gray-500">温柔体贴</span>
+                            </div>
+                        </button>
+                        
+                        <button class="w-full text-left p-3 rounded-xl hover:bg-gray-50 flex items-center transition-all character-btn" 
+                                data-character="bestfriend" data-name="知心闺蜜" data-desc="无话不谈的好闺蜜">
+                            <div class="w-10 h-10 bg-gradient-to-br from-purple-400 to-purple-600 rounded-full flex items-center justify-center mr-3 shadow-md">
+                                <i class="fa fa-female text-white"></i>
+                            </div>
+                            <div>
+                                <span class="font-medium block">知心闺蜜</span>
+                                <span class="text-xs text-gray-500">知心好友</span>
+                            </div>
+                        </button>
+                        
+                        <button class="w-full text-left p-3 rounded-xl hover:bg-gray-50 flex items-center transition-all character-btn" 
+                                data-character="goddess" data-name="高冷女神" data-desc="优雅高贵的女神">
+                            <div class="w-10 h-10 bg-gradient-to-br from-red-400 to-red-600 rounded-full flex items-center justify-center mr-3 shadow-md">
+                                <i class="fa fa-star text-white"></i>
+                            </div>
+                            <div>
+                                <span class="font-medium block">高冷女神</span>
+                                <span class="text-xs text-gray-500">优雅高贵</span>
+                            </div>
+                        </button>
+                        
+                        <button class="w-full text-left p-3 rounded-xl hover:bg-gray-50 flex items-center transition-all character-btn" 
+                                data-character="libai" data-name="诗仙李白" data-desc="唐代诗人">
+                            <div class="w-10 h-10 bg-gradient-to-br from-yellow-400 to-yellow-600 rounded-full flex items-center justify-center mr-3 shadow-md">
+                                <i class="fa fa-pencil text-white"></i>
+                            </div>
+                            <div>
+                                <span class="font-medium block">诗仙李白</span>
+                                <span class="text-xs text-gray-500">浪漫诗人</span>
+                            </div>
+                        </button>
+                        
+                        <button class="w-full text-left p-3 rounded-xl hover:bg-gray-50 flex items-center transition-all character-btn" 
+                                data-character="john_carmack" data-name="约翰·卡马克" data-desc="传奇程序员">
+                            <div class="w-10 h-10 bg-gradient-to-br from-green-400 to-green-600 rounded-full flex items-center justify-center mr-3 shadow-md">
+                                <i class="fa fa-code text-white"></i>
+                            </div>
+                            <div>
+                                <span class="font-medium block">约翰·卡马克</span>
+                                <span class="text-xs text-gray-500">技术大神</span>
+                            </div>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 快捷工具 -->
+                <div class="bg-white rounded-2xl shadow-lg p-5">
+                    <h3 class="font-semibold mb-4 flex items-center text-lg">
+                        <i class="fa fa-wrench mr-2 text-blue-600"></i> 
+                        快捷工具
+                    </h3>
+                    <div class="space-y-2">
+                        <button onclick="useTool('weather')" class="w-full text-left p-3 rounded-xl hover:bg-blue-50 flex items-center transition-all group">
+                            <div class="w-9 h-9 bg-blue-100 group-hover:bg-blue-200 rounded-lg flex items-center justify-center mr-3 transition">
+                                <i class="fa fa-cloud text-blue-600"></i>
+                            </div>
+                            <div>
+                                <span class="font-medium block text-sm">天气查询</span>
+                                <span class="text-xs text-gray-500">实时天气预报</span>
+                            </div>
+                        </button>
+                        
+                        <button onclick="useTool('web_scraper')" class="w-full text-left p-3 rounded-xl hover:bg-green-50 flex items-center transition-all group">
+                            <div class="w-9 h-9 bg-green-100 group-hover:bg-green-200 rounded-lg flex items-center justify-center mr-3 transition">
+                                <i class="fa fa-globe text-green-600"></i>
+                            </div>
+                            <div>
+                                <span class="font-medium block text-sm">网页爬虫</span>
+                                <span class="text-xs text-gray-500">抓取网页内容</span>
+                            </div>
+                        </button>
+                        
+                        <button onclick="useTool('translator')" class="w-full text-left p-3 rounded-xl hover:bg-purple-50 flex items-center transition-all group">
+                            <div class="w-9 h-9 bg-purple-100 group-hover:bg-purple-200 rounded-lg flex items-center justify-center mr-3 transition">
+                                <i class="fa fa-language text-purple-600"></i>
+                            </div>
+                            <div>
+                                <span class="font-medium block text-sm">翻译工具</span>
+                                <span class="text-xs text-gray-500">多语言翻译</span>
+                            </div>
+                        </button>
+                        
+                        <button onclick="useTool('data_analysis')" class="w-full text-left p-3 rounded-xl hover:bg-yellow-50 flex items-center transition-all group">
+                            <div class="w-9 h-9 bg-yellow-100 group-hover:bg-yellow-200 rounded-lg flex items-center justify-center mr-3 transition">
+                                <i class="fa fa-bar-chart text-yellow-600"></i>
+                            </div>
+                            <div>
+                                <span class="font-medium block text-sm">数据分析</span>
+                                <span class="text-xs text-gray-500">数据统计分析</span>
+                            </div>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 历史记录 -->
+                <div class="bg-white rounded-2xl shadow-lg p-5">
+                    <h3 class="font-semibold mb-4 flex items-center text-lg justify-between">
+                        <span>
+                            <i class="fa fa-history mr-2 text-blue-600"></i> 
+                            历史记录
+                        </span>
+                        <button onclick="showHistoryStats()" class="text-xs bg-blue-100 hover:bg-blue-200 px-2 py-1 rounded transition" title="统计分析">
+                            📊
+                        </button>
+                    </h3>
+                    
+                    <!-- 搜索框 -->
+                    <div class="mb-3">
+                        <input type="text" id="history-search-input" placeholder="🔍 搜索历史..." 
+                               class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                               onkeypress="if(event.key==='Enter') loadHistory()">
+                    </div>
+                    
+                    <!-- 筛选器 -->
+                    <div class="flex gap-2 mb-3">
+                        <select id="history-time-filter" onchange="loadHistory()" class="flex-1 px-2 py-1.5 border border-gray-300 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <option value="all">全部时间</option>
+                            <option value="today">今天</option>
+                            <option value="week">本周</option>
+                            <option value="month">本月</option>
+                        </select>
+                        <button onclick="clearAllHistory()" class="px-2 py-1.5 bg-red-100 hover:bg-red-200 text-red-600 rounded-lg text-xs transition" title="清空历史">
+                            🗑️
+                        </button>
+                    </div>
+                    
+                    <!-- 历史列表 -->
+                    <div id="history-list" class="space-y-2 max-h-[300px] overflow-y-auto">
+                        <div class="text-center text-gray-400 text-sm py-8">
+                            <i class="fa fa-spinner fa-spin text-2xl mb-2"></i>
+                            <p>加载中...</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 系统状态 -->
+                <div class="bg-white rounded-2xl shadow-lg p-5">
+                    <h3 class="font-semibold mb-4 flex items-center text-lg">
+                        <i class="fa fa-info-circle mr-2 text-blue-600"></i> 
+                        系统状态
+                    </h3>
+                    <div class="space-y-3 text-sm">
+                        <div class="flex justify-between items-center">
+                            <span class="text-gray-600">API版本</span>
+                            <span class="font-medium text-blue-600">v1.0</span>
+                        </div>
+                        <div class="flex justify-between items-center">
+                            <span class="text-gray-600">响应时间</span>
+                            <span id="response-time" class="font-medium text-green-600">--ms</span>
+                        </div>
+                        <div class="flex justify-between items-center">
+                            <span class="text-gray-600">消息数</span>
+                            <span id="message-count" class="font-medium">0</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 页脚 -->
+        <footer class="text-center text-gray-600 mt-8 pb-4">
+            <p class="text-sm">© 2026 小雷版小龙虾AI助手 | 智能对话平台</p>
+        </footer>
+    </div>
+
+    <script>
+        // 全局变量
+        let currentCharacter = 'default';
+        let ws;
+        let messageCount = 0;
+        let responseStartTime = 0;
+
+        // 初始化WebSocket连接
+        function initWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/ws/chat`;
+            
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = function() {
+                console.log('WebSocket连接已建立');
+                updateConnectionStatus(true);
+            };
+
+            ws.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                const responseTime = Date.now() - responseStartTime;
+                document.getElementById('response-time').textContent = `${responseTime}ms`;
+                
+                // 使用打字机效果显示回复
+                showTypingEffect(data.reply);
+            };
+
+            ws.onclose = function() {
+                console.log('WebSocket连接已关闭');
+                updateConnectionStatus(false);
+                // 5秒后重连
+                setTimeout(initWebSocket, 5000);
+            };
+
+            ws.onerror = function(error) {
+                console.error('WebSocket错误:', error);
+                updateConnectionStatus(false);
+            };
+        }
+
+        // 更新连接状态
+        function updateConnectionStatus(connected) {
+            const statusIndicator = document.getElementById('connection-status');
+            const statusText = document.getElementById('status-text');
+            
+            if (connected) {
+                statusIndicator.className = 'inline-block w-2 h-2 bg-green-500 rounded-full mr-2 animate-pulse';
+                statusText.textContent = '已连接';
+            } else {
+                statusIndicator.className = 'inline-block w-2 h-2 bg-red-500 rounded-full mr-2';
+                statusText.textContent = '未连接';
+            }
+        }
+
+        // 添加消息到聊天界面
+        function addMessage(role, content, useMarkdown = true) {
+            const chatMessages = document.getElementById('chat-messages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `flex message-animation ${role === 'user' ? 'justify-end' : ''}`;
+            
+            if (role === 'user') {
+                messageDiv.innerHTML = `
+                    <div class="bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-2xl rounded-tr-none p-4 max-w-[80%] shadow-md">
+                        <p class="leading-relaxed">${escapeHtml(content)}</p>
+                    </div>
+                    <div class="w-10 h-10 bg-gradient-to-br from-gray-400 to-gray-600 rounded-full flex items-center justify-center ml-3 flex-shrink-0">
+                        <i class="fa fa-user text-white"></i>
+                    </div>
+                `;
+            } else {
+                const renderedContent = useMarkdown ? marked.parse(content) : content;
+                messageDiv.innerHTML = `
+                    <div class="w-10 h-10 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center mr-3 flex-shrink-0">
+                        <i class="fa fa-robot text-white"></i>
+                    </div>
+                    <div class="bg-white rounded-2xl rounded-tl-none p-4 max-w-[80%] shadow-md border border-gray-100 prose prose-sm max-w-none">
+                        ${renderedContent}
+                    </div>
+                `;
+            }
+            
+            chatMessages.appendChild(messageDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+            
+            messageCount++;
+            document.getElementById('message-count').textContent = messageCount;
+        }
+
+        // 打字机效果
+        function showTypingEffect(text) {
+            const chatMessages = document.getElementById('chat-messages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'flex message-animation';
+            
+            const typingId = 'typing-' + Date.now();
+            messageDiv.innerHTML = `
+                <div class="w-10 h-10 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center mr-3 flex-shrink-0">
+                    <i class="fa fa-robot text-white"></i>
+                </div>
+                <div class="bg-white rounded-2xl rounded-tl-none p-4 max-w-[80%] shadow-md border border-gray-100">
+                    <div id="${typingId}" class="typing-cursor text-gray-800 leading-relaxed"></div>
+                </div>
+            `;
+            
+            chatMessages.appendChild(messageDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+            
+            const typingElement = document.getElementById(typingId);
+            let index = 0;
+            const speed = 20; // 打字速度（毫秒）
+            
+            function typeWriter() {
+                if (index < text.length) {
+                    typingElement.textContent += text.charAt(index);
+                    index++;
+                    setTimeout(typeWriter, speed);
+                    chatMessages.scrollTop = chatMessages.scrollHeight;
+                } else {
+                    // 打字完成，替换为Markdown渲染
+                    typingElement.classList.remove('typing-cursor');
+                    typingElement.innerHTML = marked.parse(text);
+                }
+            }
+            
+            typeWriter();
+        }
+
+        // 显示加载动画
+        function showLoading() {
+            const chatMessages = document.getElementById('chat-messages');
+            const loadingDiv = document.createElement('div');
+            loadingDiv.id = 'loading-indicator';
+            loadingDiv.className = 'flex message-animation';
+            loadingDiv.innerHTML = `
+                <div class="w-10 h-10 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center mr-3 flex-shrink-0">
+                    <i class="fa fa-robot text-white"></i>
+                </div>
+                <div class="bg-white rounded-2xl rounded-tl-none p-4 shadow-md border border-gray-100">
+                    <div class="loading-dots">
+                        <span class="w-2 h-2 bg-gray-400 rounded-full inline-block"></span>
+                        <span class="w-2 h-2 bg-gray-400 rounded-full inline-block"></span>
+                        <span class="w-2 h-2 bg-gray-400 rounded-full inline-block"></span>
+                    </div>
+                </div>
+            `;
+            chatMessages.appendChild(loadingDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        // 隐藏加载动画
+        function hideLoading() {
+            const loadingIndicator = document.getElementById('loading-indicator');
+            if (loadingIndicator) {
+                loadingIndicator.remove();
+            }
+        }
+
+        // 发送消息
+        function sendMessage() {
+            const messageInput = document.getElementById('message-input');
+            const message = messageInput.value.trim();
+            
+            if (message) {
+                addMessage('user', message, false);
+                messageInput.value = '';
+                responseStartTime = Date.now();
+                
+                showLoading();
+
+                // 通过WebSocket发送消息
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({
+                        message: message,
+                        user_id: 1,
+                        character_id: currentCharacter
+                    }));
+                } else {
+                    // 回退到HTTP请求
+                    fetch('/api/chat', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            message: message,
+                            user_id: 1,
+                            character_id: currentCharacter
+                        })
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        hideLoading();
+                        showTypingEffect(data.reply);
+                    })
+                    .catch(error => {
+                        hideLoading();
+                        console.error('发送消息失败:', error);
+                        addMessage('assistant', '抱歉，发送消息失败，请重试');
+                    });
+                }
+            }
+        }
+
+        // 快捷指令
+        function sendQuickCommand(command) {
+            document.getElementById('message-input').value = command;
+            sendMessage();
+        }
+
+        // 切换快捷指令面板
+        function toggleQuickCommands() {
+            const panel = document.getElementById('quick-commands');
+            panel.classList.toggle('hidden');
+        }
+
+        // 使用工具
+        function useTool(tool) {
+            const toolNames = {
+                'weather': '天气查询',
+                'web_scraper': '网页爬虫',
+                'translator': '翻译工具',
+                'data_analysis': '数据分析'
+            };
+            const command = `使用${toolNames[tool]}`;
+            sendQuickCommand(command);
+        }
+
+        // 选择角色
+        document.querySelectorAll('.character-btn').forEach(button => {
+            button.addEventListener('click', function() {
+                currentCharacter = this.getAttribute('data-character');
+                const characterName = this.getAttribute('data-name');
+                const characterDesc = this.getAttribute('data-desc');
+                
+                // 重置选中状态
+                document.querySelectorAll('.character-btn').forEach(btn => {
+                    btn.classList.remove('character-selected');
+                });
+                
+                // 设置当前选中状态
+                this.classList.add('character-selected');
+                
+                // 更新头部显示
+                document.getElementById('current-character-name').textContent = characterName;
+                document.getElementById('character-description').textContent = characterDesc;
+                
+                addMessage('assistant', `✨ 已切换到角色：**${characterName}**\n\n${characterDesc}`, true);
+            });
+        });
+
+        // 清空对话
+        function clearChat() {
+            if (confirm('确定要清空所有对话记录吗？')) {
+                const chatMessages = document.getElementById('chat-messages');
+                chatMessages.innerHTML = '';
+                messageCount = 0;
+                document.getElementById('message-count').textContent = '0';
+                addMessage('assistant', '对话已清空，有什么可以帮你的吗？');
+            }
+        }
+
+        // 导出对话
+        function exportChat() {
+            const chatMessages = document.getElementById('chat-messages');
+            const messages = [];
+            
+            chatMessages.querySelectorAll('.flex').forEach(msg => {
+                const text = msg.querySelector('p')?.textContent || msg.querySelector('.prose')?.textContent;
+                if (text) {
+                    messages.push(text);
+                }
+            });
+            
+            const blob = new Blob([messages.join('\n\n')], { type: 'text/plain;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `chat-export-${new Date().toISOString().slice(0, 10)}.txt`;
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        // HTML转义
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // ═══════════════════════════════════════════════════
+        // 历史记录功能
+        // ═══════════════════════════════════════════════════
+        
+        // 加载历史记录
+        async function loadHistory() {
+            const historyList = document.getElementById('history-list');
+            if (!historyList) return;
+            
+            try {
+                // 获取筛选参数
+                const searchInput = document.getElementById('history-search-input');
+                const timeFilter = document.getElementById('history-time-filter');
+                
+                const params = new URLSearchParams({
+                    group_by_session: 'true',
+                    limit: '20',
+                    offset: '0'
+                });
+                
+                if (searchInput && searchInput.value.trim()) {
+                    params.append('search', searchInput.value.trim());
+                }
+                
+                if (timeFilter && timeFilter.value !== 'all') {
+                    const now = new Date();
+                    let startDate;
+                    
+                    switch(timeFilter.value) {
+                        case 'today':
+                            startDate = now.toISOString().split('T')[0];
+                            break;
+                        case 'week':
+                            startDate = new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+                            break;
+                        case 'month':
+                            startDate = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
+                            break;
+                    }
+                    
+                    if (startDate) {
+                        params.append('start_date', startDate);
+                    }
+                }
+                
+                const response = await fetch(`/api/history?${params.toString()}`);
+                const data = await response.json();
+                const sessions = data.sessions || [];
+                
+                if (!sessions.length) {
+                    historyList.innerHTML = `
+                        <div class="text-center text-gray-400 text-sm py-8">
+                            <i class="fa fa-inbox text-3xl mb-2"></i>
+                            <p>暂无历史记录</p>
+                        </div>
+                    `;
+                    return;
+                }
+                
+                // 渲染会话列表
+                historyList.innerHTML = sessions.map(session => {
+                    const messageCount = session.message_count || 0;
+                    const lastTime = session.last_message_time ? formatTime(session.last_message_time) : '';
+                    const preview = session.preview || '无预览';
+                    const characterName = getCharacterName(session.character_id);
+                    
+                    return `
+                        <div class="history-session-item bg-gray-50 hover:bg-blue-50 p-3 rounded-lg cursor-pointer transition-all border border-gray-200 hover:border-blue-300" 
+                             onclick="loadSession('${session.session_id}', '${session.character_id}')">
+                            <div class="flex justify-between items-start mb-1">
+                                <span class="font-medium text-sm text-gray-800">${escapeHtml(characterName)}</span>
+                                <span class="text-xs text-gray-500">${lastTime}</span>
+                            </div>
+                            <p class="text-xs text-gray-600 line-clamp-2 mb-2">${escapeHtml(preview)}</p>
+                            <div class="flex justify-between items-center">
+                                <span class="text-xs bg-blue-100 text-blue-600 px-2 py-0.5 rounded">${messageCount}条消息</span>
+                                <button onclick="event.stopPropagation(); continueSession('${session.character_id}')" 
+                                        class="text-xs text-blue-600 hover:text-blue-800">
+                                    继续对话 →
+                                </button>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+                
+            } catch (error) {
+                console.error('加载历史记录失败:', error);
+                historyList.innerHTML = `
+                    <div class="text-center text-red-400 text-sm py-8">
+                        <i class="fa fa-exclamation-circle text-3xl mb-2"></i>
+                        <p>加载失败</p>
+                    </div>
+                `;
+            }
+        }
+        
+        // 加载会话到聊天界面
+        async function loadSession(sessionId, characterId) {
+            try {
+                const response = await fetch(`/api/history/session/${sessionId}`);
+                const data = await response.json();
+                
+                if (!data.messages || data.messages.length === 0) {
+                    alert('会话为空或不存在');
+                    return;
+                }
+                
+                // 清空当前聊天
+                clearChat();
+                
+                // 切换角色
+                if (characterId) {
+                    switchCharacter(characterId);
+                }
+                
+                // 加载历史消息
+                const chatMessages = document.getElementById('chat-messages');
+                data.messages.forEach(msg => {
+                    addMessage(msg.role, msg.content, false);
+                });
+                
+                // 滚动到底部
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+                
+            } catch (error) {
+                console.error('加载会话失败:', error);
+                alert('加载会话失败');
+            }
+        }
+        
+        // 继续会话
+        function continueSession(characterId) {
+            switchCharacter(characterId);
+            document.getElementById('message-input').focus();
+        }
+        
+        // 切换角色
+        function switchCharacter(characterId) {
+            const charBtn = document.querySelector(`[data-character="${characterId}"]`);
+            if (charBtn) {
+                charBtn.click();
+            }
+        }
+        
+        // 获取角色名称
+        function getCharacterName(characterId) {
+            const charMap = {
+                'default': '小龙虾助手',
+                'li_bai': '诗仙李白',
+                'john_carmack': '约翰·卡马克',
+                'weather_expert': '天气专家',
+                'data_analyst': '数据分析师'
+            };
+            return charMap[characterId] || characterId;
+        }
+        
+        // 格式化时间
+        function formatTime(isoString) {
+            if (!isoString) return '';
+            const date = new Date(isoString);
+            const now = new Date();
+            const diff = now - date;
+            
+            // 今天
+            if (diff < 24 * 60 * 60 * 1000 && date.getDate() === now.getDate()) {
+                return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+            }
+            
+            // 昨天
+            if (diff < 48 * 60 * 60 * 1000) {
+                return '昨天 ' + date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+            }
+            
+            // 其他
+            return date.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' });
+        }
+        
+        // 显示历史统计
+        async function showHistoryStats() {
+            try {
+                const response = await fetch('/api/history/stats');
+                const data = await response.json();
+                const stats = data.stats || {};
+                
+                const totalMessages = stats.total_messages || 0;
+                const userMessages = stats.user_messages || 0;
+                const assistantMessages = stats.assistant_messages || 0;
+                const conversationDays = stats.conversation_days || 0;
+                
+                // 创建统计弹窗
+                const modal = document.createElement('div');
+                modal.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50';
+                modal.onclick = (e) => {
+                    if (e.target === modal) modal.remove();
+                };
+                
+                modal.innerHTML = `
+                    <div class="bg-white rounded-2xl shadow-2xl max-w-md w-full mx-4 p-6 animate-fadeIn">
+                        <div class="flex justify-between items-center mb-4">
+                            <h3 class="text-xl font-bold text-gray-800">📊 对话统计</h3>
+                            <button onclick="this.closest('.fixed').remove()" class="text-gray-400 hover:text-gray-600 text-2xl">&times;</button>
+                        </div>
+                        
+                        <div class="grid grid-cols-2 gap-4 mb-6">
+                            <div class="bg-gradient-to-br from-blue-50 to-blue-100 p-4 rounded-xl text-center">
+                                <div class="text-3xl font-bold text-blue-600">${totalMessages}</div>
+                                <div class="text-sm text-gray-600 mt-1">总消息数</div>
+                            </div>
+                            <div class="bg-gradient-to-br from-green-50 to-green-100 p-4 rounded-xl text-center">
+                                <div class="text-3xl font-bold text-green-600">${userMessages}</div>
+                                <div class="text-sm text-gray-600 mt-1">我的消息</div>
+                            </div>
+                            <div class="bg-gradient-to-br from-purple-50 to-purple-100 p-4 rounded-xl text-center">
+                                <div class="text-3xl font-bold text-purple-600">${assistantMessages}</div>
+                                <div class="text-sm text-gray-600 mt-1">AI回复</div>
+                            </div>
+                            <div class="bg-gradient-to-br from-yellow-50 to-yellow-100 p-4 rounded-xl text-center">
+                                <div class="text-3xl font-bold text-yellow-600">${conversationDays}</div>
+                                <div class="text-sm text-gray-600 mt-1">活跃天数</div>
+                            </div>
+                        </div>
+                        
+                        ${stats.character_breakdown ? `
+                            <div class="mb-4">
+                                <h4 class="font-semibold text-gray-700 mb-2">各角色消息分布</h4>
+                                <div class="space-y-2">
+                                    ${Object.entries(stats.character_breakdown).map(([char, count]) => `
+                                        <div class="flex justify-between items-center p-2 bg-gray-50 rounded-lg">
+                                            <span class="text-sm text-gray-700">${getCharacterName(char)}</span>
+                                            <span class="text-sm font-medium text-blue-600">${count} 条</span>
+                                        </div>
+                                    `).join('')}
+                                </div>
+                            </div>
+                        ` : ''}
+                        
+                        ${stats.earliest_message ? `
+                            <div class="text-xs text-gray-500 space-y-1 pt-4 border-t">
+                                <p>📅 最早消息: ${new Date(stats.earliest_message).toLocaleString('zh-CN')}</p>
+                                <p>📅 最新消息: ${new Date(stats.latest_message).toLocaleString('zh-CN')}</p>
+                            </div>
+                        ` : ''}
+                    </div>
+                `;
+                
+                document.body.appendChild(modal);
+                
+            } catch (error) {
+                console.error('获取统计信息失败:', error);
+                alert('获取统计信息失败');
+            }
+        }
+        
+        // 清空所有历史记录
+        async function clearAllHistory() {
+            if (!confirm('确定要清空所有历史记录吗？此操作不可恢复！')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/history', {
+                    method: 'DELETE'
+                });
+                const data = await response.json();
+                
+                if (data.success) {
+                    alert('清空成功');
+                    loadHistory();
+                } else {
+                    alert('清空失败: ' + (data.detail || '未知错误'));
+                }
+            } catch (error) {
+                console.error('清空历史记录失败:', error);
+                alert('清空失败');
+            }
+        }
+        
+        // 显示历史记录面板（从顶部按钮调用）
+        function showHistory() {
+            // 滚动到历史记录面板
+            const historyPanel = document.getElementById('history-list');
+            if (historyPanel) {
+                historyPanel.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                // 高亮显示
+                historyPanel.parentElement.classList.add('ring-2', 'ring-blue-500');
+                setTimeout(() => {
+                    historyPanel.parentElement.classList.remove('ring-2', 'ring-blue-500');
+                }, 1000);
+            }
+        }
+
+        // 表单提交
+        document.getElementById('chat-form').addEventListener('submit', function(e) {
+            e.preventDefault();
+            sendMessage();
+        });
+
+        // 回车键发送
+        document.getElementById('message-input').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+
+        // 初始化
+        document.addEventListener('DOMContentLoaded', function() {
+            initWebSocket();
+            
+            // 默认选中第一个角色
+            document.querySelector('[data-character="default"]').classList.add('character-selected');
+            
+            // 加载历史记录
+            loadHistory();
+        });
+    </script>
+</body>
+</html>

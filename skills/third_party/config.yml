@@ -1,0 +1,166 @@
+# 第三方应用配置
+apps:
+  twitter:
+    name: Twitter
+    api_url: https://api.twitter.com
+    auth_method: bearer_token
+    keywords: [twitter, tweet, social, 推特, 社交, 推文]
+    priority: 4
+    description: Twitter API集成
+    config:
+      api_key: your_twitter_bearer_token
+  
+  discord:
+    name: Discord
+    api_url: https://discord.com/api/v10
+    auth_method: bot_token
+    keywords: [discord, server, channel, message,  discord, 服务器, 频道, 消息]
+    priority: 4
+    description: Discord API集成
+    config:
+      api_key: your_discord_token
+  
+  jira:
+    name: Jira
+    api_url: https://your-domain.atlassian.net
+    auth_method: basic_auth
+    keywords: [jira, issue, project, task, 项目, 任务, 问题]
+    priority: 3
+    description: Jira API集成
+    config:
+      email: your_email@example.com
+      api_token: your_jira_api_token
+  
+  slack:
+    name: Slack
+    api_url: https://slack.com/api
+    auth_method: api_key
+    keywords: [slack, chat, message, channel, 聊天, 消息, 频道]
+    priority: 4
+    description: Slack API集成
+    config:
+      api_key: your_slack_api_key
+  
+  trello:
+    name: Trello
+    api_url: https://api.trello.com/1
+    auth_method: api_key
+    keywords: [trello, board, card, task, 看板, 卡片, 任务]
+    priority: 3
+    description: Trello API集成
+    config:
+      api_key: your_trello_api_key
+      token: your_trello_token
+  
+  # 国内应用
+  wechat:
+    name: 微信
+    api_url: https://api.weixin.qq.com
+    auth_method: api_key
+    keywords: [wechat, 微信, 公众号, 小程序, 企业微信]
+    priority: 5
+    description: 微信API集成
+    config:
+      app_id: wx25b46208976c074a
+      app_secret: d7a9863ac391827f9a075bde516e945c
+  
+  dingtalk:
+    name: 钉钉
+    api_url: https://oapi.dingtalk.com
+    auth_method: api_key
+    keywords: [dingtalk, 钉钉, 企业应用, 审批, 打卡]
+    priority: 4
+    description: 钉钉API集成
+    config:
+      app_key: your_dingtalk_app_key
+      app_secret: your_dingtalk_app_secret
+  
+  feishu:
+    name: 飞书
+    api_url: https://open.feishu.cn
+    auth_method: api_key
+    keywords: [feishu, 飞书, 字节跳动, 企业协作, 文档]
+    priority: 4
+    description: 飞书API集成
+    config:
+      app_id: your_feishu_app_id
+      app_secret: your_feishu_app_secret
+  
+  weibo:
+    name: 微博
+    api_url: https://api.weibo.com
+    auth_method: api_key
+    keywords: [weibo, 微博, 热搜, 话题, 微博热搜]
+    priority: 4
+    description: 微博API集成
+    config:
+      app_key: your_weibo_app_key
+      app_secret: your_weibo_app_secret
+      access_token: your_weibo_access_token
+  
+  zhihu:
+    name: 知乎
+    api_url: https://api.zhihu.com
+    auth_method: api_key
+    keywords: [zhihu, 知乎, 问题, 回答, 专栏]
+    priority: 3
+    description: 知乎API集成
+    config:
+      api_key: your_zhihu_api_key
+      api_secret: your_zhihu_api_secret
+  
+  douyin:
+    name: 抖音
+    api_url: https://open.douyin.com
+    auth_method: api_key
+    keywords: [douyin, 抖音, 短视频, 直播, 抖音直播]
+    priority: 4
+    description: 抖音API集成
+    config:
+      client_key: your_douyin_client_key
+      client_secret: your_douyin_client_secret
+  
+  baidu:
+    name: 百度
+    api_url: https://api.baidu.com
+    auth_method: api_key
+    keywords: [baidu, 百度, 搜索, 地图, 百度地图]
+    priority: 3
+    description: 百度API集成
+    config:
+      api_key: your_baidu_api_key
+      secret_key: your_baidu_secret_key
+  
+  tencent_cloud:
+    name: 腾讯云
+    api_url: https://api.tencentcloudapi.com
+    auth_method: api_key
+    keywords: [tencent, 腾讯云, 云服务, 腾讯, 云函数]
+    priority: 3
+    description: 腾讯云API集成
+    config:
+      secret_id: your_tencent_secret_id
+      secret_key: your_tencent_secret_key
+  
+  alibaba_cloud:
+    name: 阿里云
+    api_url: https://ecs.aliyuncs.com
+    auth_method: api_key
+    keywords: [alibaba, 阿里云, 云服务, 阿里, 云服务器]
+    priority: 3
+    description: 阿里云API集成
+    config:
+      access_key_id: your_alibaba_access_key_id
+      access_key_secret: your_alibaba_access_key_secret
+  
+  huawei_cloud:
+    name: 华为云
+    api_url: https://ecs.cn-north-1.myhuaweicloud.com
+    auth_method: api_key
+    keywords: [huawei, 华为云, 云服务, 华为, 云服务器]
+    priority: 3
+    description: 华为云API集成
+    config:
+      ak: your_huawei_ak
+      sk: your_huawei_sk
+      project_id: your_huawei_project_id

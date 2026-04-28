@@ -1,0 +1,14 @@
+{
+  "recommendations": [
+    "ms-python.python",
+    "ms-python.vscode-pylance",
+    "ms-python.black-formatter",
+    "ms-python.isort",
+    "charliermarsh.ruff",
+    "github.copilot",
+    "streetsidesoftware.code-spell-checker",
+    "eamodio.gitlens",
+    "gruntfuggly.todo-tree",
+    "formulahendry.auto-rename-tag"
+  ]
+}

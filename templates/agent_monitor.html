@@ -1,0 +1,985 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>前端Agent监控 - 小雷版小龙虾</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <div class="container mx-auto px-4 py-8">
+        <header class="mb-8">
+            <div class="flex justify-between items-center">
+                <div>
+                    <h1 class="text-3xl font-bold text-blue-600">前端Agent监控中心</h1>
+                    <p class="text-gray-600 mt-1">实时监控前端Agent系统运行状态</p>
+                </div>
+                <div class="flex space-x-4">
+                    <a href="/" class="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 transition duration-200 flex items-center">
+                        <i class="fa fa-home mr-2"></i> 首页
+                    </a>
+                    <a href="/chat" class="bg-gray-200 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-300 transition duration-200 flex items-center">
+                        <i class="fa fa-comments mr-2"></i> 聊天
+                    </a>
+                </div>
+            </div>
+        </header>
+
+        <!-- 导航栏 -->
+        <nav class="bg-white rounded-lg shadow-md p-4 mb-6">
+            <ul class="flex space-x-6 overflow-x-auto">
+                <li><a href="#agent-status" class="font-medium text-blue-600 border-b-2 border-blue-600 pb-2 whitespace-nowrap">Agent状态</a></li>
+                <li><a href="#task-list" class="text-gray-600 hover:text-blue-600 hover:border-b-2 hover:border-blue-600 pb-2 whitespace-nowrap">任务列表</a></li>
+                <li><a href="#system-monitor" class="text-gray-600 hover:text-blue-600 hover:border-b-2 hover:border-blue-600 pb-2 whitespace-nowrap">系统监控</a></li>
+                <li><a href="#workflow" class="text-gray-600 hover:text-blue-600 hover:border-b-2 hover:border-blue-600 pb-2 whitespace-nowrap">工作流可视化</a></li>
+                <li><a href="#task-submit" class="text-gray-600 hover:text-blue-600 hover:border-b-2 hover:border-blue-600 pb-2 whitespace-nowrap">任务提交</a></li>
+            </ul>
+        </nav>
+
+        <!-- 系统概览 -->
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+            <div class="bg-white rounded-lg shadow-md p-4">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-gray-500 text-sm">总Agent数</p>
+                        <h3 class="text-2xl font-bold text-gray-800" id="total-agents">0</h3>
+                    </div>
+                    <div class="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center">
+                        <i class="fa fa-cogs text-blue-600 text-xl"></i>
+                    </div>
+                </div>
+            </div>
+            <div class="bg-white rounded-lg shadow-md p-4">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-gray-500 text-sm">总任务数</p>
+                        <h3 class="text-2xl font-bold text-gray-800" id="total-tasks">0</h3>
+                    </div>
+                    <div class="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center">
+                        <i class="fa fa-tasks text-green-600 text-xl"></i>
+                    </div>
+                </div>
+            </div>
+            <div class="bg-white rounded-lg shadow-md p-4">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-gray-500 text-sm">活跃任务</p>
+                        <h3 class="text-2xl font-bold text-gray-800" id="active-tasks">0</h3>
+                    </div>
+                    <div class="w-12 h-12 bg-yellow-100 rounded-full flex items-center justify-center">
+                        <i class="fa fa-spinner text-yellow-600 text-xl"></i>
+                    </div>
+                </div>
+            </div>
+            <div class="bg-white rounded-lg shadow-md p-4">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-gray-500 text-sm">系统负载</p>
+                        <h3 class="text-2xl font-bold text-gray-800" id="system-load">0%</h3>
+                    </div>
+                    <div class="w-12 h-12 bg-purple-100 rounded-full flex items-center justify-center">
+                        <i class="fa fa-tachometer text-purple-600 text-xl"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Agent状态面板 -->
+        <section id="agent-status" class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-xl font-semibold flex items-center">
+                    <i class="fa fa-cogs mr-2 text-blue-600"></i> Agent状态
+                </h2>
+                <button id="refresh-agents" class="bg-gray-200 text-gray-700 px-3 py-1 rounded-md hover:bg-gray-300 transition duration-200 flex items-center text-sm">
+                    <i class="fa fa-refresh mr-1"></i> 刷新
+                </button>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" id="agent-cards">
+                <!-- Agent状态卡片将通过JavaScript动态生成 -->
+            </div>
+        </section>
+
+        <!-- 任务列表 -->
+        <section id="task-list" class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-xl font-semibold flex items-center">
+                    <i class="fa fa-tasks mr-2 text-blue-600"></i> 任务列表
+                </h2>
+                <div class="flex space-x-2">
+                    <select id="task-filter" class="border border-gray-300 rounded-md px-3 py-1 text-sm">
+                        <option value="all">所有任务</option>
+                        <option value="pending">待处理</option>
+                        <option value="running">运行中</option>
+                        <option value="completed">已完成</option>
+                        <option value="failed">失败</option>
+                    </select>
+                    <button id="refresh-tasks" class="bg-gray-200 text-gray-700 px-3 py-1 rounded-md hover:bg-gray-300 transition duration-200 flex items-center text-sm">
+                        <i class="fa fa-refresh mr-1"></i> 刷新
+                    </button>
+                </div>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="min-w-full">
+                    <thead>
+                        <tr class="bg-gray-100">
+                            <th class="py-2 px-4 border-b text-left">任务ID</th>
+                            <th class="py-2 px-4 border-b text-left">Agent名称</th>
+                            <th class="py-2 px-4 border-b text-left">任务类型</th>
+                            <th class="py-2 px-4 border-b text-left">状态</th>
+                            <th class="py-2 px-4 border-b text-left">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="task-table-body">
+                        <!-- 任务列表将通过JavaScript动态生成 -->
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- 系统监控 -->
+        <section id="system-monitor" class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-xl font-semibold flex items-center">
+                    <i class="fa fa-line-chart mr-2 text-blue-600"></i> 系统监控
+                </h2>
+                <div class="flex space-x-2">
+                    <select id="chart-time-range" class="border border-gray-300 rounded-md px-3 py-1 text-sm">
+                        <option value="30">30秒</option>
+                        <option value="60">1分钟</option>
+                        <option value="300">5分钟</option>
+                    </select>
+                    <button id="refresh-system" class="bg-gray-200 text-gray-700 px-3 py-1 rounded-md hover:bg-gray-300 transition duration-200 flex items-center text-sm">
+                        <i class="fa fa-refresh mr-1"></i> 刷新
+                    </button>
+                </div>
+            </div>
+            
+            <!-- 系统概览卡片 -->
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                <div class="bg-white p-4 rounded-lg shadow border border-gray-100">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-gray-500 text-sm">内存使用</p>
+                            <h3 class="text-2xl font-bold text-gray-800" id="current-memory">0 MB</h3>
+                        </div>
+                        <div class="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center">
+                            <i class="fa fa-microchip text-blue-600 text-xl"></i>
+                        </div>
+                    </div>
+                </div>
+                <div class="bg-white p-4 rounded-lg shadow border border-gray-100">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-gray-500 text-sm">内存使用率</p>
+                            <h3 class="text-2xl font-bold text-gray-800" id="memory-percent">0%</h3>
+                        </div>
+                        <div class="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center">
+                            <i class="fa fa-percent text-green-600 text-xl"></i>
+                        </div>
+                    </div>
+                </div>
+                <div class="bg-white p-4 rounded-lg shadow border border-gray-100">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-gray-500 text-sm">虚拟内存</p>
+                            <h3 class="text-2xl font-bold text-gray-800" id="virtual-memory">0 MB</h3>
+                        </div>
+                        <div class="w-12 h-12 bg-purple-100 rounded-full flex items-center justify-center">
+                            <i class="fa fa-server text-purple-600 text-xl"></i>
+                        </div>
+                    </div>
+                </div>
+                <div class="bg-white p-4 rounded-lg shadow border border-gray-100">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="text-gray-500 text-sm">优化状态</p>
+                            <h3 class="text-2xl font-bold text-gray-800" id="optimization-status">正常</h3>
+                        </div>
+                        <div class="w-12 h-12 bg-yellow-100 rounded-full flex items-center justify-center">
+                            <i class="fa fa-cogs text-yellow-600 text-xl"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
+                    <h3 class="text-lg font-medium mb-2">Agent状态分布</h3>
+                    <div class="bg-gray-50 p-4 rounded-lg">
+                        <canvas id="agent-status-chart" height="200"></canvas>
+                    </div>
+                </div>
+                <div>
+                    <h3 class="text-lg font-medium mb-2">任务状态分布</h3>
+                    <div class="bg-gray-50 p-4 rounded-lg">
+                        <canvas id="task-status-chart" height="200"></canvas>
+                    </div>
+                </div>
+                <div class="md:col-span-2">
+                    <h3 class="text-lg font-medium mb-2">内存使用趋势</h3>
+                    <div class="bg-gray-50 p-4 rounded-lg">
+                        <canvas id="memory-usage-chart" height="200"></canvas>
+                    </div>
+                </div>
+                <div class="md:col-span-2">
+                    <h3 class="text-lg font-medium mb-2">内存优化日志</h3>
+                    <div class="bg-gray-50 p-4 rounded-lg">
+                        <div id="memory-logs" class="text-sm font-mono h-40 overflow-y-auto">
+                            <!-- 内存优化日志将通过JavaScript动态生成 -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+        
+        <!-- 工作流可视化 -->
+        <section id="workflow" class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-xl font-semibold flex items-center">
+                    <i class="fa fa-sitemap mr-2 text-blue-600"></i> 工作流可视化
+                </h2>
+                <button id="refresh-workflow" class="bg-gray-200 text-gray-700 px-3 py-1 rounded-md hover:bg-gray-300 transition duration-200 flex items-center text-sm">
+                    <i class="fa fa-refresh mr-1"></i> 刷新
+                </button>
+            </div>
+            <div class="grid grid-cols-1 gap-6">
+                <div>
+                    <h3 class="text-lg font-medium mb-2">Agent协作流程</h3>
+                    <div class="bg-gray-50 p-4 rounded-lg" style="min-height: 400px;">
+                        <div id="workflow-graph" class="w-full h-full"></div>
+                    </div>
+                </div>
+                <div>
+                    <h3 class="text-lg font-medium mb-2">任务执行流程</h3>
+                    <div class="bg-gray-50 p-4 rounded-lg">
+                        <div id="task-flow" class="w-full h-64 overflow-x-auto"></div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- 任务提交 -->
+        <section id="task-submit" class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <h2 class="text-xl font-semibold mb-4 flex items-center">
+                <i class="fa fa-plus-circle mr-2 text-blue-600"></i> 任务提交
+            </h2>
+            <form id="task-form" class="space-y-4">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Agent ID</label>
+                        <select id="agent-id" class="w-full p-2 border border-gray-300 rounded-md">
+                            <option value="">选择Agent</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">任务类型</label>
+                        <select id="task-type" class="w-full p-2 border border-gray-300 rounded-md">
+                            <option value="chat">聊天</option>
+                            <option value="data_analysis">数据分析</option>
+                            <option value="web_search">网络搜索</option>
+                        </select>
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">任务参数</label>
+                    <textarea id="task-params" class="w-full p-2 border border-gray-300 rounded-md" rows="4" placeholder='例如: {"message": "你好"}'></textarea>
+                </div>
+                <div class="flex justify-end">
+                    <button type="submit" class="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 transition duration-200 flex items-center">
+                        <i class="fa fa-paper-plane mr-2"></i> 提交任务
+                    </button>
+                </div>
+            </form>
+            <div id="task-submit-result" class="mt-4 p-4 rounded-md hidden"></div>
+        </section>
+
+        <!-- 页脚 -->
+        <footer class="text-center text-gray-600 mt-8">
+            <p>© 2026 小雷版小龙虾Agent系统 | 前端Agent监控中心</p>
+        </footer>
+    </div>
+
+    <script>
+        // 全局变量
+        let agentStatusChart, taskStatusChart, memoryUsageChart;
+        let cpuData = Array(30).fill(0);
+        let memoryData = Array(30).fill(0);
+        let diskData = Array(30).fill(0);
+        let networkSentData = Array(30).fill(0);
+        let networkRecvData = Array(30).fill(0);
+        let labels = Array(30).fill('');
+        let memoryUsageHistory = [];
+
+        // 初始化图表
+        function initCharts() {
+            // Agent状态图表
+            const agentStatusCtx = document.getElementById('agent-status-chart').getContext('2d');
+            agentStatusChart = new Chart(agentStatusCtx, {
+                type: 'doughnut',
+                data: {
+                    labels: ['空闲', '忙碌', '错误'],
+                    datasets: [{
+                        data: [0, 0, 0],
+                        backgroundColor: ['#4CAF50', '#FF9800', '#F44336'],
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'bottom'
+                        }
+                    }
+                }
+            });
+
+            // 任务状态图表
+            const taskStatusCtx = document.getElementById('task-status-chart').getContext('2d');
+            taskStatusChart = new Chart(taskStatusCtx, {
+                type: 'bar',
+                data: {
+                    labels: ['待处理', '运行中', '已完成', '失败'],
+                    datasets: [{
+                        label: '任务数量',
+                        data: [0, 0, 0, 0],
+                        backgroundColor: ['#2196F3', '#FFC107', '#4CAF50', '#F44336'],
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            ticks: {
+                                precision: 0
+                            }
+                        }
+                    }
+                }
+            });
+
+            // 内存使用趋势图表
+            const memoryUsageCtx = document.getElementById('memory-usage-chart').getContext('2d');
+            memoryUsageChart = new Chart(memoryUsageCtx, {
+                type: 'line',
+                data: {
+                    labels: Array(30).fill(''),
+                    datasets: [{
+                        label: '内存使用 (MB)',
+                        data: Array(30).fill(0),
+                        borderColor: '#3b82f6',
+                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                        borderWidth: 2,
+                        tension: 0.4,
+                        fill: true
+                    }, {
+                        label: '内存阈值 (MB)',
+                        data: Array(30).fill(500),
+                        borderColor: '#ef4444',
+                        borderWidth: 2,
+                        borderDash: [5, 5],
+                        fill: false,
+                        pointRadius: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: '内存使用 (MB)'
+                            }
+                        },
+                        x: {
+                            title: {
+                                display: true,
+                                text: '时间'
+                            }
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            position: 'top'
+                        }
+                    }
+                }
+            });
+        }
+
+        // 更新图表数据
+        function updateCharts(agents) {
+            // 计算Agent状态分布
+            const statusCounts = { idle: 0, busy: 0, error: 0 };
+            const taskCounts = { pending: 0, running: 0, completed: 0, failed: 0 };
+
+            Object.values(agents).forEach(agent => {
+                statusCounts[agent.status] = (statusCounts[agent.status] || 0) + 1;
+
+                // 计算任务状态分布
+                if (agent.tasks) {
+                    agent.tasks.forEach(task => {
+                        taskCounts[task.status] = (taskCounts[task.status] || 0) + 1;
+                    });
+                }
+            });
+
+            // 更新Agent状态图表
+            agentStatusChart.data.datasets[0].data = [
+                statusCounts.idle,
+                statusCounts.busy,
+                statusCounts.error
+            ];
+            agentStatusChart.update();
+
+            // 更新任务状态图表
+            taskStatusChart.data.datasets[0].data = [
+                taskCounts.pending || 0,
+                taskCounts.running || 0,
+                taskCounts.completed || 0,
+                taskCounts.failed || 0
+            ];
+            taskStatusChart.update();
+        }
+
+        // Agent名称映射
+        const agentNameMap = {
+            'checker': '检查Checker',
+            'scraper': '爬虫Scraper',
+            'vulnerability': '漏洞Vulnerability',
+            'summarizer': '总结Summarizer',
+            'data_analysis': '数据分析DataAnalysis',
+            'nlp': '自然语言处理NLP',
+            'text_analyzer': '文本分析TextAnalyzer'
+        };
+
+        // 更新Agent状态
+        function updateAgentStatus() {
+            fetch('/api/frontend_agent/monitor/agents')
+                .then(response => response.json())
+                .then(data => {
+                    const agentCards = document.getElementById('agent-cards');
+                    agentCards.innerHTML = '';
+
+                    const agentCount = Object.keys(data.agents).length;
+                    document.getElementById('total-agents').textContent = agentCount;
+
+                    let totalTasks = 0;
+                    let activeTasks = 0;
+
+                    // 更新Agent下拉列表
+                    const agentSelect = document.getElementById('agent-id');
+                    agentSelect.innerHTML = '<option value="">选择Agent</option>';
+
+                    Object.entries(data.agents).forEach(([agentId, agent]) => {
+                        const statusClass = agent.status === 'idle' ? 'bg-green-100 text-green-800' : agent.status === 'busy' ? 'bg-yellow-100 text-yellow-800' : 'bg-red-100 text-red-800';
+                        const statusText = agent.status === 'idle' ? '空闲' : agent.status === 'busy' ? '忙碌' : '错误';
+                        const iconClass = agent.status === 'idle' ? 'fa-check-circle' : agent.status === 'busy' ? 'fa-spinner' : 'fa-times-circle';
+
+                        totalTasks += agent.task_count || 0;
+                        activeTasks += agent.active_tasks || 0;
+
+                        // 获取格式化后的Agent名称
+                        const formattedName = agentNameMap[agent.agent_id] || agent.name;
+
+                        // 添加到Agent下拉列表
+                        const option = document.createElement('option');
+                        option.value = agentId;
+                        option.textContent = formattedName;
+                        agentSelect.appendChild(option);
+
+                        const card = document.createElement('div');
+                        card.className = 'bg-white p-4 rounded-lg shadow hover:shadow-md transition duration-200 border border-gray-100';
+                        card.innerHTML = `
+                            <div class="flex justify-between items-center mb-2">
+                                <div class="flex items-center">
+                                    <img src="${agent.avatar || '/static/images/default-avatar.png'}" class="w-10 h-10 rounded-full mr-3" alt="${formattedName}">
+                                    <h3 class="font-medium text-lg">${formattedName}</h3>
+                                </div>
+                                <span class="${statusClass} px-3 py-1 rounded-full text-sm flex items-center">
+                                    <i class="fa ${iconClass} mr-1"></i> ${statusText}
+                                </span>
+                            </div>
+                            <div class="space-y-2">
+                                <div class="flex justify-between">
+                                    <span class="text-gray-600">Agent ID:</span>
+                                    <span class="font-medium">${agent.agent_id}</span>
+                                </div>
+                                <div class="flex justify-between">
+                                    <span class="text-gray-600">消息数:</span>
+                                    <span class="font-medium">${agent.message_count || 0}</span>
+                                </div>
+                                <div class="flex justify-between">
+                                    <span class="text-gray-600">任务数:</span>
+                                    <span class="font-medium">${agent.task_count || 0}</span>
+                                </div>
+                                <div class="flex justify-between">
+                                    <span class="text-gray-600">活跃任务:</span>
+                                    <span class="font-medium">${agent.active_tasks || 0}</span>
+                                </div>
+                            </div>
+                            <div class="mt-3 pt-3 border-t border-gray-100">
+                                <a href="#task-list" class="text-blue-600 hover:text-blue-800 text-sm flex items-center" onclick="filterTasksByAgent('${agentId}')">
+                                    <i class="fa fa-eye mr-1"></i> 查看任务
+                                </a>
+                            </div>
+                        `;
+                        agentCards.appendChild(card);
+                    });
+
+                    document.getElementById('total-tasks').textContent = totalTasks;
+                    document.getElementById('active-tasks').textContent = activeTasks;
+                })
+                .catch(error => {
+                    console.error('获取Agent状态失败:', error);
+                });
+        }
+
+        // 更新任务列表
+        function updateTaskList() {
+            // 这里需要从前端Agent服务获取任务列表
+            // 暂时使用模拟数据
+            const taskTableBody = document.getElementById('task-table-body');
+            taskTableBody.innerHTML = '';
+
+            // 模拟任务数据
+            const tasks = [
+                { id: 'task1', agent_id: 'test_agent', agent_name: '测试Agent', type: 'chat', status: 'completed' },
+                { id: 'task2', agent_id: 'test_agent', agent_name: '测试Agent', type: 'data_analysis', status: 'running' },
+                { id: 'task3', agent_id: 'new_agent', agent_name: '新测试Agent', type: 'web_search', status: 'pending' }
+            ];
+
+            let rowCount = 0;
+
+            tasks.forEach(task => {
+                const row = document.createElement('tr');
+                row.className = rowCount % 2 === 0 ? 'bg-white' : 'bg-gray-50';
+
+                let statusClass = '';
+                let statusText = '';
+                switch (task.status) {
+                    case 'pending':
+                        statusClass = 'bg-yellow-100 text-yellow-800';
+                        statusText = '待处理';
+                        break;
+                    case 'running':
+                        statusClass = 'bg-blue-100 text-blue-800';
+                        statusText = '运行中';
+                        break;
+                    case 'completed':
+                        statusClass = 'bg-green-100 text-green-800';
+                        statusText = '已完成';
+                        break;
+                    case 'failed':
+                        statusClass = 'bg-red-100 text-red-800';
+                        statusText = '失败';
+                        break;
+                }
+
+                // 获取格式化后的Agent名称
+                const formattedAgentName = agentNameMap[task.agent_id] || task.agent_name;
+
+                row.innerHTML = `
+                    <td class="py-3 px-4 border-b">${task.id}</td>
+                    <td class="py-3 px-4 border-b">${formattedAgentName}</td>
+                    <td class="py-3 px-4 border-b">${task.type}</td>
+                    <td class="py-3 px-4 border-b">
+                        <span class="${statusClass} px-2 py-1 rounded text-xs">${statusText}</span>
+                    </td>
+                    <td class="py-3 px-4 border-b">
+                        <button class="text-blue-600 hover:text-blue-800 text-sm mr-2">
+                            <i class="fa fa-eye"></i> 查看
+                        </button>
+                        <button class="text-red-600 hover:text-red-800 text-sm">
+                            <i class="fa fa-times"></i> 取消
+                        </button>
+                    </td>
+                `;
+                taskTableBody.appendChild(row);
+                rowCount++;
+            });
+
+            if (rowCount === 0) {
+                const emptyRow = document.createElement('tr');
+                emptyRow.innerHTML = `
+                    <td colspan="5" class="py-4 px-4 text-center text-gray-500">
+                        暂无任务
+                    </td>
+                `;
+                taskTableBody.appendChild(emptyRow);
+            }
+        }
+
+        // 提交任务
+        function setupTaskForm() {
+            const taskForm = document.getElementById('task-form');
+            const taskSubmitResult = document.getElementById('task-submit-result');
+
+            taskForm.addEventListener('submit', async (e) => {
+                e.preventDefault();
+
+                const agentId = document.getElementById('agent-id').value;
+                const taskType = document.getElementById('task-type').value;
+                const taskParams = document.getElementById('task-params').value;
+
+                if (!agentId) {
+                    taskSubmitResult.className = 'mt-4 p-4 rounded-md bg-red-100 text-red-800 border border-red-200';
+                    taskSubmitResult.innerHTML = `
+                        <div class="flex items-center">
+                            <i class="fa fa-times-circle mr-2 text-red-600"></i>
+                            <div>
+                                <p class="font-medium">任务提交失败</p>
+                                <p class="text-sm">请选择Agent</p>
+                            </div>
+                        </div>
+                    `;
+                    taskSubmitResult.classList.remove('hidden');
+                    return;
+                }
+
+                try {
+                    const params = JSON.parse(taskParams);
+
+                    const response = await fetch('/api/frontend_agent/tasks/submit', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            agent_id: agentId,
+                            task_type: taskType,
+                            params: params
+                        })
+                    });
+
+                    const result = await response.json();
+
+                    taskSubmitResult.className = 'mt-4 p-4 rounded-md bg-green-100 text-green-800 border border-green-200';
+                    taskSubmitResult.innerHTML = `
+                        <div class="flex items-center">
+                            <i class="fa fa-check-circle mr-2 text-green-600"></i>
+                            <div>
+                                <p class="font-medium">任务提交成功</p>
+                                <p class="text-sm">任务ID: ${result.task_id}</p>
+                                <p class="text-sm">分配到: ${agentId}</p>
+                            </div>
+                        </div>
+                    `;
+                    taskSubmitResult.classList.remove('hidden');
+
+                    // 清空表单
+                    document.getElementById('task-params').value = '';
+
+                    // 刷新任务列表
+                    setTimeout(updateTaskList, 1000);
+                } catch (error) {
+                    taskSubmitResult.className = 'mt-4 p-4 rounded-md bg-red-100 text-red-800 border border-red-200';
+                    taskSubmitResult.innerHTML = `
+                        <div class="flex items-center">
+                            <i class="fa fa-times-circle mr-2 text-red-600"></i>
+                            <div>
+                                <p class="font-medium">任务提交失败</p>
+                                <p class="text-sm">错误: ${error.message}</p>
+                            </div>
+                        </div>
+                    `;
+                    taskSubmitResult.classList.remove('hidden');
+                }
+            });
+        }
+
+        // 按Agent过滤任务
+        function filterTasksByAgent(agentId) {
+            // 实现过滤逻辑
+            console.log('Filter tasks by agent:', agentId);
+        }
+
+        // 内存优化日志
+        let memoryLogs = [];
+        
+        // 更新内存使用趋势
+        function updateMemoryUsage() {
+            // 模拟内存使用数据
+            // 实际项目中应该从后端API获取
+            const now = new Date();
+            const timeLabel = now.toLocaleTimeString();
+            
+            // 生成随机内存使用数据（实际项目中应该从后端获取）
+            const currentMemory = Math.floor(Math.random() * 300) + 100;
+            const memoryPercent = Math.floor(Math.random() * 50) + 20;
+            const virtualMemory = currentMemory + Math.floor(Math.random() * 200) + 100;
+            const memoryThreshold = 500;
+            
+            // 更新内存使用历史
+            memoryUsageHistory.push({
+                timestamp: timeLabel,
+                memory: currentMemory
+            });
+            
+            // 限制历史记录数量
+            if (memoryUsageHistory.length > 30) {
+                memoryUsageHistory = memoryUsageHistory.slice(-30);
+            }
+            
+            // 更新图表数据
+            if (memoryUsageChart) {
+                memoryUsageChart.data.labels = memoryUsageHistory.map(item => item.timestamp);
+                memoryUsageChart.data.datasets[0].data = memoryUsageHistory.map(item => item.memory);
+                memoryUsageChart.data.datasets[1].data = Array(memoryUsageHistory.length).fill(memoryThreshold);
+                memoryUsageChart.update();
+            }
+            
+            // 更新内存相关指标
+            document.getElementById('current-memory').textContent = `${currentMemory} MB`;
+            document.getElementById('memory-percent').textContent = `${memoryPercent}%`;
+            document.getElementById('virtual-memory').textContent = `${virtualMemory} MB`;
+            
+            // 更新优化状态
+            let optimizationStatus = '正常';
+            if (currentMemory > 400) {
+                optimizationStatus = '警告';
+            } else if (currentMemory > 450) {
+                optimizationStatus = '紧急';
+            }
+            document.getElementById('optimization-status').textContent = optimizationStatus;
+            
+            // 记录内存优化日志
+            addMemoryLog(`[${timeLabel}] 内存使用: ${currentMemory} MB, 使用率: ${memoryPercent}%, 虚拟内存: ${virtualMemory} MB, 状态: ${optimizationStatus}`);
+        }
+        
+        // 添加内存优化日志
+        function addMemoryLog(log) {
+            memoryLogs.push(log);
+            
+            // 限制日志数量
+            if (memoryLogs.length > 50) {
+                memoryLogs = memoryLogs.slice(-50);
+            }
+            
+            // 更新日志显示
+            const logsContainer = document.getElementById('memory-logs');
+            logsContainer.innerHTML = memoryLogs.map(log => `<div>${log}</div>`).join('');
+            
+            // 滚动到底部
+            logsContainer.scrollTop = logsContainer.scrollHeight;
+        }
+
+        // 绘制工作流图表
+        function drawWorkflowGraph() {
+            const container = document.getElementById('workflow-graph');
+            
+            // 清空容器
+            container.innerHTML = '';
+            
+            // 创建工作流图表
+            const workflow = document.createElement('div');
+            workflow.className = 'workflow-container';
+            workflow.style.display = 'flex';
+            workflow.style.flexDirection = 'column';
+            workflow.style.alignItems = 'center';
+            workflow.style.padding = '20px';
+            
+            // 定义工作流节点
+            const nodes = [
+                { id: 'input', label: '用户输入', color: '#3b82f6' },
+                { id: 'thinking', label: '深度思考', color: '#8b5cf6' },
+                { id: 'search', label: '自主搜索', color: '#ec4899' },
+                { id: 'integration', label: '信息融合', color: '#10b981' },
+                { id: 'reflection', label: '自我反思', color: '#f59e0b' },
+                { id: 'output', label: '生成回答', color: '#6366f1' }
+            ];
+            
+            // 定义工作流边
+            const edges = [
+                { from: 'input', to: 'thinking' },
+                { from: 'thinking', to: 'search' },
+                { from: 'search', to: 'integration' },
+                { from: 'integration', to: 'reflection' },
+                { from: 'reflection', to: 'output' },
+                { from: 'reflection', to: 'search' } // 反馈循环
+            ];
+            
+            // 创建节点
+            const nodeElements = {};
+            nodes.forEach((node, index) => {
+                const nodeElement = document.createElement('div');
+                nodeElement.className = 'workflow-node';
+                nodeElement.style.backgroundColor = node.color;
+                nodeElement.style.color = 'white';
+                nodeElement.style.padding = '15px 20px';
+                nodeElement.style.borderRadius = '8px';
+                nodeElement.style.margin = '10px 0';
+                nodeElement.style.position = 'relative';
+                nodeElement.style.minWidth = '200px';
+                nodeElement.style.textAlign = 'center';
+                nodeElement.style.boxShadow = '0 2px 4px rgba(0,0,0,0.1)';
+                nodeElement.textContent = node.label;
+                
+                nodeElements[node.id] = nodeElement;
+                workflow.appendChild(nodeElement);
+            });
+            
+            // 创建边
+            edges.forEach(edge => {
+                const fromNode = nodeElements[edge.from];
+                const toNode = nodeElements[edge.to];
+                
+                if (fromNode && toNode) {
+                    const edgeElement = document.createElement('div');
+                    edgeElement.className = 'workflow-edge';
+                    edgeElement.style.position = 'absolute';
+                    edgeElement.style.height = '20px';
+                    edgeElement.style.width = '2px';
+                    edgeElement.style.backgroundColor = '#9ca3af';
+                    edgeElement.style.transform = 'translateX(-50%)';
+                    
+                    // 计算位置
+                    const fromRect = fromNode.getBoundingClientRect();
+                    const toRect = toNode.getBoundingClientRect();
+                    const containerRect = container.getBoundingClientRect();
+                    
+                    const fromX = fromRect.left - containerRect.left + fromRect.width / 2;
+                    const fromY = fromRect.bottom - containerRect.top;
+                    const toX = toRect.left - containerRect.left + toRect.width / 2;
+                    const toY = toRect.top - containerRect.top;
+                    
+                    edgeElement.style.left = `${fromX}px`;
+                    edgeElement.style.top = `${fromY}px`;
+                    edgeElement.style.height = `${toY - fromY}px`;
+                    
+                    // 添加箭头
+                    const arrow = document.createElement('div');
+                    arrow.className = 'workflow-arrow';
+                    arrow.style.position = 'absolute';
+                    arrow.style.bottom = '0';
+                    arrow.style.left = '-4px';
+                    arrow.style.borderLeft = '5px solid transparent';
+                    arrow.style.borderRight = '5px solid transparent';
+                    arrow.style.borderTop = '8px solid #9ca3af';
+                    
+                    edgeElement.appendChild(arrow);
+                    container.appendChild(edgeElement);
+                }
+            });
+            
+            container.appendChild(workflow);
+        }
+        
+        // 绘制任务执行流程
+        function drawTaskFlow() {
+            const container = document.getElementById('task-flow');
+            
+            // 清空容器
+            container.innerHTML = '';
+            
+            // 创建任务流容器
+            const taskFlow = document.createElement('div');
+            taskFlow.className = 'task-flow-container';
+            taskFlow.style.display = 'flex';
+            taskFlow.style.alignItems = 'center';
+            taskFlow.style.padding = '20px';
+            taskFlow.style.gap = '20px';
+            
+            // 定义任务状态
+            const taskStates = [
+                { id: 'created', label: '创建', color: '#9ca3af' },
+                { id: 'queued', label: '排队', color: '#6366f1' },
+                { id: 'processing', label: '处理中', color: '#3b82f6' },
+                { id: 'completed', label: '完成', color: '#10b981' },
+                { id: 'failed', label: '失败', color: '#ef4444' }
+            ];
+            
+            // 创建任务状态节点
+            taskStates.forEach((state, index) => {
+                const stateElement = document.createElement('div');
+                stateElement.className = 'task-state';
+                stateElement.style.display = 'flex';
+                stateElement.style.flexDirection = 'column';
+                stateElement.style.alignItems = 'center';
+                stateElement.style.gap = '8px';
+                
+                // 状态圆圈
+                const circle = document.createElement('div');
+                circle.className = 'state-circle';
+                circle.style.width = '40px';
+                circle.style.height = '40px';
+                circle.style.borderRadius = '50%';
+                circle.style.backgroundColor = state.color;
+                circle.style.display = 'flex';
+                circle.style.alignItems = 'center';
+                circle.style.justifyContent = 'center';
+                circle.style.color = 'white';
+                circle.style.fontWeight = 'bold';
+                
+                // 状态标签
+                const label = document.createElement('div');
+                label.className = 'state-label';
+                label.style.fontSize = '12px';
+                label.style.color = '#374151';
+                label.textContent = state.label;
+                
+                stateElement.appendChild(circle);
+                stateElement.appendChild(label);
+                taskFlow.appendChild(stateElement);
+                
+                // 添加箭头
+                if (index < taskStates.length - 1) {
+                    const arrow = document.createElement('div');
+                    arrow.className = 'task-arrow';
+                    arrow.style.width = '30px';
+                    arrow.style.height = '2px';
+                    arrow.style.backgroundColor = '#9ca3af';
+                    arrow.style.position = 'relative';
+                    
+                    const arrowHead = document.createElement('div');
+                    arrowHead.className = 'arrow-head';
+                    arrowHead.style.position = 'absolute';
+                    arrowHead.style.right = '0';
+                    arrowHead.style.top = '-4px';
+                    arrowHead.style.borderLeft = '8px solid #9ca3af';
+                    arrowHead.style.borderTop = '5px solid transparent';
+                    arrowHead.style.borderBottom = '5px solid transparent';
+                    
+                    arrow.appendChild(arrowHead);
+                    taskFlow.appendChild(arrow);
+                }
+            });
+            
+            container.appendChild(taskFlow);
+        }
+        
+        // 初始化
+        document.addEventListener('DOMContentLoaded', function() {
+            initCharts();
+            updateAgentStatus();
+            updateTaskList();
+            updateMemoryUsage(); // 初始更新内存使用
+            setupTaskForm();
+            drawWorkflowGraph();
+            drawTaskFlow();
+
+            // 定时更新
+            setInterval(updateAgentStatus, 5000);
+            setInterval(updateTaskList, 5000);
+            setInterval(updateMemoryUsage, 2000); // 每2秒更新一次内存使用
+
+            // 绑定刷新按钮
+            document.getElementById('refresh-agents').addEventListener('click', updateAgentStatus);
+            document.getElementById('refresh-tasks').addEventListener('click', updateTaskList);
+            document.getElementById('refresh-system').addEventListener('click', updateMemoryUsage);
+            document.getElementById('refresh-workflow').addEventListener('click', function() {
+                drawWorkflowGraph();
+                drawTaskFlow();
+            });
+        });
+    </script>
+</body>
+</html>

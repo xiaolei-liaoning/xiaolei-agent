@@ -1,0 +1,1141 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>小雷版小龙虾 - AI Agent低代码平台</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link rel="stylesheet" href="/static/css/coze.css">
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <header class="coze-header sticky top-0 z-50">
+        <div class="container mx-auto px-4 py-3 flex justify-between items-center">
+            <div class="flex items-center space-x-4">
+                <div class="w-10 h-10 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center shadow-md">
+                    <i class="fa fa-robot text-white text-xl"></i>
+                </div>
+                <div>
+                    <h1 class="text-xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
+                        小雷版小龙虾AI平台
+                    </h1>
+                </div>
+            </div>
+            <div class="flex items-center space-x-4">
+                <button class="text-gray-600 hover:text-blue-600 transition flex items-center">
+                    <i class="fa fa-history mr-1"></i> 历史
+                </button>
+                <button class="settings-btn text-gray-700 hover:text-blue-600 transition p-2" onclick="openSettings()" title="设置">
+                    <i class="fa fa-cog mr-1"></i> 设置
+                </button>
+                <button class="text-gray-600 hover:text-blue-600 transition flex items-center">
+                    <i class="fa fa-question-circle mr-1"></i> 帮助
+                </button>
+                <button class="text-gray-600 hover:text-blue-600 transition flex items-center">
+                    <i class="fa fa-info-circle mr-1"></i> 关于
+                </button>
+                <div class="w-8 h-8 bg-gray-300 rounded-full flex items-center justify-center">
+                    <i class="fa fa-user text-gray-600"></i>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- 设置模态框 -->
+    <div id="settings-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden z-50 flex items-center justify-center p-4">
+        <div class="bg-white rounded-2xl shadow-2xl max-w-md w-full max-h-[90vh] overflow-y-auto animate-fadeIn">
+            <!-- 模态框头部 -->
+            <div class="sticky top-0 bg-white border-b px-6 py-4 flex justify-between items-center">
+                <h2 class="text-xl font-bold text-gray-800">
+                    <i class="fa fa-cog mr-2 text-blue-600"></i>设置
+                </h2>
+                <button onclick="closeSettings()" class="text-gray-400 hover:text-gray-600 transition">
+                    <i class="fa fa-times text-xl"></i>
+                </button>
+            </div>
+            
+            <!-- 模态框内容 -->
+            <div class="p-6 space-y-6">
+                <!-- 主题设置 -->
+                <div>
+                    <h3 class="font-semibold text-gray-800 mb-3">
+                        <i class="fa fa-paint-brush mr-2 text-purple-600"></i>主题设置
+                    </h3>
+                    <div class="space-y-2">
+                        <label class="theme-option flex items-center justify-between p-3 border border-gray-300 rounded-lg cursor-pointer hover:border-blue-400 transition" data-theme="light">
+                            <div class="flex items-center">
+                                <input type="radio" name="theme" value="light" class="mr-3">
+                                <span class="text-sm">☀️ 亮色主题</span>
+                            </div>
+                            <i class="fa fa-sun-o text-yellow-500"></i>
+                        </label>
+                        <label class="theme-option flex items-center justify-between p-3 border border-gray-300 rounded-lg cursor-pointer hover:border-blue-400 transition" data-theme="dark">
+                            <div class="flex items-center">
+                                <input type="radio" name="theme" value="dark" class="mr-3">
+                                <span class="text-sm">🌙 暗色主题</span>
+                            </div>
+                            <i class="fa fa-moon-o text-blue-500"></i>
+                        </label>
+                        <label class="theme-option flex items-center justify-between p-3 border border-gray-300 rounded-lg cursor-pointer hover:border-blue-400 transition" data-theme="auto">
+                            <div class="flex items-center">
+                                <input type="radio" name="theme" value="auto" class="mr-3">
+                                <span class="text-sm">🔄 自动跟随系统</span>
+                            </div>
+                            <i class="fa fa-desktop text-gray-500"></i>
+                        </label>
+                    </div>
+                </div>
+                
+                <!-- 字体大小设置 -->
+                <div>
+                    <h3 class="font-semibold text-gray-800 mb-3">
+                        <i class="fa fa-text-height mr-2 text-green-600"></i>字体大小
+                    </h3>
+                    <div class="grid grid-cols-3 gap-2">
+                        <button class="font-size-option p-3 border border-gray-300 rounded-lg hover:border-blue-400 transition text-center" data-size="small" onclick="setFontSize('small')">
+                            <div class="text-xs">Aa</div>
+                            <div class="text-xs mt-1 text-gray-600">小</div>
+                        </button>
+                        <button class="font-size-option p-3 border border-gray-300 rounded-lg hover:border-blue-400 transition text-center" data-size="medium" onclick="setFontSize('medium')">
+                            <div class="text-sm">Aa</div>
+                            <div class="text-xs mt-1 text-gray-600">中</div>
+                        </button>
+                        <button class="font-size-option p-3 border border-gray-300 rounded-lg hover:border-blue-400 transition text-center" data-size="large" onclick="setFontSize('large')">
+                            <div class="text-base">Aa</div>
+                            <div class="text-xs mt-1 text-gray-600">大</div>
+                        </button>
+                    </div>
+                </div>
+                
+                <!-- 语言设置 -->
+                <div>
+                    <h3 class="font-semibold text-gray-800 mb-3">
+                        <i class="fa fa-language mr-2 text-red-600"></i>语言设置
+                    </h3>
+                    <select id="language-select" onchange="setLanguage(this.value)" class="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        <option value="zh">简体中文</option>
+                        <option value="en">English</option>
+                    </select>
+                </div>
+                
+                <!-- 其他设置 -->
+                <div>
+                    <h3 class="font-semibold text-gray-800 mb-3">
+                        <i class="fa fa-sliders mr-2 text-orange-600"></i>其他设置
+                    </h3>
+                    <div class="space-y-3">
+                        <label class="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                            <div class="flex items-center">
+                                <i class="fa fa-volume-up mr-2 text-blue-600"></i>
+                                <span class="text-sm">提示音</span>
+                            </div>
+                            <input type="checkbox" id="sound-toggle" onchange="toggleSound(this.checked)" class="w-5 h-5">
+                        </label>
+                        <label class="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                            <div class="flex items-center">
+                                <i class="fa fa-save mr-2 text-green-600"></i>
+                                <span class="text-sm">自动保存</span>
+                            </div>
+                            <input type="checkbox" id="autosave-toggle" onchange="toggleAutosave(this.checked)" class="w-5 h-5" checked>
+                        </label>
+                        <label class="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                            <div class="flex items-center">
+                                <i class="fa fa-list-ol mr-2 text-purple-600"></i>
+                                <span class="text-sm">代码行号</span>
+                            </div>
+                            <input type="checkbox" id="linenumbers-toggle" onchange="toggleLineNumbers(this.checked)" class="w-5 h-5" checked>
+                        </label>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 模态框底部 -->
+            <div class="sticky bottom-0 bg-gray-50 border-t px-6 py-4 flex justify-between">
+                <button onclick="resetSettings()" class="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 transition">
+                    <i class="fa fa-undo mr-1"></i>恢复默认
+                </button>
+                <button onclick="closeSettings()" class="px-6 py-2 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-lg hover:shadow-lg transition">
+                    <i class="fa fa-check mr-1"></i>确定
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 主内容区 -->
+    <div class="flex min-h-[calc(100vh-64px)]">
+        <!-- 左侧导航栏 -->
+        <div class="coze-sidebar w-64 flex-shrink-0 hidden md:block">
+            <div class="p-4">
+                <div class="flex items-center justify-between mb-6">
+                    <h2 class="font-semibold text-gray-800">项目管理</h2>
+                    <button class="text-blue-600 hover:text-blue-800 transition">
+                        <i class="fa fa-plus"></i>
+                    </button>
+                </div>
+                
+                <!-- 导航菜单 -->
+                <nav class="space-y-1">
+                    <a href="#chat" class="nav-item active flex items-center px-3 py-2 rounded-lg text-gray-700">
+                        <i class="fa fa-comments mr-3"></i>
+                        <span>对话</span>
+                    </a>
+                    <a href="#plan" class="nav-item flex items-center px-3 py-2 rounded-lg text-gray-700">
+                        <i class="fa fa-tasks mr-3"></i>
+                        <span>计划</span>
+                    </a>
+                    <a href="#skill" class="nav-item flex items-center px-3 py-2 rounded-lg text-gray-700">
+                        <i class="fa fa-puzzle-piece mr-3"></i>
+                        <span>技能</span>
+                    </a>
+                    <a href="#workflow" class="nav-item flex items-center px-3 py-2 rounded-lg text-gray-700">
+                        <i class="fa fa-sitemap mr-3"></i>
+                        <span>工作流</span>
+                    </a>
+                    <a href="#agent-group" class="nav-item flex items-center px-3 py-2 rounded-lg text-gray-700">
+                        <i class="fa fa-users mr-3"></i>
+                        <span>Agent小组</span>
+                    </a>
+                </nav>
+                
+                <!-- 历史对话 -->
+                <div class="mt-8">
+                    <h3 class="font-semibold text-gray-800 mb-3">历史对话</h3>
+                    <div class="space-y-2">
+                        <div class="history-session-item bg-gray-50 rounded-lg p-3 hover:bg-gray-100 cursor-pointer">
+                            <div class="flex justify-between items-start">
+                                <h4 class="font-medium text-sm">创意写作</h4>
+                                <span class="text-xs text-gray-500">今天 14:30</span>
+                            </div>
+                            <p class="text-xs text-gray-600 mt-1 line-clamp-2">帮我写一个关于人工智能的故事，要有创意和深度</p>
+                        </div>
+                        <div class="history-session-item bg-gray-50 rounded-lg p-3 hover:bg-gray-100 cursor-pointer">
+                            <div class="flex justify-between items-start">
+                                <h4 class="font-medium text-sm">代码助手</h4>
+                                <span class="text-xs text-gray-500">今天 10:15</span>
+                            </div>
+                            <p class="text-xs text-gray-600 mt-1 line-clamp-2">帮我调试一个Python代码，实现快速排序算法</p>
+                        </div>
+                        <div class="history-session-item bg-gray-50 rounded-lg p-3 hover:bg-gray-100 cursor-pointer">
+                            <div class="flex justify-between items-start">
+                                <h4 class="font-medium text-sm">数据分析</h4>
+                                <span class="text-xs text-gray-500">昨天 16:45</span>
+                            </div>
+                            <p class="text-xs text-gray-600 mt-1 line-clamp-2">帮我分析一组销售数据，生成可视化报告</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 右侧主内容 -->
+        <div class="coze-main flex-1 overflow-hidden flex flex-col">
+            <!-- 内容区域 -->
+            <div class="flex-1 overflow-y-auto p-6">
+                <!-- 对话模块 -->
+                <div id="chat" class="block">
+                    <!-- 欢迎区域 -->
+                    <div class="text-center py-12">
+                        <h2 class="text-2xl font-bold text-gray-800 mb-2">初次见面！你的工作伙伴已就位</h2>
+                        <p class="text-gray-600 mb-8">深呼吸后工作，怎么样都能空窗期</p>
+                    </div>
+
+                    <!-- 聊天内容 -->
+                    <div id="chat-messages" class="p-4 h-[500px] overflow-y-auto space-y-4 mb-6">
+                        <!-- 欢迎消息 -->
+                        <div class="flex message-animation">
+                            <div class="w-10 h-10 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center mr-3 flex-shrink-0">
+                                <i class="fa fa-robot text-white"></i>
+                            </div>
+                            <div class="bg-white rounded-2xl rounded-tl-none p-4 max-w-[80%] shadow-md border border-gray-100">
+                                <p class="text-gray-800">你好！我是小雷，你的AI助手。我可以帮助你：</p>
+                                <ul class="mt-2 space-y-1 text-sm text-gray-600">
+                                    <li> 使用各种技能完成任务</li>
+                                    <li> 制定和执行长期计划</li>
+                                    <li> 生成和运行代码</li>
+                                    <li> 回答问题和提供建议</li>
+                                </ul>
+                                <p class="mt-3 text-sm text-gray-600">有什么我可以帮助你的吗？</p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- 消息统计 -->
+                    <div class="flex justify-between items-center px-4 py-2 bg-gray-50 rounded-lg mb-4">
+                        <div class="flex gap-4 text-sm text-gray-600">
+                            <span id="message-stats">0 条消息</span>
+                            <span>|</span>
+                            <span id="response-time-stats">平均响应时间: --</span>
+                        </div>
+                        <div class="flex gap-2">
+                            <button class="px-3 py-1 text-xs border border-gray-300 rounded-lg hover:bg-gray-100" onclick="MessageHistory.restoreToUI()" title="恢复之前的聊天记录">
+                                <i class="fa fa-history mr-1"></i>恢复历史
+                            </button>
+                            <button class="px-3 py-1 text-xs border border-gray-300 rounded-lg hover:bg-gray-100" onclick="MessageHistory.exportAsJSON()" title="导出为 JSON 格式">
+                                <i class="fa fa-file-code-o mr-1"></i>导出JSON
+                            </button>
+                            <button class="px-3 py-1 text-xs border border-gray-300 rounded-lg hover:bg-gray-100" onclick="MessageHistory.exportAsTXT()" title="导出为 TXT 格式">
+                                <i class="fa fa-file-text-o mr-1"></i>导出TXT
+                            </button>
+                            <button class="px-3 py-1 text-xs border border-red-300 text-red-600 rounded-lg hover:bg-red-50" onclick="if(confirm('确定要清空消息历史吗？')) MessageHistory.clear(); clearChat();" title="清空所有历史记录">
+                                <i class="fa fa-trash mr-1"></i>清空聊天
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 快捷功能按钮 -->
+                    <div class="flex flex-wrap gap-2 mb-4">
+                        <button class="coze-tool-btn bg-white px-3 py-1.5 rounded-lg text-sm border border-gray-200 hover:border-blue-400 flex items-center">
+                            <i class="fa fa-pencil mr-1"></i> 写作
+                        </button>
+                        <button class="coze-tool-btn bg-white px-3 py-1.5 rounded-lg text-sm border border-gray-200 hover:border-blue-400 flex items-center">
+                            <i class="fa fa-file-text mr-1"></i> PPT
+                        </button>
+                        <button class="coze-tool-btn bg-white px-3 py-1.5 rounded-lg text-sm border border-gray-200 hover:border-blue-400 flex items-center">
+                            <i class="fa fa-paint-brush mr-1"></i> 设计
+                        </button>
+                        <button class="coze-tool-btn bg-white px-3 py-1.5 rounded-lg text-sm border border-gray-200 hover:border-blue-400 flex items-center">
+                            <i class="fa fa-table mr-1"></i> Excel
+                        </button>
+                        <button class="coze-tool-btn bg-white px-3 py-1.5 rounded-lg text-sm border border-gray-200 hover:border-blue-400 flex items-center">
+                            <i class="fa fa-globe mr-1"></i> 网页
+                        </button>
+                        <button class="coze-tool-btn bg-white px-3 py-1.5 rounded-lg text-sm border border-gray-200 hover:border-blue-400 flex items-center">
+                            <i class="fa fa-music mr-1"></i> 音乐
+                        </button>
+                        <button class="coze-tool-btn bg-white px-3 py-1.5 rounded-lg text-sm border border-gray-200 hover:border-blue-400 flex items-center">
+                            <i class="fa fa-film mr-1"></i> 视频
+                        </button>
+                        <button class="coze-tool-btn bg-white px-3 py-1.5 rounded-lg text-sm border border-gray-200 hover:border-blue-400 flex items-center">
+                            <i class="fa fa-ellipsis-h mr-1"></i> 更多
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 计划模块 -->
+                <div id="plan" class="hidden page-section">
+                    <div class="mb-6">
+                        <h2 class="text-2xl font-bold text-gray-800 mb-4">长期计划</h2>
+                        <p class="text-gray-600 mb-6">创建和管理你的长期计划，系统会自动拆解为可执行闭环计划</p>
+                        
+                        <!-- 计划统计 -->
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                            <div class="bg-white rounded-xl shadow-md p-4">
+                                <div class="flex items-center">
+                                    <div class="p-3 rounded-full bg-blue-100 mr-4">
+                                        <i class="fa fa-list text-blue-600 text-xl"></i>
+                                    </div>
+                                    <div>
+                                        <div class="text-2xl font-bold text-gray-800">2</div>
+                                        <div class="text-sm text-gray-500">总计划数</div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="bg-white rounded-xl shadow-md p-4">
+                                <div class="flex items-center">
+                                    <div class="p-3 rounded-full bg-green-100 mr-4">
+                                        <i class="fa fa-check-circle text-green-600 text-xl"></i>
+                                    </div>
+                                    <div>
+                                        <div class="text-2xl font-bold text-gray-800">1</div>
+                                        <div class="text-sm text-gray-500">进行中</div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="bg-white rounded-xl shadow-md p-4">
+                                <div class="flex items-center">
+                                    <div class="p-3 rounded-full bg-orange-100 mr-4">
+                                        <i class="fa fa-clock-o text-orange-600 text-xl"></i>
+                                    </div>
+                                    <div>
+                                        <div class="text-2xl font-bold text-gray-800">1</div>
+                                        <div class="text-sm text-gray-500">待开始</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- 创建新计划 -->
+                        <div class="bg-white rounded-xl shadow-md p-6 mb-6">
+                            <h3 class="font-semibold text-gray-800 mb-3">创建新计划</h3>
+                            <form onsubmit="createNewPlan(event)" class="flex gap-3">
+                                <input type="text" placeholder="输入你的目标..." class="flex-1 p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                <button type="submit" class="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-6 py-3 rounded-lg hover:shadow-lg transition flex items-center">
+                                    <i class="fa fa-plus mr-2"></i>
+                                    创建
+                                </button>
+                            </form>
+                        </div>
+                        
+                        <!-- 筛选器 -->
+                        <div class="flex gap-2 mb-4">
+                            <button class="px-4 py-2 rounded-lg text-sm bg-blue-600 text-white" onclick="filterPlans('all')">全部</button>
+                            <button class="px-4 py-2 rounded-lg text-sm border border-gray-200 hover:border-blue-400" onclick="filterPlans('进行中')">进行中</button>
+                            <button class="px-4 py-2 rounded-lg text-sm border border-gray-200 hover:border-blue-400" onclick="filterPlans('待开始')">待开始</button>
+                            <button class="px-4 py-2 rounded-lg text-sm border border-gray-200 hover:border-blue-400" onclick="filterPlans('已完成')">已完成</button>
+                        </div>
+                        
+                        <!-- 我的计划 -->
+                        <h3 class="font-semibold text-gray-800 mb-3">我的计划</h3>
+                        <div id="plans-list" class="space-y-4">
+                            <div class="plan-card bg-white rounded-xl shadow-md p-5 cursor-pointer hover:shadow-lg transition" data-status="进行中">
+                                <div class="flex justify-between items-start mb-3">
+                                    <div>
+                                        <h4 class="font-medium text-lg">微博热搜分析计划</h4>
+                                        <p class="text-sm text-gray-500 mt-1">开始时间: 2026-04-20</p>
+                                    </div>
+                                    <span class="px-3 py-1 rounded-full text-xs font-medium bg-green-100 text-green-700">进行中</span>
+                                </div>
+                                <div class="mb-3">
+                                    <div class="flex justify-between text-sm text-gray-600 mb-1">
+                                        <span>进度</span>
+                                        <span class="font-semibold">60%</span>
+                                    </div>
+                                    <div class="w-full bg-gray-200 rounded-full h-2">
+                                        <div class="bg-blue-600 h-2 rounded-full" style="width: 60%"></div>
+                                    </div>
+                                </div>
+                                <div class="flex justify-between text-xs text-gray-500">
+                                    <span>预计完成: 2026-05-10</span>
+                                    <div class="flex gap-2">
+                                        <button class="text-blue-600 hover:underline" onclick="viewPlanDetails(event, '微博热搜分析计划')">查看详情</button>
+                                        <button class="text-red-600 hover:underline" onclick="deletePlan(event, '微博热搜分析计划')">删除</button>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="plan-card bg-white rounded-xl shadow-md p-5 cursor-pointer hover:shadow-lg transition" data-status="待开始">
+                                <div class="flex justify-between items-start mb-3">
+                                    <div>
+                                        <h4 class="font-medium text-lg">Python异步编程学习计划</h4>
+                                        <p class="text-sm text-gray-500 mt-1">开始时间: 2026-05-01</p>
+                                    </div>
+                                    <span class="px-3 py-1 rounded-full text-xs font-medium bg-orange-100 text-orange-700">待开始</span>
+                                </div>
+                                <div class="mb-3">
+                                    <div class="flex justify-between text-sm text-gray-600 mb-1">
+                                        <span>进度</span>
+                                        <span class="font-semibold">0%</span>
+                                    </div>
+                                    <div class="w-full bg-gray-200 rounded-full h-2">
+                                        <div class="bg-orange-400 h-2 rounded-full" style="width: 0%"></div>
+                                    </div>
+                                </div>
+                                <div class="flex justify-between text-xs text-gray-500">
+                                    <span>预计完成: 2026-06-30</span>
+                                    <div class="flex gap-2">
+                                        <button class="text-blue-600 hover:underline" onclick="viewPlanDetails(event, 'Python异步编程学习计划')">查看详情</button>
+                                        <button class="text-red-600 hover:underline" onclick="deletePlan(event, 'Python异步编程学习计划')">删除</button>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <!-- 空状态提示 -->
+                            <div id="empty-plans" class="hidden text-center py-12">
+                                <i class="fa fa-folder-open text-gray-300 text-6xl mb-4"></i>
+                                <p class="text-gray-500">暂无计划，点击上方按钮创建你的第一个计划</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 技能模块 -->
+                <div id="skill" class="hidden page-section">
+                    <div class="mb-6">
+                        <h2 class="text-2xl font-bold text-gray-800 mb-4">技能商店</h2>
+                        <p class="text-gray-600 mb-6">浏览和管理AI技能库，扩展Agent能力</p>
+                        
+                        <!-- 搜索和筛选 -->
+                        <div class="bg-white rounded-xl shadow-md p-4 mb-6">
+                            <div class="flex flex-col md:flex-row gap-4">
+                                <div class="flex-1 relative">
+                                    <input type="text" id="skill-search" placeholder="搜索技能..." 
+                                           class="w-full p-3 pl-10 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                           oninput="filterSkills()">
+                                    <i class="fa fa-search absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400"></i>
+                                </div>
+                                <div class="flex gap-2 flex-wrap">
+                                    <button class="px-4 py-2 rounded-lg text-sm bg-blue-600 text-white" onclick="filterByCategory('all')">全部</button>
+                                    <button class="px-4 py-2 rounded-lg text-sm border border-gray-200 hover:border-blue-400" onclick="filterByCategory('免费')">免费</button>
+                                    <button class="px-4 py-2 rounded-lg text-sm border border-gray-200 hover:border-blue-400" onclick="filterByCategory('办公')">办公</button>
+                                    <button class="px-4 py-2 rounded-lg text-sm border border-gray-200 hover:border-blue-400" onclick="filterByCategory('创作')">创作</button>
+                                    <button class="px-4 py-2 rounded-lg text-sm border border-gray-200 hover:border-blue-400" onclick="filterByCategory('开发')">开发</button>
+                                    <button class="px-4 py-2 rounded-lg text-sm border border-gray-200 hover:border-blue-400" onclick="filterByCategory('分析')">分析</button>
+                                </div>
+                            </div>
+                            <div class="mt-3 text-sm text-gray-500">
+                                找到 <span id="skill-count" class="font-semibold text-blue-600">6</span> 个技能
+                            </div>
+                        </div>
+                        
+                        <!-- 技能卡片 -->
+                        <h3 class="font-semibold text-gray-800 mb-3">推荐技能</h3>
+                        <div id="skills-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
+                            <div class="skill-card bg-white rounded-xl shadow-md overflow-hidden" data-category="免费" data-name="天气查询">
+                                <div class="p-4">
+                                    <div class="flex items-center justify-between mb-3">
+                                        <h4 class="font-medium">天气查询</h4>
+                                        <span class="text-xs text-green-600 font-medium">免费</span>
+                                    </div>
+                                    <p class="text-sm text-gray-600 mb-3">实时查询天气信息，支持多地天气预报</p>
+                                    <div class="flex items-center justify-between text-xs text-gray-500 mb-3">
+                                        <span>✓ 已安装</span>
+                                        <span>评分: 4.9</span>
+                                    </div>
+                                    <div class="flex items-center justify-between text-xs text-gray-500 mb-2">
+                                        <span class="text-blue-600">使用次数: 128</span>
+                                    </div>
+                                    <button class="w-full bg-gray-600 text-white py-2 rounded-lg transition text-sm cursor-not-allowed">
+                                        已启用
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="skill-card bg-white rounded-xl shadow-md overflow-hidden" data-category="免费" data-name="网页爬虫">
+                                <div class="p-4">
+                                    <div class="flex items-center justify-between mb-3">
+                                        <h4 class="font-medium">网页爬虫</h4>
+                                        <span class="text-xs text-green-600 font-medium">免费</span>
+                                    </div>
+                                    <p class="text-sm text-gray-600 mb-3">支持微博、百度、B站、抖音、GitHub等网站数据抓取</p>
+                                    <div class="flex items-center justify-between text-xs text-gray-500 mb-3">
+                                        <span>✓ 已安装</span>
+                                        <span>评分: 4.8</span>
+                                    </div>
+                                    <div class="flex items-center justify-between text-xs text-gray-500 mb-2">
+                                        <span class="text-blue-600">使用次数: 96</span>
+                                    </div>
+                                    <button class="w-full bg-gray-600 text-white py-2 rounded-lg transition text-sm cursor-not-allowed">
+                                        已启用
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="skill-card bg-white rounded-xl shadow-md overflow-hidden" data-category="免费 分析" data-name="数据分析">
+                                <div class="p-4">
+                                    <div class="flex items-center justify-between mb-3">
+                                        <h4 class="font-medium">数据分析</h4>
+                                        <span class="text-xs text-green-600 font-medium">免费</span>
+                                    </div>
+                                    <p class="text-sm text-gray-600 mb-3">使用数据分析Agent处理数据，生成可视化报告和洞察</p>
+                                    <div class="flex items-center justify-between text-xs text-gray-500 mb-3">
+                                        <span>✓ 已安装</span>
+                                        <span>评分: 4.7</span>
+                                    </div>
+                                    <div class="flex items-center justify-between text-xs text-gray-500 mb-2">
+                                        <span class="text-blue-600">使用次数: 87</span>
+                                    </div>
+                                    <button class="w-full bg-gray-600 text-white py-2 rounded-lg transition text-sm cursor-not-allowed">
+                                        已启用
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="skill-card bg-white rounded-xl shadow-md overflow-hidden" data-category="免费 办公" data-name="多语言翻译">
+                                <div class="p-4">
+                                    <div class="flex items-center justify-between mb-3">
+                                        <h4 class="font-medium">多语言翻译</h4>
+                                        <span class="text-xs text-green-600 font-medium">免费</span>
+                                    </div>
+                                    <p class="text-sm text-gray-600 mb-3">支持多种语言之间的翻译，保持原文风格和语境</p>
+                                    <div class="flex items-center justify-between text-xs text-gray-500 mb-3">
+                                        <span>✓ 已安装</span>
+                                        <span>评分: 4.8</span>
+                                    </div>
+                                    <div class="flex items-center justify-between text-xs text-gray-500 mb-2">
+                                        <span class="text-blue-600">使用次数: 156</span>
+                                    </div>
+                                    <button class="w-full bg-gray-600 text-white py-2 rounded-lg transition text-sm cursor-not-allowed">
+                                        已启用
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="skill-card bg-white rounded-xl shadow-md overflow-hidden" data-category="免费 分析" data-name="深度思考">
+                                <div class="p-4">
+                                    <div class="flex items-center justify-between mb-3">
+                                        <h4 class="font-medium">深度思考</h4>
+                                        <span class="text-xs text-green-600 font-medium">免费</span>
+                                    </div>
+                                    <p class="text-sm text-gray-600 mb-3">使用深度思考Agent进行复杂问题的推理和分析</p>
+                                    <div class="flex items-center justify-between text-xs text-gray-500 mb-3">
+                                        <span>✓ 已安装</span>
+                                        <span>评分: 4.9</span>
+                                    </div>
+                                    <div class="flex items-center justify-between text-xs text-gray-500 mb-2">
+                                        <span class="text-blue-600">使用次数: 203</span>
+                                    </div>
+                                    <button class="w-full bg-gray-600 text-white py-2 rounded-lg transition text-sm cursor-not-allowed">
+                                        已启用
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="skill-card bg-white rounded-xl shadow-md overflow-hidden" data-category="免费 开发" data-name="GUI自动化">
+                                <div class="p-4">
+                                    <div class="flex items-center justify-between mb-3">
+                                        <h4 class="font-medium">GUI自动化</h4>
+                                        <span class="text-xs text-green-600 font-medium">免费</span>
+                                    </div>
+                                    <p class="text-sm text-gray-600 mb-3">自动化控制鼠标键盘，执行重复性桌面任务</p>
+                                    <div class="flex items-center justify-between text-xs text-gray-500 mb-3">
+                                        <span>✓ 已安装</span>
+                                        <span>评分: 4.6</span>
+                                    </div>
+                                    <div class="flex items-center justify-between text-xs text-gray-500 mb-2">
+                                        <span class="text-blue-600">使用次数: 64</span>
+                                    </div>
+                                    <button class="w-full bg-gray-600 text-white py-2 rounded-lg transition text-sm cursor-not-allowed">
+                                        已启用
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- 技能创建 -->
+                        <div class="bg-white rounded-xl shadow-md p-6">
+                            <h3 class="font-semibold text-gray-800 mb-3">创建自定义技能</h3>
+                            <div class="mb-4">
+                                <label class="block text-sm font-medium text-gray-700 mb-1">技能名称</label>
+                                <input type="text" placeholder="输入技能名称..." class="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                            </div>
+                            <div class="mb-4">
+                                <label class="block text-sm font-medium text-gray-700 mb-1">技能描述</label>
+                                <textarea placeholder="描述你的技能功能..." class="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent" rows="3"></textarea>
+                            </div>
+                            <div class="mb-4">
+                                <label class="block text-sm font-medium text-gray-700 mb-1">技能逻辑</label>
+                                <textarea placeholder="使用自然语言描述技能的工作原理..." class="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent" rows="4"></textarea>
+                            </div>
+                            <button class="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition" onclick="createCustomSkill()">
+                                创建技能
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 工作流编辑器模块 -->
+                <div id="workflow" class="hidden page-section">
+                    <div class="mb-4">
+                        <h2 class="text-2xl font-bold text-gray-800 mb-2">🤖 智能工作流编辑器</h2>
+                        <p class="text-gray-600">可视化编排AI工作流，支持循环节点、条件判断等复杂逻辑</p>
+                    </div>
+                    
+                    <!-- 工作流编辑器容器 -->
+                    <div class="bg-white rounded-xl shadow-md overflow-hidden" style="height: calc(100vh - 200px);">
+                        <iframe id="workflow-editor-frame" src="/workflow_editor" class="w-full h-full border-0"></iframe>
+                    </div>
+                </div>
+
+                <!-- Agent小组模块 -->
+                <div id="agent-group" class="hidden page-section">
+                    <div class="mb-6">
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <h2 class="text-2xl font-bold text-gray-800 mb-2">👥 Agent小组管理</h2>
+                                <p class="text-gray-600">管理Agent集群，配置调度策略和弹性伸缩</p>
+                            </div>
+                            <button class="bg-blue-600 text-white px-5 py-2.5 rounded-lg hover:bg-blue-700 transition flex items-center" onclick="openCreateGroupModal()">
+                                <i class="fa fa-plus mr-2"></i> 新建小组
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <!-- 小组列表 -->
+                    <div id="agent-groups-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                        <!-- 小组卡片示例 -->
+                        <div class="agent-group-card bg-white rounded-xl shadow-md overflow-hidden hover:shadow-lg transition">
+                            <div class="p-5">
+                                <div class="flex items-start justify-between mb-3">
+                                    <div>
+                                        <h3 class="font-semibold text-gray-800">智能分析小组</h3>
+                                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                                            <span class="w-2 h-2 bg-green-500 rounded-full mr-1.5"></span>运行中
+                                        </span>
+                                    </div>
+                                    <div class="flex space-x-1">
+                                        <button class="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition" title="编辑" onclick="openEditGroupModal('智能分析小组')">
+                                            <i class="fa fa-pencil"></i>
+                                        </button>
+                                        <button class="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition" title="删除" onclick="deleteGroup('智能分析小组')">
+                                            <i class="fa fa-trash"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                                
+                                <div class="space-y-3">
+                                    <div class="flex items-center text-sm text-gray-600">
+                                        <i class="fa fa-users mr-2 text-gray-400"></i>
+                                        <span>成员: Checker, Scraper, Analyzer</span>
+                                    </div>
+                                    <div class="flex items-center text-sm text-gray-600">
+                                        <i class="fa fa-random mr-2 text-gray-400"></i>
+                                        <span>策略: 加权轮询</span>
+                                    </div>
+                                    <div class="flex items-center text-sm text-gray-600">
+                                        <i class="fa fa-shield mr-2 text-gray-400"></i>
+                                        <span>熔断: 开启</span>
+                                    </div>
+                                    <div class="flex items-center text-sm text-gray-600">
+                                        <i class="fa fa-expand mr-2 text-gray-400"></i>
+                                        <span>弹性伸缩: 开启</span>
+                                    </div>
+                                </div>
+                                
+                                <div class="mt-4 pt-4 border-t border-gray-100">
+                                    <button class="w-full py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition text-sm" onclick="toggleGroupStatus('智能分析小组', 'running')">
+                                        停止小组
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="agent-group-card bg-white rounded-xl shadow-md overflow-hidden hover:shadow-lg transition">
+                            <div class="p-5">
+                                <div class="flex items-start justify-between mb-3">
+                                    <div>
+                                        <h3 class="font-semibold text-gray-800">数据处理小组</h3>
+                                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
+                                            <span class="w-2 h-2 bg-yellow-500 rounded-full mr-1.5"></span>休眠
+                                        </span>
+                                    </div>
+                                    <div class="flex space-x-1">
+                                        <button class="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition" title="编辑" onclick="openEditGroupModal('数据处理小组')">
+                                            <i class="fa fa-pencil"></i>
+                                        </button>
+                                        <button class="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition" title="删除" onclick="deleteGroup('数据处理小组')">
+                                            <i class="fa fa-trash"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                                
+                                <div class="space-y-3">
+                                    <div class="flex items-center text-sm text-gray-600">
+                                        <i class="fa fa-users mr-2 text-gray-400"></i>
+                                        <span>成员: Processor, Transformer</span>
+                                    </div>
+                                    <div class="flex items-center text-sm text-gray-600">
+                                        <i class="fa fa-random mr-2 text-gray-400"></i>
+                                        <span>策略: 最小负载</span>
+                                    </div>
+                                    <div class="flex items-center text-sm text-gray-600">
+                                        <i class="fa fa-shield mr-2 text-gray-400"></i>
+                                        <span>熔断: 开启</span>
+                                    </div>
+                                    <div class="flex items-center text-sm text-gray-600">
+                                        <i class="fa fa-expand mr-2 text-gray-400"></i>
+                                        <span>弹性伸缩: 关闭</span>
+                                    </div>
+                                </div>
+                                
+                                <div class="mt-4 pt-4 border-t border-gray-100">
+                                    <button class="w-full py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition text-sm" onclick="toggleGroupStatus('数据处理小组', 'sleeping')">
+                                        启动小组
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="agent-group-card bg-white rounded-xl shadow-md overflow-hidden hover:shadow-lg transition">
+                            <div class="p-5">
+                                <div class="flex items-start justify-between mb-3">
+                                    <div>
+                                        <h3 class="font-semibold text-gray-800">安全检测小组</h3>
+                                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
+                                            <span class="w-2 h-2 bg-gray-500 rounded-full mr-1.5"></span>离线
+                                        </span>
+                                    </div>
+                                    <div class="flex space-x-1">
+                                        <button class="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition" title="编辑" onclick="openEditGroupModal('安全检测小组')">
+                                            <i class="fa fa-pencil"></i>
+                                        </button>
+                                        <button class="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition" title="删除" onclick="deleteGroup('安全检测小组')">
+                                            <i class="fa fa-trash"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                                
+                                <div class="space-y-3">
+                                    <div class="flex items-center text-sm text-gray-600">
+                                        <i class="fa fa-users mr-2 text-gray-400"></i>
+                                        <span>成员: Vulnerability, Scanner</span>
+                                    </div>
+                                    <div class="flex items-center text-sm text-gray-600">
+                                        <i class="fa fa-random mr-2 text-gray-400"></i>
+                                        <span>策略: 随机选择</span>
+                                    </div>
+                                    <div class="flex items-center text-sm text-gray-600">
+                                        <i class="fa fa-shield mr-2 text-gray-400"></i>
+                                        <span>熔断: 关闭</span>
+                                    </div>
+                                    <div class="flex items-center text-sm text-gray-600">
+                                        <i class="fa fa-expand mr-2 text-gray-400"></i>
+                                        <span>弹性伸缩: 关闭</span>
+                                    </div>
+                                </div>
+                                
+                                <div class="mt-4 pt-4 border-t border-gray-100">
+                                    <button class="w-full py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition text-sm" onclick="toggleGroupStatus('安全检测小组', 'offline')">
+                                        启动小组
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 代码模块 -->
+                <div id="code" class="hidden page-section">
+                    <div class="mb-6">
+                        <h2 class="text-2xl font-bold text-gray-800 mb-4">低代码开发</h2>
+                        <p class="text-gray-600 mb-6">描述你的需求，系统会自动生成对应代码/应用</p>
+                        
+                        <!-- 模板选择 -->
+                        <div class="bg-white rounded-xl shadow-md p-4 mb-6">
+                            <h3 class="font-semibold text-gray-800 mb-3">快速模板</h3>
+                            <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+                                <button class="p-3 border-2 border-gray-200 rounded-lg hover:border-blue-400 transition text-left" onclick="loadTemplate('web')">
+                                    <i class="fa fa-globe text-blue-600 text-2xl mb-2"></i>
+                                    <div class="font-medium text-sm">网页应用</div>
+                                    <div class="text-xs text-gray-500">HTML/CSS/JS</div>
+                                </button>
+                                <button class="p-3 border-2 border-gray-200 rounded-lg hover:border-blue-400 transition text-left" onclick="loadTemplate('api')">
+                                    <i class="fa fa-code text-green-600 text-2xl mb-2"></i>
+                                    <div class="font-medium text-sm">API接口</div>
+                                    <div class="text-xs text-gray-500">FastAPI/Flask</div>
+                                </button>
+                                <button class="p-3 border-2 border-gray-200 rounded-lg hover:border-blue-400 transition text-left" onclick="loadTemplate('script')">
+                                    <i class="fa fa-terminal text-purple-600 text-2xl mb-2"></i>
+                                    <div class="font-medium text-sm">Python脚本</div>
+                                    <div class="text-xs text-gray-500">自动化脚本</div>
+                                </button>
+                                <button class="p-3 border-2 border-gray-200 rounded-lg hover:border-blue-400 transition text-left" onclick="loadTemplate('game')">
+                                    <i class="fa fa-gamepad text-red-600 text-2xl mb-2"></i>
+                                    <div class="font-medium text-sm">小游戏</div>
+                                    <div class="text-xs text-gray-500">HTML5游戏</div>
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <!-- 需求输入 -->
+                        <div class="bg-white rounded-xl shadow-md p-6 mb-6">
+                            <div class="flex justify-between items-center mb-3">
+                                <h3 class="font-semibold text-gray-800">需求描述</h3>
+                                <select class="text-sm border border-gray-300 rounded-lg px-3 py-1">
+                                    <option>Python</option>
+                                    <option>JavaScript</option>
+                                    <option>HTML/CSS</option>
+                                    <option>SQL</option>
+                                </select>
+                            </div>
+                            <textarea id="code-requirement" placeholder="输入你的需求，例如：生成一个AVG恋爱文字游戏..." class="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent" rows="4"></textarea>
+                            <div class="flex justify-between items-center mt-4">
+                                <div class="flex space-x-2">
+                                    <button class="px-3 py-1.5 rounded-lg text-sm border border-gray-200 hover:border-blue-400 flex items-center" onclick="optimizeRequirement()">
+                                        <i class="fa fa-magic mr-1"></i> 智能优化
+                                    </button>
+                                    <button class="px-3 py-1.5 rounded-lg text-sm border border-gray-200 hover:border-blue-400 flex items-center" onclick="clearRequirement()">
+                                        <i class="fa fa-trash mr-1"></i> 清空
+                                    </button>
+                                </div>
+                                <button class="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-6 py-2 rounded-lg hover:shadow-lg transition" onclick="generateCode()">
+                                    <i class="fa fa-magic mr-2"></i>生成代码
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <!-- 开发模式切换 -->
+                        <div class="flex space-x-2 mb-4">
+                            <button class="px-4 py-2 rounded-lg text-sm bg-blue-600 text-white">
+                                智能体
+                            </button>
+                            <button class="px-4 py-2 rounded-lg text-sm bg-gray-100 text-gray-700 hover:bg-gray-200 transition">
+                                工作流
+                            </button>
+                            <button class="px-4 py-2 rounded-lg text-sm bg-gray-100 text-gray-700 hover:bg-gray-200 transition">
+                                网页应用
+                            </button>
+                            <button class="px-4 py-2 rounded-lg text-sm bg-gray-100 text-gray-700 hover:bg-gray-200 transition">
+                                移动应用
+                            </button>
+                            <button class="px-4 py-2 rounded-lg text-sm bg-gray-100 text-gray-700 hover:bg-gray-200 transition">
+                                技能
+                            </button>
+                        </div>
+                        
+                        <!-- 双栏编辑器 -->
+                        <div class="flex flex-col lg:flex-row gap-4">
+                            <!-- 代码编辑区 -->
+                            <div class="flex-1">
+                                <div class="bg-white rounded-xl shadow-md overflow-hidden">
+                                    <div class="flex items-center justify-between bg-gray-50 px-4 py-2 border-b">
+                                        <div class="flex items-center space-x-2">
+                                            <div class="w-3 h-3 bg-red-400 rounded-full"></div>
+                                            <div class="w-3 h-3 bg-yellow-400 rounded-full"></div>
+                                            <div class="w-3 h-3 bg-green-400 rounded-full"></div>
+                                        </div>
+                                        <div class="text-sm text-gray-600">main.py</div>
+                                        <div class="flex items-center space-x-2">
+                                            <button class="text-gray-600 hover:text-blue-600 transition">
+                                                <i class="fa fa-save"></i>
+                                            </button>
+                                            <button class="text-gray-600 hover:text-blue-600 transition">
+                                                <i class="fa fa-download"></i>
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <div class="h-[400px] overflow-auto">
+                                        <pre class="code-editor p-4 text-sm">
+# 智能体示例代码
+class SmartAgent:
+    def __init__(self):
+        self.name = "小雷版小龙虾AI助手"
+        self.skills = []
+    
+    def greet(self):
+        return f"你好！我是{self.name}，有什么可以帮你的吗？"
+    
+    def add_skill(self, skill):
+        self.skills.append(skill)
+        return f"已添加技能: {skill}"
+    
+    def process_task(self, task):
+        # 处理任务逻辑
+        return f"正在处理任务: {task}"
+
+# 示例使用
+agent = SmartAgent()
+print(agent.greet())
+print(agent.add_skill("天气查询"))
+print(agent.process_task("查询北京天气"))
+                                        </pre>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <!-- 预览区 -->
+                            <div class="flex-1">
+                                <div class="bg-white rounded-xl shadow-md overflow-hidden">
+                                    <div class="flex items-center justify-between bg-gray-50 px-4 py-2 border-b">
+                                        <h4 class="font-medium text-gray-800">实时预览</h4>
+                                        <div class="flex items-center space-x-2">
+                                            <button class="px-3 py-1 rounded-lg text-sm bg-green-600 text-white hover:bg-green-700 transition">
+                                                <i class="fa fa-play mr-1"></i> 运行
+                                            </button>
+                                            <button class="px-3 py-1 rounded-lg text-sm bg-gray-100 text-gray-700 hover:bg-gray-200 transition">
+                                                <i class="fa fa-bug mr-1"></i> 调试
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <div class="h-[400px] overflow-auto p-4 bg-gray-50">
+                                        <div class="bg-white rounded-lg p-4 shadow">
+                                            <div class="mb-4">
+                                                <h3 class="font-medium text-gray-800 mb-2">智能体输出</h3>
+                                                <div class="text-sm text-gray-600 space-y-2">
+                                                    <p>你好！我是小雷版小龙虾AI助手，有什么可以帮你的吗？</p>
+                                                    <p>已添加技能: 天气查询</p>
+                                                    <p>正在处理任务: 查询北京天气</p>
+                                                </div>
+                                            </div>
+                                            <div class="mt-4 pt-4 border-t">
+                                                <h3 class="font-medium text-gray-800 mb-2">控制台</h3>
+                                                <div class="text-sm text-gray-600 bg-gray-100 p-2 rounded">
+                                                    <p>INFO: 智能体初始化成功</p>
+                                                    <p>INFO: 技能加载完成</p>
+                                                    <p>INFO: 任务处理完成</p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 聊天输入 -->
+            <div class="coze-input-area p-4">
+                <!-- 文件拖拽上传区域（隐藏，通过拖拽显示） -->
+                <div id="drop-zone" class="hidden mb-3 border-2 border-dashed border-blue-400 rounded-xl bg-blue-50 p-6 text-center transition-all">
+                    <i class="fa fa-cloud-upload text-4xl text-blue-500 mb-2"></i>
+                    <p class="text-gray-600">拖拽文件到此处上传</p>
+                    <p class="text-xs text-gray-400 mt-1">支持图片、文档等格式（最多5个文件）</p>
+                </div>
+                
+                <!-- 已上传文件列表 -->
+                <div id="uploaded-files" class="hidden mb-3 flex flex-wrap gap-2">
+                    <!-- 动态插入文件标签 -->
+                </div>
+                
+                <form id="chat-form" class="flex space-x-3 items-center">
+                    <!-- 数据分析下拉框 -->
+                    <div class="relative">
+                        <select id="analysis-type" class="appearance-none bg-white border border-gray-300 rounded-xl px-4 py-4 pr-10 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer hover:border-blue-400 transition-all text-sm font-medium text-gray-700" style="min-width: 120px;">
+                            <option value="chat">💬 聊天</option>
+                            <optgroup label="📊 数据分析">
+                                <option value="stats">📈 描述性统计</option>
+                                <option value="bar">📊 柱状图</option>
+                                <option value="pie">🥧 饼图</option>
+                                <option value="line">📉 折线图</option>
+                                <option value="heatmap">🔥 热力图</option>
+                                <option value="wordcloud">☁️ 词云</option>
+                                <option value="ocr">🔍 OCR识别</option>
+                            </optgroup>
+                        </select>
+                        <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-gray-500">
+                            <i class="fa fa-chevron-down text-xs"></i>
+                        </div>
+                    </div>
+                    
+                    <!-- 消息输入框 -->
+                    <div class="flex-1 relative">
+                        <input type="text" id="message-input" placeholder="输入消息... (Enter发送)" 
+                               class="w-full p-4 pr-12 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all">
+                        <div class="absolute right-3 top-1/2 transform -translate-y-1/2 flex items-center space-x-2">
+                            <!-- 文件上传按钮 -->
+                            <button type="button" id="upload-btn" class="text-gray-400 hover:text-blue-600 transition" title="上传文件" onclick="document.getElementById('file-input').click()">
+                                <i class="fa fa-paperclip"></i>
+                            </button>
+                            <!-- 隐藏的文件输入 -->
+                            <input type="file" id="file-input" multiple accept="image/*,.pdf,.doc,.docx,.txt,.csv,.xlsx" class="hidden" onchange="handleFileSelect(event)">
+                            
+                            <button type="button" class="text-gray-400 hover:text-blue-600 transition">
+                                <i class="fa fa-microphone"></i>
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <!-- 发送按钮 -->
+                    <button type="submit" id="send-button" class="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-6 py-4 rounded-xl hover:shadow-lg transition duration-200 flex items-center">
+                        <i class="fa fa-paper-plane"></i>
+                    </button>
+                </form>
+                
+                <div class="flex justify-between items-center mt-3 text-xs text-gray-500">
+                    <div class="flex items-center space-x-4">
+                        <span>💡 提示：Shift+Enter 换行</span>
+                        <span>|</span>
+                        <span>⌨️ 快捷指令：/天气 /翻译 /分析 /思考</span>
+                        <span>|</span>
+                        <span>📎 支持拖拽上传文件（最多5个）</span>
+                    </div>
+                    <div>
+                        <span>AI 增强</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Agent小组创建/编辑模态框 -->
+    <div id="agent-group-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden z-50 flex items-center justify-center p-4">
+        <div class="bg-white rounded-2xl shadow-2xl max-w-lg w-full max-h-[90vh] overflow-y-auto">
+            <!-- 模态框头部 -->
+            <div class="sticky top-0 bg-white border-b px-6 py-4 flex justify-between items-center">
+                <h2 class="text-xl font-bold text-gray-800" id="modal-title">
+                    <i class="fa fa-users mr-2 text-blue-600"></i>新建Agent小组
+                </h2>
+                <button onclick="closeGroupModal()" class="text-gray-400 hover:text-gray-600 transition">
+                    <i class="fa fa-times text-xl"></i>
+                </button>
+            </div>
+            
+            <!-- 模态框内容 -->
+            <div class="p-6 space-y-5">
+                <!-- 小组名称 -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">小组名称</label>
+                    <input type="text" id="group-name" placeholder="输入小组名称..." 
+                           class="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                </div>
+                
+                <!-- Agent成员选择 -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Agent成员（多选）</label>
+                    <div id="agent-members-list" class="grid grid-cols-2 gap-2">
+                        <label class="flex items-center p-3 border border-gray-300 rounded-lg cursor-pointer hover:border-blue-400 hover:bg-blue-50 transition">
+                            <input type="checkbox" class="agent-member-checkbox" value="Checker">
+                            <span class="ml-2 text-sm">Checker</span>
+                        </label>
+                        <label class="flex items-center p-3 border border-gray-300 rounded-lg cursor-pointer hover:border-blue-400 hover:bg-blue-50 transition">
+                            <input type="checkbox" class="agent-member-checkbox" value="Scraper">
+                            <span class="ml-2 text-sm">Scraper</span>
+                        </label>
+                        <label class="flex items-center p-3 border border-gray-300 rounded-lg cursor-pointer hover:border-blue-400 hover:bg-blue-50 transition">
+                            <input type="checkbox" class="agent-member-checkbox" value="Analyzer">
+                            <span class="ml-2 text-sm">Analyzer</span>
+                        </label>
+                        <label class="flex items-center p-3 border border-gray-300 rounded-lg cursor-pointer hover:border-blue-400 hover:bg-blue-50 transition">
+                            <input type="checkbox" class="agent-member-checkbox" value="Processor">
+                            <span class="ml-2 text-sm">Processor</span>
+                        </label>
+                        <label class="flex items-center p-3 border border-gray-300 rounded-lg cursor-pointer hover:border-blue-400 hover:bg-blue-50 transition">
+                            <input type="checkbox" class="agent-member-checkbox" value="Transformer">
+                            <span class="ml-2 text-sm">Transformer</span>
+                        </label>
+                        <label class="flex items-center p-3 border border-gray-300 rounded-lg cursor-pointer hover:border-blue-400 hover:bg-blue-50 transition">
+                            <input type="checkbox" class="agent-member-checkbox" value="Vulnerability">
+                            <span class="ml-2 text-sm">Vulnerability</span>
+                        </label>
+                        <label class="flex items-center p-3 border border-gray-300 rounded-lg cursor-pointer hover:border-blue-400 hover:bg-blue-50 transition">
+                            <input type="checkbox" class="agent-member-checkbox" value="Scanner">
+                            <span class="ml-2 text-sm">Scanner</span>
+                        </label>
+                        <label class="flex items-center p-3 border border-gray-300 rounded-lg cursor-pointer hover:border-blue-400 hover:bg-blue-50 transition">
+                            <input type="checkbox" class="agent-member-checkbox" value="Summarizer">
+                            <span class="ml-2 text-sm">Summarizer</span>
+                        </label>
+                    </div>
+                </div>
+                
+                <!-- 调度策略选择 -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">调度策略</label>
+                    <select id="scheduling-strategy" class="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        <option value="weighted_round_robin">加权轮询</option>
+                        <option value="least_load">最小负载</option>
+                        <option value="random">随机选择</option>
+                        <option value="priority">优先级调度</option>
+                    </select>
+                </div>
+                
+                <!-- 熔断开关 -->
+                <div class="flex items-center justify-between">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">熔断机制</label>
+                        <p class="text-xs text-gray-500">启用后自动熔断故障节点</p>
+                    </div>
+                    <label class="relative inline-flex items-center cursor-pointer">
+                        <input type="checkbox" id="circuit-breaker" class="sr-only peer">
+                        <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                    </label>
+                </div>
+                
+                <!-- 弹性伸缩开关 -->
+                <div class="flex items-center justify-between">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">弹性伸缩</label>
+                        <p class="text-xs text-gray-500">根据负载自动调整Agent数量</p>
+                    </div>
+                    <label class="relative inline-flex items-center cursor-pointer">
+                        <input type="checkbox" id="elastic-scaling" class="sr-only peer">
+                        <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                    </label>
+                </div>
+            </div>
+            
+            <!-- 模态框底部 -->
+            <div class="sticky bottom-0 bg-white border-t px-6 py-4 flex justify-end space-x-3">
+                <button onclick="closeGroupModal()" class="px-6 py-2 text-gray-600 hover:text-gray-800 transition">
+                    取消
+                </button>
+                <button id="save-group-btn" onclick="saveGroup()" class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition">
+                    保存
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/coze.js"></script>
+</body>
+</`
+
+```
+
+```

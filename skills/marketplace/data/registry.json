@@ -1,0 +1,228 @@
+{
+  "version": "1.0",
+  "updated_at": "2026-04-27T14:50:41.133358",
+  "skills": [
+    {
+      "name": "test_skill_1",
+      "version": "1.0.0",
+      "description": "Test skill 1",
+      "author": "tester",
+      "email": "test@example.com",
+      "category": "test",
+      "tags": [
+        "test",
+        "demo"
+      ],
+      "keywords": [
+        "test",
+        "example"
+      ],
+      "dependencies": {},
+      "downloads": 0,
+      "rating": 0.0,
+      "rating_count": 0,
+      "created_at": "2026-04-27T14:48:46.503544",
+      "updated_at": "2026-04-27T14:48:46.503553",
+      "status": "active",
+      "verified": false,
+      "path": "",
+      "handler_module": ""
+    },
+    {
+      "name": "test_skill_2",
+      "version": "1.0.0",
+      "description": "Test skill 2",
+      "author": "tester",
+      "email": "test@example.com",
+      "category": "test",
+      "tags": [
+        "test",
+        "sample"
+      ],
+      "keywords": [
+        "test",
+        "sample"
+      ],
+      "dependencies": {},
+      "downloads": 0,
+      "rating": 0.0,
+      "rating_count": 0,
+      "created_at": "2026-04-27T14:48:46.503557",
+      "updated_at": "2026-04-27T14:48:46.503557",
+      "status": "active",
+      "verified": false,
+      "path": "",
+      "handler_module": ""
+    },
+    {
+      "name": "weather_query",
+      "version": "1.0.0",
+      "description": "Query weather information",
+      "author": "dev1",
+      "email": "dev1@test.com",
+      "category": "utility",
+      "tags": [
+        "weather",
+        "forecast"
+      ],
+      "keywords": [
+        "天气",
+        "温度",
+        "预报"
+      ],
+      "dependencies": {},
+      "downloads": 0,
+      "rating": 0.0,
+      "rating_count": 0,
+      "created_at": "2026-04-27T14:48:46.506719",
+      "updated_at": "2026-04-27T14:48:46.506727",
+      "status": "active",
+      "verified": false,
+      "path": "",
+      "handler_module": ""
+    },
+    {
+      "name": "temperature_converter",
+      "version": "1.0.0",
+      "description": "Convert temperature units",
+      "author": "dev2",
+      "email": "dev2@test.com",
+      "category": "utility",
+      "tags": [
+        "temperature",
+        "converter"
+      ],
+      "keywords": [
+        "温度",
+        "转换",
+        "单位"
+      ],
+      "dependencies": {},
+      "downloads": 0,
+      "rating": 0.0,
+      "rating_count": 0,
+      "created_at": "2026-04-27T14:48:46.507025",
+      "updated_at": "2026-04-27T14:48:46.507029",
+      "status": "active",
+      "verified": false,
+      "path": "",
+      "handler_module": ""
+    },
+    {
+      "name": "data_analyzer",
+      "version": "1.0.0",
+      "description": "Analyze data patterns",
+      "author": "dev3",
+      "email": "dev3@test.com",
+      "category": "analysis",
+      "tags": [
+        "data",
+        "analysis"
+      ],
+      "keywords": [
+        "数据",
+        "分析",
+        "统计"
+      ],
+      "dependencies": {},
+      "downloads": 0,
+      "rating": 0.0,
+      "rating_count": 0,
+      "created_at": "2026-04-27T14:48:46.507220",
+      "updated_at": "2026-04-27T14:48:46.507222",
+      "status": "active",
+      "verified": false,
+      "path": "",
+      "handler_module": ""
+    },
+    {
+      "name": "example_skill",
+      "version": "1.0.0",
+      "description": "查询指定城市的实时天气信息，包括温度、湿度、风向等详细数据。",
+      "author": "test_author",
+      "email": "support@xiaolei.com",
+      "category": "utility",
+      "tags": [
+        "weather",
+        "forecast",
+        "temperature",
+        "utility"
+      ],
+      "keywords": [
+        "天气",
+        "温度",
+        "预报",
+        "气象",
+        "climate"
+      ],
+      "dependencies": {},
+      "downloads": 0,
+      "rating": 0.0,
+      "rating_count": 0,
+      "created_at": "2026-04-27T14:48:46.512352",
+      "updated_at": "2026-04-27T14:48:46.512362",
+      "status": "active",
+      "verified": false,
+      "path": "/Users/leiyuxuan/Desktop/逝去的白月光/小雷版小龙虾agent/skills/marketplace/example_skill",
+      "handler_module": "skills.example_skill.handler"
+    },
+    {
+      "name": "text_translator",
+      "version": "1.0.0",
+      "description": "多语言文本翻译",
+      "author": "developer_3",
+      "email": "dev3@example.com",
+      "category": "utility",
+      "tags": [
+        "translation",
+        "language",
+        "text"
+      ],
+      "keywords": [
+        "翻译",
+        "语言",
+        "文本",
+        "多语言"
+      ],
+      "dependencies": {},
+      "downloads": 0,
+      "rating": 0.0,
+      "rating_count": 0,
+      "created_at": "2026-04-27T14:50:41.132623",
+      "updated_at": "2026-04-27T14:50:41.132624",
+      "status": "active",
+      "verified": false,
+      "path": "",
+      "handler_module": ""
+    },
+    {
+      "name": "image_processor",
+      "version": "1.0.0",
+      "description": "图像处理工具",
+      "author": "developer_4",
+      "email": "dev4@example.com",
+      "category": "media",
+      "tags": [
+        "image",
+        "processing",
+        "filter"
+      ],
+      "keywords": [
+        "图像",
+        "处理",
+        "滤镜",
+        "编辑"
+      ],
+      "dependencies": {},
+      "downloads": 0,
+      "rating": 0.0,
+      "rating_count": 0,
+      "created_at": "2026-04-27T14:50:41.132625",
+      "updated_at": "2026-04-27T14:50:41.132625",
+      "status": "active",
+      "verified": false,
+      "path": "",
+      "handler_module": ""
+    }
+  ]
+}

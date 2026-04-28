@@ -1,0 +1,674 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>小雷版小龙虾Agent系统监控</title>
+    <link href="https://cdn.jsdelivr.net/npm/antd@5.12.8/dist/reset.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background-color: #f5f5f5;
+            color: #333;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        
+        .header h1 {
+            font-size: 24px;
+            font-weight: 600;
+        }
+        
+        .header p {
+            font-size: 14px;
+            opacity: 0.9;
+            margin-top: 5px;
+        }
+        
+        .dashboard {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        
+        .card {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+        
+        .card h2 {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 15px;
+            color: #333;
+        }
+        
+        .metric {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 10px;
+            padding: 10px;
+            background: #f9f9f9;
+            border-radius: 4px;
+        }
+        
+        .metric-label {
+            font-size: 14px;
+            color: #666;
+        }
+        
+        .metric-value {
+            font-size: 16px;
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .chart-container {
+            height: 300px;
+            margin-top: 15px;
+        }
+        
+        .alerts {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            margin-bottom: 20px;
+        }
+        
+        .alerts h2 {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 15px;
+            color: #333;
+        }
+        
+        .alert-item {
+            padding: 10px;
+            margin-bottom: 10px;
+            border-radius: 4px;
+            border-left: 4px solid;
+        }
+        
+        .alert-severe {
+            background: #fff2f0;
+            border-left-color: #ff4d4f;
+        }
+        
+        .alert-warning {
+            background: #fff7e6;
+            border-left-color: #faad14;
+        }
+        
+        .alert-info {
+            background: #e6f7ff;
+            border-left-color: #1890ff;
+        }
+        
+        .alert-time {
+            font-size: 12px;
+            color: #999;
+            margin-bottom: 5px;
+        }
+        
+        .alert-message {
+            font-size: 14px;
+            color: #333;
+        }
+        
+        .agents {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+        
+        .agents h2 {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 15px;
+            color: #333;
+        }
+        
+        .agent-item {
+            padding: 10px;
+            margin-bottom: 10px;
+            background: #f9f9f9;
+            border-radius: 4px;
+        }
+        
+        .agent-name {
+            font-size: 14px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 5px;
+        }
+        
+        .agent-status {
+            font-size: 12px;
+            color: #666;
+        }
+        
+        .status-running {
+            color: #52c41a;
+        }
+        
+        .status-stopped {
+            color: #ff4d4f;
+        }
+        
+        .footer {
+            text-align: center;
+            padding: 20px;
+            font-size: 14px;
+            color: #999;
+        }
+        
+        @media (max-width: 768px) {
+            .dashboard {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>小雷版小龙虾Agent系统监控</h1>
+            <p>实时监控系统状态、Agent运行情况和告警信息</p>
+        </div>
+        
+        <div class="dashboard">
+            <div class="card">
+                <h2>系统状态</h2>
+                <div class="metric">
+                    <span class="metric-label">CPU使用率</span>
+                    <span class="metric-value" id="cpu-value">0%</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">内存使用率</span>
+                    <span class="metric-value" id="memory-value">0%</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">磁盘使用率</span>
+                    <span class="metric-value" id="disk-value">0%</span>
+                </div>
+                <div class="chart-container" id="system-chart"></div>
+            </div>
+            
+            <div class="card">
+                <h2>任务统计</h2>
+                <div class="metric">
+                    <span class="metric-label">总任务数</span>
+                    <span class="metric-value" id="total-tasks">0</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">成功任务</span>
+                    <span class="metric-value" id="success-tasks">0</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">失败任务</span>
+                    <span class="metric-value" id="failed-tasks">0</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">平均执行时间</span>
+                    <span class="metric-value" id="avg-duration">0s</span>
+                </div>
+                <div class="chart-container" id="task-chart"></div>
+            </div>
+            
+            <div class="card">
+                <h2>Agent状态</h2>
+                <div id="agent-list">
+                    <!-- Agent列表将通过JavaScript动态生成 -->
+                </div>
+            </div>
+        </div>
+        
+        <div class="alerts">
+            <h2>告警信息</h2>
+            <div id="alert-list">
+                <!-- 告警列表将通过JavaScript动态生成 -->
+            </div>
+        </div>
+        
+        <div class="agents">
+            <h2>任务执行状态</h2>
+            <div id="task-list">
+                <!-- 任务列表将通过JavaScript动态生成 -->
+            </div>
+        </div>
+        
+        <div class="footer">
+            <p>小雷版小龙虾Agent系统监控 © 2026</p>
+        </div>
+    </div>
+    
+    <script>
+        // 初始化图表
+        const systemChart = echarts.init(document.getElementById('system-chart'));
+        const taskChart = echarts.init(document.getElementById('task-chart'));
+        
+        // 系统图表配置
+        const systemOption = {
+            title: {
+                text: '系统资源使用趋势',
+                left: 'center',
+                textStyle: {
+                    fontSize: 12
+                }
+            },
+            tooltip: {
+                trigger: 'axis'
+            },
+            legend: {
+                data: ['CPU', '内存', '磁盘'],
+                bottom: 0
+            },
+            grid: {
+                left: '3%',
+                right: '4%',
+                bottom: '15%',
+                top: '15%',
+                containLabel: true
+            },
+            xAxis: {
+                type: 'category',
+                boundaryGap: false,
+                data: []
+            },
+            yAxis: {
+                type: 'value',
+                max: 100
+            },
+            series: [
+                {
+                    name: 'CPU',
+                    type: 'line',
+                    data: [],
+                    smooth: true
+                },
+                {
+                    name: '内存',
+                    type: 'line',
+                    data: [],
+                    smooth: true
+                },
+                {
+                    name: '磁盘',
+                    type: 'line',
+                    data: [],
+                    smooth: true
+                }
+            ]
+        };
+        
+        // 任务图表配置
+        const taskOption = {
+            title: {
+                text: '任务执行趋势',
+                left: 'center',
+                textStyle: {
+                    fontSize: 12
+                }
+            },
+            tooltip: {
+                trigger: 'axis'
+            },
+            legend: {
+                data: ['成功', '失败'],
+                bottom: 0
+            },
+            grid: {
+                left: '3%',
+                right: '4%',
+                bottom: '15%',
+                top: '15%',
+                containLabel: true
+            },
+            xAxis: {
+                type: 'category',
+                boundaryGap: false,
+                data: []
+            },
+            yAxis: {
+                type: 'value'
+            },
+            series: [
+                {
+                    name: '成功',
+                    type: 'bar',
+                    data: []
+                },
+                {
+                    name: '失败',
+                    type: 'bar',
+                    data: []
+                }
+            ]
+        };
+        
+        systemChart.setOption(systemOption);
+        taskChart.setOption(taskOption);
+        
+        // 时间数据
+        const timeData = [];
+        const cpuData = [];
+        const memoryData = [];
+        const diskData = [];
+        const successData = [];
+        const failedData = [];
+        
+        // 更新图表数据
+        function updateCharts() {
+            const now = new Date();
+            const timeStr = now.getHours() + ':' + now.getMinutes() + ':' + now.getSeconds();
+            
+            timeData.push(timeStr);
+            if (timeData.length > 10) {
+                timeData.shift();
+            }
+            
+            // 模拟数据
+            cpuData.push(Math.random() * 50 + 10);
+            memoryData.push(Math.random() * 30 + 50);
+            diskData.push(10.3); // 固定磁盘使用率
+            successData.push(Math.floor(Math.random() * 5) + 1);
+            failedData.push(Math.floor(Math.random() * 2));
+            
+            if (cpuData.length > 10) {
+                cpuData.shift();
+                memoryData.shift();
+                diskData.shift();
+                successData.shift();
+                failedData.shift();
+            }
+            
+            systemChart.setOption({
+                xAxis: {
+                    data: timeData
+                },
+                series: [
+                    {
+                        name: 'CPU',
+                        data: cpuData
+                    },
+                    {
+                        name: '内存',
+                        data: memoryData
+                    },
+                    {
+                        name: '磁盘',
+                        data: diskData
+                    }
+                ]
+            });
+            
+            taskChart.setOption({
+                xAxis: {
+                    data: timeData
+                },
+                series: [
+                    {
+                        name: '成功',
+                        data: successData
+                    },
+                    {
+                        name: '失败',
+                        data: failedData
+                    }
+                ]
+            });
+        }
+        
+        // 模拟告警数据
+        const alerts = [
+            {
+                time: '2026-04-25 10:00:00',
+                level: 'info',
+                message: '系统启动成功'
+            },
+            {
+                time: '2026-04-25 10:05:00',
+                level: 'warning',
+                message: 'CPU使用率超过60%'
+            },
+            {
+                time: '2026-04-25 10:10:00',
+                level: 'info',
+                message: 'Agent scraper启动成功'
+            }
+        ];
+        
+        // 模拟Agent数据
+        const agents = [
+            {
+                name: 'scraper',
+                status: 'running',
+                tasks: 5,
+                active: 2
+            },
+            {
+                name: 'checker',
+                status: 'running',
+                tasks: 3,
+                active: 1
+            },
+            {
+                name: 'vulnerability',
+                status: 'running',
+                tasks: 2,
+                active: 1
+            },
+            {
+                name: 'summarizer',
+                status: 'running',
+                tasks: 1,
+                active: 0
+            }
+        ];
+        
+        // 模拟任务数据
+        const tasks = [
+            {
+                id: 'task1',
+                type: 'scrape',
+                status: 'completed',
+                duration: '2.0s'
+            },
+            {
+                id: 'task2',
+                type: 'analyze',
+                status: 'completed',
+                duration: '1.5s'
+            },
+            {
+                id: 'task3',
+                type: 'summarize',
+                status: 'running',
+                duration: '0.5s'
+            }
+        ];
+        
+        // 渲染告警列表
+        function renderAlerts() {
+            const alertList = document.getElementById('alert-list');
+            alertList.innerHTML = '';
+            
+            alerts.forEach(alert => {
+                const alertItem = document.createElement('div');
+                alertItem.className = `alert-item alert-${alert.level}`;
+                alertItem.innerHTML = `
+                    <div class="alert-time">${alert.time}</div>
+                    <div class="alert-message">${alert.message}</div>
+                `;
+                alertList.appendChild(alertItem);
+            });
+        }
+        
+        // Agent名称映射
+        const agentNameMap = {
+            'checker': '检查Checker',
+            'scraper': '爬虫Scraper',
+            'vulnerability': '漏洞Vulnerability',
+            'summarizer': '总结Summarizer',
+            'data_analysis': '数据分析DataAnalysis',
+            'nlp': '自然语言处理NLP',
+            'text_analyzer': '文本分析TextAnalyzer'
+        };
+
+        // 渲染Agent列表
+        function renderAgents() {
+            const agentList = document.getElementById('agent-list');
+            agentList.innerHTML = '';
+            
+            agents.forEach(agent => {
+                // 获取格式化后的Agent名称
+                const formattedName = agentNameMap[agent.id] || agent.name;
+                
+                const agentItem = document.createElement('div');
+                agentItem.className = 'agent-item';
+                agentItem.innerHTML = `
+                    <div class="agent-name">${formattedName}</div>
+                    <div class="agent-status">
+                        状态: <span class="status-${agent.status}">${agent.status}</span> | 
+                        任务数: ${agent.tasks} | 
+                        活跃线程: ${agent.active}
+                    </div>
+                `;
+                agentList.appendChild(agentItem);
+            });
+        }
+        
+        // 渲染任务列表
+        function renderTasks() {
+            const taskList = document.getElementById('task-list');
+            taskList.innerHTML = '';
+            
+            tasks.forEach(task => {
+                const taskItem = document.createElement('div');
+                taskItem.className = 'agent-item';
+                taskItem.innerHTML = `
+                    <div class="agent-name">${task.type} - ${task.id}</div>
+                    <div class="agent-status">
+                        状态: ${task.status} | 
+                        执行时间: ${task.duration}
+                    </div>
+                `;
+                taskList.appendChild(taskItem);
+            });
+        }
+        
+        // 更新系统指标
+        function updateMetrics() {
+            const cpuValue = document.getElementById('cpu-value');
+            const memoryValue = document.getElementById('memory-value');
+            const diskValue = document.getElementById('disk-value');
+            const totalTasks = document.getElementById('total-tasks');
+            const successTasks = document.getElementById('success-tasks');
+            const failedTasks = document.getElementById('failed-tasks');
+            const avgDuration = document.getElementById('avg-duration');
+            
+            // 模拟数据
+            const cpu = Math.random() * 50 + 10;
+            const memory = Math.random() * 30 + 50;
+            const disk = 10.3;
+            
+            cpuValue.textContent = cpu.toFixed(1) + '%';
+            memoryValue.textContent = memory.toFixed(1) + '%';
+            diskValue.textContent = disk.toFixed(1) + '%';
+            totalTasks.textContent = (Math.floor(Math.random() * 10) + 5).toString();
+            successTasks.textContent = (Math.floor(Math.random() * 8) + 4).toString();
+            failedTasks.textContent = (Math.floor(Math.random() * 2)).toString();
+            avgDuration.textContent = (Math.random() * 2 + 1).toFixed(1) + 's';
+        }
+        
+        // 初始化WebSocket连接
+        function initWebSocket() {
+            const ws = new WebSocket('ws://localhost:8001/ws/agent');
+            
+            ws.onopen = function() {
+                console.log('WebSocket连接已建立');
+                ws.send(JSON.stringify({ action: 'get_monitoring_data' }));
+            };
+            
+            ws.onmessage = function(event) {
+                try {
+                    const data = JSON.parse(event.data);
+                    if (data.action === 'get_monitoring_data' && data.success) {
+                        // 更新监控数据
+                        updateMetrics();
+                        updateCharts();
+                    } else if (data.type === 'status_update') {
+                        // 处理状态更新
+                        console.log('状态更新:', data);
+                    }
+                } catch (error) {
+                    console.error('WebSocket消息解析失败:', error);
+                }
+            };
+            
+            ws.onerror = function(error) {
+                console.error('WebSocket错误:', error);
+            };
+            
+            ws.onclose = function() {
+                console.log('WebSocket连接已关闭');
+                // 尝试重连
+                setTimeout(initWebSocket, 5000);
+            };
+        }
+        
+        // 初始化页面
+        function init() {
+            renderAlerts();
+            renderAgents();
+            renderTasks();
+            updateMetrics();
+            updateCharts();
+            
+            // 定时更新数据
+            setInterval(() => {
+                updateMetrics();
+                updateCharts();
+            }, 5000);
+            
+            // 初始化WebSocket
+            initWebSocket();
+        }
+        
+        // 页面加载完成后初始化
+        window.onload = init;
+        
+        // 响应式调整图表大小
+        window.onresize = function() {
+            systemChart.resize();
+            taskChart.resize();
+        };
+    </script>
+</body>
+</html>
