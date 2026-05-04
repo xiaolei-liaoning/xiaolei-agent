@@ -72,6 +72,7 @@ uploads/
 
 # Test temporary files
 test_*.py
+!tests/
 quick*.py
 run_*.py
 sync_test.py
