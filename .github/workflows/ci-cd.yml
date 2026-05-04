@@ -7,7 +7,7 @@ on:
     branches: [ main, master ]
 
 jobs:
-  build:
+  test:
     runs-on: ubuntu-latest
     
     steps:
@@ -23,10 +23,6 @@ jobs:
         python -m pip install --upgrade pip
         pip install pytest pytest-asyncio pytest-mock
     
-    - name: Run basic tests
+    - name: Run tests
       run: |
         pytest tests/test_tools.py tests/test_skills.py tests/test_debug.py -v --timeout=60
-    
-    - name: Build Docker image
-      run: |
-        docker build -t leiyuxuan/xiaolongxia-agent:latest .
