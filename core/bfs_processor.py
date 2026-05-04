@@ -76,55 +76,91 @@ class BFSTextProcessor:
         return paragraphs
     
     def build_content_tree(self, paragraphs: List[str], 
-                          summarizer: Optional[Callable] = None) -> TextNode:
-        """构建双节点内容树（左节点=原文，右节点=摘要）
+                          summarizer: Optional[Callable] = None,
+                          skills: Optional[List[str]] = None) -> TextNode:
+        """构建多层双节点内容树（按用户设计）
+        
+        树结构设计：
+        - 第1层（level=0）：根节点
+        - 第2层（level=1）：所有Skill功能节点（如"爬取"、"总结"、"搜索"等）
+        - 第3层及以下：双节点结构（以第一个skill为根继续构建）
+          - 左节点：概要（summary）
+          - 右节点：内容（content）
+          - 内容节点的左孩子：下一部分概要
+          - 内容节点的右孩子：下一部分内容
         
         Args:
             paragraphs: 段落列表
             summarizer: 摘要函数，签名为 func(text: str) -> str
-            
+            skills: 功能节点名称列表
+        
         Returns:
             根节点
         """
         if not paragraphs:
             raise ValueError("段落列表不能为空")
         
-        # 创建根节点
+        # 设置默认skills列表
+        if skills is None:
+            skills = ["爬取", "总结", "搜索", "分析", "翻译"]
+        
+        # ===== 第1层：根节点 =====
         root = TextNode(
             content="文档根节点",
             level=0,
             node_type="root"
         )
         
-        # 为每个段落创建双节点结构
-        for idx, paragraph in enumerate(paragraphs):
-            # 左节点：原文
-            original_node = TextNode(
-                content=paragraph,
+        # ===== 第2层：所有Skill功能节点 =====
+        skill_nodes = {}
+        for skill_name in skills:
+            skill_node = TextNode(
+                content=skill_name,
                 level=1,
-                node_type="paragraph",
+                node_type="function",
                 parent=root,
-                metadata={"index": idx, "type": "original"}
+                metadata={"skill": skill_name}
+            )
+            root.children.append(skill_node)
+            skill_nodes[skill_name] = skill_node
+        
+        # ===== 第3层及以下：递归构建双节点结构 =====
+        # 以第一个skill作为内容树的根继续构建
+        primary_skill = skills[0] if skills else "unknown"
+        current_parent = skill_nodes.get(primary_skill) or root
+        
+        for idx, paragraph in enumerate(paragraphs):
+            # 生成段落摘要
+            summary_text = summarizer(paragraph) if summarizer else "..."
+            
+            # ===== 创建当前段落的双节点 =====
+            # 左节点：概要 (level = 2 + idx*2)
+            summary_node = TextNode(
+                content=summary_text,
+                level=current_parent.level + 1,
+                node_type="summary",
+                parent=current_parent,
+                metadata={"index": idx, "type": "summary", "part": idx + 1}
             )
             
-            # 右节点：摘要（如果提供了摘要函数）
-            if summarizer:
-                try:
-                    summary = summarizer(paragraph)
-                    summary_node = TextNode(
-                        content=summary,
-                        level=1,
-                        node_type="summary",
-                        parent=root,
-                        metadata={"index": idx, "type": "summary"}
-                    )
-                    original_node.children.append(summary_node)
-                except Exception as e:
-                    logger.warning("生成摘要失败 (段落%d): %s", idx, e)
+            # 右节点：内容 (level = 2 + idx*2)
+            content_node = TextNode(
+                content=paragraph,
+                level=current_parent.level + 1,
+                node_type="content",
+                parent=current_parent,
+                metadata={"index": idx, "type": "content", "part": idx + 1}
+            )
             
-            root.children.append(original_node)
+            # 将双节点添加到当前父节点
+            current_parent.children.append(summary_node)
+            current_parent.children.append(content_node)
+            
+            # 更新当前父节点为内容节点（下一段落的双节点作为当前内容节点的子节点）
+            current_parent = content_node
         
-        logger.info("内容树构建完成，共 %d 个段落节点", len(root.children))
+        logger.info("多层双节点内容树构建完成，共 %d 个Skill，%d 个段落，树深度 %d", 
+                   len(skills), len(paragraphs), current_parent.level)
         return root
     
     def bfs_traverse(self, root: TextNode) -> deque:
