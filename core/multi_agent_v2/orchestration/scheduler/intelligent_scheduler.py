@@ -25,6 +25,11 @@ from core.multi_agent_v2.agents.base.base_agent import (
 from core.multi_agent_v2.orchestration.context.global_context_center import (
     GlobalContextCenter, TaskState, EventType, Event
 )
+from core.multi_agent_v2.orchestration.collaboration.llm_reflection import (
+    LLMReflection, ReflectionTrigger, ReflectionTriggerConfig,
+    AdaptivePipelineWithReflection, StepResult, ReflectionPrompt,
+    ReflectionDecision, ReflectionResult
+)
 
 logger = logging.getLogger(__name__)
 
@@ -201,7 +206,7 @@ class CapabilityMatcher:
 class IntelligentScheduler:
     """智能调度器 - 多Agent系统的核心大脑"""
 
-    def __init__(self, context_center: GlobalContextCenter):
+    def __init__(self, context_center: GlobalContextCenter, llm_facade: Optional[Any] = None):
         # 核心组件
         self.context_center = context_center
         self.matcher = CapabilityMatcher(context_center)
@@ -217,6 +222,12 @@ class IntelligentScheduler:
 
         # Agent池引用
         self.agent_pool: Optional['AgentPool'] = None
+
+        # LLM反思机制
+        self.llm_facade = llm_facade
+        self.reflection_engine = LLMReflection(llm_facade)
+        self.reflection_trigger = ReflectionTrigger()
+        self.adaptive_pipeline = AdaptivePipelineWithReflection(llm_facade)
 
         logger.info("智能调度器初始化完成")
 
@@ -570,6 +581,149 @@ class IntelligentScheduler:
     def get_metrics(self) -> SchedulingMetrics:
         """获取调度指标"""
         return self.metrics
+
+    async def schedule_with_reflection(
+        self,
+        task: Task,
+        execution_plan: List[Dict[str, Any]],
+        executor: Callable
+    ) -> Dict[str, Any]:
+        """带反思机制的调度执行
+
+        使用LLM反思引擎对执行过程进行评估和动态调整。
+        支持5种决策：CONTINUE/SKIP_NEXT/ADD_STEPS/RETRY/FAIL
+        """
+        logger.info(f"开始带反思的调度执行: {task.task_id}")
+
+        completed_steps: List[StepResult] = []
+        current_plan = execution_plan.copy()
+
+        while current_plan:
+            if len(completed_steps) >= 50:
+                logger.warning("达到最大步骤数，强制结束")
+                break
+
+            current_step = current_plan.pop(0)
+
+            expected_time = current_step.get("estimated_time", 10.0)
+
+            try:
+                result = await executor(current_step, task)
+            except Exception as e:
+                logger.error(f"执行步骤失败: {e}")
+                result = {
+                    "success": False,
+                    "error": str(e),
+                    "output": None,
+                    "execution_time": 0.0,
+                    "confidence": 0.0
+                }
+
+            step_result = StepResult(
+                step_id=current_step.get("subtask_id", current_step.get("task_id", "unknown")),
+                step_name=current_step.get("name", current_step.get("description", "unknown")),
+                step_type=current_step.get("type", "general"),
+                success=result.get("success", True),
+                output=result.get("output"),
+                error=result.get("error"),
+                execution_time=result.get("execution_time", 0.0),
+                confidence=result.get("confidence", 1.0)
+            )
+
+            completed_steps.append(step_result)
+
+            logger.info(
+                f"步骤完成: {step_result.step_name} - "
+                f"{'成功' if step_result.success else '失败'} "
+                f"(置信度: {step_result.confidence:.2f})"
+            )
+
+            if self.reflection_trigger.should_reflect(step_result, expected_time):
+                prompt = ReflectionPrompt(
+                    completed_steps=completed_steps,
+                    remaining_steps=current_plan,
+                    original_goal=task.description,
+                    task_context={"task_id": task.task_id, "complexity": task.complexity}
+                )
+
+                reflection_result = await self.reflection_engine.reflect(prompt, None)
+
+                logger.info(
+                    f"反思决策: {reflection_result.decision.value} "
+                    f"(置信度: {reflection_result.confidence:.2f})"
+                )
+
+                current_plan = self._apply_reflection_decision(
+                    reflection_result, current_plan, completed_steps
+                )
+
+                if reflection_result.decision == ReflectionDecision.FAIL:
+                    logger.error("反思决定：任务失败")
+                    return {
+                        "success": False,
+                        "completed_steps": [s.__dict__ for s in completed_steps],
+                        "reason": reflection_result.reasoning,
+                        "total_steps": len(completed_steps),
+                        "reflection_count": self.reflection_engine.reflection_count,
+                        "final_decision": reflection_result.decision.value
+                    }
+
+            if result.get("done"):
+                break
+
+        return {
+            "success": all(s.success for s in completed_steps) if completed_steps else False,
+            "completed_steps": [s.__dict__ for s in completed_steps],
+            "total_steps": len(completed_steps),
+            "reflection_count": self.reflection_engine.reflection_count,
+            "final_decision": ReflectionDecision.CONTINUE.value
+        }
+
+    def _apply_reflection_decision(
+        self,
+        reflection: ReflectionResult,
+        current_plan: List[Dict[str, Any]],
+        completed_steps: List[StepResult]
+    ) -> List[Dict[str, Any]]:
+        """应用反思决策到执行计划"""
+        new_plan = current_plan.copy()
+
+        if reflection.decision == ReflectionDecision.SKIP_NEXT and new_plan:
+            skipped = new_plan.pop(0)
+            logger.info(f"跳过步骤: {skipped.get('name', 'unknown')}")
+
+        elif reflection.decision == ReflectionDecision.RETRY and completed_steps:
+            last_step = completed_steps[-1]
+            retry_step = {
+                "subtask_id": f"{last_step.step_id}_retry",
+                "name": f"重试: {last_step.step_name}",
+                "type": last_step.step_type,
+                "retry": True,
+                "estimated_time": 10.0
+            }
+            new_plan.insert(0, retry_step)
+            logger.info(f"添加重试步骤: {last_step.step_name}")
+
+        elif reflection.decision == ReflectionDecision.ADD_STEPS and reflection.suggestions:
+            for suggestion in reflection.suggestions[:2]:
+                new_step = {
+                    "subtask_id": f"added_{uuid.uuid4().hex[:8]}",
+                    "name": suggestion,
+                    "type": "added",
+                    "description": suggestion,
+                    "estimated_time": 10.0
+                }
+                new_plan.append(new_step)
+                logger.info(f"添加新步骤: {suggestion}")
+
+        return new_plan
+
+    def get_reflection_stats(self) -> Dict[str, Any]:
+        """获取反思统计"""
+        return {
+            "total_reflections": self.reflection_engine.reflection_count,
+            "pipeline_stats": self.adaptive_pipeline.get_statistics()
+        }
 
 
 class CircuitBreaker:
