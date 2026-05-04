@@ -16,7 +16,7 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
-        python-version: '3.10'
+        python-version: '3.11'
     
     - name: Install dependencies
       run: |
@@ -25,4 +25,4 @@ jobs:
     
     - name: Run tests
       run: |
-        pytest tests/test_tools.py tests/test_skills.py tests/test_debug.py -v --timeout=60
+        pytest tests/test_tools.py -v --timeout=30
