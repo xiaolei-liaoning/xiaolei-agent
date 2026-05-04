@@ -14,9 +14,6 @@ jobs:
     - uses: actions/setup-python@v5
       with:
         python-version: '3.12'
-    - name: Install pip
-      run: python -m pip install --upgrade pip
-    - name: Install pytest
-      run: pip install pytest
-    - name: Run test
-      run: pytest tests/test_tools.py -v
+    - run: python -m pip install --upgrade pip
+    - run: pip install pytest pytest-asyncio
+    - run: pytest tests/test_tools.py -v
