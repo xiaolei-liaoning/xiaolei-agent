@@ -61,8 +61,8 @@ apps:
     priority: 5
     description: 微信API集成
     config:
-      app_id: wx25b46208976c074a
-      app_secret: d7a9863ac391827f9a075bde516e945c
+      app_id: ${WECHAT_APP_ID:-your_wechat_app_id}
+      app_secret: ${WECHAT_APP_SECRET:-your_wechat_app_secret}
   
   dingtalk:
     name: 钉钉

@@ -162,7 +162,7 @@ class GLMBackend:
             model:   默认模型名称
         """
         self.api_key: str = api_key or os.getenv("ZHIPU_API_KEY", "")
-        self.deepseek_api_key: str = os.getenv("DEEPSEEK_API_KEY", "sk-06237ab110d24ac88b79b001f4801dcb")
+        self.deepseek_api_key: str = os.getenv("DEEPSEEK_API_KEY", "")
         self.model: str = model
         self.client: Any = None
         self.deepseek_client: Any = None
