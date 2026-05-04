@@ -20,6 +20,9 @@ logger = logging.getLogger(__name__)
 OUTPUT_DIR = Path(__file__).parent / "output"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
+REPORT_DIR = OUTPUT_DIR / "reports"
+REPORT_DIR.mkdir(parents=True, exist_ok=True)
+
 # 请求头池（模拟浏览器访问）
 _HEADERS_POOL = [
     {
@@ -313,10 +316,10 @@ class WeiboScraper:
 
             await browser.close()
             return results
-    
+
     async def scrape(self, **kwargs) -> Dict[str, Any]:
         """爬取微博数据
-        
+
         Args:
             action: 操作类型 (热搜/搜索)
             top_n: 返回数量
@@ -326,7 +329,7 @@ class WeiboScraper:
             download_videos: 是否下载视频
             download_audio: 是否下载音频
             extract_tables: 是否提取表格
-            
+
         Returns:
             爬取结果
         """
@@ -335,7 +338,7 @@ class WeiboScraper:
         top_n = kwargs.get("top_n", 10)
         keyword = kwargs.get("keyword", "")
         generate_report = kwargs.get("generate_report", False)
-        
+
         try:
             if action in ["热搜", "热榜", "热搜top10"]:
                 data = self.get_hot_list(top_n=top_n)
@@ -343,17 +346,17 @@ class WeiboScraper:
                 data = self.search(keyword, top_n=top_n)
             else:
                 data = self.get_hot_list(top_n=top_n)
-            
+
             # 保存CSV
             csv_path = None
             if data:
                 csv_path = self._save_to_csv(data, action)
-            
+
             # 生成MD报告
             md_path = None
             if generate_report and data:
                 md_path = self._generate_md_report(data, action)
-            
+
             result = {
                 "success": True,
                 "count": len(data),
@@ -363,7 +366,7 @@ class WeiboScraper:
                 "csv_path": str(csv_path) if csv_path else None,
                 "md_path": str(md_path) if md_path else None,
             }
-            
+
             return result
         except Exception as e:
             logger.error(f"微博爬虫执行失败: {e}")
@@ -375,62 +378,67 @@ class WeiboScraper:
             }
 
     def _generate_md_report(self, data: List[Dict], action: str) -> Path:
-        """生成MD报告并保存到桌面"""
+        """生成MD报告并保存到项目目录"""
         from datetime import datetime
         from pathlib import Path
         import platform
         import subprocess
-        
-        desktop = Path.home() / "Desktop"
+
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"微博{action}_{timestamp}.md"
-        filepath = desktop / filename
-        
+
+        # 统一保存到项目目录（macOS API进程无法写入桌面）
+        filepath = REPORT_DIR / filename
+
         lines = [
             f"# 微博{action}榜\n",
             f"**爬取时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n",
             f"**总数**: {len(data)} 条\n",
         ]
-        
+
         lines.append("\n---\n")
-        
+
         for item in data:
             title = item.get('title', '').strip().replace('\n', ' ').replace('  ', ' ')
             lines.append(f"## {item.get('排名', '')}. #{title}#\n")
-            
+
             if item.get('heat'):
                 lines.append(f"- **热度**: {item['heat']}\n")
             if item.get('url'):
                 lines.append(f"- **链接**: [查看详情]({item['url']})\n")
             lines.append("")
-        
-        with open(filepath, "w", encoding="utf-8") as f:
-            f.write("\n".join(lines))
-        
-        # macOS自动打开
-        if platform.system() == "Darwin":
-            subprocess.run(["open", str(filepath)], check=False)
-        
-        logger.info(f"MD报告已保存到桌面: {filepath}")
-        return filepath
+
+        try:
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.write("\n".join(lines))
+
+            logger.info(f"MD报告已保存: {filepath}")
+
+            if platform.system() == "Darwin":
+                subprocess.run(["open", str(filepath)], check=False)
+
+            return filepath
+        except Exception as e:
+            logger.error(f"MD报告保存失败: {e}")
+            return None
 
     def _save_to_csv(self, data: List[Dict], action: str) -> Path:
         """保存为CSV"""
         import csv
-        
+
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"weibo_{action}_{timestamp}.csv"
         filepath = OUTPUT_DIR / filename
-        
+
         if data:
             fieldnames = list(data[0].keys())
-            
+
             with open(filepath, "w", encoding="utf-8-sig", newline="") as f:
                 writer = csv.DictWriter(f, fieldnames=fieldnames)
                 writer.writeheader()
                 for item in data:
                     writer.writerow(item)
-            
+
             logger.info(f"CSV已保存: {filepath}")
-        
+
         return filepath

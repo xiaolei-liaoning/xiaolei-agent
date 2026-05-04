@@ -60,30 +60,60 @@ async def execute_workflow_data(req: ExecuteWorkflowDataRequest):
     from skills.workflow_engine import WorkflowEngine
     
     try:
+        # 验证工作流数据结构
+        workflow = req.workflow
+        
+        if not workflow:
+            raise HTTPException(status_code=400, detail="工作流数据为空")
+        
+        # 检查必要字段
+        if "nodes" not in workflow and "steps" not in workflow:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"工作流格式错误：缺少nodes或steps字段。收到的字段: {list(workflow.keys())}"
+            )
+        
+        # 清理工作流框字段（前端会发送但后端不需要）
+        if "workflowBoxes" in workflow:
+            del workflow["workflowBoxes"]
+        
+        # 为工作流生成临时ID（如果没有的话）
+        if "id" not in workflow:
+            import uuid
+            workflow["id"] = f"temp_{uuid.uuid4().hex}"
+        
+        logger.info(f"接收到工作流执行请求: {workflow.get('name', '未命名')}")
+        logger.debug(f"工作流结构: nodes={len(workflow.get('nodes', []))}, edges={len(workflow.get('edges', []))}")
+        
         # 创建临时工作流引擎实例
         engine = WorkflowEngine()
         
-        # 为工作流生成临时ID
-        import uuid
-        workflow_id = f"temp_{uuid.uuid4().hex}"
-        
         # 保存临时工作流
-        engine.workflows[workflow_id] = req.workflow
+        engine.workflows[workflow["id"]] = workflow
         
         # 执行工作流
-        result = await engine.execute(workflow_id, req.input_data)
+        logger.info(f"开始执行工作流: {workflow['id']}")
+        result = await engine.execute(workflow["id"], req.input_data)
         
         # 清理临时工作流
-        if workflow_id in engine.workflows:
-            del engine.workflows[workflow_id]
+        if workflow["id"] in engine.workflows:
+            del engine.workflows[workflow["id"]]
         
         if not result.get("success"):
-            raise HTTPException(status_code=500, detail=result.get("error", "执行失败"))
+            error_msg = result.get("error", "执行失败")
+            logger.error(f"工作流执行失败: {error_msg}")
+            raise HTTPException(status_code=500, detail=error_msg)
         
+        logger.info(f"工作流执行成功: {result.get('result', 'N/A')}")
         return result
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"执行工作流数据失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        error_detail = f"{type(e).__name__}: {str(e)}"
+        logger.error(f"执行工作流数据失败: {error_detail}")
+        import traceback
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=error_detail)
 
 
 @router.get("/list")

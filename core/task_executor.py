@@ -1,27 +1,39 @@
-"""任务执行引擎 - 智能重试系统（循环版本）
+"""任务执行引擎（已废弃 - DEPRECATED）
+
+⚠️ 此模块当前未被主流程使用，保留仅供参考。
+如需简单并发+链式处理，请直接使用 ConcurrentTaskProcessor。
 
 特性：
-- 任务拆解后放入队列
-- 子任务失败后重新拆解
-- 并发执行所有子任务
-- 循环重试（最多 N 次，不会栈溢出）
-- 任务依赖管理
+- 支持并发执行和协作执行
+- 基于任务树结构(NaturalLanguageTaskParser)解析用户输入
+- 自动识别"与/和/然后/接着"等关键词构建任务依赖关系
+- 支持共享数据在协作任务间传递
 
-使用方式：
-    from core.task_executor import task_executor
-    
-    # 执行任务
-    result = await task_executor.execute("爬取微博热搜并分析数据")
+注意：
+- 当前系统采用简化架构，仅使用ConcurrentTaskProcessor进行任务处理
+- 如需启用此模块，需修改handlers.py中的handle_multi_step函数
+- 未来如需复杂任务编排(嵌套并发/协作)，可重新评估是否启用
+
+原设计目标：
+- 处理复杂的自然语言任务描述
+- 支持多层级任务依赖关系
+- 提供完整的任务执行报告
 """
 
 import asyncio
 import logging
-from typing import Dict, Any, List, Optional, Set
-from dataclasses import dataclass, field
-from datetime import datetime
+import time
+from typing import Dict, List, Any, Optional
+from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor
 
-from .task_processor import task_processor, TaskResult, SubTask
-from .task_queue import task_queue, TaskStatus, RetryPolicy
+from core.task_parser import (
+    TaskNode,
+    TaskRelation,
+    ParseResult,
+    get_task_parser
+)
+from core.intelligent_agent_selector import get_intelligent_selector
 
 logger = logging.getLogger(__name__)
 
@@ -29,413 +41,372 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ExecutionResult:
     """执行结果"""
+    task_id: str
+    description: str
     success: bool
-    results: List[Dict[str, Any]]
-    total_time: float
-    completed_tasks: List[str]
-    failed_tasks: List[str]
-    retry_count: int = 0
+    result: Any
+    error: Optional[str] = None
+    duration: float = 0.0
+    agent_used: Optional[str] = None
+    output_key: Optional[str] = None  # 用于协作传递
 
 
 @dataclass
-class TaskNode:
-    """任务节点（支持循环重试）"""
-    id: str
-    original_task: str  # 原始任务
-    subtask: Optional[SubTask] = None  # 子任务（如果已拆解）
-    parent_id: Optional[str] = None  # 父任务 ID
-    retry_count: int = 0  # 重试次数
-    max_retries: int = 3  # 最大重试次数
-    status: TaskStatus = TaskStatus.PENDING
-    created_at: float = field(default_factory=lambda: datetime.now().timestamp())
-    started_at: Optional[float] = None
-    completed_at: Optional[float] = None
-    error: Optional[str] = None
+class TaskExecutionReport:
+    """任务执行报告"""
+    total_tasks: int
+    success_count: int
+    failed_count: int
+    total_duration: float
+    results: List[ExecutionResult]
+    strategy: str
+    task_tree_explanation: str
 
 
 class TaskExecutor:
-    """任务执行引擎（循环重试模式）"""
-    
+    """任务执行引擎"""
+
     def __init__(self):
-        self._task_queue = task_queue
-        self._processor = task_processor
-        self._started = False
-        
-        # 任务节点存储
-        self._task_nodes: Dict[str, TaskNode] = {}
-        self._task_counter: int = 0
-        
-        # 执行结果
-        self._results: Dict[str, Dict[str, Any]] = {}
-        
-        logger.info("TaskExecutor 初始化完成（循环重试模式）")
-    
-    async def start(self):
-        """启动执行引擎"""
-        if self._started:
-            return
-        
-        logger.info("启动任务执行引擎...")
-        await self._task_queue.start()
-        self._started = True
-        logger.info("任务执行引擎已启动")
-    
-    async def stop(self, wait: bool = True):
-        """停止执行引擎"""
-        if not self._started:
-            return
-        
-        logger.info("停止任务执行引擎...")
-        await self._task_queue.stop(wait=wait)
-        self._started = False
-        logger.info("任务执行引擎已停止")
-    
-    async def execute(
-        self,
-        user_task: str,
-        max_retries: int = 3,
-    ) -> ExecutionResult:
-        """执行任务（循环重试模式）
-        
-        流程：
-        1. 创建根任务节点
-        2. 放入待处理队列
-        3. 循环处理队列中的任务
-        4. 失败的任务重新拆解（循环，最多 N 次）
-        5. 直到所有任务完成或达到最大重试次数
-        
+        self.parser = get_task_parser()
+        self.agent_selector = get_intelligent_selector()
+        self.execution_results: Dict[str, ExecutionResult] = {}
+        self.shared_data: Dict[str, Any] = {}  # 用于协作任务间的数据传递
+
+    async def execute(self, user_input: str, user_id: int = 1) -> TaskExecutionReport:
+        """执行用户输入的任务
+
         Args:
-            user_task: 用户任务
-            max_retries: 最大重试次数
-            
+            user_input: 用户输入的自然语言
+            user_id: 用户ID
+
         Returns:
-            执行结果
+            TaskExecutionReport: 执行报告
         """
-        import time
         start_time = time.time()
-        
-        # 确保引擎已启动
-        if not self._started:
-            await self.start()
-        
-        # 清空状态
-        self._task_nodes.clear()
-        self._results.clear()
-        self._task_counter = 0
-        
-        logger.info("开始执行任务: %s", user_task[:50])
-        
+
+        logger.info(f"开始执行任务: {user_input}")
+
+        # 1. 解析任务
+        parse_result = self.parser.parse(user_input)
+        task_tree_explanation = self.parser.explain_task_tree(parse_result.root_tasks)
+        logger.info(f"任务树:\n{task_tree_explanation}")
+
+        # 2. 执行任务树
+        results = []
+        self.shared_data.clear()
+
+        for task in parse_result.root_tasks:
+            task_results = await self._execute_task_tree(task, user_id)
+            results.extend(task_results)
+
+        # 3. 生成报告
+        total_duration = time.time() - start_time
+        success_count = sum(1 for r in results if r.success)
+        failed_count = len(results) - success_count
+
+        report = TaskExecutionReport(
+            total_tasks=len(results),
+            success_count=success_count,
+            failed_count=failed_count,
+            total_duration=total_duration,
+            results=results,
+            strategy=parse_result.execution_strategy,
+            task_tree_explanation=task_tree_explanation
+        )
+
+        logger.info(f"执行完成: 成功 {success_count}/{len(results)}, 耗时 {total_duration:.2f}秒")
+        return report
+
+    async def _execute_task_tree(self, task: TaskNode, user_id: int) -> List[ExecutionResult]:
+        """执行任务树"""
+        results = []
+
+        if task.relation == TaskRelation.PARALLEL and task.children:
+            # 并发执行
+            logger.info(f"并发执行 {len(task.children)} 个子任务")
+            task_results = await self._execute_parallel(task.children, user_id)
+            results.extend(task_results)
+
+        elif task.relation == TaskRelation.COLLABORATIVE and task.children:
+            # 协作执行（按依赖顺序）
+            logger.info(f"协作执行 {len(task.children)} 个子任务")
+            task_results = await self._execute_collaborative(task.children, user_id)
+            results.extend(task_results)
+
+        else:
+            # 单个任务
+            result = await self._execute_single_task(task.description, user_id)
+            results.append(result)
+
+        return results
+
+    async def _execute_parallel(self, tasks: List[TaskNode], user_id: int) -> List[ExecutionResult]:
+        """并发执行多个任务"""
+        # 创建并发任务
+        coroutines = [self._execute_single_task(task.description, user_id) for task in tasks]
+
+        # 使用 gather 并发执行
+        results = await asyncio.gather(*coroutines, return_exceptions=True)
+
+        # 处理结果
+        execution_results = []
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                execution_results.append(ExecutionResult(
+                    task_id=tasks[i].id,
+                    description=tasks[i].description,
+                    success=False,
+                    result=None,
+                    error=str(result)
+                ))
+            else:
+                execution_results.append(result)
+
+        return execution_results
+
+    async def _execute_collaborative(self, tasks: List[TaskNode], user_id: int) -> List[ExecutionResult]:
+        """协作执行多个任务（按依赖顺序）"""
+        results = []
+
+        for task in tasks:
+            # 检查依赖
+            if task.depends_on:
+                # 等待依赖任务完成
+                await self._wait_for_dependencies(task.depends_on)
+
+            # 执行当前任务
+            logger.info(f"执行协作任务: {task.description}")
+            result = await self._execute_single_task(task.description, user_id, task.depends_on)
+
+            # 保存结果供后续任务使用
+            if result.success:
+                self.shared_data[task.id] = result.result
+                result.output_key = task.id
+
+            results.append(result)
+
+            # 如果失败，根据策略决定是否继续
+            if not result.success:
+                logger.warning(f"任务 {task.id} 执行失败，继续执行后续任务")
+
+        return results
+
+    async def _wait_for_dependencies(self, depends_on: List[str]) -> None:
+        """等待依赖任务完成"""
+        # 在协作模式下，依赖任务已经在之前的循环中执行完成
+        # 这里可以添加额外的等待逻辑（如检查结果是否可用）
+        for dep_id in depends_on:
+            if dep_id not in self.shared_data:
+                logger.debug(f"等待依赖任务 {dep_id} 完成")
+
+    async def _execute_single_task(self, description: str, user_id: int, depends_on: Optional[List[str]] = None) -> ExecutionResult:
+        """执行单个任务
+
+        使用智能选择器选择合适的 Agent/Skill
+        """
+        start_time = time.time()
+
         try:
-            # 1. 创建根任务节点
-            root_node = self._create_task_node(
-                original_task=user_task,
-                max_retries=max_retries,
-            )
-            
-            # 2. 创建待处理队列（循环处理）
-            pending_queue: List[TaskNode] = [root_node]
-            
-            # 3. 循环处理队列中的任务
-            while pending_queue:
-                # 取出一个任务
-                node = pending_queue.pop(0)
-                
-                logger.info(
-                    "处理任务: %s (重试: %d/%d)",
-                    node.id, node.retry_count, node.max_retries,
-                )
-                
-                # 4. 拆解任务
-                decompose_success = await self._decompose_task(node)
-                
-                if decompose_success:
-                    # 拆解成功，子任务已入队
-                    logger.info("任务拆解成功: %s", node.id)
-                    node.status = TaskStatus.COMPLETED
-                    node.completed_at = datetime.now().timestamp()
-                    self._results[node.id] = {
-                        "task_id": node.id,
-                        "action": node.subtask.action if node.subtask else None,
-                        "status": "completed",
-                        "success": True,
-                    }
-                else:
-                    # 拆解失败
-                    logger.warning("任务拆解失败: %s", node.id)
-                    
-                    # 检查是否可以重试
-                    if node.retry_count < node.max_retries:
-                        # 可以重试，重新入队
-                        node.retry_count += 1
-                        node.status = TaskStatus.PENDING
-                        pending_queue.append(node)
-                        
-                        logger.info(
-                            "任务重新入队: %s (重试: %d/%d)",
-                            node.id, node.retry_count, node.max_retries,
-                        )
-                    else:
-                        # 达到最大重试次数，标记为失败
-                        node.status = TaskStatus.DEAD_LETTER
-                        node.completed_at = datetime.now().timestamp()
-                        self._results[node.id] = {
-                            "task_id": node.id,
-                            "action": node.subtask.action if node.subtask else None,
-                            "status": "failed",
-                            "success": False,
-                            "error": node.error or "达到最大重试次数",
-                        }
-            
-            # 5. 等待所有子任务完成
-            await self._wait_for_subtasks(timeout=300.0)
-            
-            # 6. 收集结果
-            completed_tasks = [
-                task_id for task_id, node in self._task_nodes.items()
-                if node.status == TaskStatus.COMPLETED
-            ]
-            failed_tasks = [
-                task_id for task_id, node in self._task_nodes.items()
-                if node.status in [TaskStatus.FAILED, TaskStatus.DEAD_LETTER]
-            ]
-            
-            total_time = time.time() - start_time
-            
+            # 1. 使用智能选择器分析任务
+            execution_plan = self.agent_selector.create_execution_plan(description)
+
             logger.info(
-                "任务执行完成: %s (成功: %d, 失败: %d, 总耗时: %.2fs)",
-                user_task[:50], len(completed_tasks), len(failed_tasks), total_time,
+                f"任务执行计划: 复杂度={execution_plan.complexity.value}, "
+                f"Agent={execution_plan.agents}, 模式={execution_plan.execution_mode.value}"
             )
-            
+
+            # 2. 获取依赖数据（如果有）
+            context_data = None
+            if depends_on:
+                context_data = self._gather_dependency_data(depends_on)
+
+            # 3. 根据选择的 Agent 执行任务
+            # 这里需要根据实际系统集成
+            result_text = await self._dispatch_to_agent(
+                description=description,
+                agents=execution_plan.agents,
+                user_id=user_id,
+                context_data=context_data
+            )
+
+            duration = time.time() - start_time
+
             return ExecutionResult(
-                success=len(failed_tasks) == 0,
-                results=list(self._results.values()),
-                total_time=total_time,
-                completed_tasks=completed_tasks,
-                failed_tasks=failed_tasks,
-                retry_count=sum(node.retry_count for node in self._task_nodes.values()),
+                task_id=f"task_{int(time.time()*1000)}",
+                description=description,
+                success=True,
+                result=result_text,
+                duration=duration,
+                agent_used=",".join(execution_plan.agents)
             )
-            
+
         except Exception as e:
-            logger.error("任务执行失败: %s - %s", user_task, e)
+            duration = time.time() - start_time
+            logger.error(f"任务执行失败: {e}", exc_info=True)
+
             return ExecutionResult(
+                task_id=f"task_{int(time.time()*1000)}",
+                description=description,
                 success=False,
-                results=list(self._results.values()),
-                total_time=time.time() - start_time,
-                completed_tasks=[],
-                failed_tasks=[],
+                result=None,
+                error=str(e),
+                duration=duration
             )
-    
-    def _create_task_node(
+
+    def _gather_dependency_data(self, depends_on: List[str]) -> Dict[str, Any]:
+        """收集依赖任务的数据"""
+        data = {}
+        for dep_id in depends_on:
+            if dep_id in self.shared_data:
+                data[dep_id] = self.shared_data[dep_id]
+        return data
+
+    async def _dispatch_to_agent(
         self,
-        original_task: str,
-        max_retries: int = 3,
-        parent_id: Optional[str] = None,
-    ) -> TaskNode:
-        """创建任务节点"""
-        self._task_counter += 1
-        task_id = f"task_{self._task_counter}"
-        
-        node = TaskNode(
-            id=task_id,
-            original_task=original_task,
-            parent_id=parent_id,
-            max_retries=max_retries,
-        )
-        
-        self._task_nodes[task_id] = node
-        return node
-    
-    async def _decompose_task(self, node: TaskNode) -> bool:
-        """拆解任务（循环版本，不会递归）
-        
-        Returns:
-            True: 拆解成功
-            False: 拆解失败
+        description: str,
+        agents: List[str],
+        user_id: int,
+        context_data: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """分发任务到 Agent/Skill
+
+        这里需要与现有的 Agent/Skill 系统集成
         """
+        # 获取主要 agent
+        primary_agent = agents[0] if agents else "chat"
+
+        logger.info(f"分发任务到 {primary_agent}: {description}")
+
+        # 构建带上下文的描述
+        task_description = description
+        if context_data:
+            # 将依赖数据添加到任务描述中
+            context_str = "\n".join([f"[参考数据]: {v}" for v in context_data.values() if v])
+            task_description = f"{description}\n\n{context_str}"
+
+        # 调用现有的处理逻辑
         try:
-            # 拆解任务
-            result: TaskResult = await self._processor.process(node.original_task)
-            
-            if not result.subtasks:
-                # 无法拆解，直接执行原始任务
-                logger.info("任务无法拆解，直接执行: %s", node.id)
-                return await self._enqueue_single_task(node)
-            
-            # 拆解成功，创建子任务节点并入队
-            for subtask in result.subtasks:
-                # 创建子任务节点
-                child_node = self._create_task_node(
-                    original_task=f"{subtask.action}: {subtask.params}",
-                    max_retries=node.max_retries,
-                    parent_id=node.id,
-                )
-                child_node.subtask = subtask
-                
-                # 入队
-                await self._enqueue_subtask(child_node)
-            
-            logger.info("任务拆解完成: %s -> %d 个子任务", node.id, len(result.subtasks))
-            return True
-            
-        except Exception as e:
-            logger.error("任务拆解失败: %s - %s", node.id, e)
-            node.error = str(e)
-            return False
-    
-    async def _enqueue_single_task(self, node: TaskNode) -> bool:
-        """将单个任务入队（无法拆解的情况）
-        
-        Returns:
-            True: 入队成功
-            False: 入队失败
-        """
-        try:
-            # 提取 action 和 params
-            from core.skill_dispatcher import SkillDispatcher
-            dispatcher = SkillDispatcher()
-            
-            action = dispatcher.match_skill(node.original_task)
-            params = dispatcher.extract_params(node.original_task, action)
-            
-            # 创建临时 subtask
-            node.subtask = SubTask(
-                id=f"{node.id}_sub",
-                action=action,
-                params=params,
-                dependencies=[],
+            from core.handlers import handle_single_step
+
+            result = await handle_single_step(
+                message=task_description,
+                user_id=user_id,
+                skill_name=None,  # 让系统自动选择
+                agent_id="auto_agent"
             )
-            
-            # 入队
-            await self._enqueue_subtask(node)
-            return True
-            
+
+            reply = result.get("reply", str(result))
+            return reply
+
         except Exception as e:
-            logger.error("任务入队失败: %s - %s", node.id, e)
-            node.error = str(e)
-            return False
-    
-    async def _enqueue_subtask(self, node: TaskNode):
-        """将子任务入队"""
-        if not node.subtask:
-            logger.warning("子任务为空，跳过: %s", node.id)
-            return
-        
-        # 提交到队列
-        task_id = await self._task_queue.submit(
-            action=node.subtask.action,
-            params=node.subtask.params,
-            max_retries=1,  # 我们自己控制重试
-            retry_policy=RetryPolicy.FIXED,
-            retry_delay=0.1,
-            priority=10 - node.subtask.priority,
-            metadata={
-                "node_id": node.id,
-                "original_task": node.original_task,
-            },
-        )
-        
-        node.status = TaskStatus.RUNNING
-        node.started_at = datetime.now().timestamp()
-        
-        logger.info("子任务已入队: %s -> %s", node.id, task_id)
-    
-    async def _wait_for_subtasks(self, timeout: float = 300.0):
-        """等待所有子任务完成"""
-        import time
+            logger.error(f"Agent 执行失败: {e}", exc_info=True)
+            # 降级到简单回复
+            return f"任务执行中: {description}\n\n(详细执行结果待完善)"
+
+
+class HybridTaskExecutor(TaskExecutor):
+    """混合任务执行器
+
+    支持更复杂的嵌套结构和执行策略
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.execution_history: List[Dict[str, Any]] = []
+
+    async def execute_with_nested(
+        self,
+        user_input: str,
+        user_id: int = 1
+    ) -> TaskExecutionReport:
+        """执行支持嵌套结构的任务"""
         start_time = time.time()
-        
-        while True:
-            # 检查所有任务节点
-            all_completed = True
-            has_running = False
-            
-            for task_id, node in self._task_nodes.items():
-                if node.status == TaskStatus.RUNNING:
-                    has_running = True
-                    all_completed = False
-                    
-                    # 检查任务是否完成（从队列获取状态）
-                    task_status = await self._check_task_status(node)
-                    
-                    if task_status == TaskStatus.COMPLETED:
-                        node.status = TaskStatus.COMPLETED
-                        node.completed_at = datetime.now().timestamp()
-                        self._results[task_id] = {
-                            "task_id": task_id,
-                            "action": node.subtask.action if node.subtask else None,
-                            "status": "completed",
-                            "success": True,
-                        }
-                        
-                    elif task_status == TaskStatus.DEAD_LETTER:
-                        # 任务失败
-                        logger.warning("子任务执行失败: %s", task_id)
-                        node.status = TaskStatus.DEAD_LETTER
-                        node.completed_at = datetime.now().timestamp()
-                        self._results[task_id] = {
-                            "task_id": task_id,
-                            "action": node.subtask.action if node.subtask else None,
-                            "status": "failed",
-                            "success": False,
-                            "error": node.error or "任务执行失败",
-                        }
-            
-            if all_completed:
-                break
-            
-            # 检查超时
-            if time.time() - start_time > timeout:
-                logger.warning("等待任务超时: %ds", timeout)
-                break
-            
-            # 等待一段时间再检查
-            await asyncio.sleep(0.5)
-    
-    async def _check_task_status(self, node: TaskNode) -> TaskStatus:
-        """检查任务状态（从队列获取真实状态）"""
-        if not node.subtask:
-            return TaskStatus.FAILED
-        
-        # 从队列获取所有任务，找到对应的任务
-        # 注意：TaskQueue 的 task_id 和 TaskExecutor 的 node.id 不同
-        # 我们需要通过 metadata 中的 node_id 来匹配
-        
-        # 获取队列中的所有任务
-        all_tasks = self._task_queue._tasks
-        
-        # 查找匹配的任务（通过 metadata 中的 node_id）
-        for task_id, task in all_tasks.items():
-            if task.metadata.get("node_id") == node.id:
-                # 找到匹配的任务
-                return task.status
-        
-        # 没有找到匹配的任务，假设已完成
-        return TaskStatus.COMPLETED
-    
-    async def get_metrics(self) -> Dict[str, Any]:
-        """获取执行引擎指标"""
-        queue_metrics = self._task_queue.get_metrics()
-        
-        total_nodes = len(self._task_nodes)
-        completed_nodes = sum(
-            1 for node in self._task_nodes.values()
-            if node.status == TaskStatus.COMPLETED
+
+        # 1. 解析任务
+        parse_result = self.parser.parse(user_input)
+        task_tree_explanation = self.parser.explain_task_tree(parse_result.root_tasks)
+
+        # 2. 递归执行任务树
+        results = []
+        self.shared_data.clear()
+        self.execution_history.clear()
+
+        for task in parse_result.root_tasks:
+            task_results = await self._execute_node_recursive(task, user_id, depth=0)
+            results.extend(task_results)
+
+        # 3. 生成报告
+        total_duration = time.time() - start_time
+        success_count = sum(1 for r in results if r.success)
+
+        return TaskExecutionReport(
+            total_tasks=len(results),
+            success_count=success_count,
+            failed_count=len(results) - success_count,
+            total_duration=total_duration,
+            results=results,
+            strategy=parse_result.execution_strategy,
+            task_tree_explanation=task_tree_explanation
         )
-        failed_nodes = sum(
-            1 for node in self._task_nodes.values()
-            if node.status in [TaskStatus.FAILED, TaskStatus.DEAD_LETTER]
-        )
-        
-        return {
-            "executor": {
-                "started": self._started,
-                "total_nodes": total_nodes,
-                "completed_nodes": completed_nodes,
-                "failed_nodes": failed_nodes,
-            },
-            "queue": queue_metrics,
-        }
+
+    async def _execute_node_recursive(
+        self,
+        node: TaskNode,
+        user_id: int,
+        depth: int
+    ) -> List[ExecutionResult]:
+        """递归执行节点"""
+        results = []
+
+        # 如果有子节点，按关系执行
+        if node.children:
+            if node.relation == TaskRelation.PARALLEL:
+                # 并发执行所有子节点
+                logger.info(f"[深度{depth}] 并发执行 {len(node.children)} 个子任务")
+                results = await self._execute_parallel(node.children, user_id)
+
+            elif node.relation == TaskRelation.COLLABORATIVE:
+                # 按顺序执行（考虑依赖）
+                logger.info(f"[深度{depth}] 协作执行 {len(node.children)} 个子任务")
+                results = await self._execute_collaborative(node.children, user_id)
+
+            else:
+                # 递归执行每个子节点
+                for child in node.children:
+                    child_results = await self._execute_node_recursive(child, user_id, depth + 1)
+                    results.extend(child_results)
+        else:
+            # 叶子节点，直接执行
+            result = await self._execute_single_task(node.description, user_id)
+            results.append(result)
+
+            # 记录执行历史
+            self.execution_history.append({
+                "depth": depth,
+                "node_id": node.id,
+                "description": node.description,
+                "result": result.result if result.success else None
+            })
+
+        return results
 
 
-# 全局实例
-task_executor = TaskExecutor()
+# 全局执行器
+_executor: Optional[TaskExecutor] = None
+_hybrid_executor: Optional[HybridTaskExecutor] = None
+
+
+def get_task_executor() -> TaskExecutor:
+    """获取任务执行器单例"""
+    global _executor
+    if _executor is None:
+        _executor = TaskExecutor()
+    return _executor
+
+
+def get_hybrid_task_executor() -> HybridTaskExecutor:
+    """获取混合任务执行器单例"""
+    global _hybrid_executor
+    if _hybrid_executor is None:
+        _hybrid_executor = HybridTaskExecutor()
+    return _hybrid_executor

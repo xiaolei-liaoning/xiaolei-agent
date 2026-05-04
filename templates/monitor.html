@@ -7,6 +7,15 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+    <style>
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-fadeIn {
+            animation: fadeIn 0.3s ease-out forwards;
+        }
+    </style>
 </head>
 <body class="bg-gray-50 min-h-screen">
     <div class="container mx-auto px-4 py-8">
@@ -147,11 +156,22 @@
                     <i class="fa fa-line-chart mr-2 text-blue-600"></i> 系统监控
                 </h2>
                 <div class="flex space-x-2">
+                    <select id="chart-refresh-interval" class="border border-gray-300 rounded-md px-3 py-1 text-sm">
+                        <option value="2">每2秒刷新</option>
+                        <option value="5" selected>每5秒刷新</option>
+                        <option value="10">每10秒刷新</option>
+                    </select>
                     <select id="chart-time-range" class="border border-gray-300 rounded-md px-3 py-1 text-sm">
                         <option value="30">30秒</option>
                         <option value="60">1分钟</option>
                         <option value="300">5分钟</option>
                     </select>
+                    <button id="toggle-auto-refresh" class="bg-green-100 text-green-700 px-3 py-1 rounded-md hover:bg-green-200 transition duration-200 flex items-center text-sm">
+                        <i class="fa fa-pause mr-1" id="auto-refresh-icon"></i> <span id="auto-refresh-text">暂停刷新</span>
+                    </button>
+                    <button onclick="exportChartData()" class="bg-blue-100 text-blue-700 px-3 py-1 rounded-md hover:bg-blue-200 transition duration-200 flex items-center text-sm">
+                        <i class="fa fa-download mr-1"></i> 导出数据
+                    </button>
                     <button id="refresh-system" class="bg-gray-200 text-gray-700 px-3 py-1 rounded-md hover:bg-gray-300 transition duration-200 flex items-center text-sm">
                         <i class="fa fa-refresh mr-1"></i> 刷新
                     </button>
@@ -394,28 +414,51 @@
             });
         }
 
+        // 全局变量 - 自动刷新控制
+        let autoRefresh = true;
+        let refreshIntervalId;
+        let chartHistory = {
+            cpu: [],
+            memory: [],
+            disk: [],
+            networkSent: [],
+            networkRecv: []
+        };
+
         // 更新图表数据
         function updateCharts() {
             fetch('/api/monitor/system/status')
                 .then(response => response.json())
                 .then(data => {
+                    const now = new Date().toLocaleTimeString();
+                    
                     // 更新CPU数据
                     cpuData.shift();
                     cpuData.push(data.cpu_percent);
-
+                    chartHistory.cpu.push({ time: now, value: data.cpu_percent });
+                    
                     // 更新内存数据
                     memoryData.shift();
                     memoryData.push(data.memory.percent);
+                    chartHistory.memory.push({ time: now, value: data.memory.percent });
 
                     // 更新磁盘数据
                     diskData.shift();
                     diskData.push(data.disk.percent);
+                    chartHistory.disk.push({ time: now, value: data.disk.percent });
 
                     // 更新网络数据
+                    const sentMB = data.network.bytes_sent / 1024 / 1024;
+                    const recvMB = data.network.bytes_recv / 1024 / 1024;
                     networkSentData.shift();
-                    networkSentData.push(data.network.bytes_sent / 1024 / 1024); // 转换为MB
+                    networkSentData.push(sentMB);
                     networkRecvData.shift();
-                    networkRecvData.push(data.network.bytes_recv / 1024 / 1024); // 转换为MB
+                    networkRecvData.push(recvMB);
+                    chartHistory.networkSent.push({ time: now, value: sentMB });
+                    chartHistory.networkRecv.push({ time: now, value: recvMB });
+
+                    labels.shift();
+                    labels.push(now);
 
                     // 更新系统负载
                     document.getElementById('system-load').textContent = `${data.cpu_percent}%`;
@@ -425,10 +468,130 @@
                     memoryChart.update();
                     diskChart.update();
                     networkChart.update();
+
+                    // 检查告警
+                    checkForAlerts(data);
                 })
                 .catch(error => {
                     console.error('获取系统状态失败:', error);
                 });
+        }
+
+        // 检查告警
+        function checkForAlerts(data) {
+            const alerts = [];
+            
+            if (data.cpu_percent > 80) {
+                alerts.push({
+                    type: 'warning',
+                    message: `CPU使用率过高: ${data.cpu_percent}%`,
+                    time: new Date().toLocaleTimeString()
+                });
+            }
+            
+            if (data.memory.percent > 85) {
+                alerts.push({
+                    type: 'danger',
+                    message: `内存使用率过高: ${data.memory.percent}%`,
+                    time: new Date().toLocaleTimeString()
+                });
+            }
+            
+            if (data.disk.percent > 90) {
+                alerts.push({
+                    type: 'warning',
+                    message: `磁盘使用率过高: ${data.disk.percent}%`,
+                    time: new Date().toLocaleTimeString()
+                });
+            }
+
+            if (alerts.length > 0) {
+                showAlerts(alerts);
+            }
+        }
+
+        // 显示告警通知
+        function showAlerts(alerts) {
+            alerts.forEach(alert => {
+                const notification = document.createElement('div');
+                notification.className = `fixed top-4 right-4 p-4 rounded-lg shadow-lg max-w-sm z-50 animate-fadeIn border ${
+                    alert.type === 'danger' 
+                        ? 'bg-red-100 text-red-800 border-red-300' 
+                        : 'bg-yellow-100 text-yellow-800 border-yellow-300'
+                }`;
+                notification.innerHTML = `
+                    <div class="flex items-center justify-between">
+                        <div class="flex items-center">
+                            <i class="fa ${alert.type === 'danger' ? 'fa-exclamation-triangle' : 'fa-info-circle'} mr-2 text-xl"></i>
+                            <span class="font-medium">${alert.message}</span>
+                        </div>
+                        <button onclick="this.parentElement.parentElement.remove()" class="ml-4 text-gray-500 hover:text-gray-700">
+                            <i class="fa fa-times"></i>
+                        </button>
+                    </div>
+                    <div class="text-xs mt-1 opacity-70">${alert.time}</div>
+                `;
+                document.body.appendChild(notification);
+                
+                // 8秒后自动移除
+                setTimeout(() => notification.remove(), 8000);
+            });
+        }
+
+        // 导出图表数据
+        function exportChartData() {
+            const exportData = {
+                timestamp: new Date().toISOString(),
+                cpu: chartHistory.cpu,
+                memory: chartHistory.memory,
+                disk: chartHistory.disk,
+                networkSent: chartHistory.networkSent,
+                networkRecv: chartHistory.networkRecv
+            };
+            
+            const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `system-monitor-${new Date().toISOString().slice(0, 10)}.json`;
+            a.click();
+            URL.revokeObjectURL(url);
+            
+            // 显示成功提示
+            const successMsg = document.createElement('div');
+            successMsg.className = 'fixed top-4 left-1/2 transform -translate-x-1/2 bg-green-100 text-green-800 px-4 py-2 rounded-lg shadow-lg z-50 animate-fadeIn';
+            successMsg.innerHTML = '<i class="fa fa-check-circle mr-2"></i>数据导出成功！';
+            document.body.appendChild(successMsg);
+            setTimeout(() => successMsg.remove(), 3000);
+        }
+
+        // 切换自动刷新
+        function toggleAutoRefresh() {
+            autoRefresh = !autoRefresh;
+            const btn = document.getElementById('toggle-auto-refresh');
+            const icon = document.getElementById('auto-refresh-icon');
+            const text = document.getElementById('auto-refresh-text');
+            
+            if (autoRefresh) {
+                btn.className = 'bg-green-100 text-green-700 px-3 py-1 rounded-md hover:bg-green-200 transition duration-200 flex items-center text-sm';
+                icon.className = 'fa fa-pause mr-1';
+                text.textContent = '暂停刷新';
+                startRefreshInterval();
+            } else {
+                btn.className = 'bg-red-100 text-red-700 px-3 py-1 rounded-md hover:bg-red-200 transition duration-200 flex items-center text-sm';
+                icon.className = 'fa fa-play mr-1';
+                text.textContent = '开始刷新';
+                clearInterval(refreshIntervalId);
+            }
+        }
+
+        // 启动刷新间隔
+        function startRefreshInterval() {
+            const interval = parseInt(document.getElementById('chart-refresh-interval').value) * 1000;
+            if (refreshIntervalId) {
+                clearInterval(refreshIntervalId);
+            }
+            refreshIntervalId = setInterval(updateCharts, interval);
         }
 
         // Agent名称映射
@@ -666,7 +829,6 @@
                 { name: 'gui_automation', status: 'active', description: 'GUI自动化工具' },
                 { name: 'advanced_automation', status: 'active', description: '高级自动化工具' },
                 { name: 'system_toolbox', status: 'active', description: '系统工具箱' },
-                { name: 'doubao_chat', status: 'active', description: '豆包聊天工具' },
                 { name: 'search_engine', status: 'active', description: '搜索引擎工具' }
             ];
 
@@ -712,8 +874,13 @@
             updateSkillStatus();
             setupTaskForm();
 
-            // 定时更新
-            setInterval(updateCharts, 2000);
+            // 初始刷新
+            updateCharts();
+            
+            // 启动自动刷新
+            startRefreshInterval();
+            
+            // 定时更新其他数据
             setInterval(updateAgentStatus, 5000);
             setInterval(updateTaskList, 5000);
 
@@ -722,6 +889,16 @@
             document.getElementById('refresh-tasks').addEventListener('click', updateTaskList);
             document.getElementById('refresh-system').addEventListener('click', updateCharts);
             document.getElementById('refresh-skills').addEventListener('click', updateSkillStatus);
+            
+            // 绑定自动刷新按钮
+            document.getElementById('toggle-auto-refresh').addEventListener('click', toggleAutoRefresh);
+            
+            // 绑定刷新间隔选择
+            document.getElementById('chart-refresh-interval').addEventListener('change', function() {
+                if (autoRefresh) {
+                    startRefreshInterval();
+                }
+            });
         });
     </script>
 </body>

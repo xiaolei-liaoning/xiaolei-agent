@@ -5,17 +5,212 @@ VectorMemoryStore 单例类：
 - PersistentClient + Settings(anonymized_telemetry=False)
 - 集合：long_term_memory
 - category 支持：general / fact / preference / experience
+- 可配置 embedding 模型：在线（sentence-transformers）或离线（TF-IDF）
 """
+import os
+os.environ["CHROMADB_TELEMETRY_DISABLED"] = "1"
+
 import chromadb
 from chromadb.config import Settings
 import threading
 import time
-import os
 import logging
-from typing import Optional, List, Dict, Any
+import re
+import math
+from typing import Optional, List, Dict, Any, Callable
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
+
+# ─── Embedding 模型配置 ────────────────────────────────────────────────────────
+# 设置 EMBEDDING_MODEL="local" 强制使用本地 TF-IDF
+_EMBEDDING_MODEL_NAME = os.environ.get("EMBEDDING_MODEL", "local")
+_EMBEDDING_DEVICE = "cpu"
+_EMBEDDING_BATCH_SIZE = 32
+
+class LocalEmbeddingFunction:
+    """本地 TF-IDF Embedding 函数（离线备选方案）
+
+    当在线模型不可用时使用简单的 TF-IDF 实现
+    - 无需网络连接
+    - 支持中英文
+    - 输出维度不固定（基于词汇表大小）
+    """
+
+    def __init__(self):
+        self._vectorizer = None
+        self._vocab = {}
+        self._idf = {}
+        self._dimension = 0
+
+    def _tokenize(self, text: str) -> List[str]:
+        """简单分词"""
+        tokens = re.findall(r'[\w]+', text.lower())
+        return tokens
+
+    def _build_vocab(self, texts: List[str]):
+        """构建词汇表"""
+        vocab = {}
+        for text in texts:
+            for token in self._tokenize(text):
+                if token not in vocab:
+                    vocab[token] = len(vocab)
+        return vocab
+
+    def _compute_tfidf(self, text: str, vocab: Dict[str, int], idf: Dict[str, float]) -> List[float]:
+        """计算 TF-IDF 向量"""
+        tokens = self._tokenize(text)
+        tf = {}
+        for token in tokens:
+            tf[token] = tf.get(token, 0) + 1
+
+        max_tf = max(tf.values()) if tf else 1
+        dimension = len(vocab)
+        vector = [0.0] * dimension
+
+        for token, count in tf.items():
+            if token in vocab:
+                tf_norm = count / max_tf
+                idf_val = idf.get(token, 0)
+                vector[vocab[token]] = tf_norm * idf_val
+
+        return vector
+
+    def __call__(self, input: List[str]) -> List[List[float]]:
+        """ChromaDB API 调用接口"""
+        if not input:
+            return []
+
+        try:
+            from sklearn.feature_extraction.text import TfidfVectorizer
+            vectorizer = TfidfVectorizer()
+            vectors = vectorizer.fit_transform(input).toarray()
+            return vectors.tolist()
+        except ImportError:
+            logger.warning("sklearn 不可用，使用简单词向量")
+            return self._simple_embedding(input)
+
+    def _simple_embedding(self, texts: List[str]) -> List[List[float]]:
+        """简单词向量（无 sklearn 时）"""
+        vocab = self._build_vocab(texts)
+        self._dimension = len(vocab)
+
+        token_counts = {}
+        for text in texts:
+            for token in self._tokenize(text):
+                token_counts[token] = token_counts.get(token, 0) + 1
+
+        idf = {}
+        N = len(texts)
+        for token, df in token_counts.items():
+            idf[token] = math.log(N / (df + 1)) + 1
+
+        vectors = []
+        for text in texts:
+            vector = self._compute_tfidf(text, vocab, idf)
+            vectors.append(vector)
+
+        return vectors
+
+    def embed_query(self, text: str) -> List[float]:
+        """单独查询的 embedding"""
+        return self(input=[text])[0]
+
+    def get_dimension(self) -> int:
+        """获取向量维度"""
+        if self._dimension > 0:
+            return self._dimension
+        return 768
+
+
+class BGEEmbeddingFunction:
+    """Embedding 函数封装（适配 ChromaDB API）
+
+    使用 shibing624/text2vec-base-chinese 模型，支持中文语义匹配
+    - 中文语义embedding效果好
+    - 支持最长序列 256 tokens
+    - 输出维度 768
+    """
+
+    def __init__(
+        self,
+        model_name: str = _EMBEDDING_MODEL_NAME,
+        device: str = _EMBEDDING_DEVICE,
+        normalize_embeddings: bool = True,
+        batch_size: int = _EMBEDDING_BATCH_SIZE,
+    ):
+        self.model_name = model_name
+        self.device = device
+        self.normalize_embeddings = normalize_embeddings
+        self.batch_size = batch_size
+        self._model = None
+        self._max_seq_length = 512
+
+    def _load_model(self):
+        """延迟加载模型"""
+        if self._model is None:
+            try:
+                from sentence_transformers import SentenceTransformer
+                logger.info(f"正在加载 BGE 模型: {self.model_name}...")
+                self._model = SentenceTransformer(
+                    self.model_name,
+                    device=self.device,
+                    cache_folder=os.path.expanduser("~/.cache/bge"),
+                )
+                self._model.max_seq_length = self._max_seq_length
+                logger.info(f"BGE 模型加载成功，设备: {self.device}, 输出维度: {self._model.get_sentence_embedding_dimension()}")
+            except Exception as e:
+                logger.error(f"BGE 模型加载失败: {e}")
+                raise
+
+    def __call__(self, input: List[str]) -> List[List[float]]:
+        """ChromaDB API 调用接口
+
+        Args:
+            input: 文本列表
+
+        Returns:
+            embedding 列表
+        """
+        if not input:
+            return []
+
+        self._load_model()
+
+        try:
+            embeddings = self._model.encode(
+                input,
+                batch_size=self.batch_size,
+                normalize_embeddings=self.normalize_embeddings,
+                show_progress_bar=False,
+                convert_to_numpy=True,
+            )
+            return embeddings.tolist()
+        except Exception as e:
+            logger.error(f"Embedding 生成失败: {e}")
+            raise
+
+    def embed_query(self, text: str) -> List[float]:
+        """单独查询的 embedding
+
+        Args:
+            text: 单条查询文本
+
+        Returns:
+            embedding 向量
+        """
+        return self(input=[text])[0]
+
+
+_bge_embedding_function = None
+
+def get_bge_embedding_function():
+    """获取全局 embedding 函数单例（直接使用本地 TF-IDF）"""
+    global _bge_embedding_function
+    if _bge_embedding_function is None:
+        logger.info("使用本地 TF-IDF Embedding")
+        _bge_embedding_function = LocalEmbeddingFunction()
+    return _bge_embedding_function
 
 # ─── 支持的记忆类别 ──────────────────────────────────────────────────────────
 VALID_CATEGORIES = {"general", "fact", "preference", "experience"}
@@ -91,12 +286,19 @@ class VectorMemoryStore:
 
     # ── 集合初始化 ───────────────────────────────────────────────────────────
     def _ensure_initialized(self):
-        """确保集合存在"""
+        """确保集合存在（使用 text2vec embedding）"""
         try:
-            self._collection = self._client.get_or_create_collection(
-                name="long_term_memory",
-                metadata={"description": "用户长期记忆库"},
-            )
+            embed_fn = get_bge_embedding_function()
+            try:
+                self._collection = self._client.get_collection(name="long_term_memory")
+                logger.info("ChromaDB 集合 long_term_memory 已存在")
+            except Exception:
+                self._collection = self._client.get_or_create_collection(
+                    name="long_term_memory",
+                    metadata={"description": "用户长期记忆库 (text2vec-base-chinese)"},
+                    embedding_function=embed_fn,
+                )
+                logger.info("ChromaDB 集合 long_term_memory 已创建")
             logger.info("ChromaDB 集合 long_term_memory 就绪")
         except Exception as e:
             logger.error("ChromaDB 初始化失败: %s", e)
@@ -236,11 +438,13 @@ class VectorMemoryStore:
             return
         try:
             self._client.delete_collection("long_term_memory")
+            embed_fn = get_bge_embedding_function()
             self._collection = self._client.get_or_create_collection(
                 name="long_term_memory",
-                metadata={"description": "用户长期记忆库"},
+                metadata={"description": "用户长期记忆库 (text2vec-base-chinese)"},
+                embedding_function=embed_fn,
             )
-            logger.info("向量库已清空并重建")
+            logger.info("向量库已清空并重建 (text2vec-base-chinese)")
         except Exception as e:
             logger.error("清空向量库失败: %s", e)
 
@@ -395,16 +599,16 @@ class VectorMemoryStore:
     
     def optimize_memory(self):
         """优化内存存储
-        
+
         执行清理和压缩操作
         """
         try:
             # 清理旧记忆
             deleted = self.cleanup_old_memories()
-            
+
             # 执行备份
             self.backup_memory()
-            
+
             logger.info("内存优化完成，删除了 %d 条旧记忆", deleted)
             return {
                 "deleted_count": deleted,
@@ -412,6 +616,62 @@ class VectorMemoryStore:
             }
         except Exception as e:
             logger.error("内存优化失败: %s", e)
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
+    def get_embedding_dimension(self) -> int:
+        """获取 embedding 向量维度
+
+        Returns:
+            embedding 维度
+        """
+        try:
+            embed_fn = get_bge_embedding_function()
+            
+            if hasattr(embed_fn, 'get_dimension'):
+                return embed_fn.get_dimension()
+            
+            if hasattr(embed_fn, '_load_model'):
+                embed_fn._load_model()
+                return embed_fn._model.get_sentence_embedding_dimension()
+            
+            return 768
+        except Exception as e:
+            logger.error("获取 embedding 维度失败: %s", e)
+            return 0
+
+    def test_embedding(self) -> Dict[str, Any]:
+        """测试 embedding 是否正常工作
+
+        Returns:
+            测试结果字典
+        """
+        try:
+            embed_fn = get_bge_embedding_function()
+
+            test_texts = [
+                "深度学习是机器学习的一个分支",
+                "人工智能改变了我们的生活方式",
+                "Python是一门强大的编程语言"
+            ]
+
+            embeddings = embed_fn(test_texts)
+
+            model_name = getattr(embed_fn, 'model_name', 'Local TF-IDF')
+            device = getattr(embed_fn, 'device', 'local')
+
+            return {
+                "success": True,
+                "model": model_name,
+                "dimension": len(embeddings[0]) if embeddings else 0,
+                "device": device,
+                "test_count": len(test_texts),
+                "sample_norm": round(sum(sum(e * e for e in emb) ** 0.5 for emb in embeddings) / len(embeddings), 4) if embeddings else 0
+            }
+        except Exception as e:
+            logger.error("Embedding 测试失败: %s", e)
             return {
                 "success": False,
                 "error": str(e)

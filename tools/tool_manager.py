@@ -15,6 +15,7 @@ import hashlib
 import time
 import logging
 import threading
+import asyncio
 from typing import Dict, Any, Optional, List, Callable
 
 logger = logging.getLogger(__name__)
@@ -30,7 +31,6 @@ _TTL_MAP: Dict[str, int] = {
     "data_analysis": 600,
     "gui_automation": 600,
     "rag_search": 600,
-    "doubao_chat": 600,
     "advanced_automation": 600,
     "search_engine": 600,  # 搜索引擎10分钟缓存
     "code_sandbox": 0,     # 代码执行不缓存（每次都是新的）
@@ -91,7 +91,7 @@ class ToolManager:
         logger.info("工具注册成功: %s (priority=%d)", name, priority)
 
     # ── 执行 ─────────────────────────────────────────────────────────────────
-    def execute(self, tool_name: str, **kwargs) -> Any:
+    async def execute(self, tool_name: str, **kwargs) -> Any:
         """执行工具（自动 Redis 缓存）
 
         Returns:
@@ -115,8 +115,14 @@ class ToolManager:
             # 优先调用 handler.execute()
             if hasattr(handler, "execute"):
                 result = handler.execute(**kwargs)
+                # 如果结果是协程，等待它完成
+                if asyncio.iscoroutine(result):
+                    result = await result
             elif callable(handler):
                 result = handler(**kwargs)
+                # 如果结果是协程，等待它完成
+                if asyncio.iscoroutine(result):
+                    result = await result
             else:
                 return {"success": False, "error": f"工具 {tool_name} 无法执行"}
 
@@ -317,12 +323,7 @@ def register_all_skills():
                    description="系统信息查询与文件操作",
                    keywords=["系统", "时间", "日期", "计算", "内存"])
 
-    # 9. 豆包对话
-    _safe_register(tm, "doubao_chat", "skills.doubao_chat.handler", "doubao_handler",
-                   description="豆包AI对话",
-                   keywords=["豆包", "doubao"], priority=2)
-
-    # 10. 搜索引擎（与爬虫隔离）
+    # 9. 搜索引擎（与爬虫隔离）
     _safe_register(tm, "search_engine", "skills.search_engine.handler", "handler",
                    description="联网搜索引擎（search/scrape双模式）",
                    keywords=["搜索", "查询", "查找", "搜一下", "查一下", "了解一下", "search", "query"], priority=5)

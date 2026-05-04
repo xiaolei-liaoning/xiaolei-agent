@@ -8,6 +8,7 @@
     <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <link rel="stylesheet" href="/static/css/coze.css">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤖</text></svg>" type="image/svg+xml">
 </head>
 <body class="bg-gray-50 min-h-screen">
     <header class="coze-header sticky top-0 z-50">
@@ -192,9 +193,9 @@
                         <i class="fa fa-sitemap mr-3"></i>
                         <span>工作流</span>
                     </a>
-                    <a href="#agent-group" class="nav-item flex items-center px-3 py-2 rounded-lg text-gray-700">
-                        <i class="fa fa-users mr-3"></i>
-                        <span>Agent小组</span>
+                    <a href="#history" class="nav-item flex items-center px-3 py-2 rounded-lg text-gray-700">
+                        <i class="fa fa-history mr-3"></i>
+                        <span>历史记录</span>
                     </a>
                 </nav>
                 
@@ -257,6 +258,88 @@
                                 </ul>
                                 <p class="mt-3 text-sm text-gray-600">有什么我可以帮助你的吗？</p>
                             </div>
+                        </div>
+                    </div>
+                    
+                    <!-- 聊天输入 -->
+                    <div class="coze-input-area p-4 mb-4">
+                        <!-- 文件拖拽上传区域（隐藏，通过拖拽显示） -->
+                        <div id="drop-zone" class="hidden mb-3 border-2 border-dashed border-blue-400 rounded-xl bg-blue-50 p-6 text-center transition-all">
+                            <i class="fa fa-cloud-upload text-4xl text-blue-500 mb-2"></i>
+                            <p class="text-gray-600">拖拽文件到此处上传</p>
+                            <p class="text-xs text-gray-400 mt-1">支持图片、文档等格式（最多5个文件）</p>
+                        </div>
+                        
+                        <!-- 输入框区域 -->
+                        <form id="chat-form" class="flex items-end gap-3">
+                            <!-- 数据分析下拉框 -->
+                            <select id="analysis-type" class="px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 flex-shrink-0">
+                                <optgroup label="数据分析">
+                                    <option value="">选择分析类型</option>
+                                    <option value="summary">总结分析</option>
+                                    <option value="keyword">关键词提取</option>
+                                    <option value="sentiment">情感分析</option>
+                                    <option value="trend">趋势分析</option>
+                                    <option value="compare">对比分析</option>
+                                </optgroup>
+                                <optgroup label="写作模式">
+                                    <option value="creative">创意写作</option>
+                                    <option value="formal">正式文书</option>
+                                    <option value="story">故事创作</option>
+                                    <option value="poem">诗歌创作</option>
+                                </optgroup>
+                                <optgroup label="代码生成">
+                                    <option value="python">Python代码</option>
+                                    <option value="javascript">JavaScript代码</option>
+                                    <option value="html">HTML/CSS</option>
+                                </optgroup>
+                            </select>
+                            
+                            <!-- 输入框 -->
+                            <div class="flex-1 relative">
+                                <textarea id="message-input"
+                                          placeholder="输入消息..."
+                                          class="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                          rows="1"></textarea>
+                                <div class="absolute right-3 bottom-2.5 flex items-center gap-1 text-xs text-gray-400">
+                                    <span id="char-count">0</span>
+                                    <span>/</span>
+                                    <span>2000</span>
+                                </div>
+                            </div>
+                            
+                            <!-- 上传按钮 -->
+                            <label for="file-input" id="upload-btn" class="p-2.5 bg-gray-100 rounded-xl hover:bg-gray-200 transition cursor-pointer" title="上传文件">
+                                <i class="fa fa-paperclip text-gray-600"></i>
+                            </label>
+                            <input type="file" id="file-input" class="hidden" multiple accept="image/*,.pdf,.doc,.docx,.txt,.csv,.json">
+
+                            <!-- 语音按钮 -->
+                            <button id="voice-btn" type="button" class="p-2.5 bg-gray-100 rounded-xl hover:bg-gray-200 transition" title="语音输入">
+                                <i class="fa fa-microphone text-gray-600"></i>
+                            </button>
+
+                            <!-- 发送按钮 -->
+                            <button type="submit" id="send-button" class="px-4 py-2.5 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-xl hover:shadow-lg transition flex items-center">
+                                <i class="fa fa-paper-plane mr-1"></i>
+                                发送
+                            </button>
+                        </form>
+                        
+                        <!-- 提示信息 -->
+                        <div class="flex items-center justify-between mt-2 text-xs text-gray-400">
+                            <div class="flex items-center gap-4">
+                                <span><i class="fa fa-info-circle mr-1"></i>提示: Shift+Enter 换行</span>
+                            </div>
+                            <div class="flex items-center gap-4">
+                                <span><i class="fa fa-magic mr-1"></i>快捷指令: /天气 /翻译 /分析 /思考</span>
+                                <span><i class="fa fa-files-o mr-1"></i>支持拖拽上传文件（最多5个）</span>
+                            </div>
+                        </div>
+                        
+                        <!-- 已上传文件列表 -->
+                        <div id="uploaded-files" class="mt-3 flex flex-wrap gap-2">
+                            <!-- 已上传文件标签将动态生成 -->
                         </div>
                     </div>
                     
@@ -454,137 +537,29 @@
                                            oninput="filterSkills()">
                                     <i class="fa fa-search absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400"></i>
                                 </div>
-                                <div class="flex gap-2 flex-wrap">
-                                    <button class="px-4 py-2 rounded-lg text-sm bg-blue-600 text-white" onclick="filterByCategory('all')">全部</button>
-                                    <button class="px-4 py-2 rounded-lg text-sm border border-gray-200 hover:border-blue-400" onclick="filterByCategory('免费')">免费</button>
-                                    <button class="px-4 py-2 rounded-lg text-sm border border-gray-200 hover:border-blue-400" onclick="filterByCategory('办公')">办公</button>
-                                    <button class="px-4 py-2 rounded-lg text-sm border border-gray-200 hover:border-blue-400" onclick="filterByCategory('创作')">创作</button>
-                                    <button class="px-4 py-2 rounded-lg text-sm border border-gray-200 hover:border-blue-400" onclick="filterByCategory('开发')">开发</button>
-                                    <button class="px-4 py-2 rounded-lg text-sm border border-gray-200 hover:border-blue-400" onclick="filterByCategory('分析')">分析</button>
-                                </div>
                             </div>
                             <div class="mt-3 text-sm text-gray-500">
-                                找到 <span id="skill-count" class="font-semibold text-blue-600">6</span> 个技能
+                                找到 <span id="skill-count" class="font-semibold text-blue-600">0</span> 个技能
                             </div>
                         </div>
                         
                         <!-- 技能卡片 -->
                         <h3 class="font-semibold text-gray-800 mb-3">推荐技能</h3>
+                        
+                        <!-- 分类过滤器 -->
+                        <div class="flex flex-wrap gap-2 mb-4" id="skill-filters">
+                            <button class="category-filter active px-4 py-2 bg-blue-600 text-white rounded-lg text-sm transition" data-category="all" onclick="filterByCategory('all')">全部</button>
+                            <button class="category-filter px-4 py-2 bg-gray-200 text-gray-700 rounded-lg text-sm hover:bg-gray-300 transition" data-category="基础工具" onclick="filterByCategory('基础工具')">基础工具</button>
+                            <button class="category-filter px-4 py-2 bg-gray-200 text-gray-700 rounded-lg text-sm hover:bg-gray-300 transition" data-category="数据处理" onclick="filterByCategory('数据处理')">数据处理</button>
+                            <button class="category-filter px-4 py-2 bg-gray-200 text-gray-700 rounded-lg text-sm hover:bg-gray-300 transition" data-category="自动化" onclick="filterByCategory('自动化')">自动化</button>
+                            <button class="category-filter px-4 py-2 bg-gray-200 text-gray-700 rounded-lg text-sm hover:bg-gray-300 transition" data-category="AI增强" onclick="filterByCategory('AI增强')">AI增强</button>
+                            <button class="category-filter px-4 py-2 bg-gray-200 text-gray-700 rounded-lg text-sm hover:bg-gray-300 transition" data-category="第三方集成" onclick="filterByCategory('第三方集成')">第三方集成</button>
+                            <button class="category-filter px-4 py-2 bg-gray-200 text-gray-700 rounded-lg text-sm hover:bg-gray-300 transition" data-category="角色模拟" onclick="filterByCategory('角色模拟')">角色模拟</button>
+                        </div>
+                        
+                        <!-- 技能网格 - 由JavaScript动态渲染 -->
                         <div id="skills-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
-                            <div class="skill-card bg-white rounded-xl shadow-md overflow-hidden" data-category="免费" data-name="天气查询">
-                                <div class="p-4">
-                                    <div class="flex items-center justify-between mb-3">
-                                        <h4 class="font-medium">天气查询</h4>
-                                        <span class="text-xs text-green-600 font-medium">免费</span>
-                                    </div>
-                                    <p class="text-sm text-gray-600 mb-3">实时查询天气信息，支持多地天气预报</p>
-                                    <div class="flex items-center justify-between text-xs text-gray-500 mb-3">
-                                        <span>✓ 已安装</span>
-                                        <span>评分: 4.9</span>
-                                    </div>
-                                    <div class="flex items-center justify-between text-xs text-gray-500 mb-2">
-                                        <span class="text-blue-600">使用次数: 128</span>
-                                    </div>
-                                    <button class="w-full bg-gray-600 text-white py-2 rounded-lg transition text-sm cursor-not-allowed">
-                                        已启用
-                                    </button>
-                                </div>
-                            </div>
-                            <div class="skill-card bg-white rounded-xl shadow-md overflow-hidden" data-category="免费" data-name="网页爬虫">
-                                <div class="p-4">
-                                    <div class="flex items-center justify-between mb-3">
-                                        <h4 class="font-medium">网页爬虫</h4>
-                                        <span class="text-xs text-green-600 font-medium">免费</span>
-                                    </div>
-                                    <p class="text-sm text-gray-600 mb-3">支持微博、百度、B站、抖音、GitHub等网站数据抓取</p>
-                                    <div class="flex items-center justify-between text-xs text-gray-500 mb-3">
-                                        <span>✓ 已安装</span>
-                                        <span>评分: 4.8</span>
-                                    </div>
-                                    <div class="flex items-center justify-between text-xs text-gray-500 mb-2">
-                                        <span class="text-blue-600">使用次数: 96</span>
-                                    </div>
-                                    <button class="w-full bg-gray-600 text-white py-2 rounded-lg transition text-sm cursor-not-allowed">
-                                        已启用
-                                    </button>
-                                </div>
-                            </div>
-                            <div class="skill-card bg-white rounded-xl shadow-md overflow-hidden" data-category="免费 分析" data-name="数据分析">
-                                <div class="p-4">
-                                    <div class="flex items-center justify-between mb-3">
-                                        <h4 class="font-medium">数据分析</h4>
-                                        <span class="text-xs text-green-600 font-medium">免费</span>
-                                    </div>
-                                    <p class="text-sm text-gray-600 mb-3">使用数据分析Agent处理数据，生成可视化报告和洞察</p>
-                                    <div class="flex items-center justify-between text-xs text-gray-500 mb-3">
-                                        <span>✓ 已安装</span>
-                                        <span>评分: 4.7</span>
-                                    </div>
-                                    <div class="flex items-center justify-between text-xs text-gray-500 mb-2">
-                                        <span class="text-blue-600">使用次数: 87</span>
-                                    </div>
-                                    <button class="w-full bg-gray-600 text-white py-2 rounded-lg transition text-sm cursor-not-allowed">
-                                        已启用
-                                    </button>
-                                </div>
-                            </div>
-                            <div class="skill-card bg-white rounded-xl shadow-md overflow-hidden" data-category="免费 办公" data-name="多语言翻译">
-                                <div class="p-4">
-                                    <div class="flex items-center justify-between mb-3">
-                                        <h4 class="font-medium">多语言翻译</h4>
-                                        <span class="text-xs text-green-600 font-medium">免费</span>
-                                    </div>
-                                    <p class="text-sm text-gray-600 mb-3">支持多种语言之间的翻译，保持原文风格和语境</p>
-                                    <div class="flex items-center justify-between text-xs text-gray-500 mb-3">
-                                        <span>✓ 已安装</span>
-                                        <span>评分: 4.8</span>
-                                    </div>
-                                    <div class="flex items-center justify-between text-xs text-gray-500 mb-2">
-                                        <span class="text-blue-600">使用次数: 156</span>
-                                    </div>
-                                    <button class="w-full bg-gray-600 text-white py-2 rounded-lg transition text-sm cursor-not-allowed">
-                                        已启用
-                                    </button>
-                                </div>
-                            </div>
-                            <div class="skill-card bg-white rounded-xl shadow-md overflow-hidden" data-category="免费 分析" data-name="深度思考">
-                                <div class="p-4">
-                                    <div class="flex items-center justify-between mb-3">
-                                        <h4 class="font-medium">深度思考</h4>
-                                        <span class="text-xs text-green-600 font-medium">免费</span>
-                                    </div>
-                                    <p class="text-sm text-gray-600 mb-3">使用深度思考Agent进行复杂问题的推理和分析</p>
-                                    <div class="flex items-center justify-between text-xs text-gray-500 mb-3">
-                                        <span>✓ 已安装</span>
-                                        <span>评分: 4.9</span>
-                                    </div>
-                                    <div class="flex items-center justify-between text-xs text-gray-500 mb-2">
-                                        <span class="text-blue-600">使用次数: 203</span>
-                                    </div>
-                                    <button class="w-full bg-gray-600 text-white py-2 rounded-lg transition text-sm cursor-not-allowed">
-                                        已启用
-                                    </button>
-                                </div>
-                            </div>
-                            <div class="skill-card bg-white rounded-xl shadow-md overflow-hidden" data-category="免费 开发" data-name="GUI自动化">
-                                <div class="p-4">
-                                    <div class="flex items-center justify-between mb-3">
-                                        <h4 class="font-medium">GUI自动化</h4>
-                                        <span class="text-xs text-green-600 font-medium">免费</span>
-                                    </div>
-                                    <p class="text-sm text-gray-600 mb-3">自动化控制鼠标键盘，执行重复性桌面任务</p>
-                                    <div class="flex items-center justify-between text-xs text-gray-500 mb-3">
-                                        <span>✓ 已安装</span>
-                                        <span>评分: 4.6</span>
-                                    </div>
-                                    <div class="flex items-center justify-between text-xs text-gray-500 mb-2">
-                                        <span class="text-blue-600">使用次数: 64</span>
-                                    </div>
-                                    <button class="w-full bg-gray-600 text-white py-2 rounded-lg transition text-sm cursor-not-allowed">
-                                        已启用
-                                    </button>
-                                </div>
-                            </div>
+                            <!-- 技能卡片将由skills_manager.js动态生成 -->
                         </div>
                         
                         <!-- 技能创建 -->
@@ -622,159 +597,53 @@
                     </div>
                 </div>
 
-                <!-- Agent小组模块 -->
-                <div id="agent-group" class="hidden page-section">
+                <!-- 历史记录模块 -->
+                <div id="history" class="hidden page-section">
                     <div class="mb-6">
-                        <div class="flex items-center justify-between">
-                            <div>
-                                <h2 class="text-2xl font-bold text-gray-800 mb-2">👥 Agent小组管理</h2>
-                                <p class="text-gray-600">管理Agent集群，配置调度策略和弹性伸缩</p>
+                        <h2 class="text-2xl font-bold text-gray-800 mb-4">💬 聊天历史</h2>
+                        <p class="text-gray-600 mb-6">查看和管理所有对话记录</p>
+                        
+                        <!-- 搜索和过滤 -->
+                        <div class="bg-white rounded-xl shadow-md p-4 mb-6">
+                            <div class="flex flex-col md:flex-row gap-4">
+                                <div class="flex-1 relative">
+                                    <input type="text" id="history-search" placeholder="搜索历史记录..." 
+                                           class="w-full p-3 pl-10 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                           oninput="searchHistory(this.value)">
+                                    <i class="fa fa-search absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400"></i>
+                                </div>
+                                <select id="history-filter-role" onchange="filterHistory()" class="p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                    <option value="">全部角色</option>
+                                    <option value="user">用户</option>
+                                    <option value="assistant">AI助手</option>
+                                </select>
+                                <button onclick="exportHistory()" class="px-4 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition">
+                                    <i class="fa fa-download mr-2"></i>导出
+                                </button>
+                                <button onclick="clearAllHistory()" class="px-4 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 transition">
+                                    <i class="fa fa-trash mr-2"></i>清空
+                                </button>
                             </div>
-                            <button class="bg-blue-600 text-white px-5 py-2.5 rounded-lg hover:bg-blue-700 transition flex items-center" onclick="openCreateGroupModal()">
-                                <i class="fa fa-plus mr-2"></i> 新建小组
+                        </div>
+                        
+                        <!-- 视图切换 -->
+                        <div class="flex space-x-2 mb-4">
+                            <button onclick="showHistoryView('messages')" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm transition" id="view-messages">
+                                <i class="fa fa-comments mr-2"></i>消息视图
+                            </button>
+                            <button onclick="showHistoryView('sessions')" class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg text-sm hover:bg-gray-300 transition" id="view-sessions">
+                                <i class="fa fa-folder mr-2"></i>会话视图
                             </button>
                         </div>
-                    </div>
-                    
-                    <!-- 小组列表 -->
-                    <div id="agent-groups-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                        <!-- 小组卡片示例 -->
-                        <div class="agent-group-card bg-white rounded-xl shadow-md overflow-hidden hover:shadow-lg transition">
-                            <div class="p-5">
-                                <div class="flex items-start justify-between mb-3">
-                                    <div>
-                                        <h3 class="font-semibold text-gray-800">智能分析小组</h3>
-                                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                                            <span class="w-2 h-2 bg-green-500 rounded-full mr-1.5"></span>运行中
-                                        </span>
-                                    </div>
-                                    <div class="flex space-x-1">
-                                        <button class="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition" title="编辑" onclick="openEditGroupModal('智能分析小组')">
-                                            <i class="fa fa-pencil"></i>
-                                        </button>
-                                        <button class="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition" title="删除" onclick="deleteGroup('智能分析小组')">
-                                            <i class="fa fa-trash"></i>
-                                        </button>
-                                    </div>
-                                </div>
-                                
-                                <div class="space-y-3">
-                                    <div class="flex items-center text-sm text-gray-600">
-                                        <i class="fa fa-users mr-2 text-gray-400"></i>
-                                        <span>成员: Checker, Scraper, Analyzer</span>
-                                    </div>
-                                    <div class="flex items-center text-sm text-gray-600">
-                                        <i class="fa fa-random mr-2 text-gray-400"></i>
-                                        <span>策略: 加权轮询</span>
-                                    </div>
-                                    <div class="flex items-center text-sm text-gray-600">
-                                        <i class="fa fa-shield mr-2 text-gray-400"></i>
-                                        <span>熔断: 开启</span>
-                                    </div>
-                                    <div class="flex items-center text-sm text-gray-600">
-                                        <i class="fa fa-expand mr-2 text-gray-400"></i>
-                                        <span>弹性伸缩: 开启</span>
-                                    </div>
-                                </div>
-                                
-                                <div class="mt-4 pt-4 border-t border-gray-100">
-                                    <button class="w-full py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition text-sm" onclick="toggleGroupStatus('智能分析小组', 'running')">
-                                        停止小组
-                                    </button>
-                                </div>
-                            </div>
+                        
+                        <!-- 消息列表视图 -->
+                        <div id="history-list" class="space-y-3">
+                            <!-- 历史记录将由history_manager.js动态生成 -->
                         </div>
                         
-                        <div class="agent-group-card bg-white rounded-xl shadow-md overflow-hidden hover:shadow-lg transition">
-                            <div class="p-5">
-                                <div class="flex items-start justify-between mb-3">
-                                    <div>
-                                        <h3 class="font-semibold text-gray-800">数据处理小组</h3>
-                                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
-                                            <span class="w-2 h-2 bg-yellow-500 rounded-full mr-1.5"></span>休眠
-                                        </span>
-                                    </div>
-                                    <div class="flex space-x-1">
-                                        <button class="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition" title="编辑" onclick="openEditGroupModal('数据处理小组')">
-                                            <i class="fa fa-pencil"></i>
-                                        </button>
-                                        <button class="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition" title="删除" onclick="deleteGroup('数据处理小组')">
-                                            <i class="fa fa-trash"></i>
-                                        </button>
-                                    </div>
-                                </div>
-                                
-                                <div class="space-y-3">
-                                    <div class="flex items-center text-sm text-gray-600">
-                                        <i class="fa fa-users mr-2 text-gray-400"></i>
-                                        <span>成员: Processor, Transformer</span>
-                                    </div>
-                                    <div class="flex items-center text-sm text-gray-600">
-                                        <i class="fa fa-random mr-2 text-gray-400"></i>
-                                        <span>策略: 最小负载</span>
-                                    </div>
-                                    <div class="flex items-center text-sm text-gray-600">
-                                        <i class="fa fa-shield mr-2 text-gray-400"></i>
-                                        <span>熔断: 开启</span>
-                                    </div>
-                                    <div class="flex items-center text-sm text-gray-600">
-                                        <i class="fa fa-expand mr-2 text-gray-400"></i>
-                                        <span>弹性伸缩: 关闭</span>
-                                    </div>
-                                </div>
-                                
-                                <div class="mt-4 pt-4 border-t border-gray-100">
-                                    <button class="w-full py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition text-sm" onclick="toggleGroupStatus('数据处理小组', 'sleeping')">
-                                        启动小组
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                        
-                        <div class="agent-group-card bg-white rounded-xl shadow-md overflow-hidden hover:shadow-lg transition">
-                            <div class="p-5">
-                                <div class="flex items-start justify-between mb-3">
-                                    <div>
-                                        <h3 class="font-semibold text-gray-800">安全检测小组</h3>
-                                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
-                                            <span class="w-2 h-2 bg-gray-500 rounded-full mr-1.5"></span>离线
-                                        </span>
-                                    </div>
-                                    <div class="flex space-x-1">
-                                        <button class="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition" title="编辑" onclick="openEditGroupModal('安全检测小组')">
-                                            <i class="fa fa-pencil"></i>
-                                        </button>
-                                        <button class="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition" title="删除" onclick="deleteGroup('安全检测小组')">
-                                            <i class="fa fa-trash"></i>
-                                        </button>
-                                    </div>
-                                </div>
-                                
-                                <div class="space-y-3">
-                                    <div class="flex items-center text-sm text-gray-600">
-                                        <i class="fa fa-users mr-2 text-gray-400"></i>
-                                        <span>成员: Vulnerability, Scanner</span>
-                                    </div>
-                                    <div class="flex items-center text-sm text-gray-600">
-                                        <i class="fa fa-random mr-2 text-gray-400"></i>
-                                        <span>策略: 随机选择</span>
-                                    </div>
-                                    <div class="flex items-center text-sm text-gray-600">
-                                        <i class="fa fa-shield mr-2 text-gray-400"></i>
-                                        <span>熔断: 关闭</span>
-                                    </div>
-                                    <div class="flex items-center text-sm text-gray-600">
-                                        <i class="fa fa-expand mr-2 text-gray-400"></i>
-                                        <span>弹性伸缩: 关闭</span>
-                                    </div>
-                                </div>
-                                
-                                <div class="mt-4 pt-4 border-t border-gray-100">
-                                    <button class="w-full py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition text-sm" onclick="toggleGroupStatus('安全检测小组', 'offline')">
-                                        启动小组
-                                    </button>
-                                </div>
-                            </div>
+                        <!-- 会话列表视图（默认隐藏） -->
+                        <div id="session-list" class="space-y-3 hidden">
+                            <!-- 会话列表将由history_manager.js动态生成 -->
                         </div>
                     </div>
                 </div>
@@ -948,193 +817,45 @@ print(agent.process_task("查询北京天气"))
                     </div>
                 </div>
             </div>
-
-            <!-- 聊天输入 -->
-            <div class="coze-input-area p-4">
-                <!-- 文件拖拽上传区域（隐藏，通过拖拽显示） -->
-                <div id="drop-zone" class="hidden mb-3 border-2 border-dashed border-blue-400 rounded-xl bg-blue-50 p-6 text-center transition-all">
-                    <i class="fa fa-cloud-upload text-4xl text-blue-500 mb-2"></i>
-                    <p class="text-gray-600">拖拽文件到此处上传</p>
-                    <p class="text-xs text-gray-400 mt-1">支持图片、文档等格式（最多5个文件）</p>
-                </div>
-                
-                <!-- 已上传文件列表 -->
-                <div id="uploaded-files" class="hidden mb-3 flex flex-wrap gap-2">
-                    <!-- 动态插入文件标签 -->
-                </div>
-                
-                <form id="chat-form" class="flex space-x-3 items-center">
-                    <!-- 数据分析下拉框 -->
-                    <div class="relative">
-                        <select id="analysis-type" class="appearance-none bg-white border border-gray-300 rounded-xl px-4 py-4 pr-10 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer hover:border-blue-400 transition-all text-sm font-medium text-gray-700" style="min-width: 120px;">
-                            <option value="chat">💬 聊天</option>
-                            <optgroup label="📊 数据分析">
-                                <option value="stats">📈 描述性统计</option>
-                                <option value="bar">📊 柱状图</option>
-                                <option value="pie">🥧 饼图</option>
-                                <option value="line">📉 折线图</option>
-                                <option value="heatmap">🔥 热力图</option>
-                                <option value="wordcloud">☁️ 词云</option>
-                                <option value="ocr">🔍 OCR识别</option>
-                            </optgroup>
-                        </select>
-                        <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-gray-500">
-                            <i class="fa fa-chevron-down text-xs"></i>
-                        </div>
-                    </div>
-                    
-                    <!-- 消息输入框 -->
-                    <div class="flex-1 relative">
-                        <input type="text" id="message-input" placeholder="输入消息... (Enter发送)" 
-                               class="w-full p-4 pr-12 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all">
-                        <div class="absolute right-3 top-1/2 transform -translate-y-1/2 flex items-center space-x-2">
-                            <!-- 文件上传按钮 -->
-                            <button type="button" id="upload-btn" class="text-gray-400 hover:text-blue-600 transition" title="上传文件" onclick="document.getElementById('file-input').click()">
-                                <i class="fa fa-paperclip"></i>
-                            </button>
-                            <!-- 隐藏的文件输入 -->
-                            <input type="file" id="file-input" multiple accept="image/*,.pdf,.doc,.docx,.txt,.csv,.xlsx" class="hidden" onchange="handleFileSelect(event)">
-                            
-                            <button type="button" class="text-gray-400 hover:text-blue-600 transition">
-                                <i class="fa fa-microphone"></i>
-                            </button>
-                        </div>
-                    </div>
-                    
-                    <!-- 发送按钮 -->
-                    <button type="submit" id="send-button" class="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-6 py-4 rounded-xl hover:shadow-lg transition duration-200 flex items-center">
-                        <i class="fa fa-paper-plane"></i>
-                    </button>
-                </form>
-                
-                <div class="flex justify-between items-center mt-3 text-xs text-gray-500">
-                    <div class="flex items-center space-x-4">
-                        <span>💡 提示：Shift+Enter 换行</span>
-                        <span>|</span>
-                        <span>⌨️ 快捷指令：/天气 /翻译 /分析 /思考</span>
-                        <span>|</span>
-                        <span>📎 支持拖拽上传文件（最多5个）</span>
-                    </div>
-                    <div>
-                        <span>AI 增强</span>
-                    </div>
-                </div>
-            </div>
         </div>
     </div>
 
-    <!-- Agent小组创建/编辑模态框 -->
-    <div id="agent-group-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden z-50 flex items-center justify-center p-4">
-        <div class="bg-white rounded-2xl shadow-2xl max-w-lg w-full max-h-[90vh] overflow-y-auto">
-            <!-- 模态框头部 -->
-            <div class="sticky top-0 bg-white border-b px-6 py-4 flex justify-between items-center">
-                <h2 class="text-xl font-bold text-gray-800" id="modal-title">
-                    <i class="fa fa-users mr-2 text-blue-600"></i>新建Agent小组
-                </h2>
-                <button onclick="closeGroupModal()" class="text-gray-400 hover:text-gray-600 transition">
-                    <i class="fa fa-times text-xl"></i>
-                </button>
-            </div>
-            
-            <!-- 模态框内容 -->
-            <div class="p-6 space-y-5">
-                <!-- 小组名称 -->
-                <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-1">小组名称</label>
-                    <input type="text" id="group-name" placeholder="输入小组名称..." 
-                           class="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
-                </div>
-                
-                <!-- Agent成员选择 -->
-                <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-2">Agent成员（多选）</label>
-                    <div id="agent-members-list" class="grid grid-cols-2 gap-2">
-                        <label class="flex items-center p-3 border border-gray-300 rounded-lg cursor-pointer hover:border-blue-400 hover:bg-blue-50 transition">
-                            <input type="checkbox" class="agent-member-checkbox" value="Checker">
-                            <span class="ml-2 text-sm">Checker</span>
-                        </label>
-                        <label class="flex items-center p-3 border border-gray-300 rounded-lg cursor-pointer hover:border-blue-400 hover:bg-blue-50 transition">
-                            <input type="checkbox" class="agent-member-checkbox" value="Scraper">
-                            <span class="ml-2 text-sm">Scraper</span>
-                        </label>
-                        <label class="flex items-center p-3 border border-gray-300 rounded-lg cursor-pointer hover:border-blue-400 hover:bg-blue-50 transition">
-                            <input type="checkbox" class="agent-member-checkbox" value="Analyzer">
-                            <span class="ml-2 text-sm">Analyzer</span>
-                        </label>
-                        <label class="flex items-center p-3 border border-gray-300 rounded-lg cursor-pointer hover:border-blue-400 hover:bg-blue-50 transition">
-                            <input type="checkbox" class="agent-member-checkbox" value="Processor">
-                            <span class="ml-2 text-sm">Processor</span>
-                        </label>
-                        <label class="flex items-center p-3 border border-gray-300 rounded-lg cursor-pointer hover:border-blue-400 hover:bg-blue-50 transition">
-                            <input type="checkbox" class="agent-member-checkbox" value="Transformer">
-                            <span class="ml-2 text-sm">Transformer</span>
-                        </label>
-                        <label class="flex items-center p-3 border border-gray-300 rounded-lg cursor-pointer hover:border-blue-400 hover:bg-blue-50 transition">
-                            <input type="checkbox" class="agent-member-checkbox" value="Vulnerability">
-                            <span class="ml-2 text-sm">Vulnerability</span>
-                        </label>
-                        <label class="flex items-center p-3 border border-gray-300 rounded-lg cursor-pointer hover:border-blue-400 hover:bg-blue-50 transition">
-                            <input type="checkbox" class="agent-member-checkbox" value="Scanner">
-                            <span class="ml-2 text-sm">Scanner</span>
-                        </label>
-                        <label class="flex items-center p-3 border border-gray-300 rounded-lg cursor-pointer hover:border-blue-400 hover:bg-blue-50 transition">
-                            <input type="checkbox" class="agent-member-checkbox" value="Summarizer">
-                            <span class="ml-2 text-sm">Summarizer</span>
-                        </label>
-                    </div>
-                </div>
-                
-                <!-- 调度策略选择 -->
-                <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-2">调度策略</label>
-                    <select id="scheduling-strategy" class="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
-                        <option value="weighted_round_robin">加权轮询</option>
-                        <option value="least_load">最小负载</option>
-                        <option value="random">随机选择</option>
-                        <option value="priority">优先级调度</option>
-                    </select>
-                </div>
-                
-                <!-- 熔断开关 -->
-                <div class="flex items-center justify-between">
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700">熔断机制</label>
-                        <p class="text-xs text-gray-500">启用后自动熔断故障节点</p>
-                    </div>
-                    <label class="relative inline-flex items-center cursor-pointer">
-                        <input type="checkbox" id="circuit-breaker" class="sr-only peer">
-                        <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
-                    </label>
-                </div>
-                
-                <!-- 弹性伸缩开关 -->
-                <div class="flex items-center justify-between">
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700">弹性伸缩</label>
-                        <p class="text-xs text-gray-500">根据负载自动调整Agent数量</p>
-                    </div>
-                    <label class="relative inline-flex items-center cursor-pointer">
-                        <input type="checkbox" id="elastic-scaling" class="sr-only peer">
-                        <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
-                    </label>
-                </div>
-            </div>
-            
-            <!-- 模态框底部 -->
-            <div class="sticky bottom-0 bg-white border-t px-6 py-4 flex justify-end space-x-3">
-                <button onclick="closeGroupModal()" class="px-6 py-2 text-gray-600 hover:text-gray-800 transition">
-                    取消
-                </button>
-                <button id="save-group-btn" onclick="saveGroup()" class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition">
-                    保存
-                </button>
-            </div>
-        </div>
-    </div>
 
-    <script src="/static/js/coze.js"></script>
+
+    <script src="/static/js/coze.js?v=20260430"></script>
+    <!-- 新增功能模块 -->
+    <script src="/static/js/skills_manager.js?v=20260430"></script>
+    <script src="/static/js/history_manager.js?v=20260430"></script>
+    
+    <!-- 初始化新功能 -->
+    <script>
+        // 页面加载完成后初始化所有模块
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('🚀 初始化前端功能模块...');
+            
+            // 1. 初始化技能管理器
+            if (typeof initSkillsModule === 'function') {
+                initSkillsModule();
+                console.log('✅ 技能管理器已初始化');
+            }
+            
+            // 2. 初始化历史记录管理器
+            if (typeof initHistoryModule === 'function') {
+                initHistoryModule();
+                console.log('✅ 历史记录管理器已初始化');
+            }
+            
+            // 3. 加载计划列表
+            if (typeof loadPlans === 'function') {
+                loadPlans();
+                console.log('✅ 计划列表已加载');
+            }
+            
+            console.log('🎉 所有功能模块初始化完成');
+        });
+    </script>
 </body>
-</`
+</html>
 
 ```
 

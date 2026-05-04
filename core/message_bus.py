@@ -8,6 +8,7 @@ import asyncio
 import logging
 import json
 from typing import Dict, Any, Callable, Optional
+from collections import defaultdict
 import uuid
 
 logger = logging.getLogger(__name__)
@@ -19,7 +20,8 @@ class MessageBus:
     def __init__(self):
         self._subscribers = {}
         self._request_responses = {}
-        self._lock = asyncio.Lock()
+        # ✅ 优化：按主题分锁，减少锁竞争
+        self._topic_locks = defaultdict(asyncio.Lock)
         logger.info("消息总线初始化完成")
     
     async def publish(self, topic: str, message: Dict[str, Any]):
@@ -29,7 +31,8 @@ class MessageBus:
             topic: 主题名称
             message: 消息内容
         """
-        async with self._lock:
+        # ✅ 优化：只锁定当前主题，而非全局锁
+        async with self._topic_locks[topic]:
             if topic not in self._subscribers:
                 return
             
@@ -52,7 +55,8 @@ class MessageBus:
             topic: 主题名称
             callback: 回调函数
         """
-        async with self._lock:
+        # ✅ 优化：只锁定当前主题
+        async with self._topic_locks[topic]:
             if topic not in self._subscribers:
                 self._subscribers[topic] = []
             
@@ -67,7 +71,8 @@ class MessageBus:
             topic: 主题名称
             callback: 回调函数
         """
-        async with self._lock:
+        # ✅ 优化：只锁定当前主题
+        async with self._topic_locks[topic]:
             if topic in self._subscribers:
                 if callback in self._subscribers[topic]:
                     self._subscribers[topic].remove(callback)

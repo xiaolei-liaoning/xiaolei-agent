@@ -12,7 +12,7 @@ import logging
 import re
 import time
 from typing import Dict, Any, List, Optional, Tuple, Set
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from enum import Enum
 
 from .llm_backend import get_llm_router
@@ -73,6 +73,33 @@ class DecompositionResult:
     confidence: float            # 置信度（0-1）
     reasoning: str             # 分解理由
     original_task: str         # 原始任务
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典格式
+        
+        Returns:
+            字典格式的分解结果
+        """
+        return {
+            "path": self.path.value,
+            "subtasks": [
+                {
+                    "id": task.id,
+                    "action": task.action,
+                    "params": task.params,
+                    "dependencies": task.dependencies,
+                    "priority": task.priority,
+                    "retry_count": task.retry_count,
+                    "timeout": task.timeout,
+                    "status": task.status,
+                    "error_message": task.error_message,
+                }
+                for task in self.subtasks
+            ],
+            "confidence": self.confidence,
+            "reasoning": self.reasoning,
+            "original_task": self.original_task,
+        }
 
 
 class RuleEngine:

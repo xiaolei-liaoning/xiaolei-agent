@@ -33,9 +33,9 @@ SKILL_CONFIGS: List[tuple] = [
     (
         "data_analysis",
         [
-            "分析", "统计", "可视化", "图表", "趋势", "词云",
-            "饼图", "柱状图", "analyze", "chart", "数据",
-            "预测", "机器学习", "ml", "predict", "forecast", "时间序列",
+            "数据分析", "统计图表", "可视化", "趋势分析", "词云图",
+            "饼图", "柱状图", "折线图", "analyze data", "chart", "数据统计",
+            "预测模型", "机器学习", "时间序列", "forecast", "predict",
         ],
         4,
     ),
@@ -110,21 +110,16 @@ SKILL_CONFIGS: List[tuple] = [
     (
         "rag_search",
         ["搜索", "查询", "了解", "是什么", "什么是", "如何", "怎么", "为什么", "search", "lookup", "learn"],
-        3,
-    ),
-    (
-        "doubao_chat",
-        ["豆包", "doubao", "对话"],
-        2,
+        9,
     ),
     (
         "system_toolbox",
         [
-            "系统", "时间", "日期", "计算", "内存", "磁盘", "system", "sys",
-            "进程", "process", "网络", "network", "网速", "ip", "cpu",
-            "文件", "file", "文件夹", "directory", "文件夹列表",
-            "系统信息", "hostname", "主机名", "处理器", "架构",
-            "屏幕尺寸", "分辨率", "鼠标位置", "mouse",
+            "系统时间", "当前时间", "现在几点", "日期", "今天几号", "星期几", 
+            "内存使用", "磁盘空间", "cpu使用率", "系统信息", "hostname",
+            "进程列表", "网络连接", "网速测试", "ip地址",
+            "文件列表", "文件夹内容", "目录结构",
+            "屏幕分辨率", "鼠标位置",
         ],
         3,
     ),
@@ -135,7 +130,7 @@ SKILL_CONFIGS: List[tuple] = [
     ),
     (
         "deep_thinking",
-        ["深度思考", "自主搜索", "联网查询", "最新信息", "分析一下", "研究一下", "了解一下", "详细分析", "深入探讨", "最新动态", "最新消息", "现在怎么样", "今天", "最近", "2026", "2025"],
+        ["深度思考", "自主搜索", "联网查询", "最新信息", "研究一下", "详细分析", "深入探讨", "最新动态", "最新消息", "现在怎么样", "最近趋势", "2026年", "2025年"],
         8,
     ),
     (
@@ -167,6 +162,42 @@ _LANG_MAP = {
     "西班牙文": "es", "西班牙语": "es",
 }
 
+# P1修复2：意图到技能的明确映射表（用于快速路由和调试）
+_INTENT_SKILL_MAP = {
+    # 数学计算 → chat（由LLM处理）
+    "math_calculation": {"keywords": ["加", "减", "乘", "除", "等于", "计算", "+", "-", "*", "/"], "skill": "chat"},
+    
+    # 闲聊问候 → chat
+    "greeting": {"keywords": ["你好", "嗨", "hello", "hi", "在吗"], "skill": "chat"},
+    
+    # 天气查询 → weather
+    "weather_query": {"keywords": ["天气", "气温", "温度", "下雨", "下雪", "刮风", "预报"], "skill": "weather"},
+    
+    # 网页爬取 → web_scraper
+    "web_scraping": {"keywords": ["热搜", "热榜", "爬取", "抓取", "微博", "抖音", "知乎", "b站", "github"], "skill": "web_scraper"},
+    
+    # 系统信息 → system_toolbox
+    "system_info": {"keywords": ["系统时间", "内存", "磁盘", "cpu", "进程", "网络", "现在几点", "今天几号"], "skill": "system_toolbox"},
+    
+    # 翻译 → translator
+    "translation": {"keywords": ["翻译", "translate", "中英互译", "翻译成"], "skill": "translator"},
+    
+    # GUI自动化 → gui_automation
+    "gui_control": {"keywords": ["打开", "点击", "截图", "音量", "亮度", "微信", "浏览器", "关闭"], "skill": "gui_automation"},
+    
+    # RAG搜索 → rag_search
+    "knowledge_search": {"keywords": ["什么是", "如何", "为什么", "了解一下", "查询", "是什么", "搜索", "搜一下", "搜一搜"], "skill": "rag_search"},
+    
+    # 深度思考 → deep_thinking
+    "deep_analysis": {"keywords": ["深度思考", "自主搜索", "最新信息", "分析一下", "研究一下", "最新动态"], "skill": "deep_thinking"},
+    
+    # 多步任务 → multi_step
+    "multi_step_task": {"keywords": ["先", "然后", "接着", "再", "最后"], "skill": "multi_step"},
+    
+    # 文本分析 → text_analyzer
+    "text_analysis": {"keywords": ["分析文本", "拆解", "提取概要", "生成标题", "文本分析", "长文本", "主要观点", "段落"], "skill": "text_analyzer"},
+}
+
 
 class SkillDispatcher:
     """基于关键词权重 + 优先级的意图识别和技能路由"""
@@ -188,13 +219,32 @@ class SkillDispatcher:
 
     # ── 意图匹配 ─────────────────────────────────────────────────────────────
     def match_skill(self, message: str) -> str:
-        """基于关键词权重匹配，返回最佳技能名
+        """基于关键词权重匹配，返回最佳技能名 - P1修复：添加映射表快速路由
 
         score = 命中关键词数 × 优先级
         
         修复：只有当用户明确提到第三方应用名称时才调用，避免误触发
         """
         message_lower = message.lower()
+        
+        # P1修复3：优先检查意图映射表（快速路径）
+        for intent_name, config in _INTENT_SKILL_MAP.items():
+            keywords = config["keywords"]
+            skill = config["skill"]
+            
+            # 如果命中2个及以上关键词，直接使用映射的技能
+            hits = sum(1 for kw in keywords if kw.lower() in message_lower)
+            if hits >= 2:
+                logger.debug(f"意图映射快速路由: {intent_name} -> {skill} (hits={hits})")
+                return skill
+            
+            # P1修复9：对于高优先级技能（priority>=7），1个关键词也足够
+            # 获取该技能在静态配置中的优先级
+            for name, _, priority in self.skill_configs:
+                if name == skill and priority >= 7 and hits >= 1:
+                    logger.debug(f"高优先级技能快速路由: {intent_name} -> {skill} (hits={hits}, priority={priority})")
+                    return skill
+        
         best_match = "chat"
         best_score = 0
         best_is_third_party = False
@@ -210,30 +260,60 @@ class SkillDispatcher:
                 logger.debug("技能匹配: '%s' -> %s (at格式)", message[:40], skill_name)
                 return skill_name
 
+        # 关键修复：检测多步任务指示词，优先选择multi_step技能
+        if self.is_multi_step(message):
+            logger.debug("检测到多步任务指示词，优先选择multi_step技能")
+            return "multi_step"
+
         # 检查动态注册的第三方应用技能
         # 关键修复：只有明确提到应用名称时才调用第三方应用
-        for name, config in self._dynamic_registry.items():
-            if name.startswith("third_party_"):
+        # 优化：先收集所有第三方应用的名称，避免每次都遍历
+        third_party_apps = {
+            name: config for name, config in self._dynamic_registry.items()
+            if name.startswith("third_party_")
+        }
+        
+        # 如果没有第三方应用，跳过这段逻辑
+        if not third_party_apps:
+            pass  # 继续静态配置检查
+        else:
+            # 构建快速查找的应用名称集合
+            app_names_in_message = set()
+            chinese_names_map = {
+                'twitter': ['推特'],
+                'wechat': ['微信'],
+                'dingtalk': ['钉钉'],
+                'feishu': ['飞书'],
+                'weibo': ['微博'],
+                'zhihu': ['知乎'],
+                'douyin': ['抖音'],
+                'github': ['github', 'git'],
+                'discord': ['discord'],
+                'jira': ['jira'],
+            }
+            
+            # 检查消息中是否包含任何第三方应用名称
+            for app_name in third_party_apps.keys():
+                app_key = app_name.replace("third_party_", "")
+                if app_key.lower() in message_lower:
+                    app_names_in_message.add(app_name)
+                # 检查中文名称
+                for cn_names in chinese_names_map.get(app_key, []):
+                    if cn_names in message_lower:
+                        app_names_in_message.add(app_name)
+            
+            # 只有消息中包含第三方应用名称时才遍历
+            for name, config in third_party_apps.items():
+                if name not in app_names_in_message:
+                    continue
+                    
                 app_name = name.replace("third_party_", "")
                 
                 # 严格模式：必须明确提到应用名称（英文或中文）
                 has_app_name_en = app_name.lower() in message_lower
                 
                 # 检查是否有对应的中文名称
-                chinese_names = {
-                    'twitter': ['推特'],
-                    'wechat': ['微信'],
-                    'dingtalk': ['钉钉'],
-                    'feishu': ['飞书'],
-                    'weibo': ['微博'],
-                    'zhihu': ['知乎'],
-                    'douyin': ['抖音'],
-                    'github': ['github', 'git'],
-                    'discord': ['discord'],
-                    'jira': ['jira'],
-                }
-                
-                has_app_name_cn = any(cn in message_lower for cn in chinese_names.get(app_name, []))
+                has_app_name_cn = any(cn in message_lower for cn in chinese_names_map.get(app_name, []))
                 
                 # 只有明确提到应用名称才考虑
                 if has_app_name_en or has_app_name_cn:
@@ -275,6 +355,15 @@ class SkillDispatcher:
             best_match = "chat"
             best_is_third_party = False
 
+        # **新增**: 精确匹配优化 - 如果输入已经是技能名称,直接返回
+        all_skills = [c[0] for c in self.skill_configs] + list(self._dynamic_registry.keys())
+        if message_lower in [s.lower() for s in all_skills]:
+            # 找到精确匹配的技能名(忽略大小写)
+            for skill_name in all_skills:
+                if skill_name.lower() == message_lower:
+                    logger.debug("精确匹配技能: '%s' -> %s", message, skill_name)
+                    return skill_name
+
         logger.debug("技能匹配: '%s' -> %s (score=%d, is_third_party=%s)", message[:40], best_match, best_score, best_is_third_party)
         return best_match
 
@@ -282,6 +371,60 @@ class SkillDispatcher:
     def is_multi_step(self, message: str) -> bool:
         """检测多步任务指示词"""
         return any(ind in message for ind in _MULTI_STEP_INDICATORS)
+    
+    # P1修复4：添加调试方法，查看技能匹配详情
+    def debug_match(self, message: str) -> Dict[str, Any]:
+        """调试技能匹配过程，返回详细的匹配信息
+        
+        Returns:
+            {
+                "message": 原始消息,
+                "matched_skill": 最终匹配的技能,
+                "intent_map_hits": 意图映射表的命中情况,
+                "keyword_scores": 各技能的关键词得分,
+                "third_party_check": 第三方应用检查结果
+            }
+        """
+        message_lower = message.lower()
+        result = {
+            "message": message,
+            "matched_skill": None,
+            "intent_map_hits": [],
+            "keyword_scores": {},
+            "third_party_check": {}
+        }
+        
+        # 检查意图映射表
+        for intent_name, config in _INTENT_SKILL_MAP.items():
+            keywords = config["keywords"]
+            skill = config["skill"]
+            hits = [kw for kw in keywords if kw.lower() in message_lower]
+            
+            if hits:
+                result["intent_map_hits"].append({
+                    "intent": intent_name,
+                    "skill": skill,
+                    "hit_keywords": hits,
+                    "hit_count": len(hits),
+                    "would_route": len(hits) >= 2
+                })
+        
+        # 检查静态配置的关键词得分
+        for name, keywords, priority in self.skill_configs:
+            hits = sum(1 for kw in keywords if kw.lower() in message_lower)
+            score = hits * priority
+            if hits > 0:
+                result["keyword_scores"][name] = {
+                    "hits": hits,
+                    "priority": priority,
+                    "score": score
+                }
+        
+        # 执行完整匹配
+        final_skill = self.match_skill(message)
+        result["matched_skill"] = final_skill
+        
+        return result
 
     # ── 参数提取 ─────────────────────────────────────────────────────────────
     def extract_params(self, message: str, skill_name: str) -> Dict[str, Any]:
@@ -596,3 +739,19 @@ class SkillDispatcher:
         # 关闭/退出应用
         if "关闭" in message or "退出" in message or "quit" in message_lower:
             params["action"] = "quit_app"
+
+
+# 全局单例实例
+_skill_dispatcher_instance: Optional[SkillDispatcher] = None
+
+
+def get_skill_dispatcher() -> SkillDispatcher:
+    """获取技能分发器单例实例
+    
+    Returns:
+        SkillDispatcher: 技能分发器实例
+    """
+    global _skill_dispatcher_instance
+    if _skill_dispatcher_instance is None:
+        _skill_dispatcher_instance = SkillDispatcher()
+    return _skill_dispatcher_instance

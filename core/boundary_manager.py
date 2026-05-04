@@ -25,7 +25,6 @@ class BoundaryManager:
             "advanced_automation": 7,
             "rag_search": 3,
             "system_toolbox": 3,
-            "doubao_chat": 2,
             "libai": 4,
             "goddess": 4,
             "first_love": 4,
@@ -54,7 +53,6 @@ class BoundaryManager:
             "advanced_automation": (5, 60),  # 每分钟5次
             "rag_search": (30, 60),       # 每分钟30次
             "system_toolbox": (60, 60),    # 每分钟60次
-            "doubao_chat": (30, 60),      # 每分钟30次
             "libai": (20, 60),            # 每分钟20次
             "goddess": (20, 60),          # 每分钟20次
             "first_love": (20, 60),        # 每分钟20次

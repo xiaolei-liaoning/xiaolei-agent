@@ -179,49 +179,175 @@ class PlanningAgent:
         
         # 合并描述和参数用于关键词匹配
         full_text = f"{action} {description} {params}"
+        full_text_lower = full_text.lower()
         
-        # 邮件相关任务
-        if any(kw in full_text for kw in ["邮件", "email", "send_mail"]):
+        # ==================== 深度思考者相关 ====================
+        # 深度思考任务（GLM可能生成的action）
+        if action in ["deep_thinking", "thinking", "reasoning", "predict", "forecast", "analyze_deep"]:
+            query = params.get("query", params.get("input", params.get("topic", "")))
+            return "deep_thinking", {"input": query}
+        
+        # 包含思考相关关键词
+        elif any(kw in full_text for kw in ["思考", "深度", "think", "推理", "reason", "预测", "推断"]):
+            query = params.get("query", params.get("input", ""))
+            return "deep_thinking", {"input": query}
+        
+        # ==================== 研究员相关 ====================
+        # 研究任务（GLM可能生成的action）
+        if action in ["research", "researcher", "content_curation", "literature_search", "scholarly_search"]:
+            query = params.get("query", params.get("topic", params.get("keywords", "")))
+            return "researcher", {"query": query}
+        
+        # 包含研究相关关键词
+        elif any(kw in full_text for kw in ["研究", "调研", "research", "文献", "学术", "资料"]):
+            query = self._extract_query(full_text)
+            return "researcher", {"query": query}
+        
+        # ==================== 计算器相关 ====================
+        # 计算器任务
+        if action in ["calculator", "calculate", "math", "arithmetic", "compute"]:
+            expr = params.get("expression", params.get("query", params.get("input", "2+2")))
+            return "calculator", {"expression": expr}
+        
+        # 包含计算相关关键词
+        elif any(kw in full_text for kw in ["计算", "calculator", "calc", "math", "数学", "运算"]):
+            expr = params.get("expression", params.get("query", "2+2"))
+            return "calculator", {"expression": expr}
+        
+        # ==================== 聊天助手相关 ====================
+        # 聊天任务（GLM可能生成的action）
+        if action in ["chat", "conversation", "message", "dialog"]:
+            message = params.get("message", params.get("query", params.get("input", "你好")))
+            return "chat", {"message": message}
+        
+        # 包含聊天相关关键词
+        elif any(kw in full_text for kw in ["聊天", "对话", "chat", "talk", "你好", "怎么样", "你呢"]):
+            message = params.get("message", params.get("query", "你好"))
+            return "chat", {"message": message}
+        
+        # ==================== 系统助手相关 ====================
+        # 系统工具任务（GLM可能生成的action）
+        if action in ["system", "system_tool", "system_info", "sys_info", "system_monitor"]:
+            command = "info"
+            if any(kw in full_text for kw in ["时间", "time"]):
+                command = "time"
+            elif any(kw in full_text for kw in ["日期", "date"]):
+                command = "date"
+            elif any(kw in full_text for kw in ["cpu", "内存", "memory"]):
+                command = "info"
+            return "system_toolbox", {"command": command}
+        
+        # 包含系统相关关键词
+        elif any(kw in full_text for kw in ["系统", "时间", "日期", "cpu", "内存", "disk", "system", "time", "date"]):
+            if any(kw in full_text for kw in ["时间", "time"]):
+                return "system_toolbox", {"command": "time"}
+            elif any(kw in full_text for kw in ["日期", "date"]):
+                return "system_toolbox", {"command": "date"}
+            elif any(kw in full_text for kw in ["cpu", "内存", "memory"]):
+                return "system_toolbox", {"command": "info"}
+            else:
+                return "system_toolbox", {"command": "info"}
+        
+        # ==================== OpenClaw相关 ====================
+        # OpenClaw任务（GLM可能生成的action）
+        if action in ["openclaw", "workflow", "database_query", "workflow_list", "workflow_execute"]:
+            query_action = params.get("action", params.get("task", "list"))
+            return "openclaw", {"action": query_action}
+        
+        # 包含工作流相关关键词
+        elif any(kw in full_text for kw in ["工作流", "任务流", "workflow", "自动化流程"]):
+            query_action = params.get("action", "list")
+            return "openclaw", {"action": query_action}
+        
+        # ==================== 邮件相关任务 ====================
+        elif any(kw in full_text for kw in ["邮件", "email", "send_mail"]):
             return "send_email", self._extract_email_params(params, full_text)
         
-        # 浏览器相关任务
-        elif any(kw in full_text for kw in ["浏览器", "browser", "打开网页", "搜索"]):
+        # ==================== 浏览器相关任务 ====================
+        elif any(kw in full_text for kw in ["浏览器", "browser", "打开网页"]):
             return "open_app", {"app": "浏览器"}
         
-        # 爬取相关任务
+        # ==================== 爬取相关任务 ====================
         elif any(kw in full_text for kw in ["爬取", "抓取", "crawl", "scrape", "热搜"]):
             site = self._extract_site_name(full_text)
             return "workflow_crawl_analyze", {"site": site, "analyze": True}
         
-        # GUI自动化任务
+        # ==================== GUI自动化任务 ====================
         elif any(kw in full_text for kw in ["点击", "输入", "gui", "界面操作"]):
             return "gui_automation", params
         
-        # 文件操作任务
+        # ==================== 文件操作任务 ====================
         elif any(kw in full_text for kw in ["文件", "下载", "上传", "file"]):
             return "file_operation", params
         
-        # 天气查询任务
+        # ==================== 天气查询任务 ====================
         elif any(kw in full_text for kw in ["天气", "weather", "气温", "预报"]):
             location = self._extract_location(full_text)
             return "query_weather", {"location": location}
         
-        # 信息检索任务
+        # ==================== 分析任务 ====================
+        elif any(kw in full_text for kw in ["分析", "统计", "analyze", "analysis"]):
+            query = self._extract_query(full_text)
+            return "workflow_crawl_analyze", {"site": "analysis", "analyze": True, "query": query}
+        
+        # ==================== 整理/处理任务 ====================
+        elif any(kw in full_text for kw in ["整理", "处理", "process", "organize"]):
+            return "search_knowledge", {"query": "整理数据"}
+        
+        # ==================== 信息检索任务 ====================
         elif any(kw in full_text for kw in ["检索", "搜索", "查找", "search", "查询"]):
             query = self._extract_query(full_text)
             return "search_knowledge", {"query": query}
         
-        # 邮件/消息任务
+        # ==================== 消息发送任务 ====================
         elif any(kw in full_text for kw in ["发送", "消息", "通知", "send", "message", "notify"]):
-            return "send_message", params
+            recipient = self._extract_recipient(full_text)
+            message_content = self._extract_message_content(full_text)
+            return "send_message", {"message": message_content, "recipient": recipient}
         
-        # 安全检测任务
+        # ==================== 安全检测任务 ====================
         elif any(kw in full_text for kw in ["安全", "检测", "漏洞", "security", "scan", "vulnerability"]):
             return "security_scan", params
         
-        # 默认返回原任务
-        else:
+        # ==================== 翻译任务 ====================
+        elif any(kw in full_text for kw in ["翻译", "translate", "translator", "英文", "中文", "日语", "韩语"]):
+            text = params.get("text", params.get("query", "Hello"))
+            target_lang = "zh"
+            if "英文" in full_text or "english" in full_text.lower():
+                target_lang = "en"
+            elif "日语" in full_text or "japanese" in full_text.lower():
+                target_lang = "ja"
+            return "translator", {"text": text, "target_lang": target_lang}
+        
+        # ==================== 文本分析任务 ====================
+        elif any(kw in full_text for kw in ["文本", "分析", "总结", "摘要", "text", "summary"]):
+            text = params.get("text", params.get("query", ""))
+            return "text_analyzer", {"text": text}
+        
+        # ==================== 搜索引擎任务 ====================
+        elif any(kw in full_text for kw in ["搜索", "search", "查找", "查询", "检索"]):
+            query = self._extract_query(full_text)
+            return "search_engine", {"query": query}
+        
+        # 默认返回原任务（如果action已经是automation_hub支持的）
+        supported_actions = [
+            "send_email", "open_app", "workflow_crawl_analyze", "gui_automation",
+            "file_operation", "query_weather", "search_knowledge", "send_message",
+            "security_scan", "calculator", "system_toolbox", "translator",
+            "text_analyzer", "deep_thinking", "chat", "search_engine",
+            "openclaw", "researcher", "rag_search", "web_scraper", "data_analysis"
+        ]
+        
+        if action in supported_actions:
             return action, params
+        
+        # 对于未知的action，尝试根据描述推断
+        # 如果描述中包含可识别的关键词，重新匹配
+        if description:
+            return self._map_task_to_automation_action({"action": "", "params": params, "description": description})
+        
+        # 最终兜底：返回search_knowledge
+        return "search_knowledge", {"query": full_text}
     
     def _extract_location(self, text):
         """从文本中提取地点信息"""
@@ -295,6 +421,37 @@ class PlanningAgent:
         
         return "通用网站"
     
+    def _extract_recipient(self, text):
+        """从文本中提取接收者（如微信等）"""
+        recipients = {
+            "微信": ["微信", "wechat"],
+            "QQ": ["QQ", "qq"],
+            "钉钉": ["钉钉", "dingtalk"],
+            "飞书": ["飞书", "feishu"],
+        }
+        
+        for recipient_name, keywords in recipients.items():
+            if any(kw in text for kw in keywords):
+                return recipient_name
+        
+        return "微信"  # 默认微信
+    
+    def _extract_message_content(self, text):
+        """从文本中提取要发送的消息内容"""
+        # 移除常见的前缀词
+        prefixes = ["发送", "消息", "通知", "给", "把", "将", "请", "要", "然后", "接着", "之后"]
+        message_content = text
+        
+        for prefix in prefixes:
+            message_content = message_content.replace(prefix, "")
+        
+        # 移除接收者相关词汇
+        receiver_words = ["微信", "wechat", "QQ", "钉钉", "飞书"]
+        for word in receiver_words:
+            message_content = message_content.replace(word, "")
+        
+        return message_content.strip() or "已完成数据分析"
+    
     async def _execute_plan(self, plan):
         """执行计划
         
@@ -307,7 +464,32 @@ class PlanningAgent:
         executed_tasks = set()
         
         # 按优先级排序（高优先级先执行）
-        sorted_tasks = sorted(plan["tasks"], key=lambda x: x["priority"], reverse=True)
+        # 先按依赖关系排序，确保依赖任务先执行
+        # 使用拓扑排序：没有依赖的任务先执行
+        sorted_tasks = []
+        remaining_tasks = list(plan["tasks"])
+        executed_ids = set()
+        
+        while remaining_tasks:
+            ready_tasks = [
+                t for t in remaining_tasks 
+                if all(dep in executed_ids for dep in plan["dependencies"].get(t["id"], []))
+            ]
+            
+            if not ready_tasks:
+                # 如果没有就绪任务，按优先级选择一个执行（避免死锁）
+                ready_tasks = [max(remaining_tasks, key=lambda x: x["priority"])]
+            
+            # 按优先级排序就绪任务
+            ready_tasks.sort(key=lambda x: x["priority"], reverse=True)
+            
+            task = ready_tasks[0]
+            remaining_tasks.remove(task)
+            sorted_tasks.append(task)
+            executed_ids.add(task["id"])
+        
+        # 重置执行任务集合
+        executed_tasks = set()
         
         # 最多重试3次
         max_retries = 3
@@ -315,7 +497,7 @@ class PlanningAgent:
         for task in sorted_tasks:
             task_id = task["id"]
             
-            # 检查依赖是否满足
+            # 检查依赖是否满足（应该已经满足，但再检查一次以防万一）
             dependencies = plan["dependencies"].get(task_id, [])
             if not all(dep in executed_tasks for dep in dependencies):
                 logger.warning(f"任务 {task_id} 的依赖未满足，跳过")
@@ -383,13 +565,13 @@ class PlanningAgent:
                 "task_id": r["task_id"],
                 "action": r["action"],
                 "success": r.get("result", {}).get("success", False),
-                "message": r.get("result", {}).get("message", "")
+                "message": r.get("result", {}).get("reply") or r.get("result", {}).get("message", "")
             })
         
         summary = {
             "success": success_count == total_count and total_count > 0,
             "total_tasks": total_count,
-            "completed_tasks": success_count,
+            "success_count": success_count,
             "results": result_summary,
             "message": f"任务执行完成，成功 {success_count}/{total_count} 个任务"
         }
@@ -431,7 +613,7 @@ async def main():
     
     print("\n" + "="*60)
     print(f"✅ 执行结果: {result['message']}")
-    print(f"📊 任务统计: 成功 {result['completed_tasks']}/{result['total_tasks']}")
+    print(f"📊 任务统计: 成功 {result.get('success_count', result.get('completed_tasks', 0))}/{result.get('total_tasks', 0)}")
     
     if result.get("results"):
         print("\n📋 详细结果:")

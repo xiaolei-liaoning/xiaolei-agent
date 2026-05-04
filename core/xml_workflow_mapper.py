@@ -5,14 +5,71 @@
 - 每个节点类型对应特定的JSON结构
 - 直接执行XML工作流，无需转换文件
 - 支持所有节点类型：start, llm, tool, condition, end
+- XML Schema验证（提前发现配置错误）
 """
 
 import xml.etree.ElementTree as ET
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 import logging
+from lxml import etree
 
 logger = logging.getLogger(__name__)
+
+# XML Schema定义（用于验证XML格式）
+WORKFLOW_SCHEMA = """<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+    <xs:element name="workflow">
+        <xs:complexType>
+            <xs:sequence>
+                <xs:element name="node" maxOccurs="unbounded">
+                    <xs:complexType>
+                        <xs:sequence>
+                            <xs:element name="config" minOccurs="0">
+                                <xs:complexType>
+                                    <xs:sequence>
+                                        <xs:any processContents="lax" minOccurs="0" maxOccurs="unbounded"/>
+                                    </xs:sequence>
+                                </xs:complexType>
+                            </xs:element>
+                        </xs:sequence>
+                        <xs:attribute name="id" type="xs:string" use="required"/>
+                        <xs:attribute name="type" use="required">
+                            <xs:simpleType>
+                                <xs:restriction base="xs:string">
+                                    <xs:enumeration value="start"/>
+                                    <xs:enumeration value="llm"/>
+                                    <xs:enumeration value="tool"/>
+                                    <xs:enumeration value="calculator"/>
+                                    <xs:enumeration value="http"/>
+                                    <xs:enumeration value="condition"/>
+                                    <xs:enumeration value="loop"/>
+                                    <xs:enumeration value="parallel"/>
+                                    <xs:enumeration value="database"/>
+                                    <xs:enumeration value="file"/>
+                                    <xs:enumeration value="message_queue"/>
+                                    <xs:enumeration value="transform"/>
+                                    <xs:enumeration value="end"/>
+                                </xs:restriction>
+                            </xs:simpleType>
+                        </xs:attribute>
+                        <xs:attribute name="timeout" type="xs:integer" use="optional"/>
+                        <xs:attribute name="max_retries" type="xs:integer" use="optional"/>
+                    </xs:complexType>
+                </xs:element>
+                <xs:element name="edge" minOccurs="0" maxOccurs="unbounded">
+                    <xs:complexType>
+                        <xs:attribute name="source" type="xs:string" use="required"/>
+                        <xs:attribute name="target" type="xs:string" use="required"/>
+                        <xs:attribute name="condition" type="xs:string" use="optional"/>
+                    </xs:complexType>
+                </xs:element>
+            </xs:sequence>
+            <xs:attribute name="name" type="xs:string" use="optional"/>
+            <xs:attribute name="description" type="xs:string" use="optional"/>
+        </xs:complexType>
+    </xs:element>
+</xs:schema>"""
 
 
 class XMLWorkflowMapper:
@@ -131,6 +188,63 @@ class XMLWorkflowMapper:
             "optional_attrs": ["branches", "branch_count", "sync_mode"],
             "description": "并行节点 - 同时执行多个分支"
         },
+        "database": {
+            "json_template": {
+                "id": "{node_id}",
+                "type": "database",
+                "config": {
+                    "operation": "query",
+                    "connection": "default",
+                    "sql": "SELECT * FROM table",
+                    "params": ""
+                }
+            },
+            "required_attrs": ["id", "type"],
+            "optional_attrs": ["operation", "connection", "sql", "params"],
+            "description": "数据库节点 - 执行SQL查询或更新操作"
+        },
+        "file": {
+            "json_template": {
+                "id": "{node_id}",
+                "type": "file",
+                "config": {
+                    "operation": "read",
+                    "path": "/path/to/file",
+                    "encoding": "utf-8"
+                }
+            },
+            "required_attrs": ["id", "type"],
+            "optional_attrs": ["operation", "path", "encoding"],
+            "description": "文件节点 - 读写文件操作"
+        },
+        "message_queue": {
+            "json_template": {
+                "id": "{node_id}",
+                "type": "message_queue",
+                "config": {
+                    "operation": "publish",
+                    "queue": "default",
+                    "message": ""
+                }
+            },
+            "required_attrs": ["id", "type"],
+            "optional_attrs": ["operation", "queue", "message"],
+            "description": "消息队列节点 - 发布或订阅消息"
+        },
+        "transform": {
+            "json_template": {
+                "id": "{node_id}",
+                "type": "transform",
+                "config": {
+                    "transformation": "json_to_csv",
+                    "input_field": "data",
+                    "output_field": "result"
+                }
+            },
+            "required_attrs": ["id", "type"],
+            "optional_attrs": ["transformation", "input_field", "output_field"],
+            "description": "数据转换节点 - 格式转换和数据清洗"
+        },
         "end": {
             "json_template": {
                 "id": "{node_id}",
@@ -148,6 +262,36 @@ class XMLWorkflowMapper:
     def __init__(self):
         self.xml_cache: Dict[str, ET.Element] = {}
         self.json_cache: Dict[str, Dict[str, Any]] = {}
+        # 编译Schema（提高重复验证性能）
+        try:
+            schema_root = etree.fromstring(WORKFLOW_SCHEMA.encode())
+            self.schema = etree.XMLSchema(schema_root)
+        except Exception as e:
+            logger.warning(f"XML Schema编译失败: {e}，将跳过Schema验证")
+            self.schema = None
+    
+    def _validate_xml_schema(self, xml_content: str):
+        """使用XML Schema验证XML内容
+        
+        Args:
+            xml_content: XML内容字符串
+            
+        Returns:
+            (是否有效, 错误信息)
+        """
+        if self.schema is None:
+            return True, ""
+        
+        try:
+            xml_doc = etree.fromstring(xml_content.encode())
+            self.schema.assertValid(xml_doc)
+            return True, ""
+        except etree.DocumentInvalid as e:
+            return False, f"XML Schema验证失败: {str(e)}"
+        except etree.XMLSyntaxError as e:
+            return False, f"XML语法错误: {str(e)}"
+        except Exception as e:
+            return False, f"验证过程出错: {str(e)}"
     
     def parse_xml_workflow(self, xml_content: str) -> Dict[str, Any]:
         """解析XML工作流为JSON结构
@@ -158,6 +302,15 @@ class XMLWorkflowMapper:
         Returns:
             JSON格式的工作流结构
         """
+        # 1. XML Schema 验证
+        is_valid, error_msg = self._validate_xml_schema(xml_content)
+        if not is_valid:
+            logger.error(error_msg)
+            return {
+                "success": False,
+                "error": error_msg
+            }
+
         try:
             root = ET.fromstring(xml_content)
             
@@ -302,34 +455,81 @@ class XMLWorkflowMapper:
             验证结果字典
         """
         errors = []
+        warnings = []
         
         # 检查是否有开始节点
         has_start = any(node["type"] == "start" for node in workflow["nodes"])
         if not has_start:
-            errors.append("缺少开始节点")
+            errors.append("缺少开始节点（start）")
         
         # 检查是否有结束节点
         has_end = any(node["type"] == "end" for node in workflow["nodes"])
         if not has_end:
-            errors.append("缺少结束节点")
+            errors.append("缺少结束节点（end）")
         
         # 检查节点ID唯一性
         node_ids = [node["id"] for node in workflow["nodes"]]
-        if len(node_ids) != len(set(node_ids)):
-            errors.append("存在重复的节点ID")
+        duplicates = [id for id in node_ids if node_ids.count(id) > 1]
+        if duplicates:
+            errors.append(f"存在重复的节点ID: {', '.join(set(duplicates))}")
         
         # 检查连线有效性
         node_id_set = set(node_ids)
+        orphan_edges = []
         for edge in workflow["edges"]:
             if edge["source"] not in node_id_set:
                 errors.append(f"连线源节点不存在: {edge['source']}")
+                orphan_edges.append(edge)
             if edge["target"] not in node_id_set:
                 errors.append(f"连线目标节点不存在: {edge['target']}")
+                orphan_edges.append(edge)
+        
+        # 检查孤立节点（没有入边或出边的非start/end节点）
+        connected_nodes = set()
+        for edge in workflow["edges"]:
+            connected_nodes.add(edge["source"])
+            connected_nodes.add(edge["target"])
+        
+        for node in workflow["nodes"]:
+            if node["type"] not in ["start", "end"] and node["id"] not in connected_nodes:
+                warnings.append(f"节点 '{node['id']}' ({node['type']}) 未连接到工作流")
+        
+        # 检查条件节点的分支配置
+        for node in workflow["nodes"]:
+            if node["type"] == "condition":
+                config = node.get("config", {})
+                if not config.get("true_branch") or not config.get("false_branch"):
+                    warnings.append(f"条件节点 '{node['id']}' 缺少true_branch或false_branch配置")
+        
+        # 检查循环节点配置
+        for node in workflow["nodes"]:
+            if node["type"] == "loop":
+                config = node.get("config", {})
+                max_iter = config.get("max_iterations", 100)
+                if max_iter > 1000:
+                    warnings.append(f"循环节点 '{node['id']}' 的最大迭代次数({max_iter})过大，可能导致性能问题")
+        
+        # 检查工作流复杂度
+        if len(workflow["nodes"]) > 50:
+            warnings.append(f"工作流包含{len(workflow['nodes'])}个节点，建议拆分为多个子工作流以提高可维护性")
+        
+        # 生成验证消息
+        message_parts = []
+        if errors:
+            message_parts.append(f"错误({len(errors)}): {'; '.join(errors)}")
+        if warnings:
+            message_parts.append(f"警告({len(warnings)}): {'; '.join(warnings)}")
+        
+        if not errors and not warnings:
+            message = "验证通过"
+        else:
+            message = "; ".join(message_parts)
         
         return {
             "valid": len(errors) == 0,
-            "message": "; ".join(errors) if errors else "验证通过",
-            "errors": errors
+            "message": message,
+            "errors": errors,
+            "warnings": warnings
         }
     
     def create_steps_format(self, xml_content: str) -> Dict[str, Any]:

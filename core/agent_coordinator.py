@@ -1,4 +1,7 @@
-"""Agent协调器模块（优化版）
+"""Agent协调器（已废弃 - DEPRECATED）
+
+⚠️ 此模块当前未被主流程使用，仅初始化但未调用coordinate方法。
+如需Agent协调功能，请直接使用 AgentScheduler。
 
 实现Agent之间的协同协作，升级了调度中心路由评分体系：
 - 多维加权路由模型
@@ -32,14 +35,23 @@ class AgentMetrics:
     failed_tasks: int = 0              # 失败任务数
     last_active: float = 0.0           # 最后活跃时间戳
     
+    # 动态权重配置（基于历史表现自动调整）
+    _dynamic_weights: Dict[str, float] = field(default_factory=lambda: {
+        "priority": 0.30,
+        "health_score": 0.25,
+        "execution_time": 0.20,
+        "success_rate": 0.25
+    })
+    _weight_update_count: int = 0      # 权重更新次数
+    
     def calculate_routing_score(self) -> float:
         """计算路由评分（多维加权模型）
         
         权重分配：
-        - 优先级: 0.30
-        - 健康度: 0.25
-        - 执行时间: 0.20 (越短越好)
-        - 成功率: 0.25
+        - 优先级: 0.30（可动态调整）
+        - 健康度: 0.25（可动态调整）
+        - 执行时间: 0.20 (越短越好，可动态调整)
+        - 成功率: 0.25（可动态调整）
         
         Returns:
             路由评分 (0-1)，越高越优先
@@ -51,15 +63,57 @@ class AgentMetrics:
         else:
             time_score = 1.0  # 无历史数据时给满分
         
-        # 加权计算
+        # 动态权重调整：当任务数>10时，根据历史表现调整权重
+        if self.total_tasks > 10:
+            self._adjust_weights_based_on_performance()
+        
+        # 使用当前权重计算
+        w = self._dynamic_weights
         score = (
-            self.priority * 0.30 +
-            self.health_score * 0.25 +
-            time_score * 0.20 +
-            self.success_rate * 0.25
+            self.priority * w["priority"] +
+            self.health_score * w["health_score"] +
+            time_score * w["execution_time"] +
+            self.success_rate * w["success_rate"]
         )
         
         return round(score, 4)
+    
+    def _adjust_weights_based_on_performance(self):
+        """基于历史表现动态调整权重
+        
+        调整策略：
+        - 如果成功率波动大 → 提高success_rate权重
+        - 如果执行时间波动大 → 提高execution_time权重
+        - 每50次任务重新评估一次
+        """
+        # 每50次任务才调整一次，避免频繁变化
+        if self._weight_update_count % 50 != 0 and self._weight_update_count > 0:
+            return
+        
+        self._weight_update_count += 1
+        
+        # 计算各指标的稳定性（标准差越小越稳定）
+        # 简化版：用成功率作为稳定性指标
+        if self.success_rate < 0.8:  # 成功率低于80%
+            # 提高成功率权重，降低其他权重
+            self._dynamic_weights["success_rate"] = 0.35
+            self._dynamic_weights["priority"] = 0.25
+            self._dynamic_weights["health_score"] = 0.20
+            self._dynamic_weights["execution_time"] = 0.20
+        elif self.avg_execution_time > 30:  # 平均执行时间超过30秒
+            # 提高执行时间权重
+            self._dynamic_weights["execution_time"] = 0.30
+            self._dynamic_weights["success_rate"] = 0.25
+            self._dynamic_weights["priority"] = 0.25
+            self._dynamic_weights["health_score"] = 0.20
+        else:
+            # 恢复默认权重
+            self._dynamic_weights = {
+                "priority": 0.30,
+                "health_score": 0.25,
+                "execution_time": 0.20,
+                "success_rate": 0.25
+            }
     
     def update_metrics(self, execution_time: float, success: bool):
         """更新性能指标

@@ -1,908 +1,1151 @@
 """Agent小组管理API
 
-提供Agent小组的CRUD操作、状态管理、成员配置等功能
+提供真正的Agent小组功能：
+- 小组包含多个Agent
+- 每个Agent有自己的角色和技能
+- 支持混合Agent（人物Agent + 功能Agent）
 """
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, validator
-from typing import List, Optional, Dict, Any
+from typing import Dict, Any, List, Optional
 from datetime import datetime
 import uuid
 import logging
 import re
+import os
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/agent-groups", tags=["Agent小组管理"])
 
-# ==================== 数据模型 ====================
+# 全局内存存储（生产环境应该用数据库）
+_agent_groups = {}
 
-# 系统已注册的Agent列表
-REGISTERED_AGENTS = {
-    'checker': 'Checker',
-    'scraper': 'Scraper',
-    'vulnerability': 'Vulnerability',
-    'summarizer': 'Summarizer',
-    'data_analysis': 'DataAnalysis',
-    'nlp': 'NLP',
-    'text_analyzer': 'TextAnalyzer',
-    'planning': 'Planning',
-    'processor': 'Processor',
-    'transformer': 'Transformer',
-    'scanner': 'Scanner',
-    'analyzer': 'Analyzer'
-}
+
+# ==========================================
+# 数据模型
+# ==========================================
+
+class AgentSkill(BaseModel):
+    """Agent使用的技能"""
+    skill_id: str = Field(..., description="技能ID")
+    skill_name: str = Field(..., description="技能名称")
+    enabled: bool = Field(default=True, description="是否启用")
+
+
+class AgentInGroup(BaseModel):
+    """小组中的Agent"""
+    agent_id: str = Field(..., description="Agent唯一标识")
+    agent_type: str = Field(..., description="Agent类型（character/tool）")
+    agent_name: str = Field(..., description="Agent名称")
+    description: str = Field(default="", description="Agent描述")
+    skills: List[AgentSkill] = Field(default_factory=list, description="Agent技能列表")
+    priority: float = Field(default=1.0, description="优先级（0-1）")
+    enabled: bool = Field(default=True, description="是否启用")
+
 
 class AgentGroupCreate(BaseModel):
-    """创建Agent小组请求模型"""
-    name: str = Field(..., min_length=1, max_length=100, description="小组名称")
-    members: List[str] = Field(..., min_items=1, max_items=10, description="Agent成员列表")
-    strategy: str = Field(default="weighted_round_robin", description="调度策略")
-    circuit_breaker: bool = Field(default=False, description="是否启用熔断机制")
-    elastic_scaling: bool = Field(default=False, description="是否启用弹性伸缩")
+    """创建Agent小组请求"""
+    name: str = Field(..., description="小组名称")
+    description: str = Field(default="", description="小组描述")
+    agents: List[AgentInGroup] = Field(..., description="Agent列表")
+    strategy: str = Field(default="pipeline", description="协作模式：pipeline/parallel_review/master_slave/dynamic_auction")
+    failure_strategy: Optional[str] = Field(None, description="失败处理策略")
+    circuit_strategy: Optional[str] = Field(None, description="熔断策略")
+    timeout: Optional[float] = Field(None, description="超时时间")
+    circuit_breaker: bool = Field(default=False, description="熔断机制")
+    elastic_scaling: bool = Field(default=False, description="弹性伸缩")
     
     @validator('name')
     def validate_name(cls, v):
-        """验证小组名称格式"""
-        if not re.match(r'^[\u4e00-\u9fa5a-zA-Z0-9_\-()\u3002\uff0c\uff1a\uff1b\uff01\uff1f]+$', v):
-            raise ValueError('小组名称只能包含中文、英文、数字、下划线、连字符和中文标点')
-        if len(v.strip()) < 2:
-            raise ValueError('小组名称至少需要2个字符')
+        if not re.match(r'^[\u4e00-\u9fa5a-zA-Z0-9_\-()\u3002\uff0c\uff1a\uff1b\uff01\uff1f]{2,100}$', v):
+            raise ValueError('小组名称只能包含中文、英文、数字、下划线、连字符，2-100字符')
         return v.strip()
     
-    @validator('members')
-    def validate_members(cls, v):
-        """验证成员有效性"""
+    @validator('agents')
+    def validate_agents(cls, v):
         if not v:
-            raise ValueError('成员列表不能为空')
-        
-        # 检查重复成员
-        if len(v) != len(set(v)):
-            raise ValueError('成员列表中存在重复的Agent')
-        
-        # 验证成员是否在已注册列表中
-        valid_members_lower = {agent.lower(): agent for agent in REGISTERED_AGENTS.values()}
-        invalid_members = []
-        for member in v:
-            if member.lower() not in valid_members_lower:
-                invalid_members.append(member)
-        
-        if invalid_members:
-            valid_list = ', '.join(REGISTERED_AGENTS.values())
-            raise ValueError(f'以下Agent未注册: {", ".join(invalid_members)}。已注册的Agent: {valid_list}')
-        
+            raise ValueError('小组至少需要1个Agent')
+        agent_ids = [a.agent_id for a in v]
+        if len(agent_ids) != len(set(agent_ids)):
+            raise ValueError('Agent ID不能重复')
         return v
-    
-    @validator('strategy')
-    def validate_strategy(cls, v):
-        """验证调度策略"""
-        valid_strategies = ['weighted_round_robin', 'least_load', 'random', 'priority']
-        if v not in valid_strategies:
-            raise ValueError(f'不支持的调度策略: {v}。支持的策略: {", ".join(valid_strategies)}')
-        return v
+
 
 class AgentGroupUpdate(BaseModel):
-    """更新Agent小组请求模型"""
-    name: Optional[str] = Field(None, min_length=1, max_length=100, description="小组名称")
-    members: Optional[List[str]] = Field(None, min_items=1, max_items=10, description="Agent成员列表")
+    """更新Agent小组请求"""
+    name: Optional[str] = Field(None, description="小组名称")
+    description: Optional[str] = Field(None, description="小组描述")
+    agents: Optional[List[AgentInGroup]] = Field(None, description="Agent列表")
     strategy: Optional[str] = Field(None, description="调度策略")
-    circuit_breaker: Optional[bool] = Field(None, description="是否启用熔断机制")
-    elastic_scaling: Optional[bool] = Field(None, description="是否启用弹性伸缩")
+    circuit_breaker: Optional[bool] = Field(None, description="熔断机制")
+    elastic_scaling: Optional[bool] = Field(None, description="弹性伸缩")
+
+
+class AgentGroup(BaseModel):
+    """Agent小组"""
+    group_id: str = Field(..., description="小组ID")
+    name: str = Field(..., description="小组名称")
+    description: str = Field(..., description="小组描述")
+    agents: List[AgentInGroup] = Field(..., description="Agent列表")
+    strategy: str = Field(..., description="调度策略")
+    failure_strategy: Optional[str] = Field(None, description="失败处理策略")
+    circuit_strategy: Optional[str] = Field(None, description="熔断策略")
+    timeout: Optional[float] = Field(None, description="超时时间")
+    circuit_breaker: bool = Field(..., description="熔断机制")
+    elastic_scaling: bool = Field(..., description="弹性伸缩")
+    created_at: datetime = Field(default_factory=datetime.now, description="创建时间")
+    updated_at: datetime = Field(default_factory=datetime.now, description="更新时间")
+    status: str = Field(default="active", description="状态")
+    task_count: int = Field(default=0, description="任务计数")
+    success_rate: float = Field(default=1.0, description="成功率")
+
+
+# ==========================================
+# 系统预定义Agent列表
+# ==========================================
+
+# 人物Agent（从skills/人物目录加载 + 自定义角色）
+def get_character_agents() -> List[Dict[str, Any]]:
+    """获取人物Agent列表"""
+    character_agents = []
     
-    @validator('name')
-    def validate_name(cls, v):
-        """验证小组名称格式"""
-        if v is not None:
-            if not re.match(r'^[\u4e00-\u9fa5a-zA-Z0-9_\-()\u3002\uff0c\uff1a\uff1b\uff01\uff1f]+$', v):
-                raise ValueError('小组名称只能包含中文、英文、数字、下划线、连字符和中文标点')
-            if len(v.strip()) < 2:
-                raise ValueError('小组名称至少需要2个字符')
-            return v.strip()
-        return v
+    # 1. 从skills/人物目录加载
+    skills_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "skills", "人物")
     
-    @validator('members')
-    def validate_members(cls, v):
-        """验证成员有效性"""
-        if v is not None:
-            if not v:
-                raise ValueError('成员列表不能为空')
-            
-            # 检查重复成员
-            if len(v) != len(set(v)):
-                raise ValueError('成员列表中存在重复的Agent')
-            
-            # 验证成员是否在已注册列表中
-            valid_members_lower = {agent.lower(): agent for agent in REGISTERED_AGENTS.values()}
-            invalid_members = []
-            for member in v:
-                if member.lower() not in valid_members_lower:
-                    invalid_members.append(member)
-            
-            if invalid_members:
-                valid_list = ', '.join(REGISTERED_AGENTS.values())
-                raise ValueError(f'以下Agent未注册: {", ".join(invalid_members)}。已注册的Agent: {valid_list}')
-            
-            return v
-        return v
-    
-    @validator('strategy')
-    def validate_strategy(cls, v):
-        """验证调度策略"""
-        if v is not None:
-            valid_strategies = ['weighted_round_robin', 'least_load', 'random', 'priority']
-            if v not in valid_strategies:
-                raise ValueError(f'不支持的调度策略: {v}。支持的策略: {", ".join(valid_strategies)}')
-        return v
-
-class AgentGroupResponse(BaseModel):
-    """Agent小组响应模型"""
-    id: str
-    name: str
-    members: List[str]
-    strategy: str  # 这里返回中文显示名称
-    circuit_breaker: bool
-    elastic_scaling: bool
-    status: str  # 运行中、休眠、离线
-    created_at: str
-    updated_at: str
-    members_count: int
-    last_active: Optional[str] = None
-
-class AgentGroupListResponse(BaseModel):
-    """Agent小组列表响应模型"""
-    total: int
-    groups: List[AgentGroupResponse]
-
-# ==================== 策略名称映射 ====================
-
-STRATEGY_NAMES = {
-    'weighted_round_robin': '加权轮询',
-    'least_load': '最小负载',
-    'random': '随机选择',
-    'priority': '优先级调度'
-}
-
-# ==================== 审计日志工具类 ====================
-
-class AuditLogger:
-    """审计日志记录工具"""
-    
-    # 内存存储审计日志（降级方案）
-    _logs: List[Dict[str, Any]] = []
-
-    @classmethod
-    def log(cls, action: str, group_id: str, details: Dict[str, Any], operator_id: int = 1):
-        """记录审计日志"""
-        log_entry = {
-            'id': str(uuid.uuid4()),
-            'timestamp': datetime.now().isoformat(),
-            'action': action,
-            'group_id': group_id,
-            'operator_id': operator_id,
-            'details': details
+    if os.path.exists(skills_dir):
+        character_dirs = [d for d in os.listdir(skills_dir) if os.path.isdir(os.path.join(skills_dir, d)) and not d.startswith(".")]
+        
+        # 人物Agent与名称的映射
+        character_names = {
+            "bestfriend": "知心闺蜜",
+            "first_love": "初恋",
+            "goddess": "女神",
+            "john_carmack": "John Carmack",
+            "libai": "李白",
+            "linus_torvalds": "Linus Torvalds"
         }
-        cls._logs.append(log_entry)
         
-        # 尝试写入数据库
-        try:
-            _log_audit_action(action, group_id, details, operator_id)
-        except Exception as e:
-            logger.warning(f"写入数据库审计日志失败，仅保存到内存: {e}")
+        for character in character_dirs:
+            agent_id = f"character_{character}"
+            character_name = character_names.get(character, character)
+            character_agents.append({
+                "agent_id": agent_id,
+                "agent_type": "character",
+                "agent_name": character_name,
+                "description": f"{character_name}角色Agent",
+                "skills": [],
+                "priority": 1.0,
+                "enabled": True
+            })
+    
+    # 2. 添加更多自定义角色Agent
+    additional_characters = [
+        {
+            "agent_id": "character_scientist",
+            "agent_type": "character",
+            "agent_name": "爱因斯坦",
+            "description": "天才科学家，擅长逻辑推理和创新思维",
+            "skills": [],
+            "priority": 1.0,
+            "enabled": True
+        },
+        {
+            "agent_id": "character_artist",
+            "agent_type": "character",
+            "agent_name": "达芬奇",
+            "description": "艺术大师，擅长创意和审美",
+            "skills": [],
+            "priority": 1.0,
+            "enabled": True
+        },
+        {
+            "agent_id": "character_writer",
+            "agent_type": "character",
+            "agent_name": "莎士比亚",
+            "description": "文学巨匠，擅长写作和表达",
+            "skills": [],
+            "priority": 1.0,
+            "enabled": True
+        },
+        {
+            "agent_id": "character_teacher",
+            "agent_type": "character",
+            "agent_name": "苏格拉底",
+            "description": "伟大的老师，擅长提问和启发",
+            "skills": [],
+            "priority": 1.0,
+            "enabled": True
+        },
+        {
+            "agent_id": "character_warrior",
+            "agent_type": "character",
+            "agent_name": "诸葛亮",
+            "description": "智慧军师，擅长策略和规划",
+            "skills": [],
+            "priority": 1.0,
+            "enabled": True
+        },
+        {
+            "agent_id": "character_explorer",
+            "agent_type": "character",
+            "agent_name": "哥伦布",
+            "description": "探索家，擅长发现和探索新事物",
+            "skills": [],
+            "priority": 1.0,
+            "enabled": True
+        },
+        {
+            "agent_id": "character_doctor",
+            "agent_type": "character",
+            "agent_name": "华佗",
+            "description": "神医，擅长诊断和解决问题",
+            "skills": [],
+            "priority": 1.0,
+            "enabled": True
+        },
+        {
+            "agent_id": "character_philosopher",
+            "agent_type": "character",
+            "agent_name": "老子",
+            "description": "哲学家，擅长思考和洞察",
+            "skills": [],
+            "priority": 1.0,
+            "enabled": True
+        }
+    ]
+    
+    character_agents.extend(additional_characters)
+    
+    return character_agents
 
-    @classmethod
-    def get_logs(cls, group_id: Optional[str] = None, action: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
-        """获取审计日志"""
-        # 尝试从数据库读取
-        try:
-            from core.database import get_session, AgentGroupAuditLog
-            db = get_session()
-            try:
-                query = db.query(AgentGroupAuditLog)
-                if group_id:
-                    query = query.filter(AgentGroupAuditLog.group_id == group_id)
-                if action:
-                    query = query.filter(AgentGroupAuditLog.action == action)
-                
-                # 按时间倒序
-                query = query.order_by(AgentGroupAuditLog.timestamp.desc()).limit(limit)
-                
-                db_logs = []
-                for log in query.all():
-                    db_logs.append({
-                        'id': log.id,
-                        'timestamp': log.timestamp.isoformat(),
-                        'action': log.action,
-                        'group_id': log.group_id,
-                        'operator_id': log.operator_id,
-                        'details': log.details
-                    })
-                return db_logs
-            finally:
-                db.close()
-        except Exception as e:
-            logger.warning(f"从数据库读取审计日志失败，使用内存数据: {e}")
+
+# 工具Agent（从技能系统获取）
+def get_tool_agents() -> List[Dict[str, Any]]:
+    """获取工具Agent列表"""
+    tool_agents = []
+    
+    # 工具Agent列表（使用真实存在的skill_id）
+    tool_agent_defs = [
+        {
+            "agent_id": "tool_scraper",
+            "agent_type": "tool",
+            "agent_name": "爬虫专家",
+            "description": "网页内容爬取和分析（微博、B站、知乎、抖音等）",
+            "skills": ["web_scraper", "search_engine"],
+            "priority": 1.0
+        },
+        {
+            "agent_id": "tool_analyzer",
+            "agent_type": "tool",
+            "agent_name": "数据分析员",
+            "description": "数据统计、可视化、词云、趋势预测",
+            "skills": ["data_analysis", "calculator"],
+            "priority": 1.0
+        },
+        {
+            "agent_id": "tool_translator",
+            "agent_type": "tool",
+            "agent_name": "翻译官",
+            "description": "11种语言互译，自动语言检测",
+            "skills": ["translator"],
+            "priority": 1.0
+        },
+        {
+            "agent_id": "tool_deep_thinker",
+            "agent_type": "tool",
+            "agent_name": "深度思考者",
+            "description": "深度分析、自主搜索、验证闭环",
+            "skills": ["deep_thinking", "search_engine"],
+            "priority": 1.0
+        },
+        {
+            "agent_id": "tool_system_helper",
+            "agent_type": "tool",
+            "agent_name": "系统助手",
+            "description": "系统信息查询、文件操作、进程管理",
+            "skills": ["system_toolbox", "calculator"],
+            "priority": 1.0
+        },
+        {
+            "agent_id": "tool_weatherman",
+            "agent_type": "tool",
+            "agent_name": "天气预报员",
+            "description": "全球城市天气查询，未来3天预报",
+            "skills": ["weather"],
+            "priority": 1.0
+        },
+        {
+            "agent_id": "tool_automation_engineer",
+            "agent_type": "tool",
+            "agent_name": "自动化工程师",
+            "description": "GUI自动化、工作流、全链路自动化",
+            "skills": ["gui_automation", "advanced_automation"],
+            "priority": 1.0
+        },
+        {
+            "agent_id": "tool_researcher",
+            "agent_type": "tool",
+            "agent_name": "研究员",
+            "description": "RAG知识检索、资料整理",
+            "skills": ["rag_search", "search_engine"],
+            "priority": 1.0
+        },
+        {
+            "agent_id": "tool_calculator",
+            "agent_type": "tool",
+            "agent_name": "计算器",
+            "description": "数学计算、统计计算",
+            "skills": ["calculator"],
+            "priority": 1.0
+        },
+        {
+            "agent_id": "tool_text_analyzer",
+            "agent_type": "tool",
+            "agent_name": "文本分析师",
+            "description": "文本分析、拆解、摘要、标题生成",
+            "skills": ["text_analyzer"],
+            "priority": 1.0
+        },
+        {
+            "agent_id": "tool_orchestrator",
+            "agent_type": "tool",
+            "agent_name": "任务编排师",
+            "description": "多步任务编排、协调、执行",
+            "skills": ["multi_step", "advanced_automation"],
+            "priority": 1.0
+        },
+        {
+            "agent_id": "tool_chatbot",
+            "agent_type": "tool",
+            "agent_name": "聊天助手",
+            "description": "日常聊天、问答、陪伴",
+            "skills": ["chat"],
+            "priority": 1.0
+        },
+        {
+            "agent_id": "tool_ocr_expert",
+            "agent_type": "tool",
+            "agent_name": "OCR识别专家",
+            "description": "文字识别、图像转文字",
+            "skills": ["ocr_recognition"],
+            "priority": 1.0
+        },
+        {
+            "agent_id": "tool_openclaw",
+            "agent_type": "tool",
+            "agent_name": "OpenClaw工具",
+            "description": "OpenClaw生态工具集",
+            "skills": ["openclaw"],
+            "priority": 1.0
+        }
+    ]
+    
+    for agent_def in tool_agent_defs:
+        agent_skills = []
+        for skill_id in agent_def.get("skills", []):
+            agent_skills.append({
+                "skill_id": skill_id,
+                "skill_name": skill_id,
+                "enabled": True
+            })
         
-        # 降级：从内存读取
-        filtered_logs = cls._logs
-        if group_id:
-            filtered_logs = [l for l in filtered_logs if l['group_id'] == group_id]
-        if action:
-            filtered_logs = [l for l in filtered_logs if l['action'] == action]
-        
-        # 按时间倒序并限制数量
-        filtered_logs = sorted(filtered_logs, key=lambda x: x['timestamp'], reverse=True)[:limit]
-        return filtered_logs
-
-# ==================== 内存存储(降级方案) ====================
-
-# 模拟数据库存储
-_agent_groups: Dict[str, Dict[str, Any]] = {}
-
-def _check_db_available() -> bool:
-    """检查数据库是否可用"""
-    try:
-        from core.database import get_session
-        session = get_session()
-        session.execute("SELECT 1")
-        session.close()
-        return True
-    except Exception:
-        return False
-
-def _get_or_create_group_from_db(group_id: str) -> Optional[Dict[str, Any]]:
-    """从数据库获取或创建小组数据"""
-    try:
-        from core.database import get_session, AgentGroup
-        
-        db = get_session()
-        try:
-            group = db.query(AgentGroup).filter(AgentGroup.id == group_id).first()
-            if not group:
-                return None
-            
-            return {
-                'id': group.id,
-                'name': group.name,
-                'members': group.members,
-                'strategy': group.strategy,
-                'circuit_breaker': group.circuit_breaker,
-                'elastic_scaling': group.elastic_scaling,
-                'status': group.status,
-                'created_at': group.created_at.isoformat(),
-                'updated_at': group.updated_at.isoformat(),
-                'last_active': group.last_active.isoformat() if group.last_active else None
-            }
-        finally:
-            db.close()
-    except Exception as e:
-        logger.error(f"从数据库获取小组失败: {e}")
-        return None
-
-def _save_group_to_db(group_data: Dict[str, Any]) -> bool:
-    """保存小组数据到数据库"""
-    try:
-        from core.database import get_session, AgentGroup
-        
-        db = get_session()
-        try:
-            # 检查是否存在
-            existing = db.query(AgentGroup).filter(AgentGroup.id == group_data['id']).first()
-            
-            if existing:
-                # 更新
-                existing.name = group_data['name']
-                existing.members = group_data['members']
-                existing.strategy = group_data['strategy']
-                existing.circuit_breaker = group_data['circuit_breaker']
-                existing.elastic_scaling = group_data['elastic_scaling']
-                existing.status = group_data['status']
-                existing.updated_at = datetime.fromisoformat(group_data['updated_at'])
-                if group_data.get('last_active'):
-                    existing.last_active = datetime.fromisoformat(group_data['last_active'])
-            else:
-                # 创建
-                new_group = AgentGroup(
-                    id=group_data['id'],
-                    name=group_data['name'],
-                    members=group_data['members'],
-                    strategy=group_data['strategy'],
-                    circuit_breaker=group_data['circuit_breaker'],
-                    elastic_scaling=group_data['elastic_scaling'],
-                    status=group_data['status'],
-                    created_at=datetime.fromisoformat(group_data['created_at']),
-                    updated_at=datetime.fromisoformat(group_data['updated_at']),
-                    last_active=datetime.fromisoformat(group_data['last_active']) if group_data.get('last_active') else None
-                )
-                db.add(new_group)
-            
-            db.commit()
-            return True
-        except Exception as e:
-            db.rollback()
-            logger.error(f"保存小组到数据库失败: {e}")
-            return False
-        finally:
-            db.close()
-    except Exception as e:
-        logger.error(f"数据库操作失败: {e}")
-        return False
-
-def _delete_group_from_db(group_id: str) -> bool:
-    """从数据库删除小组"""
-    try:
-        from core.database import get_session, AgentGroup
-        
-        db = get_session()
-        try:
-            group = db.query(AgentGroup).filter(AgentGroup.id == group_id).first()
-            if group:
-                db.delete(group)
-                db.commit()
-                return True
-            return False
-        except Exception as e:
-            db.rollback()
-            logger.error(f"删除小组失败: {e}")
-            return False
-        finally:
-            db.close()
-    except Exception as e:
-        logger.error(f"数据库操作失败: {e}")
-        return False
-
-def _log_audit_action(action: str, group_id: str, details: Dict[str, Any], operator_id: int = 1):
-    """记录审计日志到数据库"""
-    try:
-        from core.database import get_session, AgentGroupAuditLog
-        
-        db = get_session()
-        try:
-            audit_log = AgentGroupAuditLog(
-                group_id=group_id,
-                action=action,
-                operator_id=operator_id,
-                details=details
-            )
-            db.add(audit_log)
-            db.commit()
-        except Exception as e:
-            db.rollback()
-            logger.error(f"记录审计日志失败: {e}")
-        finally:
-            db.close()
-    except Exception as e:
-        logger.error(f"数据库操作失败: {e}")
-
-# 初始化示例数据
-def _init_sample_data():
-    """初始化示例Agent小组数据"""
-    if not _agent_groups:
-        now = datetime.now().isoformat()
-        _agent_groups.update({
-            'group_1': {
-                'id': 'group_1',
-                'name': '数据处理小组',
-                'members': ['Processor', 'Transformer'],
-                'strategy': 'least_load',
-                'circuit_breaker': True,
-                'elastic_scaling': False,
-                'status': '休眠',
-                'created_at': now,
-                'updated_at': now,
-                'last_active': None
-            },
-            'group_2': {
-                'id': 'group_2',
-                'name': '安全检测小组',
-                'members': ['Vulnerability', 'Scanner'],
-                'strategy': 'random',
-                'circuit_breaker': False,
-                'elastic_scaling': False,
-                'status': '离线',
-                'created_at': now,
-                'updated_at': now,
-                'last_active': None
-            },
-            'group_3': {
-                'id': 'group_3',
-                'name': '智能分析小组',
-                'members': ['Checker', 'Scraper', 'Analyzer'],
-                'strategy': 'weighted_round_robin',
-                'circuit_breaker': True,
-                'elastic_scaling': True,
-                'status': '运行中',
-                'created_at': now,
-                'updated_at': now,
-                'last_active': now
-            }
+        tool_agents.append({
+            "agent_id": agent_def["agent_id"],
+            "agent_type": agent_def["agent_type"],
+            "agent_name": agent_def["agent_name"],
+            "description": agent_def["description"],
+            "skills": agent_skills,
+            "priority": agent_def["priority"],
+            "enabled": True
         })
-        logger.info("初始化示例Agent小组数据完成")
-
-# 启动时初始化示例数据
-_init_sample_data()
-
-# ==================== API路由 ====================
-
-@router.get("/strategies", summary="获取支持的调度策略")
-async def get_strategies():
-    """获取所有支持的调度策略
     
-    注意: 此路由必须放在 /{group_id} 之前,避免被动态路由拦截
-    """
-    try:
-        strategies = [
-            {
-                "key": key,
-                "name": name,
-                "description": _get_strategy_description(key)
-            }
-            for key, name in STRATEGY_NAMES.items()
-        ]
-        
-        return {
-            "success": True,
-            "strategies": strategies
-        }
-    except Exception as e:
-        logger.error(f"获取调度策略失败: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"获取调度策略失败: {str(e)}")
+    return tool_agents
 
-@router.get("/audit-logs", summary="获取操作审计日志")
-async def get_audit_logs(
-    group_id: Optional[str] = None,
-    action: Optional[str] = None,
-    limit: int = 100
-):
-    """获取操作审计日志
-    
-    Args:
-        group_id: 可选的小组ID筛选
-        action: 可选的操作类型筛选 (CREATE, UPDATE, DELETE, START, STOP)
-        limit: 返回的最大记录数
-    
-    Returns:
-        审计日志列表
-    """
-    try:
-        logs = AuditLogger.get_logs(group_id=group_id, action=action, limit=limit)
-        return {
-            "success": True,
-            "total": len(logs),
-            "logs": logs
-        }
-    except Exception as e:
-        logger.error(f"获取审计日志失败: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"获取审计日志失败: {str(e)}")
 
-@router.get("", response_model=AgentGroupListResponse)
-async def list_agent_groups(status: Optional[str] = None):
-    """获取所有Agent小组列表
-    
-    Args:
-        status: 可选的状态筛选（运行中、休眠、离线）
-    
-    Returns:
-        Agent小组列表
-    """
-    try:
-        # 尝试从数据库加载数据
-        if _check_db_available():
-            try:
-                from core.database import get_session, AgentGroup
-                db = get_session()
-                try:
-                    query = db.query(AgentGroup)
-                    if status:
-                        query = query.filter(AgentGroup.status == status)
-                    
-                    db_groups = query.all()
-                    
-                    # 更新内存缓存
-                    _agent_groups.clear()
-                    for group in db_groups:
-                        _agent_groups[group.id] = {
-                            'id': group.id,
-                            'name': group.name,
-                            'members': group.members,
-                            'strategy': group.strategy,
-                            'circuit_breaker': group.circuit_breaker,
-                            'elastic_scaling': group.elastic_scaling,
-                            'status': group.status,
-                            'created_at': group.created_at.isoformat(),
-                            'updated_at': group.updated_at.isoformat(),
-                            'last_active': group.last_active.isoformat() if group.last_active else None
-                        }
-                finally:
-                    db.close()
-            except Exception as e:
-                logger.warning(f"从数据库同步数据失败，使用内存数据: {e}")
-        
-        groups = list(_agent_groups.values())
-        
-        # 状态筛选
-        if status:
-            groups = [g for g in groups if g['status'] == status]
-        
-        # 转换为响应模型
-        response_groups = []
-        for group in groups:
-            response_groups.append(AgentGroupResponse(
-                id=group['id'],
-                name=group['name'],
-                members=group['members'],
-                strategy=STRATEGY_NAMES.get(group['strategy'], group['strategy']),
-                circuit_breaker=group['circuit_breaker'],
-                elastic_scaling=group['elastic_scaling'],
-                status=group['status'],
-                created_at=group['created_at'],
-                updated_at=group['updated_at'],
-                members_count=len(group['members']),
-                last_active=group.get('last_active')
-            ))
-        
-        return AgentGroupListResponse(
-            total=len(response_groups),
-            groups=response_groups
-        )
-    except Exception as e:
-        logger.error(f"获取Agent小组列表失败: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"获取Agent小组列表失败: {str(e)}")
+# ==========================================
+# API端点
+# ==========================================
 
-@router.get("/{group_id}", response_model=AgentGroupResponse)
+@router.get("/available-agents")
+async def get_available_agents():
+    """获取系统可用的所有Agent列表"""
+    character_agents = get_character_agents()
+    tool_agents = get_tool_agents()
+    
+    return {
+        "character_agents": character_agents,
+        "tool_agents": tool_agents,
+        "total_count": len(character_agents) + len(tool_agents)
+    }
+
+
+@router.post("", response_model=AgentGroup)
+async def create_agent_group(group: AgentGroupCreate):
+    """创建新的Agent小组"""
+    group_id = str(uuid.uuid4())
+    
+    agent_group = AgentGroup(
+        group_id=group_id,
+        name=group.name,
+        description=group.description,
+        agents=group.agents,
+        strategy=group.strategy,
+        failure_strategy=group.failure_strategy,
+        circuit_strategy=group.circuit_strategy,
+        timeout=group.timeout,
+        circuit_breaker=group.circuit_breaker,
+        elastic_scaling=group.elastic_scaling,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+        status="active",
+        task_count=0,
+        success_rate=1.0
+    )
+    
+    _agent_groups[group_id] = agent_group
+    logger.info(f"创建Agent小组成功: {group.name} ({group_id})")
+    
+    return agent_group
+
+
+@router.get("", response_model=List[AgentGroup])
+async def get_all_agent_groups():
+    """获取所有Agent小组"""
+    return list(_agent_groups.values())
+
+
+@router.get("/{group_id}", response_model=AgentGroup)
 async def get_agent_group(group_id: str):
-    """获取指定Agent小组详情
-    
-    Args:
-        group_id: 小组ID
-    
-    Returns:
-        Agent小组详情
-    """
-    try:
-        # 先从内存查找，如果没有再尝试数据库
-        if group_id not in _agent_groups:
-            if _check_db_available():
-                db_group = _get_or_create_group_from_db(group_id)
-                if db_group:
-                    _agent_groups[group_id] = db_group
-                else:
-                    raise HTTPException(status_code=404, detail=f"Agent小组不存在: {group_id}")
-            else:
-                raise HTTPException(status_code=404, detail=f"Agent小组不存在: {group_id}")
-        
-        group = _agent_groups[group_id]
-        return AgentGroupResponse(
-            id=group['id'],
-            name=group['name'],
-            members=group['members'],
-            strategy=STRATEGY_NAMES.get(group['strategy'], group['strategy']),
-            circuit_breaker=group['circuit_breaker'],
-            elastic_scaling=group['elastic_scaling'],
-            status=group['status'],
-            created_at=group['created_at'],
-            updated_at=group['updated_at'],
-            members_count=len(group['members']),
-            last_active=group.get('last_active')
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"获取Agent小组详情失败: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"获取Agent小组详情失败: {str(e)}")
+    """获取指定的Agent小组"""
+    if group_id not in _agent_groups:
+        raise HTTPException(status_code=404, detail="Agent小组不存在")
+    return _agent_groups[group_id]
 
-@router.post("", response_model=AgentGroupResponse, status_code=201)
-async def create_agent_group(group_data: AgentGroupCreate):
-    """创建新的Agent小组
-    
-    Args:
-        group_data: 小组创建数据
-    
-    Returns:
-        创建的Agent小组
-    """
-    try:
-        # 验证调度策略
-        if group_data.strategy not in STRATEGY_NAMES:
-            raise HTTPException(
-                status_code=400, 
-                detail=f"不支持的调度策略: {group_data.strategy}。支持的策略: {list(STRATEGY_NAMES.keys())}"
-            )
-        
-        # 检查名称唯一性
-        existing_names = [g['name'] for g in _agent_groups.values()]
-        if group_data.name in existing_names:
-            raise HTTPException(status_code=409, detail=f"小组名称已存在: {group_data.name}")
-        
-        # 生成唯一ID
-        group_id = f"group_{uuid.uuid4().hex[:8]}"
-        now = datetime.now().isoformat()
-        
-        # 创建小组
-        new_group = {
-            'id': group_id,
-            'name': group_data.name,
-            'members': group_data.members,
-            'strategy': group_data.strategy,
-            'circuit_breaker': group_data.circuit_breaker,
-            'elastic_scaling': group_data.elastic_scaling,
-            'status': '离线',  # 新创建的小组默认为离线状态
-            'created_at': now,
-            'updated_at': now,
-            'last_active': None
-        }
-        
-        # 保存到内存
-        _agent_groups[group_id] = new_group
-        
-        # 尝试保存到数据库
-        if _check_db_available():
-            if not _save_group_to_db(new_group):
-                logger.warning(f"保存小组到数据库失败，仅保存到内存: {group_id}")
-        
-        logger.info(f"创建Agent小组成功: {group_data.name} (ID: {group_id})")
-        
-        # 记录审计日志
-        AuditLogger.log('CREATE', group_id, {
-            'name': group_data.name,
-            'members': group_data.members,
-            'strategy': group_data.strategy
-        })
-        
-        return AgentGroupResponse(
-            id=group_id,
-            name=group_data.name,
-            members=group_data.members,
-            strategy=STRATEGY_NAMES[group_data.strategy],
-            circuit_breaker=group_data.circuit_breaker,
-            elastic_scaling=group_data.elastic_scaling,
-            status='离线',
-            created_at=now,
-            updated_at=now,
-            members_count=len(group_data.members),
-            last_active=None
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"创建Agent小组失败: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"创建Agent小组失败: {str(e)}")
 
-@router.put("/{group_id}", response_model=AgentGroupResponse)
-async def update_agent_group(group_id: str, group_data: AgentGroupUpdate):
-    """更新Agent小组配置
+@router.put("/{group_id}", response_model=AgentGroup)
+async def update_agent_group(group_id: str, group_update: AgentGroupUpdate):
+    """更新Agent小组"""
+    if group_id not in _agent_groups:
+        raise HTTPException(status_code=404, detail="Agent小组不存在")
     
-    Args:
-        group_id: 小组ID
-        group_data: 更新数据
+    group = _agent_groups[group_id]
     
-    Returns:
-        更新后的Agent小组
-    """
-    try:
-        if group_id not in _agent_groups:
-            raise HTTPException(status_code=404, detail=f"Agent小组不存在: {group_id}")
-        
-        group = _agent_groups[group_id]
-        
-        # 验证调度策略
-        if group_data.strategy and group_data.strategy not in STRATEGY_NAMES:
-            raise HTTPException(
-                status_code=400, 
-                detail=f"不支持的调度策略: {group_data.strategy}。支持的策略: {list(STRATEGY_NAMES.keys())}"
-            )
-        
-        # 更新字段
-        if group_data.name is not None:
-            group['name'] = group_data.name
-        if group_data.members is not None:
-            group['members'] = group_data.members
-        if group_data.strategy is not None:
-            group['strategy'] = group_data.strategy
-        if group_data.circuit_breaker is not None:
-            group['circuit_breaker'] = group_data.circuit_breaker
-        if group_data.elastic_scaling is not None:
-            group['elastic_scaling'] = group_data.elastic_scaling
-        
-        group['updated_at'] = datetime.now().isoformat()
-        
-        # 尝试保存到数据库
-        if _check_db_available():
-            if not _save_group_to_db(group):
-                logger.warning(f"更新小组到数据库失败，仅更新内存: {group_id}")
-        
-        logger.info(f"更新Agent小组成功: {group['name']} (ID: {group_id})")
-        
-        # 记录审计日志
-        AuditLogger.log('UPDATE', group_id, {
-            'name': group['name'],
-            'members': group['members'],
-            'strategy': group['strategy']
-        })
-        
-        return AgentGroupResponse(
-            id=group['id'],
-            name=group['name'],
-            members=group['members'],
-            strategy=STRATEGY_NAMES.get(group['strategy'], group['strategy']),
-            circuit_breaker=group['circuit_breaker'],
-            elastic_scaling=group['elastic_scaling'],
-            status=group['status'],
-            created_at=group['created_at'],
-            updated_at=group['updated_at'],
-            members_count=len(group['members']),
-            last_active=group.get('last_active')
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"更新Agent小组失败: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"更新Agent小组失败: {str(e)}")
+    update_data = group_update.dict(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(group, field, value)
+    
+    group.updated_at = datetime.now()
+    logger.info(f"更新Agent小组成功: {group.name}")
+    
+    return group
+
 
 @router.delete("/{group_id}")
 async def delete_agent_group(group_id: str):
-    """删除Agent小组
+    """删除Agent小组"""
+    if group_id not in _agent_groups:
+        raise HTTPException(status_code=404, detail="Agent小组不存在")
     
-    Args:
-        group_id: 小组ID
+    group_name = _agent_groups[group_id].name
+    del _agent_groups[group_id]
+    logger.info(f"删除Agent小组成功: {group_name}")
     
-    Returns:
-        删除结果
-    """
-    try:
-        if group_id not in _agent_groups:
-            raise HTTPException(status_code=404, detail=f"Agent小组不存在: {group_id}")
-        
-        group_name = _agent_groups[group_id]['name']
-        
-        # 从内存删除
-        del _agent_groups[group_id]
-        
-        # 尝试从数据库删除
-        if _check_db_available():
-            if not _delete_group_from_db(group_id):
-                logger.warning(f"从数据库删除小组失败，仅删除内存数据: {group_id}")
-        
-        logger.info(f"删除Agent小组成功: {group_name} (ID: {group_id})")
-        
-        # 记录审计日志
-        AuditLogger.log('DELETE', group_id, {
-            'name': group_name
-        })
-        
-        return {
-            "success": True,
-            "message": f"Agent小组 '{group_name}' 已删除",
-            "group_id": group_id
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"删除Agent小组失败: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"删除Agent小组失败: {str(e)}")
+    return {"success": True, "message": f"Agent小组 {group_name} 已删除"}
 
-@router.post("/{group_id}/start")
-async def start_agent_group(group_id: str):
-    """启动Agent小组
-    
-    Args:
-        group_id: 小组ID
-    
-    Returns:
-        启动结果
-    """
-    try:
-        if group_id not in _agent_groups:
-            raise HTTPException(status_code=404, detail=f"Agent小组不存在: {group_id}")
-        
-        group = _agent_groups[group_id]
-        
-        # 检查是否已经在运行
-        if group['status'] == '运行中':
-            return {
-                "success": True,
-                "message": f"Agent小组 '{group['name']}' 已经在运行中",
-                "status": group['status']
-            }
-        
-        # 更新状态
-        old_status = group['status']
-        group['status'] = '运行中'
-        group['updated_at'] = datetime.now().isoformat()
-        group['last_active'] = datetime.now().isoformat()
-        
-        # 尝试保存到数据库
-        if _check_db_available():
-            if not _save_group_to_db(group):
-                logger.warning(f"更新小组状态到数据库失败，仅更新内存: {group_id}")
-        
-        logger.info(f"启动Agent小组成功: {group['name']} (ID: {group_id}, {old_status} → 运行中)")
-        
-        # 记录审计日志
-        AuditLogger.log('START', group_id, {
-            'name': group['name'],
-            'previous_status': old_status,
-            'members': group['members']
-        })
-        
-        # TODO: 这里可以添加实际启动Agent的逻辑
-        # 例如：调用agent_coordinator.start_group(group_id)
-        
-        return {
-            "success": True,
-            "message": f"Agent小组 '{group['name']}' 已启动",
-            "status": "运行中",
-            "members": group['members'],
-            "strategy": STRATEGY_NAMES.get(group['strategy'], group['strategy'])
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"启动Agent小组失败: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"启动Agent小组失败: {str(e)}")
 
-@router.post("/{group_id}/stop")
-async def stop_agent_group(group_id: str):
-    """停止Agent小组
+@router.post("/{group_id}/activate")
+async def activate_agent_group(group_id: str):
+    """激活Agent小组"""
+    if group_id not in _agent_groups:
+        raise HTTPException(status_code=404, detail="Agent小组不存在")
     
-    Args:
-        group_id: 小组ID
+    group = _agent_groups[group_id]
+    group.status = "active"
+    group.updated_at = datetime.now()
     
-    Returns:
-        停止结果
-    """
-    try:
-        if group_id not in _agent_groups:
-            raise HTTPException(status_code=404, detail=f"Agent小组不存在: {group_id}")
-        
-        group = _agent_groups[group_id]
-        
-        # 检查是否已经停止
-        if group['status'] == '离线':
-            return {
-                "success": True,
-                "message": f"Agent小组 '{group['name']}' 已经停止",
-                "status": group['status']
-            }
-        
-        # 更新状态
-        old_status = group['status']
-        group['status'] = '休眠'
-        group['updated_at'] = datetime.now().isoformat()
-        
-        # 尝试保存到数据库
-        if _check_db_available():
-            if not _save_group_to_db(group):
-                logger.warning(f"更新小组状态到数据库失败，仅更新内存: {group_id}")
-        
-        logger.info(f"停止Agent小组成功: {group['name']} (ID: {group_id}, {old_status} → 休眠)")
-        
-        # 记录审计日志
-        AuditLogger.log('STOP', group_id, {
-            'name': group['name'],
-            'previous_status': old_status
-        })
-        
-        # TODO: 这里可以添加实际停止Agent的逻辑
-        # 例如：调用agent_coordinator.stop_group(group_id)
-        
-        return {
-            "success": True,
-            "message": f"Agent小组 '{group['name']}' 已停止",
-            "status": "休眠",
-            "previous_status": old_status
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"停止Agent小组失败: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"停止Agent小组失败: {str(e)}")
+    logger.info(f"激活Agent小组: {group.name}")
+    return {"success": True, "group_id": group_id, "status": "active"}
 
-def _get_strategy_description(strategy_key: str) -> str:
-    """获取调度策略的描述"""
-    descriptions = {
-        'weighted_round_robin': '根据Agent权重轮询分配任务',
-        'least_load': '将任务分配给当前负载最低的Agent',
-        'random': '随机选择Agent执行任务',
-        'priority': '根据优先级顺序分配任务'
+
+@router.post("/{group_id}/deactivate")
+async def deactivate_agent_group(group_id: str):
+    """停用Agent小组"""
+    if group_id not in _agent_groups:
+        raise HTTPException(status_code=404, detail="Agent小组不存在")
+    
+    group = _agent_groups[group_id]
+    group.status = "inactive"
+    group.updated_at = datetime.now()
+    
+    logger.info(f"停用Agent小组: {group.name}")
+    return {"success": True, "group_id": group_id, "status": "inactive"}
+
+
+@router.get("/{group_id}/stats")
+async def get_agent_group_stats(group_id: str):
+    """获取Agent小组统计信息"""
+    if group_id not in _agent_groups:
+        raise HTTPException(status_code=404, detail="Agent小组不存在")
+    
+    group = _agent_groups[group_id]
+    
+    return {
+        "group_id": group_id,
+        "name": group.name,
+        "agent_count": len(group.agents),
+        "enabled_agent_count": len([a for a in group.agents if a.enabled]),
+        "task_count": group.task_count,
+        "success_rate": group.success_rate,
+        "status": group.status,
+        "created_at": group.created_at,
+        "updated_at": group.updated_at
     }
-    return descriptions.get(strategy_key, '未知策略')
+
+
+# ==========================================
+# 小组执行API（与planning_agent集成）
+# ==========================================
+
+class GroupExecuteRequest(BaseModel):
+    """小组执行请求"""
+    message: str
+    use_agents: Optional[List[str]] = None  # 指定使用某些agent，None表示全部
+    strategy: Optional[str] = None  # 调度策略：priority, weighted_round_robin, collaborative, round_robin
+    failure_strategy: Optional[str] = None  # 失败处理策略：fast_fail, retry, degrade, fallback
+    circuit_strategy: Optional[str] = None  # 熔断策略：count_based, rate_based, time_based
+    timeout: Optional[float] = None  # 超时时间（秒）
+
+
+# 全局变量：当前选择的小组
+_current_group_id: Optional[str] = None
+
+
+@router.get("/current/selected")
+async def get_current_group():
+    """获取当前选择的小组"""
+    if _current_group_id and _current_group_id in _agent_groups:
+        return {
+            "success": True,
+            "group": _agent_groups[_current_group_id]
+        }
+    return {
+        "success": False,
+        "group": None
+    }
+
+
+@router.post("/current/select")
+async def select_current_group(group_id: str):
+    """选择当前小组"""
+    global _current_group_id
+    
+    if group_id not in _agent_groups:
+        raise HTTPException(status_code=404, detail="Agent小组不存在")
+    
+    _current_group_id = group_id
+    logger.info(f"已选择小组: {_agent_groups[group_id].name}")
+    
+    return {
+        "success": True,
+        "group_id": group_id,
+        "group": _agent_groups[group_id]
+    }
+
+
+@router.post("/current/execute")
+async def execute_with_current_group(request: GroupExecuteRequest):
+    """使用当前选择的小组执行任务"""
+    global _current_group_id
+    
+    if not _current_group_id or _current_group_id not in _agent_groups:
+        raise HTTPException(status_code=400, detail="请先选择一个Agent小组")
+    
+    group = _agent_groups[_current_group_id]
+    
+    # 使用小组配置作为默认值
+    final_strategy = request.strategy or group.strategy
+    final_failure_strategy = request.failure_strategy or getattr(group, 'failure_strategy', None)
+    final_circuit_strategy = request.circuit_strategy or getattr(group, 'circuit_strategy', None)
+    final_timeout = request.timeout or getattr(group, 'timeout', None)
+    
+    logger.info(f"小组 {group.name} 开始执行任务，策略: {final_strategy}, "
+                f"失败策略: {final_failure_strategy}, 熔断策略: {final_circuit_strategy}, 超时: {final_timeout}")
+    
+    # 使用新的Agent小组执行引擎
+    try:
+        from agent_group_executor import agent_group_executor
+    except Exception as e:
+        logger.error(f"导入Agent执行引擎失败: {e}")
+        raise HTTPException(status_code=500, detail="执行引擎初始化失败")
+    
+    try:
+        result = await agent_group_executor.execute_with_group(
+            group,
+            request.message,
+            strategy=final_strategy,
+            failure_strategy=final_failure_strategy,
+            circuit_strategy=final_circuit_strategy,
+            timeout=final_timeout
+        )
+        
+        # 更新小组统计
+        group.task_count += 1
+        if result.get('total_count', 0) > 0:
+            group.success_rate = result.get('success_count', 0) / result.get('total_count', 1)
+        group.updated_at = datetime.now()
+        
+        return result
+    except Exception as e:
+        logger.error(f"小组执行任务失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{group_id}/execute")
+async def execute_with_group(group_id: str, request: GroupExecuteRequest):
+    """使用指定的小组执行任务"""
+    if group_id not in _agent_groups:
+        raise HTTPException(status_code=404, detail="Agent小组不存在")
+    
+    group = _agent_groups[group_id]
+    
+    # 使用小组配置作为默认值
+    final_strategy = request.strategy or group.strategy
+    final_failure_strategy = request.failure_strategy or getattr(group, 'failure_strategy', None)
+    final_circuit_strategy = request.circuit_strategy or getattr(group, 'circuit_strategy', None)
+    final_timeout = request.timeout or getattr(group, 'timeout', None)
+    
+    logger.info(f"小组 {group.name} 开始执行任务，策略: {final_strategy}, "
+                f"失败策略: {final_failure_strategy}, 熔断策略: {final_circuit_strategy}, 超时: {final_timeout}")
+    
+    # 使用Agent小组执行引擎
+    try:
+        from agent_group_executor import agent_group_executor
+    except Exception as e:
+        logger.error(f"导入Agent执行引擎失败: {e}")
+        raise HTTPException(status_code=500, detail="执行引擎初始化失败")
+    
+    try:
+        result = await agent_group_executor.execute_with_group(
+            group,
+            request.message,
+            strategy=final_strategy,
+            failure_strategy=final_failure_strategy,
+            circuit_strategy=final_circuit_strategy,
+            timeout=final_timeout
+        )
+        
+        # 更新小组统计
+        group.task_count += 1
+        if result.get('total_count', 0) > 0:
+            group.success_rate = result.get('success_count', 0) / result.get('total_count', 1)
+        group.updated_at = datetime.now()
+        
+        return result
+    except Exception as e:
+        logger.error(f"小组执行任务失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==========================================
+# 初始化一些示例数据
+# ==========================================
+
+def _initialize_sample_groups():
+    """初始化示例Agent小组"""
+    # 获取可用Agent
+    character_agents = get_character_agents()
+    tool_agents = get_tool_agents()
+    
+    # 创建示例小组1：技术评审团队 - 并行评审模式
+    review_team_agents = []
+    
+    # 添加Linus Torvalds（技术专家）
+    linus_agent = next((a for a in character_agents if a["agent_id"] == "character_linus_torvalds"), None)
+    if linus_agent:
+        review_team_agents.append(AgentInGroup(**{
+            **linus_agent,
+            "skills": [
+                AgentSkill(skill_id="review", skill_name="代码评审", enabled=True),
+                AgentSkill(skill_id="system_toolbox", skill_name="系统工具箱", enabled=True)
+            ]
+        }))
+    
+    # 添加苏格拉底（提问和启发）
+    socrates_agent = next((a for a in character_agents if a["agent_id"] == "character_teacher"), None)
+    if socrates_agent:
+        review_team_agents.append(AgentInGroup(**{
+            **socrates_agent,
+            "skills": [
+                AgentSkill(skill_id="review", skill_name="评审", enabled=True),
+                AgentSkill(skill_id="search_engine", skill_name="搜索引擎", enabled=True)
+            ]
+        }))
+    
+    # 添加深度思考者
+    deep_thinker_agent = next((a for a in tool_agents if a["agent_id"] == "tool_deep_thinker"), None)
+    if deep_thinker_agent:
+        review_team_agents.append(AgentInGroup(**deep_thinker_agent))
+    
+    if review_team_agents:
+        review_team = AgentGroup(
+            group_id=str(uuid.uuid4()),
+            name="技术评审团队",
+            description="代码审查和技术方案评审团队，多专家并行评审",
+            agents=review_team_agents,
+            strategy="parallel_review",
+            circuit_breaker=True,
+            elastic_scaling=False
+        )
+        _agent_groups[review_team.group_id] = review_team
+    
+    # 创建示例小组2：创意流水线团队 - 流水线模式
+    pipeline_team_agents = []
+    
+    # 添加达芬奇（创意设计）
+    davinci_agent = next((a for a in character_agents if a["agent_id"] == "character_artist"), None)
+    if davinci_agent:
+        pipeline_team_agents.append(AgentInGroup(**{
+            **davinci_agent,
+            "skills": [
+                AgentSkill(skill_id="creative_writing", skill_name="创意写作", enabled=True),
+                AgentSkill(skill_id="search_engine", skill_name="搜索引擎", enabled=True)
+            ]
+        }))
+    
+    # 添加莎士比亚（文学创作）
+    shakespeare_agent = next((a for a in character_agents if a["agent_id"] == "character_writer"), None)
+    if shakespeare_agent:
+        pipeline_team_agents.append(AgentInGroup(**{
+            **shakespeare_agent,
+            "skills": [
+                AgentSkill(skill_id="writing", skill_name="写作", enabled=True),
+                AgentSkill(skill_id="text_analyzer", skill_name="文本分析", enabled=True)
+            ]
+        }))
+    
+    # 添加李白（诗歌创作）
+    libai_agent = next((a for a in character_agents if a["agent_id"] == "character_libai"), None)
+    if libai_agent:
+        pipeline_team_agents.append(AgentInGroup(**{
+            **libai_agent,
+            "skills": [
+                AgentSkill(skill_id="translation", skill_name="翻译", enabled=True),
+                AgentSkill(skill_id="writing", skill_name="写作", enabled=True)
+            ]
+        }))
+    
+    if pipeline_team_agents:
+        pipeline_team = AgentGroup(
+            group_id=str(uuid.uuid4()),
+            name="创意流水线团队",
+            description="创意设计、写作、翻译流水线协作",
+            agents=pipeline_team_agents,
+            strategy="pipeline",
+            circuit_breaker=False,
+            elastic_scaling=False
+        )
+        _agent_groups[pipeline_team.group_id] = pipeline_team
+    
+    # 创建示例小组3：科学研究团队 - 主从协作模式
+    science_team_agents = []
+    
+    # 添加爱因斯坦（主Agent - 任务拆解）
+    einstein_agent = next((a for a in character_agents if a["agent_id"] == "character_scientist"), None)
+    if einstein_agent:
+        science_team_agents.append(AgentInGroup(**{
+            **einstein_agent,
+            "skills": [
+                AgentSkill(skill_id="deep_thinking", skill_name="深度思考", enabled=True),
+                AgentSkill(skill_id="calculator", skill_name="计算器", enabled=True)
+            ]
+        }))
+    
+    # 添加研究员
+    researcher_agent = next((a for a in tool_agents if a["agent_id"] == "tool_researcher"), None)
+    if researcher_agent:
+        science_team_agents.append(AgentInGroup(**researcher_agent))
+    
+    # 添加计算器
+    calculator_agent = next((a for a in tool_agents if a["agent_id"] == "tool_calculator"), None)
+    if calculator_agent:
+        science_team_agents.append(AgentInGroup(**calculator_agent))
+    
+    # 添加数据分析员
+    analyzer_agent = next((a for a in tool_agents if a["agent_id"] == "tool_analyzer"), None)
+    if analyzer_agent:
+        science_team_agents.append(AgentInGroup(**analyzer_agent))
+    
+    if science_team_agents:
+        science_team = AgentGroup(
+            group_id=str(uuid.uuid4()),
+            name="科学研究团队",
+            description="科学研究、深度思考和数据分析团队，主从协作模式",
+            agents=science_team_agents,
+            strategy="master_slave",
+            circuit_breaker=True,
+            elastic_scaling=False
+        )
+        _agent_groups[science_team.group_id] = science_team
+    
+    logger.info(f"初始化示例Agent小组完成，共 {len(_agent_groups)} 个小组")
+
+
+# ==========================================
+# 场景1：多Agent小组协作 API
+# ==========================================
+
+class CollaborationRequest(BaseModel):
+    """协作请求"""
+    task: str = Field(..., description="任务描述")
+    strategy: Optional[str] = Field("parallel", description="协作策略: parallel, sequential")
+    use_auto_coordination: bool = Field(True, description="是否使用自动协调")
+
+class SessionStatusResponse(BaseModel):
+    """会话状态响应"""
+    session_id: str
+    status: str
+    phase: str
+    total_subtasks: int
+    completed_subtasks: int
+    results: Optional[Dict[str, Any]] = None
+    error_message: Optional[str] = None
+
+
+@router.post("/collaborate/analyze")
+async def analyze_and_recommend_agents(request: CollaborationRequest):
+    """分析任务并推荐Agent小组"""
+    try:
+        from core.group_collaboration import get_group_coordinator
+        coordinator = get_group_coordinator()
+        
+        recommendation = coordinator.recommend_agent_groups(request.task)
+        
+        return {
+            "success": True,
+            "task_analysis": {
+                "required_capabilities": [cap.value for cap in recommendation.required_capabilities],
+                "task_type": "complex" if len(recommendation.required_capabilities) > 1 else "simple"
+            },
+            "recommended_groups": [
+                {
+                    "group_id": g.group_id,
+                    "name": g.name,
+                    "description": g.description,
+                    "capabilities": [c.value for c in g.capabilities],
+                    "success_rate": g.success_rate
+                }
+                for g in recommendation.recommended_groups
+            ],
+            "requires_new_agent": recommendation.requires_new_agent,
+            "suggested_agent": {
+                "name": recommendation.suggested_agent_name,
+                "description": recommendation.suggested_agent_description
+            } if recommendation.requires_new_agent else None
+        }
+    except Exception as e:
+        logger.error(f"任务分析失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/collaborate/start")
+async def start_collaboration_session(request: CollaborationRequest):
+    """启动多Agent小组协作会话"""
+    try:
+        from core.group_collaboration import get_group_coordinator, CollaborationStrategy
+        
+        coordinator = get_group_coordinator()
+        
+        strategy_map = {
+            "parallel": CollaborationStrategy.PARALLEL,
+            "sequential": CollaborationStrategy.SEQUENTIAL,
+            "hierarchical": CollaborationStrategy.HIERARCHICAL
+        }
+        
+        strategy = strategy_map.get(request.strategy, CollaborationStrategy.PARALLEL)
+        
+        session = await coordinator.start_collaboration_session(request.task, strategy)
+        
+        return {
+            "success": True,
+            "session_id": session.session_id,
+            "total_subtasks": len(session.subtasks),
+            "participant_groups": session.participant_groups,
+            "subtasks": [
+                {
+                    "subtask_id": st.subtask_id,
+                    "description": st.description,
+                    "required_capability": st.required_capability.value,
+                    "assigned_group": st.assigned_group,
+                    "priority": st.priority
+                }
+                for st in session.subtasks
+            ]
+        }
+    except Exception as e:
+        logger.error(f"启动协作会话失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/collaborate/{session_id}/execute")
+async def execute_collaboration(session_id: str):
+    """执行协作任务"""
+    try:
+        from core.group_collaboration import get_group_coordinator
+        from agent_group_executor import agent_group_executor
+        
+        coordinator = get_group_coordinator()
+        session = coordinator.get_session_status(session_id)
+        
+        if not session:
+            raise HTTPException(status_code=404, detail="会话不存在")
+        
+        # 创建一个简易的执行器包装
+        class SimpleExecutor:
+            def __init__(self):
+                pass
+            
+            async def execute_with_group_id(self, group_id: str, message: str):
+                if group_id not in _agent_groups:
+                    return {"success": False, "error": "小组不存在"}
+                
+                group = _agent_groups[group_id]
+                try:
+                    result = await agent_group_executor.execute_with_group(
+                        group,
+                        message
+                    )
+                    return result
+                except Exception as e:
+                    return {"success": False, "error": str(e)}
+        
+        executor = SimpleExecutor()
+        
+        result = await coordinator.execute_collaboration(session, executor)
+        
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"执行协作失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/collaborate/{session_id}/status")
+async def get_collaboration_status(session_id: str):
+    """获取协作会话状态"""
+    try:
+        from core.group_collaboration import get_group_coordinator
+        
+        coordinator = get_group_coordinator()
+        session = coordinator.get_session_status(session_id)
+        
+        if not session:
+            raise HTTPException(status_code=404, detail="会话不存在")
+        
+        completed = len([st for st in session.subtasks if st.status == "completed"])
+        
+        return {
+            "success": True,
+            "session_id": session.session_id,
+            "status": session.status,
+            "phase": session.phase.value,
+            "total_subtasks": len(session.subtasks),
+            "completed_subtasks": completed,
+            "subtasks": [
+                {
+                    "subtask_id": st.subtask_id,
+                    "description": st.description,
+                    "status": st.status,
+                    "assigned_group": st.assigned_group
+                }
+                for st in session.subtasks
+            ]
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取会话状态失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==========================================
+# 场景2：无对应Agent处理 API
+# ==========================================
+
+class NewAgentRequest(BaseModel):
+    """创建新Agent请求"""
+    task_example: str = Field(..., description="任务示例")
+    agent_name: Optional[str] = Field(None, description="Agent名称")
+    agent_description: Optional[str] = Field(None, description="Agent描述")
+
+class AgentRequestApproval(BaseModel):
+    """Agent添加请求审批"""
+    request_id: str
+    approve: bool = Field(True, description="是否批准")
+    make_permanent: bool = Field(False, description="是否转为永久Agent")
+
+
+@router.post("/missing-agent/analyze")
+async def analyze_missing_agent(request: NewAgentRequest):
+    """分析缺失的Agent需求"""
+    try:
+        from core.group_collaboration import get_group_coordinator
+        
+        coordinator = get_group_coordinator()
+        recommendation = coordinator.recommend_agent_groups(request.task_example)
+        
+        if not recommendation.requires_new_agent:
+            return {
+                "success": True,
+                "requires_new_agent": False,
+                "message": "已有合适的Agent可以处理此任务",
+                "recommended_groups": [
+                    {"group_id": g.group_id, "name": g.name}
+                    for g in recommendation.recommended_groups
+                ]
+            }
+        
+        return {
+            "success": True,
+            "requires_new_agent": True,
+            "required_capabilities": [cap.value for cap in recommendation.required_capabilities],
+            "suggested_agent": {
+                "name": recommendation.suggested_agent_name,
+                "description": recommendation.suggested_agent_description
+            }
+        }
+    except Exception as e:
+        logger.error(f"分析缺失Agent失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/missing-agent/create-temporary")
+async def create_temporary_agent(request: NewAgentRequest):
+    """创建临时Agent"""
+    try:
+        from core.group_collaboration import get_group_coordinator, get_temp_agent_creator, AgentCapability
+        
+        coordinator = get_group_coordinator()
+        creator = get_temp_agent_creator()
+        
+        recommendation = coordinator.recommend_agent_groups(request.task_example)
+        
+        if not recommendation.requires_new_agent:
+            raise HTTPException(status_code=400, detail="不需要创建新Agent")
+        
+        agent_name = request.agent_name or recommendation.suggested_agent_name
+        agent_description = request.agent_description or recommendation.suggested_agent_description
+        
+        config = creator.create_temporary_agent_config(
+            recommendation.required_capabilities,
+            agent_name,
+            agent_description
+        )
+        
+        return {
+            "success": True,
+            "temporary_agent": config,
+            "message": "临时Agent已创建，管理员将收到添加请求",
+            "requires_supervision": config["requires_supervision"]
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"创建临时Agent失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/missing-agent/pending-requests")
+async def get_pending_agent_requests():
+    """获取待审批的Agent添加请求"""
+    try:
+        from core.group_collaboration import get_temp_agent_creator
+        
+        creator = get_temp_agent_creator()
+        pending = creator.get_pending_requests()
+        
+        return {
+            "success": True,
+            "pending_requests": pending
+        }
+    except Exception as e:
+        logger.error(f"获取待处理请求失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/missing-agent/approve")
+async def approve_agent_request(approval: AgentRequestApproval):
+    """审批Agent添加请求"""
+    try:
+        from core.group_collaboration import get_temp_agent_creator
+        
+        creator = get_temp_agent_creator()
+        
+        if approval.approve:
+            success = creator.approve_agent_request(approval.request_id, approval.make_permanent)
+            if success:
+                return {
+                    "success": True,
+                    "message": "Agent添加请求已批准" + ("并已转为永久Agent" if approval.make_permanent else "")
+                }
+            else:
+                raise HTTPException(status_code=404, detail="请求不存在")
+        else:
+            return {
+                "success": True,
+                "message": "Agent添加请求已拒绝"
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"审批请求失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==========================================
+# 初始化能力画像
+# ==========================================
+
+def _register_group_profiles():
+    """为示例小组注册能力画像"""
+    try:
+        from core.group_collaboration import get_group_coordinator, AgentGroupProfile, AgentCapability
+        
+        coordinator = get_group_coordinator()
+        
+        for group_id, group in _agent_groups.items():
+            capabilities = []
+            
+            if "技术" in group.name or "技术智囊团" == group.name:
+                capabilities.extend([AgentCapability.DATA_ANALYSIS, AgentCapability.WEB_SEARCH, AgentCapability.REASONING])
+            elif "文学" in group.name or "文学创作" in group.name:
+                capabilities.extend([AgentCapability.CREATIVE_WRITING, AgentCapability.TRANSLATION, AgentCapability.TEXT_GENERATION])
+            elif "科学" in group.name or "研究" in group.name:
+                capabilities.extend([AgentCapability.DATA_ANALYSIS, AgentCapability.REASONING, AgentCapability.TEXT_GENERATION])
+            else:
+                capabilities.append(AgentCapability.REASONING)
+            
+            profile = AgentGroupProfile(
+                group_id=group_id,
+                name=group.name,
+                capabilities=capabilities,
+                description=group.description,
+                success_rate=group.success_rate,
+                total_tasks=group.task_count
+            )
+            
+            coordinator.register_group_profile(profile)
+        
+        logger.info("✅ Agent小组能力画像注册完成")
+    except Exception as e:
+        logger.warning(f"注册能力画像失败: {e}")
+
+
+# 初始化示例数据
+_initialize_sample_groups()
+
+# 注册能力画像（延迟执行，避免循环导入）
+import threading
+threading.Thread(target=_register_group_profiles, daemon=True).start()

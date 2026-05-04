@@ -1,29 +1,84 @@
 """深度思考引擎
 
-核心功能：
-- 理解问题并判断是否需要信息
-- 制定思考计划和步骤
-- 评估信息需求并触发搜索
-- 执行验证和自我反思
-- 修正和完善答案
+基于 Deep Thinking Protocol 框架的智能思考系统，包含以下核心功能：
+1. 问题理解 - 理解用户意图和需求
+2. 信息收集 - 收集必要的背景信息和知识
+3. 方案设计 - 生成和评估多个解决路径
+4. 执行验证 - 实施方案并验证结果
+5. 反思优化 - 总结经验并持续改进
 
-实现原理：
-- 多轮隐式推理
-- 思维链（CoT）强化版
-- 自我反思（Self-Reflect）
+思考深度级别：
+- Level 1: Quick (快速模式，< 5秒)
+- Level 2: Standard (标准模式，5-30秒)
+- Level 3: Deep (深度模式，> 30秒)
 """
 import logging
 import asyncio
 import hashlib
+import math
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
 from collections import OrderedDict
+from enum import Enum
 
 logger = logging.getLogger(__name__)
 
 
+class ThinkingDepth(Enum):
+    """思考深度级别枚举"""
+    QUICK = "quick"          # Level 1: 快速模式
+    STANDARD = "standard"    # Level 2: 标准模式
+    DEEP = "deep"            # Level 3: 深度模式
+
+
+class TaskComplexity(Enum):
+    """任务复杂度级别"""
+    SIMPLE = "simple"
+    MODERATE = "moderate"
+    COMPLEX = "complex"
+
+
+class ImpactLevel(Enum):
+    """影响程度级别"""
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+# 全局单例
+_rag_engine = None
+_short_term_memory = None
+
+def _get_rag_engine():
+    global _rag_engine
+    if _rag_engine is None:
+        try:
+            from core.rag_search_engine import get_rag_engine
+            _rag_engine = get_rag_engine()
+        except Exception as e:
+            logger.warning("RAG引擎初始化失败: %s", e)
+    return _rag_engine
+
+def _get_short_term_memory():
+    global _short_term_memory
+    if _short_term_memory is None:
+        try:
+            from core.handlers import short_term_memory
+            _short_term_memory = short_term_memory
+        except Exception as e:
+            logger.warning("短时记忆管理器初始化失败: %s", e)
+    return _short_term_memory
+
+
 class ReasoningEngine:
-    """深度思考引擎"""
+    """基于 Deep Thinking Protocol 的深度思考引擎
+    
+    核心5阶段框架：
+    1. 问题理解 - 理解用户需求和边界
+    2. 信息收集 - 收集必要知识和上下文
+    3. 方案设计 - 生成多个解决方案并评估
+    4. 执行验证 - 实施并验证结果
+    5. 反思优化 - 总结经验并改进
+    """
     
     def __init__(self):
         self.llm_router = None
@@ -36,6 +91,407 @@ class ReasoningEngine:
         # 批量缓存检查和清理
         self._last_cache_cleanup = datetime.now()
         self._cache_cleanup_interval = timedelta(minutes=5)  # 每5分钟清理一次过期缓存
+        # 决策复杂度矩阵
+        self._complexity_matrix = self._build_complexity_matrix()
+        # 质量标准检查器
+        self._quality_standards = self._build_quality_standards()
+    
+    def _build_complexity_matrix(self) -> Dict[str, ThinkingDepth]:
+        """构建决策复杂度矩阵
+        
+        Returns:
+            (复杂度, 影响程度) -> 思考深度的映射
+        """
+        return {
+            (TaskComplexity.SIMPLE, ImpactLevel.LOW): ThinkingDepth.QUICK,
+            (TaskComplexity.SIMPLE, ImpactLevel.MEDIUM): ThinkingDepth.QUICK,
+            (TaskComplexity.SIMPLE, ImpactLevel.HIGH): ThinkingDepth.STANDARD,
+            (TaskComplexity.MODERATE, ImpactLevel.LOW): ThinkingDepth.QUICK,
+            (TaskComplexity.MODERATE, ImpactLevel.MEDIUM): ThinkingDepth.STANDARD,
+            (TaskComplexity.MODERATE, ImpactLevel.HIGH): ThinkingDepth.DEEP,
+            (TaskComplexity.COMPLEX, ImpactLevel.LOW): ThinkingDepth.STANDARD,
+            (TaskComplexity.COMPLEX, ImpactLevel.MEDIUM): ThinkingDepth.DEEP,
+            (TaskComplexity.COMPLEX, ImpactLevel.HIGH): ThinkingDepth.DEEP,
+        }
+    
+    def _build_quality_standards(self) -> Dict[str, Dict[str, Any]]:
+        """构建质量标准检查器
+        
+        Returns:
+            质量标准配置
+        """
+        return {
+            "completeness": {
+                "description": "完整性：所有子任务都被处理，没有隐含假设",
+                "checker": self._check_completeness,
+                "min_score": 0.7
+            },
+            "correctness": {
+                "description": "正确性：逻辑一致，信息准确，工具使用正确",
+                "checker": self._check_correctness,
+                "min_score": 0.7
+            },
+            "feasibility": {
+                "description": "可行性：技术上可实现，在资源约束内",
+                "checker": self._check_feasibility,
+                "min_score": 0.6
+            },
+            "efficiency": {
+                "description": "效率：思考时间与任务价值成正比",
+                "checker": self._check_efficiency,
+                "min_score": 0.5
+            },
+            "explainability": {
+                "description": "可解释性：能清楚说明决策理由",
+                "checker": self._check_explainability,
+                "min_score": 0.6
+            }
+        }
+    
+    # ========== 质量标准检查方法 ==========
+    def _check_completeness(self, thinking_process: Dict[str, Any], message: str) -> float:
+        """检查完整性得分
+        
+        Args:
+            thinking_process: 思考过程
+            message: 用户消息
+            
+        Returns:
+            完整性得分 (0-1)
+        """
+        score = 0.5  # 基础分
+        
+        # 检查是否有问题理解
+        if 'understanding' in thinking_process:
+            score += 0.15
+        
+        # 检查是否有思考计划
+        if 'plan' in thinking_process:
+            score += 0.15
+        
+        # 检查是否有验证反思
+        if 'validation' in thinking_process:
+            score += 0.1
+        
+        # 检查关键信息提取
+        understanding = thinking_process.get('understanding', {})
+        if understanding.get('key_information'):
+            score += 0.1
+        
+        return min(score, 1.0)
+    
+    def _check_correctness(self, thinking_process: Dict[str, Any], message: str) -> float:
+        """检查正确性得分
+        
+        Args:
+            thinking_process: 思考过程
+            message: 用户消息
+            
+        Returns:
+            正确性得分 (0-1)
+        """
+        score = 0.5
+        
+        # 检查验证是否通过
+        validation = thinking_process.get('validation', {})
+        if validation.get('validation_passed'):
+            score += 0.2
+        
+        # 检查置信度
+        confidence = validation.get('confidence', 0.5)
+        score += confidence * 0.2
+        
+        # 检查是否有关键证据
+        if validation.get('key_evidence'):
+            score += 0.1
+        
+        return min(score, 1.0)
+    
+    def _check_feasibility(self, thinking_process: Dict[str, Any], message: str) -> float:
+        """检查可行性得分
+        
+        Args:
+            thinking_process: 思考过程
+            message: 用户消息
+            
+        Returns:
+            可行性得分 (0-1)
+        """
+        score = 0.6
+        
+        # 检查是否有明确的计划
+        plan = thinking_process.get('plan', {})
+        if plan.get('steps'):
+            score += 0.2
+        
+        # 检查是否有备用方案
+        if 'fallback_plans' in thinking_process:
+            score += 0.2
+        
+        return min(score, 1.0)
+    
+    def _check_efficiency(self, thinking_process: Dict[str, Any], message: str) -> float:
+        """检查效率得分
+        
+        Args:
+            thinking_process: 思考过程
+            message: 用户消息
+            
+        Returns:
+            效率得分 (0-1)
+        """
+        score = 0.7
+        
+        # 检查是否合理使用搜索
+        info_needed = thinking_process.get('info_needed', {})
+        needs_search = info_needed.get('needs_search', False)
+        
+        # 简单问题不搜索更高效
+        if len(message) < 20 and not needs_search:
+            score += 0.3
+        elif needs_search:
+            # 有搜索需求时执行搜索是合理的
+            score += 0.1
+        
+        return min(score, 1.0)
+    
+    def _check_explainability(self, thinking_process: Dict[str, Any], message: str) -> float:
+        """检查可解释性得分
+        
+        Args:
+            thinking_process: 思考过程
+            message: 用户消息
+            
+        Returns:
+            可解释性得分 (0-1)
+        """
+        score = 0.6
+        
+        # 检查是否有清晰的思考步骤
+        if 'steps' in thinking_process:
+            score += 0.2
+        
+        # 检查是否有反思内容
+        validation = thinking_process.get('validation', {})
+        if validation.get('reflection'):
+            score += 0.2
+        
+        return min(score, 1.0)
+    
+    # ========== 思考深度选择方法 ==========
+    def determine_thinking_depth(self, message: str) -> ThinkingDepth:
+        """根据决策复杂度矩阵确定思考深度
+        
+        Args:
+            message: 用户消息
+            
+        Returns:
+            确定的思考深度级别
+        """
+        # 分析任务复杂度
+        complexity = self._determine_task_complexity(message)
+        
+        # 分析影响程度
+        impact = self._determine_impact_level(message)
+        
+        # 使用复杂度矩阵确定思考深度
+        key = (complexity, impact)
+        depth = self._complexity_matrix.get(key, ThinkingDepth.STANDARD)
+        
+        logger.info(f"思考深度决策：复杂度={complexity.value}, 影响={impact.value} -> 深度={depth.value}")
+        return depth
+    
+    def _determine_task_complexity(self, message: str) -> TaskComplexity:
+        """确定任务复杂度级别
+        
+        Args:
+            message: 用户消息
+            
+        Returns:
+            任务复杂度级别
+        """
+        score = self._calculate_complexity_score(message)
+        
+        if score < 6:
+            return TaskComplexity.SIMPLE
+        elif score < 11:
+            return TaskComplexity.MODERATE
+        else:
+            return TaskComplexity.COMPLEX
+    
+    def _calculate_complexity_score(self, message: str) -> int:
+        """计算任务复杂度分数
+        
+        Args:
+            message: 用户消息
+            
+        Returns:
+            复杂度分数
+        """
+        score = 0
+        message_lower = message.lower()
+        
+        # 1. 长度分析
+        length = len(message)
+        if length <= 10:
+            score += 0
+        elif length <= 20:
+            score += 1
+        elif length <= 40:
+            score += 2
+        elif length <= 60:
+            score += 4
+        elif length <= 100:
+            score += 6
+        else:
+            score += 8
+        
+        # 2. 多问题检测
+        question_count = message.count('？') + message.count('?')
+        if question_count == 1:
+            score += 2
+        elif question_count >= 2:
+            score += 5
+        
+        # 3. 条件句式
+        conditional_keywords = ['如果', '假如', '要是', '若', '倘若', '一旦', 'if']
+        if any(kw in message_lower for kw in conditional_keywords):
+            score += 3
+        
+        # 4. 比较句式
+        comparison_keywords = ['和', '与', '相比', '比较', '哪个', '哪一个', 'vs', 'or']
+        if any(kw in message_lower for kw in comparison_keywords):
+            score += 3
+        
+        # 5. 因果句式
+        causal_keywords = ['因为', '所以', '因此', '由于', '导致', '造成', 'because', 'so']
+        if any(kw in message_lower for kw in causal_keywords):
+            score += 3
+        
+        # 6. 推理句式
+        reasoning_keywords = ['为什么', '如何', '怎么', '怎样', '应该', '需要', 'why', 'how']
+        reasoning_count = sum(1 for kw in reasoning_keywords if kw in message_lower)
+        score += reasoning_count * 2
+        
+        # 7. 领域检测
+        domain_keywords = {
+            'technical': ['python', '编程', '代码', '算法', '数据', '软件', '开发', '系统', 'api'],
+            'math': ['计算', '公式', '证明', '定理', '方程', '求解', '数学'],
+            'science': ['实验', '研究', '发现', '理论', '分析', '原理', '科学'],
+            'business': ['市场', '营销', '销售', '利润', '投资', '管理', '商业'],
+            'legal': ['法律', '法规', '合同', '权利', '义务', '诉讼', '司法']
+        }
+        
+        domains_found = 0
+        for domain, keywords in domain_keywords.items():
+            if any(kw.lower() in message_lower for kw in keywords):
+                domains_found += 1
+        
+        score += domains_found * 3
+        
+        # 8. 实时信息需求
+        realtime_keywords = ["最新", "最近", "今天", "现在", "新闻", "趋势", "天气", "当前"]
+        if any(kw in message_lower for kw in realtime_keywords):
+            score += 3
+        
+        # 9. 深度思考触发词
+        deep_thinking_keywords = ["分析", "研究", "评估", "思考", "总结", "解释", "设计", "规划"]
+        if any(kw in message_lower for kw in deep_thinking_keywords):
+            score += 4
+        
+        # 10. 多步任务指示词
+        multistep_keywords = ["先", "然后", "接着", "再", "最后", "之后", "并且", "同时"]
+        if any(kw in message_lower for kw in multistep_keywords):
+            score += 3
+        
+        return score
+    
+    def _determine_impact_level(self, message: str) -> ImpactLevel:
+        """确定任务影响程度
+        
+        Args:
+            message: 用户消息
+            
+        Returns:
+            影响程度级别
+        """
+        message_lower = message.lower()
+        
+        # 高影响关键词
+        high_impact_keywords = [
+            "重要", "关键", "紧急", "严重", "核心", "必须", "生死攸关",
+            "战略", "长期", "重大", "影响深远", "不可逆", "决策"
+        ]
+        
+        # 中影响关键词
+        medium_impact_keywords = [
+            "建议", "规划", "设计", "分析", "研究", "评估",
+            "优化", "改进", "提升", "重要性"
+        ]
+        
+        # 检查高影响
+        high_hit = sum(1 for kw in high_impact_keywords if kw in message_lower)
+        if high_hit >= 1:
+            return ImpactLevel.HIGH
+        
+        # 检查中影响
+        medium_hit = sum(1 for kw in medium_impact_keywords if kw in message_lower)
+        if medium_hit >= 2 or len(message) > 50:
+            return ImpactLevel.MEDIUM
+        
+        # 默认低影响
+        return ImpactLevel.LOW
+    
+    def evaluate_quality(self, thinking_process: Dict[str, Any], message: str) -> Dict[str, Any]:
+        """评估思考质量
+        
+        Args:
+            thinking_process: 思考过程
+            message: 用户消息
+            
+        Returns:
+            质量评估结果
+        """
+        quality_report = {
+            "overall_score": 0.0,
+            "standards": {},
+            "passed": True,
+            "improvement_suggestions": []
+        }
+        
+        total_score = 0.0
+        standards_count = 0
+        
+        for standard_name, standard_config in self._quality_standards.items():
+            checker = standard_config["checker"]
+            min_score = standard_config["min_score"]
+            
+            try:
+                score = checker(thinking_process, message)
+                passed = score >= min_score
+                
+                quality_report["standards"][standard_name] = {
+                    "description": standard_config["description"],
+                    "score": score,
+                    "min_score": min_score,
+                    "passed": passed
+                }
+                
+                total_score += score
+                standards_count += 1
+                
+                if not passed:
+                    quality_report["passed"] = False
+                    quality_report["improvement_suggestions"].append(
+                        f"{standard_name}: 需要改进（当前 {score:.2f}，要求 {min_score:.2f}）"
+                    )
+            except Exception as e:
+                logger.warning(f"质量标准检查失败 {standard_name}: {e}")
+        
+        if standards_count > 0:
+            quality_report["overall_score"] = total_score / standards_count
+        
+        return quality_report
     
     def _initialize_dependencies(self):
         """初始化依赖"""
@@ -128,7 +584,37 @@ class ReasoningEngine:
             self._cache.popitem(last=False)
     
     async def process(self, message: str, user_id: int = 1) -> Dict[str, Any]:
-        """处理用户消息，执行深度思考
+        """处理用户消息，执行深度思考（使用新的 Deep Thinking Protocol）
+        
+        Args:
+            message: 用户消息
+            user_id: 用户ID
+            
+        Returns:
+            包含思考过程和最终答案的字典
+        """
+        # 先使用legacy实现（完整版本）
+        result = await self.process_legacy(message, user_id)
+        
+        # 在此基础上，添加新的protocol功能：思考深度和质量评估
+        try:
+            # 1. 添加思考深度信息
+            depth = self.determine_thinking_depth(message)
+            result["thinking_depth"] = depth.value
+            result["quality_assessment"] = "added"
+            
+            # 2. 添加质量评估
+            thinking_process = result.get("thinking_process", {})
+            quality_report = self.evaluate_quality(thinking_process, message)
+            result["quality_report"] = quality_report
+            
+        except Exception as e:
+            logger.warning(f"添加protocol增强信息时出错: {e}")
+        
+        return result
+    
+    async def process_legacy(self, message: str, user_id: int = 1) -> Dict[str, Any]:
+        """处理用户消息，执行深度思考（旧版本，保留用于兼容性）
         
         Args:
             message: 用户消息
@@ -189,6 +675,10 @@ class ReasoningEngine:
             search_results = await self._execute_search(info_needed, message)
             logger.info("搜索结果数量: %d", len(search_results))
         
+        # 新增：获取BFS第2层匹配和RAG相似标签
+        bfs_layer2 = await self._get_bfs_layer2_matching(message, info_needed.get("search_keywords", []))
+        rag_similar = await self._get_rag_similar_tags(info_needed.get("search_keywords", []))
+        
         # 6. 执行验证和自我反思
         validation = await self._validate_and_reflect(plan, search_results, message)
         logger.info("验证和反思结果: %s", validation)
@@ -199,8 +689,84 @@ class ReasoningEngine:
         # 8. 生成最终答案
         final_answer = await self._generate_final_answer(plan, search_results, validation, message, fused_info)
         
+        # 9. ✅ 新增：多轮反思迭代优化
+        reflection_iterations = []
+        max_reflection_iterations = 3
+        
+        for iteration in range(max_reflection_iterations):
+            # 反思当前答案
+            reflection = await self._reflect_on_answer(final_answer, search_results, message)
+            reflection_iterations.append(reflection)
+            
+            confidence = reflection.get("confidence", 0)
+            logger.info(f"反思迭代 {iteration+1}: 置信度 {confidence:.2f}")
+            
+            if confidence >= 0.85:
+                logger.info(f"答案置信度达到阈值 {confidence:.2f}，停止迭代")
+                break
+                
+            # 改进答案
+            improved_answer = await self._improve_answer(final_answer, reflection, message)
+            
+            if improved_answer and improved_answer != final_answer:
+                final_answer = improved_answer
+                logger.info(f"迭代 {iteration+1}：答案已优化")
+            else:
+                logger.info(f"迭代 {iteration+1}：答案无法进一步优化")
+                break
+        
         end_time = datetime.now()
         elapsed = (end_time - start_time).total_seconds()
+        
+        # 构建思考步骤列表（用于前端显示）
+        thinking_steps = []
+        
+        # 步骤1: 理解问题
+        thinking_steps.append({
+            "title": "理解问题",
+            "content": f"问题类型: {understanding.get('question_type', '未知')}\n关键信息: {understanding.get('key_information', '')[:50]}...\n需要实时信息: {'是' if understanding.get('needs_realtime_info') else '否'}"
+        })
+        
+        # 步骤2: 制定计划
+        thinking_steps.append({
+            "title": "制定计划",
+            "content": f"策略: {plan.get('strategy', '未知')}\n步骤: {', '.join(plan.get('steps', []))}"
+        })
+        
+        # 步骤3: 评估信息需求
+        thinking_steps.append({
+            "title": "评估信息需求",
+            "content": f"需要搜索: {'是' if info_needed.get('needs_search') else '否'}\n搜索关键词: {', '.join(info_needed.get('search_keywords', []))[:50]}..."
+        })
+        
+        # 步骤4: BFS上下文匹配（如果有结果）
+        if bfs_layer2:
+            items = "\n".join([f"  - {item.get('title', '')}" for item in bfs_layer2])
+            thinking_steps.append({
+                "title": "BFS上下文匹配",
+                "content": f"找到 {len(bfs_layer2)} 条相关历史上下文\n{items}"
+            })
+        
+        # 步骤5: RAG相似标签（如果有结果）
+        if rag_similar:
+            items = "\n".join([f"  - {item.get('title', '')}" for item in rag_similar])
+            thinking_steps.append({
+                "title": "RAG相似标签检索",
+                "content": f"找到 {len(rag_similar)} 条相关知识\n{items}"
+            })
+        
+        # 步骤6: 执行搜索（如果需要）
+        if search_results:
+            thinking_steps.append({
+                "title": "执行搜索",
+                "content": f"搜索结果: {len(search_results)} 条\n验证置信度: {validation.get('confidence', 0):.2f}"
+            })
+        
+        # 步骤7: 生成答案
+        thinking_steps.append({
+            "title": "生成答案",
+            "content": "根据分析结果生成最终回答"
+        })
         
         result = {
             "final_answer": final_answer,
@@ -208,9 +774,13 @@ class ReasoningEngine:
                 "understanding": understanding,
                 "plan": plan,
                 "info_needed": info_needed,
+                "bfs_layer2": bfs_layer2,
+                "rag_similar": rag_similar,
                 "search_results": search_results[:3],  # 只返回前3个结果
                 "validation": validation,
-                "fused_info": fused_info
+                "fused_info": fused_info,
+                "steps": thinking_steps,
+                "summary": f"问题分析完成，共 {len(thinking_steps)} 个思考步骤"
             },
             "elapsed_time": elapsed,
             "timestamp": end_time.isoformat()
@@ -245,17 +815,25 @@ class ReasoningEngine:
             }
         
         prompt = f"""
-请分析以下用户问题，并返回JSON格式的理解结果：
+你是一个专业的问题分析助手。请分析以下用户问题，并严格按照JSON格式返回结果，不要包含任何其他内容。
 
 用户问题：{message}
 
-分析内容包括：
-1. question_type: 问题类型（如：事实查询、观点询问、建议请求、指令执行等）
-2. key_information: 关键信息点
-3. needs_realtime_info: 是否需要实时信息（是/否）
-4. confidence: 理解置信度（0-1）
+分析结果的JSON格式如下：
+{{
+  "question_type": "问题类型（如：事实查询、观点询问、建议请求、指令执行）",
+  "key_information": "关键信息点",
+  "needs_realtime_info": false,
+  "confidence": 0.8
+}}
 
-请只返回JSON，不要包含其他内容。
+注意：
+- question_type 是字符串
+- key_information 是字符串，包含问题中的关键信息
+- needs_realtime_info 是布尔值，true 或 false
+- confidence 是数字，范围 0-1
+
+请严格返回纯JSON，不要包含代码块标记或其他文字。
 """
         
         try:
@@ -318,16 +896,22 @@ class ReasoningEngine:
                 }
         
         prompt = f"""
-基于以下问题理解结果，制定一个思考计划：
+你是一个专业的计划制定助手。请基于问题理解结果，制定思考计划，并严格按照JSON格式返回。
 
 理解结果：{understanding}
 用户问题：{message}
 
-计划应包括：
-1. steps: 思考步骤列表
-2. strategy: 总体策略
+计划的JSON格式如下：
+{{
+  "steps": ["步骤1", "步骤2", "步骤3"],
+  "strategy": "策略名称"
+}}
 
-请只返回JSON，不要包含其他内容。
+注意：
+- steps 是字符串数组
+- strategy 是字符串，如"直接回答"或"搜索后回答"
+
+请严格返回纯JSON，不要包含代码块标记或其他文字。
 """
         
         try:
@@ -400,17 +984,24 @@ class ReasoningEngine:
             }
         
         prompt = f"""
-评估以下问题是否需要搜索额外信息：
+你是一个专业的信息需求评估助手。请评估问题是否需要搜索额外信息，并严格按照JSON格式返回。
 
 思考计划：{plan}
 用户问题：{message}
 
-评估内容包括：
-1. needs_search: 是否需要搜索（是/否）
-2. search_keywords: 搜索关键词列表
-3. search_strategy: 搜索策略（如：general、specific、comprehensive等）
+评估结果的JSON格式如下：
+{{
+  "needs_search": false,
+  "search_keywords": ["关键词1", "关键词2"],
+  "search_strategy": "general"
+}}
 
-请只返回JSON，不要包含其他内容。
+注意：
+- needs_search 是布尔值，true 或 false
+- search_keywords 是字符串数组
+- search_strategy 是字符串，如"general"、"specific"、"comprehensive"
+
+请严格返回纯JSON，不要包含代码块标记或其他文字。
 """
         
         try:
@@ -509,7 +1100,177 @@ class ReasoningEngine:
         # 按综合分数排序（相关性、质量、权威性、时效性）
         unique_results.sort(key=lambda x: self._calculate_combined_score(x, message), reverse=True)
         
-        return unique_results[:10]  # 返回前10个结果，提供更多信息
+        return unique_results[:15]  # 返回前15个结果，包含更多相关信息
+    
+    async def _get_bfs_layer2_matching(self, message: str, keywords: List[str]) -> List[Dict[str, Any]]:
+        """获取BFS上下文树第2层节点并与关键词匹配（增强版：语义相似度）"""
+        results = []
+        try:
+            stm = _get_short_term_memory()
+            if stm:
+                # 获取深度为3的上下文以获取实际消息内容
+                layer_nodes = stm.get_context("1", depth=3)
+                if layer_nodes:
+                    matched = []
+                    for node in layer_nodes:
+                        node_content = node.get("content", "").lower()
+                        # 检查是否包含实际消息内容（不是纯标签）
+                        if len(node_content) > 20:
+                            # ✅ 增强：结合关键词匹配和语义相似度
+                            keyword_score = sum(1 for kw in keywords if kw.lower() in node_content)
+                            
+                            # 语义相似度得分（0-1）
+                            semantic_score = self._calculate_text_similarity(message, node.get("content", ""))
+                            
+                            # 综合得分：关键词匹配(0.4) + 语义相似度(0.6)
+                            combined_score = keyword_score * 0.4 + semantic_score * 0.6
+                            
+                            if combined_score >= 0.2:  # 降低阈值，因为语义相似度更敏感
+                                matched.append({
+                                    "title": f"【上下文】{node.get('role', 'user')}消息",
+                                    "content": node.get("content", ""),
+                                    "source": "bfs_layer2",
+                                    "match_score": combined_score,
+                                    "keyword_score": keyword_score,
+                                    "semantic_score": semantic_score,
+                                    "role": node.get("role", "user")
+                                })
+                    # 按综合得分排序
+                    matched.sort(key=lambda x: x["match_score"], reverse=True)
+                    results = matched[:8]  # 增加返回数量，语义匹配更精准
+                logger.info(f"BFS第2层匹配完成，找到 {len(results)} 条结果")
+        except Exception as e:
+            logger.error("BFS第2层匹配失败: %s", e)
+        return results
+    
+    def _calculate_text_similarity(self, text1: str, text2: str) -> float:
+        """计算两段文本的语义相似度
+        
+        使用词重叠和余弦相似度的组合方法
+        
+        Args:
+            text1: 第一段文本
+            text2: 第二段文本
+            
+        Returns:
+            相似度得分（0-1）
+        """
+        if not text1 or not text2:
+            return 0.0
+            
+        # 分词（支持中英文）
+        words1 = self._tokenize(text1)
+        words2 = self._tokenize(text2)
+        
+        if not words1 or not words2:
+            return 0.0
+            
+        # 方法1: 词重叠率
+        set1 = set(words1)
+        set2 = set(words2)
+        intersection = set1 & set2
+        union = set1 | set2
+        
+        if not union:
+            overlap_score = 0.0
+        else:
+            overlap_score = len(intersection) / len(union)
+        
+        # 方法2: 子字符串匹配（处理中文词语）
+        substring_score = 0.0
+        text1_lower = text1.lower()
+        text2_lower = text2.lower()
+        
+        # 检查是否有2个以上字符的子串匹配
+        for word in words1:
+            if len(word) >= 2 and word in text2_lower:
+                substring_score += 1
+        
+        substring_score = substring_score / max(len(words1), 1)
+        
+        # 方法3: 字符级相似度
+        char_overlap = sum(1 for c in text1_lower if c in text2_lower)
+        char_score = char_overlap / max(len(text1_lower), len(text2_lower), 1)
+        
+        # 综合得分
+        similarity = (overlap_score * 0.4 + substring_score * 0.3 + char_score * 0.3)
+        
+        return min(similarity, 1.0)
+    
+    def _tokenize(self, text: str) -> List[str]:
+        """文本分词（支持中英文）"""
+        import re
+        
+        # 匹配中文和英文单词
+        pattern = re.compile(r'[\u4e00-\u9fa5]+|[a-zA-Z]+')
+        tokens = pattern.findall(text.lower())
+        
+        # 过滤太短的词（中文单字保留，英文至少2个字符）
+        result = []
+        for token in tokens:
+            if len(token) >= 2:
+                result.append(token)
+            elif len(token) == 1 and '\u4e00' <= token <= '\u9fff':
+                # 保留中文单字
+                result.append(token)
+        
+        return result
+    
+    def _word_frequency(self, words: List[str]) -> Dict[str, int]:
+        """计算词频"""
+        freq = {}
+        for word in words:
+            freq[word] = freq.get(word, 0) + 1
+        return freq
+    
+    def _cosine_similarity(self, vec1: Dict[str, int], vec2: Dict[str, int]) -> float:
+        """计算余弦相似度"""
+        # 获取所有唯一词
+        all_words = set(vec1.keys()) | set(vec2.keys())
+        
+        # 计算点积
+        dot_product = sum(vec1.get(word, 0) * vec2.get(word, 0) for word in all_words)
+        
+        # 计算向量长度
+        len1 = math.sqrt(sum(v * v for v in vec1.values()))
+        len2 = math.sqrt(sum(v * v for v in vec2.values()))
+        
+        if len1 == 0 or len2 == 0:
+            return 0.0
+            
+        return dot_product / (len1 * len2)
+    
+    async def _get_rag_similar_tags(self, keywords: List[str]) -> List[Dict[str, Any]]:
+        """获取RAG相似标签内容"""
+        results = []
+        rag = _get_rag_engine()
+        if not rag:
+            return results
+        
+        try:
+            for kw in keywords[:3]:
+                topic_result = await rag.search_by_topic(topic=kw, user_id=1, max_results=3)
+                if topic_result and topic_result.get("knowledge_points"):
+                    for point in topic_result["knowledge_points"][:3]:
+                        results.append({
+                            "title": f"【知识】{point.get('topic', '')}",
+                            "content": point.get("content", ""),
+                            "source": "rag_similar_tags",
+                            "tag": point.get("topic", ""),
+                            "relevance": point.get("relevance", 0.8)
+                        })
+            
+            seen = set()
+            unique = []
+            for r in results:
+                title = r["title"]
+                if title not in seen:
+                    seen.add(title)
+                    unique.append(r)
+            results = unique[:8]
+        except Exception as e:
+            logger.error("RAG相似标签搜索失败: %s", e)
+        return results
     
     def _is_simple_question(self, message: str) -> bool:
         """判断是否为简单问题
@@ -570,7 +1331,112 @@ class ReasoningEngine:
             if re.match(pattern, message.strip()):
                 return False
         
-        return False
+        # ✅ 增强：使用复杂度分析
+        complexity = self._analyze_complexity(message)
+        return complexity in ["trivial", "simple"]
+    
+    def _analyze_complexity(self, message: str) -> str:
+        """分析问题复杂度
+        
+        Args:
+            message: 用户消息
+            
+        Returns:
+            复杂度级别: trivial/simple/moderate/complex/very_complex
+        """
+        score = 0
+        
+        # 1. 长度分析（权重更高）
+        length = len(message)
+        if length <= 10:
+            score += 0
+        elif length <= 20:
+            score += 1
+        elif length <= 40:
+            score += 2
+        elif length <= 60:
+            score += 4
+        elif length <= 100:
+            score += 6
+        else:
+            score += 8
+        
+        # 2. 句式分析
+        message_lower = message.lower()
+        
+        # 多问题检测（权重更高）
+        question_count = message.count('？') + message.count('?')
+        if question_count == 1:
+            score += 2
+        elif question_count >= 2:
+            score += 5
+        
+        # 条件句式
+        conditional_keywords = ['如果', '假如', '要是', '若', '倘若', '一旦']
+        if any(kw in message_lower for kw in conditional_keywords):
+            score += 3
+        
+        # 比较句式
+        comparison_keywords = ['和', '与', '相比', '比较', '哪个', '哪一个']
+        if any(kw in message_lower for kw in comparison_keywords):
+            score += 3
+        
+        # 因果句式
+        causal_keywords = ['因为', '所以', '因此', '由于', '导致', '造成']
+        if any(kw in message_lower for kw in causal_keywords):
+            score += 3
+        
+        # 推理句式（权重更高）
+        reasoning_keywords = ['为什么', '如何', '怎么', '怎样', '应该', '需要']
+        reasoning_count = sum(1 for kw in reasoning_keywords if kw in message_lower)
+        score += reasoning_count * 2
+        
+        # 3. 领域检测（权重更高）
+        domain_keywords = {
+            '技术': ['Python', '编程', '代码', '算法', '数据', '软件', '开发', '系统'],
+            '数学': ['计算', '公式', '证明', '定理', '方程', '求解'],
+            '科学': ['实验', '研究', '发现', '理论', '分析', '原理'],
+            '商业': ['市场', '营销', '销售', '利润', '投资', '管理'],
+            '法律': ['法律', '法规', '合同', '权利', '义务', '诉讼']
+        }
+        
+        domains_found = 0
+        for domain, keywords in domain_keywords.items():
+            if any(kw.lower() in message_lower for kw in keywords):
+                domains_found += 1
+        
+        score += domains_found * 3
+        
+        # 4. 实时信息需求
+        realtime_keywords = ["最新", "最近", "今天", "现在", "新闻", "趋势", "天气"]
+        if any(kw in message_lower for kw in realtime_keywords):
+            score += 3
+        
+        # 5. 深度思考触发词（权重更高）
+        deep_thinking_keywords = ["分析", "研究", "评估", "思考", "总结", "解释"]
+        if any(kw in message_lower for kw in deep_thinking_keywords):
+            score += 4
+        
+        # 6. 否定和条件组合
+        if '不' in message and ('如果' in message or '假如' in message):
+            score += 3
+        
+        # 7. 命令句式检测
+        command_keywords = ['帮我', '请', '能否', '是否', '可不可以']
+        if any(kw in message_lower for kw in command_keywords):
+            score += 2
+        
+        # 确定复杂度级别（调整阈值）
+        if score < 3:
+            return "trivial"
+        elif score < 6:
+            return "simple"
+        elif score < 11:
+            return "moderate"
+        elif score < 18:
+            return "complex"
+        else:
+            return "very_complex"
     
     async def _quick_answer(self, message: str) -> str:
         """快速回答简单问题
@@ -899,25 +1765,33 @@ class ReasoningEngine:
         search_context = "\n".join(search_summaries)
         
         prompt = f"""
-        请验证以下信息是否足够回答用户问题，并进行自我反思：
+你是一个专业的验证和反思助手。请验证信息是否足够回答用户问题，并严格按照JSON格式返回结果。
 
-        思考计划：{plan}
-        搜索结果：
-        {search_context}
-        用户问题：{message}
+思考计划：{plan}
+搜索结果：
+{search_context}
+用户问题：{message}
 
-        验证内容包括：
-        1. validation_passed: 验证是否通过（是/否）
-        2. issues: 存在的问题列表
-        3. confidence: 回答置信度（0-1）
-        4. reflection: 自我反思内容，包括可能的错误和改进方向
-        5. additional_search: 是否需要额外搜索（是/否）
-        6. missing_info: 缺少的信息
-        7. improvement_suggestions: 改进建议
-        8. key_evidence: 关键证据
+验证结果的JSON格式如下：
+{{
+  "validation_passed": false,
+  "issues": ["问题1", "问题2"],
+  "confidence": 0.8,
+  "reflection": "反思内容",
+  "additional_search": false,
+  "missing_info": ["缺少的信息1"],
+  "improvement_suggestions": ["建议1"],
+  "key_evidence": ["证据1"]
+}}
 
-        请只返回JSON，不要包含其他内容。
-        """
+注意：
+- validation_passed 和 additional_search 是布尔值
+- issues、missing_info、improvement_suggestions、key_evidence 是字符串数组
+- confidence 是数字，范围 0-1
+- reflection 是字符串
+
+请严格返回纯JSON，不要包含代码块标记或其他文字。
+"""
         
         try:
             response = await self.llm_router.simple_chat(prompt)
@@ -1137,6 +2011,192 @@ class ReasoningEngine:
                 return f"根据搜索结果：\n{summary}"
             else:
                 return "抱歉，我无法生成回答。"
+
+
+    async def _reflect_on_answer(self, answer: str, search_results: List[Dict[str, Any]], message: str) -> Dict[str, Any]:
+        """反思当前答案的质量
+        
+        Args:
+            answer: 当前答案
+            search_results: 搜索结果
+            message: 用户消息
+            
+        Returns:
+            反思结果，包含置信度和改进建议
+        """
+        if not self.llm_router or not self.llm_router.is_available():
+            return self._rule_based_reflection(answer, search_results, message)
+        
+        search_summaries = []
+        for i, result in enumerate(search_results[:3]):
+            search_summaries.append(f"[{i+1}] {result.get('title', '')}: {result.get('snippet', '')[:100]}...")
+        search_context = "\n".join(search_summaries)
+        
+        prompt = f"""
+你是一个专业的答案反思助手。请分析当前答案是否准确、完整地回答了用户问题。
+
+用户问题：{message}
+当前答案：{answer}
+参考信息：
+{search_context}
+
+请按照JSON格式返回反思结果：
+{{
+  "confidence": 0.85,
+  "accuracy": "high",
+  "completeness": "complete",
+  "relevance": "high",
+  "issues": ["问题1", "问题2"],
+  "suggestions": ["改进建议1", "改进建议2"],
+  "missing_info": ["缺少的信息"],
+  "reflection": "反思内容"
+}}
+
+说明：
+- confidence: 0-1的数字，表示对答案的置信度
+- accuracy: high/medium/low，表示准确性
+- completeness: complete/partial/incomplete，表示完整性
+- relevance: high/medium/low，表示相关性
+- issues: 问题列表
+- suggestions: 改进建议列表
+- missing_info: 缺少的信息列表
+- reflection: 反思内容（字符串）
+
+请严格返回纯JSON，不要包含其他内容。
+"""
+        
+        try:
+            response = await self.llm_router.simple_chat(prompt)
+            import json
+            result = json.loads(response)
+            
+            # 确保所有字段存在
+            result.setdefault("confidence", 0.7)
+            result.setdefault("accuracy", "medium")
+            result.setdefault("completeness", "partial")
+            result.setdefault("relevance", "medium")
+            result.setdefault("issues", [])
+            result.setdefault("suggestions", [])
+            result.setdefault("missing_info", [])
+            result.setdefault("reflection", "")
+            
+            return result
+        except Exception as e:
+            logger.error("反思失败: %s", e)
+            return self._rule_based_reflection(answer, search_results, message)
+    
+    def _rule_based_reflection(self, answer: str, search_results: List[Dict[str, Any]], message: str) -> Dict[str, Any]:
+        """基于规则的反思
+        
+        Args:
+            answer: 当前答案
+            search_results: 搜索结果
+            message: 用户消息
+            
+        Returns:
+            反思结果
+        """
+        issues = []
+        suggestions = []
+        missing_info = []
+        confidence = 0.7
+        
+        # 检查答案长度
+        if len(answer) < 20:
+            issues.append("答案过于简短")
+            suggestions.append("增加详细解释")
+            confidence -= 0.1
+        
+        # 检查是否引用了搜索结果
+        answer_lower = answer.lower()
+        has_source = False
+        for result in search_results[:3]:
+            title = result.get("title", "").lower()
+            snippet = result.get("snippet", "").lower()
+            if title in answer_lower or snippet[:20] in answer_lower:
+                has_source = True
+                break
+        
+        if not has_source and search_results:
+            issues.append("答案未引用搜索结果")
+            suggestions.append("结合搜索结果提供更准确的回答")
+            confidence -= 0.15
+        
+        # 检查问题关键词是否在答案中出现
+        import re
+        message_words = re.findall(r'[\w\u4e00-\u9fa5]+', message.lower())
+        answer_words = re.findall(r'[\w\u4e00-\u9fa5]+', answer.lower())
+        matched_words = set(message_words) & set(answer_words)
+        
+        if len(matched_words) < len(message_words) * 0.5:
+            issues.append("答案与问题相关性不足")
+            suggestions.append("确保回答直接针对用户问题")
+            confidence -= 0.1
+        
+        # 检查是否有矛盾信息
+        for result in search_results[:3]:
+            snippet = result.get("snippet", "").lower()
+            if snippet and snippet[:30] in answer_lower:
+                pass  # 内容匹配，没问题
+        
+        confidence = max(0.3, min(confidence, 1.0))
+        
+        return {
+            "confidence": confidence,
+            "accuracy": "high" if confidence > 0.7 else "medium" if confidence > 0.5 else "low",
+            "completeness": "complete" if not issues else "partial",
+            "relevance": "high" if len(matched_words) >= len(message_words) * 0.7 else "medium",
+            "issues": issues,
+            "suggestions": suggestions,
+            "missing_info": missing_info,
+            "reflection": "基于规则的反思完成"
+        }
+    
+    async def _improve_answer(self, answer: str, reflection: Dict[str, Any], message: str) -> str:
+        """根据反思结果改进答案
+        
+        Args:
+            answer: 当前答案
+            reflection: 反思结果
+            message: 用户消息
+            
+        Returns:
+            改进后的答案
+        """
+        if not self.llm_router or not self.llm_router.is_available():
+            return answer
+        
+        suggestions = reflection.get("suggestions", [])
+        issues = reflection.get("issues", [])
+        
+        if not suggestions and not issues:
+            return answer
+        
+        prompt = f"""
+请根据以下反思结果改进答案：
+
+用户问题：{message}
+当前答案：{answer}
+
+问题列表：
+{chr(10).join([f"- {issue}" for issue in issues]) if issues else "- 无"}
+
+改进建议：
+{chr(10).join([f"- {suggestion}" for suggestion in suggestions]) if suggestions else "- 无"}
+
+请基于问题和建议，生成一个改进后的答案。
+要求：
+1. 直接返回改进后的答案，不要有额外说明
+2. 确保答案准确、完整、相关
+3. 结构清晰，逻辑连贯
+"""
+        
+        try:
+            response = await self.llm_router.simple_chat(prompt)
+            return response
+        except Exception as e:
+            logger.error("改进答案失败: %s", e)
+            return answer
 
 
 # 全局深度思考引擎实例

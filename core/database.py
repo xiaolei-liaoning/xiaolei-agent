@@ -81,6 +81,15 @@ class ChatHistory(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     tool_call: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    
+    # 方案A新增字段
+    is_liked: Mapped[bool] = mapped_column(Boolean, default=False, index=True, comment="是否点赞")
+    weight: Mapped[float] = mapped_column(Float, default=1.0, comment="消息权重，影响检索优先级")
+    accessed_count: Mapped[int] = mapped_column(Integer, default=0, comment="被访问次数")
+    last_accessed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, comment="最后访问时间")
+    
+    user_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    ai_response: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
 
 class Character(Base):
@@ -159,6 +168,64 @@ class AgentGroupAuditLog(Base):
     def __repr__(self):
         return f"<AgentGroupAuditLog(group_id='{self.group_id}', action='{self.action}')>"
 
+
+class Plan(Base):
+    """计划表"""
+    __tablename__ = "plans"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True, comment="用户ID")
+    name: Mapped[str] = mapped_column(String(255), nullable=False, comment="计划名称")
+    goal: Mapped[str] = mapped_column(Text, nullable=False, comment="计划目标")
+    status: Mapped[str] = mapped_column(String(20), default="待开始", comment="状态: 待开始/进行中/已完成/已暂停")
+    progress: Mapped[float] = mapped_column(Float, default=0.0, comment="进度百分比 0-100")
+    steps: Mapped[Optional[list]] = mapped_column(JSON, nullable=True, comment="计划步骤列表")
+    start_date: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, comment="开始时间")
+    end_date: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, comment="预计完成时间")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, comment="创建时间")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now, comment="更新时间")
+
+
+class BFSContextNode(Base):
+    """BFS上下文记忆节点表（短期记忆持久化）"""
+    __tablename__ = "bfs_context_nodes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    node_id: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True, comment="节点唯一ID")
+    user_id: Mapped[str] = mapped_column(String(50), nullable=False, index=True, comment="用户ID")
+    node_type: Mapped[str] = mapped_column(String(20), nullable=False, comment="节点类型: root/function/text/paragraph")
+    content: Mapped[str] = mapped_column(Text, nullable=False, comment="节点内容")
+    summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment="节点摘要")
+    parent_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True, comment="父节点ID")
+    children_ids: Mapped[Optional[list]] = mapped_column(JSON, nullable=True, comment="子节点ID列表")
+    queue_order: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, comment="队列顺序（用于BFS队列）")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, comment="创建时间")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now, comment="更新时间")
+
+    def __repr__(self):
+        return f"<BFSContextNode(node_id='{self.node_id}', type='{self.node_type}')>"
+
+
+class DynamicContextNode(Base):
+    """动态上下文节点表（基于token计数的短时记忆持久化）"""
+    __tablename__ = "dynamic_context_nodes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    node_id: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True, comment="节点唯一ID")
+    user_id: Mapped[str] = mapped_column(String(50), nullable=False, index=True, comment="用户ID")
+    node_type: Mapped[str] = mapped_column(String(20), nullable=False, comment="节点类型: root/function/text/paragraph")
+    content: Mapped[str] = mapped_column(Text, nullable=False, comment="节点内容")
+    summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment="节点摘要")
+    parent_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True, comment="父节点ID")
+    children_ids: Mapped[Optional[list]] = mapped_column(JSON, nullable=True, comment="子节点ID列表")
+    array_index: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True, comment="动态数组索引位置")
+    token_count: Mapped[int] = mapped_column(Integer, default=0, comment="估算的token数量")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, comment="创建时间")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now, comment="更新时间")
+
+    def __repr__(self):
+        return f"<DynamicContextNode(node_id='{self.node_id}', tokens={self.token_count}, index={self.array_index})>"
+
 # ═══════════════════════════════════════════════════════════════════════════════
 #  引擎 & 会话管理
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -187,10 +254,41 @@ def get_engine():
     return _engine
 
 
-def get_session() -> Session:
-    """获取一个新的数据库会话"""
+from contextlib import contextmanager
+
+
+@contextmanager
+def get_db_session():
+    """上下文管理器：安全的数据库会话管理，自动关闭连接
+    
+    使用方式:
+    with get_db_session() as session:
+        # 使用session
+        pass
+    """
     if _SessionLocal is None:
         raise RuntimeError("数据库未初始化，请先调用 init_db()")
+    
+    session = _SessionLocal()
+    try:
+        yield session
+        session.commit()
+    except Exception as e:
+        session.rollback()
+        logger.error(f"数据库操作失败，已回滚: {e}")
+        raise
+    finally:
+        session.close()
+
+
+def get_session() -> Session:
+    """获取一个新的数据库会话（已废弃，请使用 get_db_session）
+    
+    WARNING: 使用此方法需手动管理会话关闭！
+    """
+    if _SessionLocal is None:
+        raise RuntimeError("数据库未初始化，请先调用 init_db()")
+    logger.warning("get_session已废弃，建议使用 get_db_session 上下文管理器")
     return _SessionLocal()
 
 
@@ -198,7 +296,7 @@ def get_session() -> Session:
 #  初始化 & 种子数据
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# 5 个预设角色
+# 7 个预设角色
 _SEED_CHARACTERS = [
     Character(
         character_id="default",
@@ -230,6 +328,18 @@ _SEED_CHARACTERS = [
         name="诗仙李白",
         description="唐代诗仙李白",
         system_prompt="你是诗仙李白，性格豪放不羁，说话常带诗意和酒意。",
+    ),
+    Character(
+        character_id="john_carmack",
+        name="约翰·卡马克",
+        description="传奇程序员",
+        system_prompt="你是John Carmack，传奇程序员，专注于游戏开发和图形编程。",
+    ),
+    Character(
+        character_id="linus_torvalds",
+        name="Linus Torvalds",
+        description="Linux之父",
+        system_prompt="你是Linus Torvalds，Linux内核创造者，直率、技术精湛。",
     ),
 ]
 
@@ -287,17 +397,14 @@ def _ensure_database_exists():
 
 def _seed_default_data():
     """插入 5 个预设角色（仅当角色表为空时）"""
-    session = get_session()
     try:
-        exists = session.query(Character).filter_by(character_id="default").first()
-        if exists:
-            logger.debug("种子角色已存在，跳过")
-            return
-        session.add_all(_SEED_CHARACTERS)
-        session.commit()
-        logger.info("已插入 %d 个预设角色", len(_SEED_CHARACTERS))
+        with get_db_session() as session:
+            exists = session.query(Character).filter_by(character_id="default").first()
+            if exists:
+                logger.debug("种子角色已存在，跳过")
+                return
+            session.add_all(_SEED_CHARACTERS)
+            logger.info("已插入 %d 个预设角色", len(_SEED_CHARACTERS))
     except Exception as e:
         logger.error("种子数据插入失败: %s", e)
-        session.rollback()
-    finally:
-        session.close()
+        raise

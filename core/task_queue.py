@@ -1,4 +1,7 @@
-"""任务队列系统 - 带重试和死信队列
+"""任务队列系统（已废弃 - DEPRECATED）
+
+⚠️ 此模块当前未被主流程使用，保留仅供参考。
+如需任务队列功能，请使用 ConcurrentTaskProcessor。
 
 特性：
 - 任务状态跟踪（pending/running/completed/failed）
@@ -9,7 +12,7 @@
 - 任务优先级
 - 指标监控
 
-使用方式：
+使用方式（示例代码，未实际启用）：
     from core.task_queue import task_queue
     
     # 提交任务

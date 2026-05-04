@@ -7,10 +7,11 @@
 2. 对于生成文本类结果，只告知位置
 3. 对于数据类结果，提取关键信息并总结
 4. 使用LLM生成人性化回复
+5. ✅ 新增：白名单机制，特定工具直接返回结果，不经过智能总结
 """
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Set
 from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
@@ -34,12 +35,54 @@ class SummaryConfig:
     file_extensions: list = field(default_factory=lambda: [
         ".pdf", ".doc", ".docx", ".txt", ".md", ".html"
     ])
+    
+    # ✅ 白名单：这些工具的执行结果直接返回，不经过智能总结
+    # 适用于：所有工具类回复，保持原始格式和简洁性
+    direct_reply_whitelist: Set[str] = field(default_factory=lambda: {
+        # 基础工具
+        "translator",      # 翻译工具
+        "calculator",      # 计算器
+        "unit_converter",  # 单位转换
+        "currency",        # 汇率查询
+        "dictionary",      # 词典查询
+        
+        # 数据工具
+        "weather",         # 天气查询
+        "web_scraper",     # 网页爬虫
+        "data_analysis",   # 数据分析
+        "search_engine",   # 搜索引擎
+        "ocr_recognition", # OCR识别
+        
+        # 自动化工具
+        "advanced_automation",  # 高级自动化
+        "gui_automation",       # GUI自动化
+        "system_toolbox",       # 系统工具箱
+        
+        # AI工具
+        "deep_thinking",   # 深度思考
+        "rag_search",      # RAG搜索（也匹配 skills.rag_search_handler）
+        "rag_search_handler",  # RAG搜索处理器（兼容旧名称）
+        
+        # 第三方工具
+        "third_party",     # 第三方集成
+        "openclaw",        # OpenClaw
+        
+        # 其他工具
+        "marketplace",     # 市场相关
+        "workflows",       # 工作流
+        "人物",            # 人物相关
+        "test_demo_skill", # 测试演示
+    })
 
 
 class SmartResultSummarizer:
     """智能结果总结器
     
     根据技能执行结果的类型，生成不同风格的人性化回复。
+    
+    ✅ 新增特性：
+    - 白名单机制：特定工具直接返回原始回复，避免过度包装
+    - 保持LLM多轮评分效果不受影响
     """
     
     def __init__(self, config: Optional[SummaryConfig] = None):
@@ -69,15 +112,22 @@ class SmartResultSummarizer:
         Returns:
             人性化的回复文本
         """
+        logger.info(f"summarize被调用: skill_name={skill_name}, result类型={type(result)}")
         try:
             # 检查执行是否成功
             if not result.get("success", False):
                 error_msg = result.get("error", "未知错误")
-                return f"❌ 执行失败：{error_msg}"
+                return f" 执行失败：{error_msg}"
+            
+            # ✅ 白名单检查：如果工具在白名单中，直接返回原始回复
+            if self._is_in_whitelist(skill_name):
+                logger.info(f"技能 [{skill_name}] 在白名单中，直接返回原始回复")
+                return self._get_direct_reply(result)
             
             # 获取结果数据
             result_data = result.get("result", result.get("data", {}))
-            
+            logger.info(f"技能 [{skill_name}] result_data类型: {type(result_data)}")
+
             # 判断结果类型并选择总结策略
             summary = await self._choose_summary_strategy(
                 skill_name, result_data, user_message
@@ -89,6 +139,54 @@ class SmartResultSummarizer:
         except Exception as e:
             logger.error(f"结果总结失败: {e}", exc_info=True)
             return f"处理完成（总结异常：{e}）"
+    
+    def _is_in_whitelist(self, skill_name: str) -> bool:
+        """检查技能是否在白名单中
+        
+        Args:
+            skill_name: 技能名称
+            
+        Returns:
+            True 如果在白名单中
+        """
+        # 精确匹配
+        if skill_name in self.config.direct_reply_whitelist:
+            return True
+        
+        # 前缀匹配（支持带命名空间的技能名，如 "skills.translator"）
+        for whitelisted in self.config.direct_reply_whitelist:
+            if skill_name.endswith(whitelisted) or whitelisted in skill_name:
+                return True
+        
+        return False
+    
+    def _get_direct_reply(self, result: Dict[str, Any]) -> str:
+        """获取直接回复（白名单工具）
+        
+        优先使用工具自带的 reply 字段，如果没有则返回简单提示
+        
+        Args:
+            result: 工具执行结果
+            
+        Returns:
+            直接回复文本
+        """
+        # 优先使用工具生成的 reply
+        if result.get("reply"):
+            return result["reply"]
+        
+        # 其次使用 result 中的文本内容
+        result_data = result.get("result", {})
+        if isinstance(result_data, dict):
+            # 尝试从常见字段获取
+            for key in ["translated", "text", "content", "message"]:
+                if key in result_data:
+                    value = result_data[key]
+                    if isinstance(value, str) and value:
+                        return value
+        
+        # 最后返回简单提示
+        return "✅ 执行完成"
     
     async def _choose_summary_strategy(self, skill_name: str, 
                                       result_data: Any,
@@ -241,6 +339,14 @@ class SmartResultSummarizer:
                                         user_message: str) -> str:
         """总结结构化数据"""
         
+        # ✅ 防御性编程：确保data是字典类型
+        if not isinstance(data, dict):
+            logger.warning(f"结构化数据格式异常 [{skill_name}]，期望dict，实际为{type(data).__name__}: {str(data)[:100]}")
+            # 如果是字符串，直接返回
+            if isinstance(data, str):
+                return data if data else "✅ 执行完成"
+            return f"✅ {skill_name} 执行完成"
+        
         # 特殊处理：天气数据
         if skill_name == "weather" or "weather" in skill_name:
             return self._summarize_weather_data(data)
@@ -254,6 +360,12 @@ class SmartResultSummarizer:
     
     def _summarize_weather_data(self, data: dict) -> str:
         """总结天气数据"""
+        # ✅ 防御性编程：确保data是字典类型
+        if not isinstance(data, dict):
+            logger.warning(f"天气数据格式异常，期望dict，实际为{type(data).__name__}: {data}")
+            # 尝试从原始结果中提取天气信息
+            return f"🌤️ 天气查询完成"
+        
         city = data.get("city", "未知城市")
         temperature = data.get("temperature", data.get("temp", "N/A"))
         condition = data.get("condition", data.get("weather", "N/A"))

@@ -2,6 +2,7 @@
 
 import json
 import logging
+import asyncio
 from typing import Dict, Any, List, Optional
 from pathlib import Path
 from datetime import datetime
@@ -22,11 +23,38 @@ class WorkflowNode:
         self.config = config
         self.inputs = {}
         self.outputs = {}
+        # 重试配置
+        self.max_retries = config.get("max_retries", 0)  # 默认不重试
+        self.retry_delay = config.get("retry_delay", 1)  # 重试间隔（秒）
     
     async def execute(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """执行节点"""
+        """执行节点（带重试机制）"""
         logger.info(f"执行节点 [{self.node_type}]: {self.node_id}")
         
+        last_error = None
+        for attempt in range(self.max_retries + 1):
+            try:
+                if attempt > 0:
+                    logger.info(f"节点 {self.node_id} 第{attempt}次重试...")
+                    await asyncio.sleep(self.retry_delay)
+                
+                result = await self._execute_node(context)
+                
+                # 如果成功或已达到最大重试次数，返回结果
+                if result.get("success", False) or attempt == self.max_retries:
+                    return result
+                    
+            except Exception as e:
+                last_error = e
+                logger.warning(f"节点 {self.node_id} 第{attempt+1}次尝试失败: {e}")
+                if attempt == self.max_retries:
+                    break
+        
+        # 所有重试都失败
+        return {"success": False, "error": str(last_error), "retries": self.max_retries}
+    
+    async def _execute_node(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """执行具体节点逻辑（子类可重写）"""
         if self.node_type == "start":
             return self._execute_start(context)
         elif self.node_type == "llm":
@@ -52,26 +80,14 @@ class WorkflowNode:
         """LLM节点 - 调用大模型"""
         try:
             from core.llm_backend import get_llm_router
+            from jinja2 import Template
             
             prompt_template = self.config.get("prompt", "")
             model = self.config.get("model", "gpt-4")
             
-            # 替换变量（支持嵌套对象访问）
-            prompt = prompt_template
-            
-            # 第一层：替换简单变量 {{key}}
-            for key, value in context.items():
-                placeholder = f"{{{{{key}}}}}"
-                if isinstance(value, str):
-                    prompt = prompt.replace(placeholder, value)
-                elif isinstance(value, dict):
-                    # 第二层：替换嵌套变量 {{key.subkey}}
-                    for subkey, subvalue in value.items():
-                        nested_placeholder = f"{{{{{key}.{subkey}}}}}"
-                        if isinstance(subvalue, str):
-                            prompt = prompt.replace(nested_placeholder, subvalue)
-                        else:
-                            prompt = prompt.replace(nested_placeholder, str(subvalue))
+            # 使用Jinja2模板引擎替换变量（支持嵌套访问和复杂表达式）
+            template = Template(prompt_template)
+            prompt = template.render(**context)
             
             logger.info(f"LLM Prompt (after substitution): {prompt[:200]}...")
             
@@ -88,26 +104,61 @@ class WorkflowNode:
     def _execute_tool(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """工具节点 - 调用Skill"""
         try:
+            from jinja2 import Template
             tool_name = self.config.get("tool", "")
             params = self.config.get("params", {})
             
-            # 替换参数中的变量
+            if not tool_name:
+                return {"success": False, "error": "工具名称未指定"}
+            
+            # 使用Jinja2替换参数中的变量
+            prepared_params = {}
             for key, value in params.items():
                 if isinstance(value, str):
-                    for ctx_key, ctx_val in context.items():
-                        placeholder = f"{{{{{ctx_key}}}}}"
-                        if isinstance(ctx_val, str):
-                            params[key] = value.replace(placeholder, ctx_val)
+                    template = Template(value)
+                    prepared_params[key] = template.render(**context)
+                else:
+                    prepared_params[key] = value
             
-            # 调用工具
-            from tools.tool_manager import ToolManager
-            manager = ToolManager.get_instance()
+            # 调用工具（支持多种方式）
+            result = None
             
-            result = manager.execute(tool_name, **params)
+            # 方式1：尝试使用 ToolManager
+            try:
+                from tools.tool_manager import ToolManager
+                manager = ToolManager.get_instance()
+                result = manager.execute(tool_name, **prepared_params)
+            except (ImportError, AttributeError):
+                # 方式2：尝试使用技能调度器
+                try:
+                    from core.skill_dispatcher import SkillDispatcher
+                    dispatcher = SkillDispatcher.get_instance()
+                    result = dispatcher.execute_skill(tool_name, prepared_params)
+                except (ImportError, AttributeError):
+                    # 方式3：尝试直接调用技能模块
+                    try:
+                        import importlib
+                        module_path = f"skills.{tool_name}.handler"
+                        module = importlib.import_module(module_path)
+                        handler = getattr(module, f"{tool_name}_handler", None) or getattr(module, "handler", None)
+                        if handler and callable(handler):
+                            result = handler.execute(**prepared_params)
+                        elif hasattr(module, "execute") and callable(module.execute):
+                            result = module.execute(**prepared_params)
+                    except Exception as e:
+                        logger.warning(f"无法调用工具 {tool_name}: {e}")
             
-            return {"success": True, "data": result}
+            if result is None:
+                return {"success": False, "error": f"无法找到或调用工具: {tool_name}"}
+            
+            # 标准化结果格式
+            if isinstance(result, dict):
+                return {"success": True, "data": result}
+            else:
+                return {"success": True, "data": {"result": result}}
+                
         except Exception as e:
-            logger.error(f"工具节点执行失败: {e}")
+            logger.error(f"工具节点执行失败: {e}", exc_info=True)
             return {"success": False, "error": str(e)}
     
     def _execute_condition(self, context: Dict[str, Any]) -> Dict[str, Any]:
@@ -432,18 +483,26 @@ class WorkflowEngine:
                     "config": {},
                 }
                 
-                # 解析配置
+                # 解析配置（支持嵌套参数）
                 for config_elem in node_elem.findall("config/*"):
-                    node["config"][config_elem.tag] = config_elem.text or ""
+                    if config_elem.tag == "params":
+                        params = {}
+                        for param_elem in config_elem.findall("*"):
+                            params[param_elem.tag] = param_elem.text or ""
+                        node["config"]["params"] = params
+                    else:
+                        node["config"][config_elem.tag] = config_elem.text or ""
                 
                 workflow["nodes"].append(node)
             
-            # 解析边
+            # 解析边（支持条件和方向）
             for edge_elem in root.findall(".//edge"):
                 edge = {
                     "source": edge_elem.attrib["source"],
                     "target": edge_elem.attrib["target"],
                     "condition": edge_elem.attrib.get("condition", ""),
+                    "sourceDirection": edge_elem.attrib.get("sourceDirection", "right"),
+                    "targetDirection": edge_elem.attrib.get("targetDirection", "left"),
                 }
                 workflow["edges"].append(edge)
             
@@ -763,10 +822,10 @@ class WorkflowEngine:
         return {"success": True, "data": branch_context}
     
     async def _execute_nodes_format(self, workflow: Dict[str, Any], input_data: Dict[str, Any]) -> Dict[str, Any]:
-        """执行nodes/edges格式的工作流"""
+        """执行nodes/edges格式的工作流（基于DAG拓扑排序）"""
         nodes = {n["id"]: WorkflowNode(n["id"], n["type"], n["config"]) for n in workflow["nodes"]}
         
-        # 构建邻接表
+        # 构建邻接表（支持循环）
         adj = {}
         for edge in workflow["edges"]:
             if edge["source"] not in adj:
@@ -774,6 +833,8 @@ class WorkflowEngine:
             adj[edge["source"]].append({
                 "target": edge["target"],
                 "condition": edge.get("condition", ""),
+                "sourceDirection": edge.get("sourceDirection", "right"),
+                "targetDirection": edge.get("targetDirection", "left"),
             })
         
         # 找到开始节点
@@ -786,16 +847,35 @@ class WorkflowEngine:
         if not start_node:
             return {"success": False, "error": "未找到开始节点"}
         
-        # 执行工作流
+        # 执行工作流（使用递归方式，支持循环）
         context = {"input": input_data}
-        current_node = start_node
-        visited = set()
+        executed_nodes = set()
+        loop_stack = set()  # 检测循环执行中的节点
         
-        while current_node and current_node not in visited:
-            visited.add(current_node)
+        # 递归执行节点
+        async def execute_node(node_id: str):
+            # 检测递归调用（循环）
+            if node_id in loop_stack:
+                logger.debug(f"检测到循环节点 {node_id}，跳过重复执行")
+                return {"success": True, "data": context.get(node_id, {})}
             
-            node = nodes[current_node]
-            result = await node.execute(context)
+            if node_id in executed_nodes and nodes[node_id].node_type != "loop":
+                return {"success": True, "data": context.get(node_id, {})}
+            
+            node = nodes[node_id]
+            
+            # 检查条件边：如果当前节点有前置条件，需验证是否满足
+            if not self._check_entry_conditions(node_id, workflow["edges"], context):
+                logger.info(f"跳过节点 {node_id}：条件不满足")
+                return {"success": True, "data": {}}
+            
+            # 执行节点（带超时控制）
+            timeout = node.config.get("timeout", 60)
+            try:
+                result = await asyncio.wait_for(node.execute(context), timeout=timeout)
+            except asyncio.TimeoutError:
+                logger.error(f"节点 {node_id} 执行超时（{timeout}秒）")
+                return {"success": False, "error": f"节点 {node_id} 执行超时"}
             
             if not result.get("success"):
                 return result
@@ -806,144 +886,239 @@ class WorkflowEngine:
                 if isinstance(result["data"], dict):
                     context.update(result["data"])
             
+            executed_nodes.add(node_id)
+            
             # 检查是否结束
             if result.get("final"):
-                return {"success": True, "result": result["data"], "context": context}
+                return result
+            
+            # 处理循环节点（特殊处理）
+            if node.node_type == "loop":
+                loop_stack.add(node_id)
+                loop_data = result.get("data", {})
+                iterations = loop_data.get("iterations", 0)
+                
+                logger.info(f"循环节点 {node_id} 需要执行 {iterations} 次")
+                
+                # 获取循环体节点（连接到循环底部的节点）
+                loop_body_nodes = []
+                if node_id in adj:
+                    for edge in adj[node_id]:
+                        if edge.get("sourceDirection") == "bottom":
+                            loop_body_nodes.append(edge["target"])
+                
+                # 执行循环体
+                for i in range(iterations):
+                    # 更新循环变量到上下文
+                    if "index" in context:
+                        context["loop_index"] = context["index"]
+                    if "iteration" in context:
+                        context["loop_iteration"] = context["iteration"]
+                    
+                    # 执行循环体中的节点
+                    for body_node_id in loop_body_nodes:
+                        body_result = await execute_node(body_node_id)
+                        if not body_result.get("success"):
+                            loop_stack.remove(node_id)
+                            return body_result
+                
+                loop_stack.remove(node_id)
+            
+            # 处理并行节点
+            elif node.node_type == "parallel":
+                parallel_result = await self._execute_parallel_branches(node_id, adj, nodes, context)
+                if not parallel_result.get("success"):
+                    return parallel_result
+                if parallel_result.get("data"):
+                    context.update(parallel_result["data"])
+            
+            # 执行后续节点
+            if node_id in adj:
+                for edge in adj[node_id]:
+                    if edge.get("sourceDirection", "right") == "right":
+                        next_result = await execute_node(edge["target"])
+                        if not next_result.get("success"):
+                            return next_result
+                        if next_result.get("final"):
+                            return next_result
+            
+            return {"success": True, "data": context.get(node_id, {})}
+        
+        # 从开始节点执行
+        final_result = await execute_node(start_node)
+        
+        if final_result.get("final"):
+            return {"success": True, "result": final_result.get("data", context), "context": context}
+        
+        return {"success": True, "result": context, "context": context}
+    
+    def _topological_sort(self, nodes: List[Dict[str, Any]], edges: List[Dict[str, Any]]) -> Optional[List[str]]:
+        """DAG拓扑排序（Kahn算法）
+        
+        Returns:
+            执行顺序列表，如果存在环则返回None
+        """
+        # 计算每个节点的入度
+        in_degree = {node["id"]: 0 for node in nodes}
+        for edge in edges:
+            if edge["target"] in in_degree:
+                in_degree[edge["target"]] += 1
+        
+        # 将所有入度为0的节点加入队列
+        from collections import deque
+        queue = deque([node_id for node_id, degree in in_degree.items() if degree == 0])
+        
+        execution_order = []
+        
+        while queue:
+            current = queue.popleft()
+            execution_order.append(current)
+            
+            # 减少后续节点的入度
+            for edge in edges:
+                if edge["source"] == current:
+                    target = edge["target"]
+                    in_degree[target] -= 1
+                    if in_degree[target] == 0:
+                        queue.append(target)
+        
+        # 如果所有节点都被处理，说明无环；否则存在环
+        if len(execution_order) == len(nodes):
+            return execution_order
+        else:
+            return None
+    
+    def _check_entry_conditions(self, node_id: str, edges: List[Dict[str, Any]], context: Dict[str, Any]) -> bool:
+        """检查节点的入口条件（条件边逻辑）
+        
+        Args:
+            node_id: 目标节点ID
+            edges: 所有边的列表
+            context: 当前上下文
+            
+        Returns:
+            是否满足进入该节点的条件
+        """
+        from jinja2 import Template
+        
+        # 找到指向该节点的所有边
+        incoming_edges = [edge for edge in edges if edge["target"] == node_id]
+        
+        # 如果没有入边（开始节点），直接允许执行
+        if not incoming_edges:
+            return True
+        
+        # 检查所有入边的条件，至少有一条满足即可
+        for edge in incoming_edges:
+            condition = edge.get("condition", "")
+            if not condition:
+                # 无条件边，直接允许
+                return True
+            
+            try:
+                # 使用Jinja2求值条件表达式
+                template = Template(condition)
+                result = template.render(**context)
+                
+                # 将结果转换为布尔值
+                if result.lower() in ["true", "1", "yes"]:
+                    return True
+            except Exception as e:
+                logger.warning(f"条件表达式求值失败: {e}，默认允许执行")
+                return True
+        
+        # 所有条件都不满足
+        return False
+    
+    async def _execute_parallel_branches(self, parallel_node_id: str, adj: Dict[str, List[Dict[str, Any]]], 
+                                         nodes: Dict[str, WorkflowNode], context: Dict[str, Any]) -> Dict[str, Any]:
+        """真并行执行分支（异步并发+结果隔离）
+        
+        Args:
+            parallel_node_id: 并行节点ID
+            adj: 邻接表
+            nodes: 节点字典
+            context: 共享上下文（只读）
+            
+        Returns:
+            合并后的结果
+        """
+        next_edges = adj.get(parallel_node_id, [])
+        if not next_edges:
+            return {"success": True, "data": {}}
+        
+        # 为每个分支创建独立的上下文副本（避免竞态条件）
+        branch_tasks = []
+        for i, edge in enumerate(next_edges):
+            branch_context = context.copy()
+            task = self._execute_branch_with_isolation(edge["target"], adj, nodes, branch_context, f"branch_{i}")
+            branch_tasks.append(task)
+        
+        # 异步并发执行所有分支
+        results = await asyncio.gather(*branch_tasks, return_exceptions=True)
+        
+        # 合并结果
+        merged_data = {}
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                logger.error(f"分支 {i} 执行异常: {result}")
+                return {"success": False, "error": f"分支 {i} 执行失败: {str(result)}"}
+            
+            if result.get("success") and result.get("data"):
+                branch_key = f"branch_{i}"
+                merged_data[branch_key] = result["data"]
+                if isinstance(result["data"], dict):
+                    merged_data.update(result["data"])
+        
+        return {"success": True, "data": merged_data}
+    
+    async def _execute_branch_with_isolation(self, start_node: str, adj: Dict[str, List[Dict[str, Any]]], 
+                                             nodes: Dict[str, WorkflowNode], context: Dict[str, Any], 
+                                             branch_id: str) -> Dict[str, Any]:
+        """执行独立分支（带上下文隔离）
+        
+        Args:
+            start_node: 起始节点ID
+            adj: 邻接表
+            nodes: 节点字典
+            context: 分支独立上下文
+            branch_id: 分支标识（用于日志）
+        """
+        current_node = start_node
+        visited = set()
+        
+        while current_node and current_node not in visited:
+            visited.add(current_node)
+            
+            node = nodes[current_node]
+            
+            # 超时控制
+            timeout = node.config.get("timeout", 60)
+            try:
+                result = await asyncio.wait_for(node.execute(context), timeout=timeout)
+            except asyncio.TimeoutError:
+                logger.error(f"分支 {branch_id} 节点 {current_node} 执行超时")
+                return {"success": False, "error": f"节点 {current_node} 执行超时"}
+            
+            if not result.get("success"):
+                return result
+            
+            # 更新分支独立上下文
+            if result.get("data"):
+                context[node.node_id] = result["data"]
+                if isinstance(result["data"], dict):
+                    context.update(result["data"])
             
             # 找下一个节点
             next_nodes = adj.get(current_node, [])
             if not next_nodes:
                 break
             
-            # 检查当前节点是否为并行节点
-            if nodes[current_node].node_type == "parallel":
-                # 并行执行所有分支
-                import asyncio
-                branch_tasks = []
-                
-                for next_edge in next_nodes:
-                    branch_context = context.copy()
-                    branch_task = self._execute_branch(nodes, adj, next_edge["target"], branch_context)
-                    branch_tasks.append(branch_task)
-                
-                # 执行所有分支
-                branch_results = await asyncio.gather(*branch_tasks, return_exceptions=True)
-                
-                # 处理分支结果
-                for i, result in enumerate(branch_results):
-                    if isinstance(result, Exception):
-                        logger.error(f"分支执行失败: {result}")
-                    elif result.get("success"):
-                        # 合并分支结果到主上下文
-                        if result.get("data"):
-                            branch_key = f"branch_{i}"
-                            context[branch_key] = result["data"]
-                            if isinstance(result["data"], dict):
-                                context.update(result["data"])
-                
-                # 并行节点执行完成后，找到所有分支的共同后续节点
-                # 这里简化处理，取第一个分支的后续节点
-                if next_nodes:
-                    first_branch_target = next_nodes[0]["target"]
-                    # 找到第一个分支的下一个节点
-                    branch_next_nodes = adj.get(first_branch_target, [])
-                    if branch_next_nodes:
-                        current_node = branch_next_nodes[0]["target"]
-                    else:
-                        break
-                else:
-                    break
-            elif nodes[current_node].node_type == "loop":
-                # ========== 循环节点处理（参考 Coze 设计）==========
-                loop_config = nodes[current_node].config
-                loop_type = loop_config.get("loop_type", "array")
-                variable_name = loop_config.get("variable", "item")
-                
-                logger.info(f"开始执行循环节点: {current_node}, 类型: {loop_type}")
-                
-                # 1. 先执行循环节点本身，获取循环配置和迭代信息
-                loop_result = await nodes[current_node].execute(context)
-                
-                if not loop_result.get("success"):
-                    return loop_result
-                
-                loop_data = loop_result.get("data", {})
-                iterations = loop_data.get("iterations", 0)
-                loop_results = loop_data.get("results", [])
-                
-                logger.info(f"循环共 {iterations} 次迭代")
-                
-                # 2. 执行每次迭代的循环体
-                all_iteration_results = []
-                
-                for i, iteration_info in enumerate(loop_results):
-                    loop_context = iteration_info.get("context", context.copy())
-                    
-                    logger.info(f"执行第 {i+1}/{iterations} 次迭代")
-                    
-                    # 执行循环体节点（通过上下连接点确定）
-                    for next_edge in next_nodes:
-                        target_node = next_edge["target"]
-                        
-                        # 检查是否是回边（避免无限循环）
-                        if target_node == current_node:
-                            continue
-                        
-                        # 执行循环体分支
-                        branch_result = await self._execute_branch(
-                            nodes, adj, target_node, loop_context
-                        )
-                        
-                        if branch_result.get("success"):
-                            # 保存本次迭代的结果
-                            iteration_result = branch_result.get("data", {})
-                            all_iteration_results.append(iteration_result)
-                            
-                            # 将结果注入到循环上下文（供下次迭代使用）
-                            if isinstance(iteration_result, dict):
-                                loop_context.update(iteration_result)
-                                
-                                # 特殊处理：如果是数组循环，累加到输出数组
-                                if loop_type == "array":
-                                    context[f"{variable_name}_result_{i}"] = iteration_result
-                    
-                    # 更新主上下文中的循环进度
-                    context[f"loop_iteration_{i}"] = all_iteration_results[-1] if all_iteration_results else {}
-                    context["current_iteration"] = i + 1
-                    context["total_iterations"] = iterations
-                
-                # 3. 循环结束后，整合所有结果
-                context["loop_results"] = all_iteration_results
-                context["loop_completed"] = True
-                context["loop_iterations_count"] = iterations
-                
-                # 4. 继续执行循环后的下一个节点（右侧连接的节点）
-                right_next_nodes = [
-                    edge for edge in next_nodes 
-                    if edge["target"] != current_node  # 排除回边
-                ]
-                
-                if right_next_nodes:
-                    current_node = right_next_nodes[0]["target"]
-                    logger.info(f"循环结束，继续执行节点: {current_node}")
-                else:
-                    logger.info("循环结束，无后续节点")
-                    break
-            else:
-                # 常规节点处理
-                # 如果有多个分支，根据条件选择
-                if len(next_nodes) > 1:
-                    for next_edge in next_nodes:
-                        if not next_edge["condition"]:
-                            current_node = next_edge["target"]
-                            break
-                    else:
-                        current_node = next_nodes[0]["target"]
-                else:
-                    current_node = next_nodes[0]["target"]
+            # 简化处理，取第一个后续节点
+            current_node = next_nodes[0]["target"]
         
-        return {"success": True, "result": context, "context": context}
-    
+        return {"success": True, "data": context}
+
     def list_workflows(self) -> List[Dict[str, Any]]:
         """列出所有工作流"""
         return [

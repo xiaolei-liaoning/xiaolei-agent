@@ -50,6 +50,16 @@ class OpenClawHandler:
         Returns:
             {"success": bool, "result/error": ...}
         """
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        
+        if loop is not None:
+            # 如果已有事件循环，返回协程任务
+            return asyncio.create_task(self.aexecute(action, **kwargs))
+        
+        # 否则使用asyncio.run
         return asyncio.run(self.aexecute(action, **kwargs))
     
     async def aexecute(self, action: str = 'list', **kwargs) -> Dict[str, Any]:

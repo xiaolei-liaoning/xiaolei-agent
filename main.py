@@ -15,10 +15,8 @@ Version: 3.3.1
 
 import asyncio
 import os
-import sys
 import time
 import logging
-from datetime import datetime
 from typing import Dict, Any, Optional, List
 from pathlib import Path
 
@@ -50,9 +48,11 @@ app = FastAPI(
     description="工业级 AI Agent 系统 - 意图识别 / 多步任务 / 工作流自动化 / 用户管理",
 )
 
+# 从环境变量读取CORS配置
+allowed_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost,http://127.0.0.1").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -147,6 +147,14 @@ def init_system() -> None:
     except Exception as e:
         logger.error("ConcurrentTaskProcessor 初始化失败: %s", e, exc_info=True)
 
+    # 3.5 初始化 TaskPlanner
+    try:
+        from core.task_planner import TaskPlanner
+        _planner = TaskPlanner()
+        logger.info("TaskPlanner 初始化完成")
+    except Exception as e:
+        logger.error("TaskPlanner 初始化失败: %s", e, exc_info=True)
+
     # 4-17. 其他组件初始化（简化显示）
     components = [
         ("TaskProcessor", "core.task_processor", "task_processor"),
@@ -209,6 +217,16 @@ def init_system() -> None:
         logger.info("Handlers 全局引用设置完成")
     except Exception as e:
         logger.error("Handlers 全局引用设置失败: %s", e, exc_info=True)
+    
+    # 19.5. 注入任务执行接口引用
+    try:
+        from core.task_execution_interface import set_task_handlers
+        from core.multi_agent_system import TextAnalyzerAgent
+        from core.handlers import handle_multi_step, handle_single_step
+        set_task_handlers(TextAnalyzerAgent, handle_multi_step, handle_single_step)
+        logger.info("任务执行接口引用注入完成")
+    except Exception as e:
+        logger.error("任务执行接口引用注入失败: %s", e, exc_info=True)
 
     # 20. 注入全局引用到 system 路由
     try:
@@ -229,6 +247,24 @@ def init_system() -> None:
 async def startup_event() -> None:
     """FastAPI 启动事件。"""
     init_system()
+    
+    # ✅ 新增：从数据库加载短期记忆（按用户ID）
+    try:
+        from core.handlers import short_term_memory
+        from core.database import get_session, BFSContextNode
+        
+        session = get_session()
+        # 获取所有有记忆的用户ID
+        user_ids = session.query(BFSContextNode.user_id).distinct().all()
+        session.close()
+        
+        for (user_id,) in user_ids:
+            logger.info("🔄 正在为用户 %s 加载短期记忆...", user_id)
+            short_term_memory.load_from_db(user_id)
+        
+        logger.info("✅ 短期记忆加载完成，共恢复 %d 个用户的记忆", len(user_ids))
+    except Exception as e:
+        logger.warning("短期记忆加载失败（首次启动或数据库未就绪）: %s", e)
     
     try:
         from core.agent_coordinator import get_agent_coordinator
@@ -312,16 +348,12 @@ try:
 except Exception as e:
     logger.warning(f"自我校验API路由注册失败: {e}")
 
-
-@app.on_event("startup")
-async def start_scheduler():
-    """启动定时任务调度器"""
-    try:
-        from core.task_scheduler import task_scheduler
-        await task_scheduler.start()
-        logger.info("定时任务调度器已启动")
-    except Exception as e:
-        logger.warning(f"定时任务调度器启动失败: {e}")
+try:
+    from api.routes.plans import router as plans_router
+    app.include_router(plans_router)
+    logger.info("计划管理API路由已注册")
+except Exception as e:
+    logger.warning(f"计划管理API路由注册失败: {e}")
 
 # ---------------------------------------------------------------------------
 # Web 界面路由
@@ -335,6 +367,7 @@ async def index_page():
             return f.read()
     return "<html><body><h1>系统首页文件不存在</h1></body></html>"
 
+@app.get("/chat_page", response_class=HTMLResponse, summary="聊天界面")
 @app.get("/chat", response_class=HTMLResponse, summary="聊天界面")
 async def chat_page():
     templates_dir = Path(__file__).parent / "templates"
@@ -422,9 +455,18 @@ def get_all_skills() -> List[Dict[str, Any]]:
     return skills
 
 
-# 缓存技能列表
-SKILLS_CACHE = get_all_skills()
-logger.info("加载了 %d 个技能", len(SKILLS_CACHE))
+# 技能列表（延迟加载）
+_skills_cache = None
+_skills_cache_loaded = False
+
+def get_cached_skills() -> list:
+    """延迟加载技能列表"""
+    global _skills_cache, _skills_cache_loaded
+    if not _skills_cache_loaded:
+        _skills_cache = get_all_skills()
+        _skills_cache_loaded = True
+        logger.info("加载了 %d 个技能", len(_skills_cache))
+    return _skills_cache
 
 
 @app.get("/api/skills")
@@ -432,7 +474,7 @@ async def get_skills_api():
     """获取所有技能API"""
     return JSONResponse({
         'success': True,
-        'data': SKILLS_CACHE
+        'data': get_cached_skills()
     })
 
 
@@ -440,16 +482,17 @@ async def get_skills_api():
 async def search_skills_api(q: str = ""):
     """搜索技能API"""
     query = q.lower()
+    skills = get_cached_skills()
     
     if not query:
         return JSONResponse({
             'success': True,
-            'data': SKILLS_CACHE
+            'data': skills
         })
     
     # 搜索匹配的技能
     filtered_skills = []
-    for skill in SKILLS_CACHE:
+    for skill in skills:
         # 匹配技能名称
         if query in skill['name'].lower():
             filtered_skills.append(skill)

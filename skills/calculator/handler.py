@@ -12,6 +12,16 @@ class CalculatorHandler:
     
     def execute(self, action: str = 'calculate', **kwargs) -> Dict[str, Any]:
         """同步执行接口"""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        
+        if loop is not None:
+            # 如果已有事件循环，直接调用异步方法
+            return asyncio.create_task(self.aexecute(action, **kwargs))
+        
+        # 否则使用asyncio.run
         return asyncio.run(self.aexecute(action, **kwargs))
     
     async def aexecute(self, action: str = 'calculate', **kwargs) -> Dict[str, Any]:

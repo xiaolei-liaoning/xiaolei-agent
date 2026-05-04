@@ -15,6 +15,12 @@
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
             background: #f5f7fa;
             min-height: 100vh;
+            transition: background-color 0.3s ease;
+        }
+        
+        body.dark-mode {
+            background: #1a1a1a;
+            color: #e5e7eb;
         }
         
         /* 顶部导航栏 */
@@ -28,6 +34,11 @@
             box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
         }
         
+        body.dark-mode .navbar {
+            background: #2d2d2d;
+            border-bottom-color: #404040;
+        }
+        
         .navbar-title {
             font-size: 18px;
             font-weight: 600;
@@ -35,6 +46,10 @@
             display: flex;
             align-items: center;
             gap: 8px;
+        }
+        
+        body.dark-mode .navbar-title {
+            color: #e5e7eb;
         }
         
         .navbar-actions {
@@ -56,6 +71,11 @@
             padding: 16px;
         }
         
+        body.dark-mode .node-panel {
+            background: #2d2d2d;
+            border-right-color: #404040;
+        }
+        
         .node-panel h2 {
             font-size: 14px;
             font-weight: 600;
@@ -63,6 +83,10 @@
             margin-bottom: 16px;
             text-transform: uppercase;
             letter-spacing: 0.5px;
+        }
+        
+        body.dark-mode .node-panel h2 {
+            color: #9ca3af;
         }
         
         .node-category {
@@ -90,11 +114,20 @@
             border: 1px solid transparent;
         }
         
+        body.dark-mode .node-item {
+            background: #363636;
+        }
+        
         .node-item:hover {
             background: #f3f4f6;
             border-color: #e5e7eb;
             transform: translateY(-1px);
             box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+        
+        body.dark-mode .node-item:hover {
+            background: #404040;
+            border-color: #525252;
         }
         
         .node-item:active {
@@ -112,10 +145,18 @@
             border-radius: 6px;
         }
         
+        body.dark-mode .node-icon {
+            background: #404040;
+        }
+        
         .node-label {
             font-size: 13px;
             color: #374151;
             font-weight: 500;
+        }
+        
+        body.dark-mode .node-label {
+            color: #d1d5db;
         }
         
         /* 中间画布 */
@@ -124,6 +165,10 @@
             background: #fafbfc;
             overflow: auto;
             position: relative;
+        }
+        
+        body.dark-mode .canvas-container {
+            background: #1a1a1a;
         }
         
         #workflow-canvas {
@@ -152,6 +197,12 @@
             z-index: 10;
         }
         
+        body.dark-mode .canvas-node {
+            background: #2d2d2d;
+            border-color: #404040;
+            color: #e5e7eb;
+        }
+        
         .canvas-node:hover {
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
             transform: translateY(-1px);
@@ -177,6 +228,10 @@
             color: #6b7280;
         }
         
+        body.dark-mode .node-content {
+            color: #9ca3af;
+        }
+        
         /* 连接点 */
         .connection-point {
             position: absolute;
@@ -188,6 +243,11 @@
             cursor: crosshair;
             z-index: 20;
             transition: all 0.2s ease;
+        }
+        
+        body.dark-mode .connection-point {
+            background: #404040;
+            border-color: #6b7280;
         }
         
         .connection-point:hover {
@@ -228,9 +288,18 @@
             overflow-y: auto;
         }
         
+        body.dark-mode .property-panel {
+            background: #2d2d2d;
+            border-left-color: #404040;
+        }
+        
         .property-panel-header {
             padding: 16px;
             border-bottom: 1px solid #e0e6ed;
+        }
+        
+        body.dark-mode .property-panel-header {
+            border-bottom-color: #404040;
         }
         
         .property-panel h2 {
@@ -238,6 +307,10 @@
             font-weight: 600;
             color: #374151;
             margin-bottom: 0;
+        }
+        
+        body.dark-mode .property-panel h2 {
+            color: #e5e7eb;
         }
         
         .property-content {
@@ -256,6 +329,10 @@
             margin-bottom: 6px;
         }
         
+        body.dark-mode .form-group label {
+            color: #d1d5db;
+        }
+        
         .form-group input,
         .form-group select,
         .form-group textarea {
@@ -266,6 +343,16 @@
             font-size: 13px;
             font-family: inherit;
             transition: border-color 0.2s ease;
+            background: white;
+            color: #374151;
+        }
+        
+        body.dark-mode .form-group input,
+        body.dark-mode .form-group select,
+        body.dark-mode .form-group textarea {
+            background: #363636;
+            border-color: #525252;
+            color: #e5e7eb;
         }
         
         .form-group input:focus,
@@ -340,9 +427,19 @@
             border: 1px solid #d1d5db;
         }
         
+        body.dark-mode .btn-secondary {
+            background: #363636;
+            color: #e5e7eb;
+            border-color: #525252;
+        }
+        
         .btn-secondary:hover {
             background: #e5e7eb;
             transform: translateY(-1px);
+        }
+        
+        body.dark-mode .btn-secondary:hover {
+            background: #404040;
         }
         
         /* 工具栏 */
@@ -361,6 +458,10 @@
             align-items: center;
         }
         
+        body.dark-mode .toolbar {
+            background: #2d2d2d;
+        }
+        
         /* 结果显示框 */
         .result-box {
             position: fixed;
@@ -376,6 +477,11 @@
             border: 1px solid #e0e6ed;
         }
         
+        body.dark-mode .result-box {
+            background: #2d2d2d;
+            border-color: #404040;
+        }
+        
         .result-box-header {
             padding: 12px 16px;
             background: #f9fafb;
@@ -383,6 +489,11 @@
             display: flex;
             align-items: center;
             justify-content: space-between;
+        }
+        
+        body.dark-mode .result-box-header {
+            background: #363636;
+            border-bottom-color: #404040;
         }
         
         .result-box h3 {
@@ -393,6 +504,10 @@
             display: flex;
             align-items: center;
             gap: 6px;
+        }
+        
+        body.dark-mode .result-box h3 {
+            color: #e5e7eb;
         }
         
         .result-box-close {
@@ -410,6 +525,11 @@
             color: #374151;
         }
         
+        body.dark-mode .result-box-close:hover {
+            background: #404040;
+            color: #e5e7eb;
+        }
+        
         .result-content {
             padding: 16px;
             font-size: 13px;
@@ -419,14 +539,28 @@
             overflow-y: auto;
         }
         
+        body.dark-mode .result-content {
+            color: #e5e7eb;
+        }
+        
         .result-content.error {
             color: #dc2626;
             background: #fef2f2;
         }
         
+        body.dark-mode .result-content.error {
+            color: #f87171;
+            background: rgba(239, 68, 68, 0.1);
+        }
+        
         .result-content.success {
             color: #059669;
             background: #f0fdf4;
+        }
+        
+        body.dark-mode .result-content.success {
+            color: #34d399;
+            background: rgba(16, 185, 129, 0.1);
         }
         
         /* 工作流框 */
@@ -441,6 +575,11 @@
             -webkit-user-select: none;
             pointer-events: auto;
             transition: all 0.2s ease;
+        }
+        
+        body.dark-mode .workflow-box {
+            border-color: #404040;
+            background: rgba(79, 70, 229, 0.08);
         }
         
         .workflow-box:hover {
@@ -465,6 +604,11 @@
             z-index: 10;
             border: 1px solid #e0e6ed;
             box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+        }
+        
+        body.dark-mode .workflow-box-header {
+            background: #2d2d2d;
+            border-color: #404040;
         }
         
         .workflow-box-delete {
@@ -586,6 +730,10 @@
             🤖 智能工作流编辑器
         </div>
         <div class="navbar-actions">
+            <button class="btn btn-secondary" id="undo-btn" onclick="undo()" title="撤销 (Ctrl+Z)" disabled>↩️</button>
+            <button class="btn btn-secondary" id="redo-btn" onclick="redo()" title="重做 (Ctrl+Y)" disabled>↪️</button>
+            <button class="btn btn-secondary" onclick="validateAndShow()" title="验证工作流">✔️</button>
+            <button class="btn btn-secondary" id="theme-toggle" onclick="toggleTheme()" title="切换主题">🌓</button>
             <button class="btn btn-secondary" onclick="exportWorkflow()">导出</button>
             <button class="btn btn-secondary" onclick="importWorkflow()">导入</button>
             <button class="btn btn-primary" onclick="saveWorkflow()">保存</button>
@@ -646,6 +794,26 @@
                 <div class="node-item" draggable="true" data-type="parallel">
                     <span class="node-icon">⚙️</span>
                     <span class="node-label">并行节点</span>
+                </div>
+            </div>
+            
+            <div class="node-category">
+                <div class="node-category-title">数据</div>
+                <div class="node-item" draggable="true" data-type="database">
+                    <span class="node-icon">💾</span>
+                    <span class="node-label">数据库节点</span>
+                </div>
+                <div class="node-item" draggable="true" data-type="file">
+                    <span class="node-icon">📁</span>
+                    <span class="node-label">文件节点</span>
+                </div>
+                <div class="node-item" draggable="true" data-type="transform">
+                    <span class="node-icon">🔀</span>
+                    <span class="node-label">数据转换</span>
+                </div>
+                <div class="node-item" draggable="true" data-type="message_queue">
+                    <span class="node-icon">📨</span>
+                    <span class="node-label">消息队列</span>
                 </div>
             </div>
             
@@ -711,6 +879,7 @@
 
     <script>
         document.addEventListener('DOMContentLoaded', function() {
+            // 全局变量
             let nodes = [];
             let edges = [];
             let workflowBoxes = [];
@@ -723,7 +892,112 @@
             let tempLine = null;
             let availableSkills = [];
             let zoom = 1;
+            let isDragging = false;
+            let dragStartX = 0;
+            let dragStartY = 0;
+            let initialX = 0;
+            let initialY = 0;
+            let clipboardNode = null;
+            
+            // DOM元素
+            const canvas = document.getElementById('workflow-canvas');
+            let svg = document.getElementById('connections');
+            const propertiesContent = document.getElementById('properties-content');
+            const resultContent = document.getElementById('result-content');
+            const undoBtn = document.getElementById('undo-btn');
+            const redoBtn = document.getElementById('redo-btn');
+            
+            // 命令栈（撤销/重做）
+            let commandStack = [];
+            let redoStack = [];
+            const MAX_HISTORY = 50; // 最大历史记录数
+            
+            class Command {
+                constructor(name, execute, undo) {
+                    this.name = name;
+                    this.execute = execute;
+                    this.undo = undo;
+                }
+            }
+            
+            function executeCommand(command) {
+                command.execute();
+                commandStack.push(command);
+                if (commandStack.length > MAX_HISTORY) {
+                    commandStack.shift();
+                }
+                redoStack = []; // 清空重做栈
+                updateUndoRedoButtons();
+            }
+            
+            function undo() {
+                if (commandStack.length === 0) return;
+                
+                const command = commandStack.pop();
+                command.undo();
+                redoStack.push(command);
+                updateUndoRedoButtons();
+                showResult('↩️ 已撤销');
+            }
+            
+            function redo() {
+                if (redoStack.length === 0) return;
+                
+                const command = redoStack.pop();
+                command.execute();
+                commandStack.push(command);
+                updateUndoRedoButtons();
+                showResult('↪️ 已重做');
+            }
+            
+            function updateUndoRedoButtons() {
+                if (undoBtn) {
+                    undoBtn.disabled = commandStack.length === 0;
+                    undoBtn.style.opacity = commandStack.length === 0 ? '0.5' : '1';
+                }
+                if (redoBtn) {
+                    redoBtn.disabled = redoStack.length === 0;
+                    redoBtn.style.opacity = redoStack.length === 0 ? '0.5' : '1';
+                }
+            }
+            
+            // 快捷键支持
+            document.addEventListener('keydown', function(e) {
+                // 忽略在输入框中的按键
+                if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
 
+                if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+                    e.preventDefault();
+                    if (e.shiftKey) {
+                        redo();
+                    } else {
+                        undo();
+                    }
+                } else if ((e.ctrlKey || e.metaKey) && e.key === 'y') {
+                    e.preventDefault();
+                    redo();
+                } else if (e.key === 'Delete' || e.key === 'Backspace') {
+                    // 确保焦点不在输入框中
+                    if (selectedNode && document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'TEXTAREA') {
+                        e.preventDefault();
+                        deleteNode(selectedNode);
+                    }
+                } else if (e.key === 'Escape') {
+                    if (selectedNode) {
+                        const selectedNodeElement = document.getElementById(selectedNode.id);
+                        if (selectedNodeElement) selectedNodeElement.classList.remove('selected');
+                        selectedNode = null;
+                        propertiesContent.innerHTML = '<p style="color: #999;">选择一个节点查看属性</p>';
+                    }
+                } else if ((e.ctrlKey || e.metaKey) && e.key === 'c' && selectedNode) {
+                    e.preventDefault();
+                    copyNode(selectedNode);
+                } else if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
+                    e.preventDefault();
+                    pasteNode();
+                }
+            });
+            
             // 加载可用Skills
             async function loadAvailableSkills() {
                 try {
@@ -750,14 +1024,14 @@
                         {name: 'translator', description: '翻译', icon: '🌐'},
                         {name: 'rag_search', description: '智能搜索', icon: '🔍'},
                         {name: 'advanced_automation', description: '高级自动化', icon: '⚙️'},
-                        {name: 'doubao_chat', description: '豆包对话', icon: '💬'},
                         {name: 'system_toolbox', description: '系统工具', icon: '🛠️'}
                     ];
                 }
             }
             
             loadAvailableSkills();
-
+            
+            // 刷新技能列表
             async function refreshSkills() {
                 showResult('刷新Skills列表中...');
                 await loadAvailableSkills();
@@ -768,9 +1042,6 @@
                 
                 showResult(`✅ Skills列表已刷新，共 ${availableSkills.length} 个工具`);
             }
-
-            const canvas = document.getElementById('workflow-canvas');
-            const svg = document.getElementById('connections');
             
             // 画布缩放功能
             function zoomIn() {
@@ -791,223 +1062,1394 @@
                 canvas.style.transformOrigin = 'top left';
             }
             
-            // 画布拖拽功能
-            let isDragging = false;
-            let dragStart = {x: 0, y: 0};
-            let canvasOffset = {x: 0, y: 0};
-            
-            function startDrag(event) {
-                isDragging = true;
-                dragStart = {x: event.clientX, y: event.clientY};
-            }
-            
-            function drag(event) {
-                if (isDragging) {
-                    const dx = event.clientX - dragStart.x;
-                    const dy = event.clientY - dragStart.y;
-                    canvasOffset.x += dx;
-                    canvasOffset.y += dy;
-                    canvas.style.transform = `translate(${canvasOffset.x}px, ${canvasOffset.y}px) scale(${zoom})`;
-                    canvas.style.transformOrigin = 'top left';
-                    dragStart = {x: event.clientX, y: event.clientY};
-                }
-            }
-            
-            function endDrag() {
-                isDragging = false;
-            }
-            
-            // 画布点击功能
-            function handleClick(event) {
-                if (isConnecting) {
-                    endConnection(event.clientX, event.clientY);
-                }
-            }
-            
             // 节点操作功能
             function addNode(type, x, y) {
+                const nodeId = `node_${nodeIdCounter++}`;
                 const node = {
-                    id: `node-${nodeIdCounter++}`,
+                    id: nodeId,
                     type: type,
                     x: x,
                     y: y,
-                    properties: {}
+                    properties: {},
+                    config: getDefaultConfig(type)
                 };
-                nodes.push(node);
-                drawNode(node);
+                
+                // 使用命令栈执行添加操作
+                const command = new Command(
+                    'addNode',
+                    () => {
+                        nodes.push(node);
+                        renderNode(node);
+                    },
+                    () => {
+                        nodes = nodes.filter(n => n.id !== nodeId);
+                        const element = document.getElementById(nodeId);
+                        if (element) canvas.removeChild(element);
+                    }
+                );
+                executeCommand(command);
             }
             
-            function drawNode(node) {
-                const nodeElement = document.createElement('div');
-                nodeElement.className = 'node';
-                nodeElement.style.left = `${node.x}px`;
-                nodeElement.style.top = `${node.y}px`;
-                nodeElement.id = node.id;
-                nodeElement.addEventListener('click', () => selectNode(node));
-                nodeElement.addEventListener('mousedown', startDrag);
-                nodeElement.addEventListener('mousemove', drag);
-                nodeElement.addEventListener('mouseup', endDrag);
-                nodeElement.addEventListener('mouseleave', endDrag);
-                nodeElement.addEventListener('dblclick', () => editNode(node));
-                nodeElement.addEventListener('contextmenu', (event) => {
-                    event.preventDefault();
-                    showContextMenu(event.clientX, event.clientY, node);
-                });
-                canvas.appendChild(nodeElement);
+            function deleteNode(nodeOrId) {
+                if (!nodeOrId) return;
                 
-                if (node.type === 'tool') {
-                    const toolIcon = document.createElement('span');
-                    toolIcon.className = 'tool-icon';
-                    const skill = availableSkills.find(skill => skill.name === node.properties.skill);
-                    if (skill) {
-                        toolIcon.textContent = skill.icon;
-                    } else {
-                        toolIcon.textContent = '🛠️';
+                const nodeId = typeof nodeOrId === 'string' ? nodeOrId : nodeOrId.id;
+                const node = typeof nodeOrId === 'string' ? nodes.find(n => n.id === nodeId) : nodeOrId;
+                if (!node) return;
+                
+                const nodeElement = document.getElementById(nodeId);
+                const deletedEdges = edges.filter(edge => edge.source === nodeId || edge.target === nodeId);
+                
+                // 使用命令栈执行删除操作
+                const command = new Command(
+                    'deleteNode',
+                    () => {
+                        if (nodeElement) canvas.removeChild(nodeElement);
+                        nodes = nodes.filter(n => n.id !== nodeId);
+                        edges = edges.filter(edge => edge.source !== nodeId && edge.target !== nodeId);
+                        if (selectedNode && selectedNode.id === nodeId) {
+                            selectedNode = null;
+                            propertiesContent.innerHTML = '<p style="color: #999;">选择一个节点查看属性</p>';
+                        }
+                        updateConnections();
+                    },
+                    () => {
+                        nodes.push(node);
+                        renderNode(node);
+                        edges.push(...deletedEdges);
+                        deletedEdges.forEach(edge => drawEdge(edge));
+                        updateConnections();
                     }
-                    nodeElement.appendChild(toolIcon);
-                }
+                );
+                executeCommand(command);
+                showResult('🗑️ 节点已删除');
             }
             
             function selectNode(node) {
                 if (selectedNode) {
-                    selectedNode.element.classList.remove('selected');
+                    const selectedNodeElement = document.getElementById(selectedNode.id);
+                    if (selectedNodeElement) selectedNodeElement.classList.remove('selected');
                 }
                 selectedNode = node;
-                selectedNode.element = document.getElementById(node.id);
-                selectedNode.element.classList.add('selected');
+                const selectedNodeElement = document.getElementById(node.id);
+                if (selectedNodeElement) selectedNodeElement.classList.add('selected');
                 showProperties(node);
             }
             
-            function showProperties(node) {
-                const propertiesContainer = document.getElementById('properties');
-                propertiesContainer.innerHTML = '';
-                
-                if (node.type === 'tool') {
-                    const skillSelect = document.createElement('select');
-                    skillSelect.addEventListener('change', (event) => {
-                        node.properties.skill = event.target.value;
-                        const skill = availableSkills.find(skill => skill.name === event.target.value);
-                        if (skill) {
-                            document.querySelector('.tool-icon').textContent = skill.icon;
-                        }
-                    });
-                    availableSkills.forEach(skill => {
-                        const option = document.createElement('option');
-                        option.value = skill.name;
-                        option.textContent = skill.description;
-                        if (skill.name === node.properties.skill) {
-                            option.selected = true;
-                        }
-                        skillSelect.appendChild(option);
-                    });
-                    propertiesContainer.appendChild(skillSelect);
+            // 节点复制/粘贴功能
+            function copyNode(node) {
+                clipboardNode = JSON.parse(JSON.stringify(node));
+                showNotification('已复制节点');
+            }
+            
+            function pasteNode() {
+                if (!clipboardNode) {
+                    showNotification('剪贴板为空', 'warning');
+                    return;
                 }
+                
+                const newNode = {
+                    id: `node-${nodeIdCounter++}`,
+                    type: clipboardNode.type,
+                    x: clipboardNode.x + 20, // 偏移避免重叠
+                    y: clipboardNode.y + 20,
+                    properties: {...clipboardNode.properties},
+                    config: {...clipboardNode.config}
+                };
+                
+                addNode(newNode.type, newNode.x, newNode.y);
+                showNotification('已粘贴节点');
             }
             
-            function editNode(node) {
-                const editContainer = document.createElement('div');
-                editContainer.className = 'edit-container';
-                editContainer.style.left = `${node.x}px`;
-                editContainer.style.top = `${node.y}px`;
-                editContainer.addEventListener('click', (event) => event.stopPropagation());
-                document.body.appendChild(editContainer);
+            function showNotification(message, type = 'info') {
+                const notification = document.createElement('div');
+                notification.style.cssText = `
+                    position: fixed;
+                    top: 80px;
+                    right: 20px;
+                    padding: 12px 20px;
+                    background: ${type === 'warning' ? '#f59e0b' : '#10b981'};
+                    color: white;
+                    border-radius: 8px;
+                    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+                    z-index: 10000;
+                    animation: slideIn 0.3s ease;
+                `;
+                notification.textContent = message;
+                document.body.appendChild(notification);
                 
-                const editInput = document.createElement('input');
-                editInput.type = 'text';
-                editInput.value = node.properties.skill || '';
-                editInput.addEventListener('keydown', (event) => {
-                    if (event.key === 'Enter') {
-                        node.properties.skill = editInput.value;
-                        document.body.removeChild(editContainer);
-                        selectNode(node);
-                    }
-                });
-                editContainer.appendChild(editInput);
-                
-                editInput.focus();
-            }
-            
-            function showContextMenu(x, y, node) {
-                const contextMenu = document.createElement('div');
-                contextMenu.className = 'context-menu';
-                contextMenu.style.left = `${x}px`;
-                contextMenu.style.top = `${y}px`;
-                document.body.appendChild(contextMenu);
-                
-                const deleteOption = document.createElement('div');
-                deleteOption.textContent = '删除';
-                deleteOption.addEventListener('click', () => {
-                    document.body.removeChild(contextMenu);
-                    deleteNode(node);
-                });
-                contextMenu.appendChild(deleteOption);
-            }
-            
-            function deleteNode(node) {
-                const nodeElement = document.getElementById(node.id);
-                canvas.removeChild(nodeElement);
-                nodes = nodes.filter(n => n.id !== node.id);
-                edges = edges.filter(edge => edge.from !== node.id && edge.to !== node.id);
-                if (selectedNode && selectedNode.id === node.id) {
-                    selectedNode = null;
-                }
+                setTimeout(() => {
+                    notification.remove();
+                }, 2000);
             }
             
             // 边操作功能
-            function startConnection(node, direction) {
+            function startConnection(e, id, direction) {
                 isConnecting = true;
-                connectionStart = node;
+                connectionStart = id;
                 connectionStartDirection = direction;
-                tempLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-                tempLine.setAttribute('stroke', 'black');
+                
+                // 创建临时连线
+                tempLine = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                tempLine.setAttribute('stroke', '#667eea');
                 tempLine.setAttribute('stroke-width', '2');
+                tempLine.setAttribute('fill', 'none');
+                tempLine.setAttribute('stroke-dasharray', '5,5');
                 svg.appendChild(tempLine);
+                
+                // 监听鼠标移动更新临时连线
+                document.addEventListener('mousemove', updateTempLine);
+                // 监听鼠标释放结束连接
+                document.addEventListener('mouseup', endConnection);
             }
             
-            function endConnection(x, y) {
-                if (isConnecting) {
-                    const endNode = findNodeAt(x, y);
-                    if (endNode && endNode !== connectionStart) {
-                        const edge = {
-                            id: `edge-${edges.length}`,
-                            from: connectionStart.id,
-                            to: endNode.id,
-                            direction: connectionStartDirection
-                        };
-                        edges.push(edge);
-                        drawEdge(edge);
+            function updateTempLine(e) {
+                if (!isConnecting) return;
+                
+                // 节点尺寸常量
+                const NODE_WIDTH = 200;
+                const NODE_HEIGHT = 90;
+                
+                const rect = canvas.getBoundingClientRect();
+                const endX = (e.clientX - rect.left) / zoom;
+                const endY = (e.clientY - rect.top) / zoom;
+                
+                // 找到起始点
+                let startX, startY;
+                const sourceNode = nodes.find(n => n.id === connectionStart);
+                const sourceBox = workflowBoxes.find(b => b.id === connectionStart);
+                
+                if (sourceNode) {
+                    if (connectionStartDirection === 'right') {
+                        startX = sourceNode.x + NODE_WIDTH;
+                        startY = sourceNode.y + NODE_HEIGHT / 2;
+                    } else if (connectionStartDirection === 'left') {
+                        startX = sourceNode.x;
+                        startY = sourceNode.y + NODE_HEIGHT / 2;
+                    } else if (connectionStartDirection === 'top') {
+                        startX = sourceNode.x + NODE_WIDTH / 2;
+                        startY = sourceNode.y;
+                    } else if (connectionStartDirection === 'bottom') {
+                        startX = sourceNode.x + NODE_WIDTH / 2;
+                        startY = sourceNode.y + NODE_HEIGHT;
                     }
-                    isConnecting = false;
-                    svg.removeChild(tempLine);
+                } else if (sourceBox) {
+                    startX = sourceBox.x + sourceBox.width / 2;
+                    startY = sourceBox.y;
+                }
+                
+                // 更新临时连线 - 使用贝塞尔曲线
+                if (tempLine) {
+                    let d;
+                    if (Math.abs(startY - endY) > 30) {
+                        // 垂直连接使用贝塞尔曲线
+                        d = `M ${startX} ${startY} C ${startX} ${startY + (endY > startY ? 30 : -30)}, ${endX} ${endY + (endY > startY ? -30 : 30)}, ${endX} ${endY}`;
+                    } else {
+                        // 水平连接使用贝塞尔曲线
+                        d = `M ${startX} ${startY} C ${startX + 40} ${startY}, ${endX - 40} ${endY}, ${endX} ${endY}`;
+                    }
+                    tempLine.setAttribute('d', d);
                 }
             }
             
+            function endConnection(e) {
+                if (!isConnecting) return;
+                
+                // 移除临时连线
+                if (tempLine) {
+                    tempLine.remove();
+                    tempLine = null;
+                }
+                
+                // 检查是否连接到了目标
+                const target = e.target;
+                if (target.classList.contains('connection-point')) {
+                    const targetId = target.dataset.nodeId;
+                    const targetDirection = target.dataset.direction;
+                    
+                    // 确保不是连接到自身
+                    if (connectionStart !== targetId) {
+                        // 检查是否已经存在相同的连线
+                        const existingEdge = edges.find(edge => 
+                            edge.source === connectionStart && edge.target === targetId
+                        );
+                        
+                        if (!existingEdge) {
+                            // 创建新连线
+                            const edge = {
+                                id: `edge_${Date.now()}`,
+                                source: connectionStart,
+                                target: targetId,
+                                sourceDirection: connectionStartDirection,
+                                targetDirection: targetDirection
+                            };
+                            edges.push(edge);
+                            updateConnections();
+                        }
+                    }
+                } else if (target.classList.contains('workflow-box-connection')) {
+                    const targetId = target.dataset.boxId;
+                    const targetDirection = 'top';
+                    
+                    // 确保不是连接到自身
+                    if (connectionStart !== targetId) {
+                        // 检查是否已经存在相同的连线
+                        const existingEdge = edges.find(edge => 
+                            edge.source === connectionStart && edge.target === targetId
+                        );
+                        
+                        if (!existingEdge) {
+                            // 创建新连线
+                            const edge = {
+                                id: `edge_${Date.now()}`,
+                                source: connectionStart,
+                                target: targetId,
+                                sourceDirection: connectionStartDirection,
+                                targetDirection: targetDirection
+                            };
+                            edges.push(edge);
+                            updateConnections();
+                        }
+                    }
+                }
+                
+                // 清理
+                isConnecting = false;
+                connectionStart = null;
+                connectionStartDirection = null;
+                document.removeEventListener('mousemove', updateTempLine);
+                document.removeEventListener('mouseup', endConnection);
+            }
+            
             function drawEdge(edge) {
-                const fromNode = nodes.find(node => node.id === edge.from);
-                const toNode = nodes.find(node => node.id === edge.to);
-                const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-                line.setAttribute('id', edge.id);
-                line.setAttribute('stroke', 'black');
-                line.setAttribute('stroke-width', '2');
-                line.setAttribute('x1', fromNode.x + (edge.direction === 'right' ? 100 : 0));
-                line.setAttribute('y1', fromNode.y + 50);
-                line.setAttribute('x2', toNode.x + (edge.direction === 'right' ? 0 : 100));
-                line.setAttribute('y2', toNode.y + 50);
-                svg.appendChild(line);
+                // 这个函数现在由updateConnections统一处理
+                // 保留是为了兼容性，实际不再使用
+                updateConnections();
             }
             
-            function findNodeAt(x, y) {
-                return nodes.find(node => {
-                    const nodeElement = document.getElementById(node.id);
-                    const rect = nodeElement.getBoundingClientRect();
-                    return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+            function updateConnections() {
+                // 节点尺寸常量
+                const NODE_WIDTH = 200;
+                const NODE_HEIGHT = 90;
+                
+                svg.innerHTML = '';
+                const rect = canvas.getBoundingClientRect();
+                
+                edges.forEach(edge => {
+                    let sourceNode = nodes.find(n => n.id === edge.source);
+                    let targetNode = nodes.find(n => n.id === edge.target);
+                    let sourceBox = workflowBoxes.find(b => b.id === edge.source);
+                    let targetBox = workflowBoxes.find(b => b.id === edge.target);
+                    
+                    if (!sourceNode && !sourceBox) return;
+                    if (!targetNode && !targetBox) return;
+                    
+                    let startX, startY, endX, endY;
+                    let d; // 声明路径变量
+                    
+                    // 获取连接方向（默认为左右连接）
+                    const sourceDir = edge.sourceDirection || 'right';
+                    const targetDir = edge.targetDirection || 'left';
+                    
+                    // 计算起点位置（根据源节点类型和方向）
+                    if (sourceNode) {
+                        switch (sourceDir) {
+                            case 'top':
+                                startX = sourceNode.x + NODE_WIDTH / 2;
+                                startY = sourceNode.y;
+                                break;
+                            case 'bottom':
+                                startX = sourceNode.x + NODE_WIDTH / 2;
+                                startY = sourceNode.y + NODE_HEIGHT;
+                                break;
+                            case 'left':
+                                startX = sourceNode.x;
+                                startY = sourceNode.y + NODE_HEIGHT / 2;
+                                break;
+                            case 'right':
+                            default:
+                                startX = sourceNode.x + NODE_WIDTH;
+                                startY = sourceNode.y + NODE_HEIGHT / 2;
+                                break;
+                        }
+                    } else if (sourceBox) {
+                        // 工作流框的连接点
+                        switch (sourceDir) {
+                            case 'top':
+                                startX = sourceBox.x + sourceBox.width / 2;
+                                startY = sourceBox.y;
+                                break;
+                            case 'bottom':
+                                startX = sourceBox.x + sourceBox.width / 2;
+                                startY = sourceBox.y + sourceBox.height;
+                                break;
+                            case 'left':
+                                startX = sourceBox.x;
+                                startY = sourceBox.y + sourceBox.height / 2;
+                                break;
+                            case 'right':
+                            default:
+                                startX = sourceBox.x + sourceBox.width;
+                                startY = sourceBox.y + sourceBox.height / 2;
+                                break;
+                        }
+                    }
+                    
+                    // 计算终点位置（根据目标节点类型和方向）
+                    if (targetNode) {
+                        switch (targetDir) {
+                            case 'top':
+                                endX = targetNode.x + NODE_WIDTH / 2;
+                                endY = targetNode.y;
+                                break;
+                            case 'bottom':
+                                endX = targetNode.x + NODE_WIDTH / 2;
+                                endY = targetNode.y + NODE_HEIGHT;
+                                break;
+                            case 'left':
+                                endX = targetNode.x;
+                                endY = targetNode.y + NODE_HEIGHT / 2;
+                                break;
+                            case 'right':
+                            default:
+                                endX = targetNode.x + NODE_WIDTH;
+                                endY = targetNode.y + NODE_HEIGHT / 2;
+                                break;
+                        }
+                    } else if (targetBox) {
+                        // 工作流框的连接点
+                        switch (targetDir) {
+                            case 'top':
+                                endX = targetBox.x + targetBox.width / 2;
+                                endY = targetBox.y;
+                                break;
+                            case 'bottom':
+                                endX = targetBox.x + targetBox.width / 2;
+                                endY = targetBox.y + targetBox.height;
+                                break;
+                            case 'left':
+                                endX = targetBox.x;
+                                endY = targetBox.y + targetBox.height / 2;
+                                break;
+                            case 'right':
+                            default:
+                                endX = targetBox.x + targetBox.width;
+                                endY = targetBox.y + targetBox.height / 2;
+                                break;
+                        }
+                    }
+                    
+                    // 为循环节点到工作流框的连线优化路径（类似Coze风格）
+                    if (sourceNode && sourceNode.type === 'loop' && targetBox && sourceDir === 'bottom' && targetDir === 'top') {
+                        // 循环节点底部 -> 工作流框顶部：垂直向下的直线 + 小弧度
+                        const midY = (startY + endY) / 2;
+                        d = `M ${startX} ${startY} C ${startX} ${midY}, ${endX} ${midY}, ${endX} ${endY}`;
+                        
+                        // 同时绘制返回的虚线（工作流框底部 -> 循环节点顶部）
+                        const returnStartX = targetBox.x + targetBox.width / 2;
+                        const returnStartY = targetBox.y + targetBox.height;
+                        const returnEndX = sourceNode.x + NODE_WIDTH / 2;
+                        const returnEndY = sourceNode.y;
+                        const returnMidY = (returnStartY + returnEndY) / 2;
+                        const returnD = `M ${returnStartX} ${returnStartY} C ${returnStartX + 60} ${returnMidY}, ${returnEndX - 60} ${returnMidY}, ${returnEndX} ${returnEndY}`;
+                        
+                        const returnPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                        returnPath.setAttribute('d', returnD);
+                        returnPath.setAttribute('stroke', '#667eea');
+                        returnPath.setAttribute('stroke-width', '2');
+                        returnPath.setAttribute('fill', 'none');
+                        returnPath.setAttribute('marker-end', 'url(#arrowhead)');
+                        returnPath.setAttribute('stroke-dasharray', '8,4');
+                        svg.appendChild(returnPath);
+                    } else {
+                        // 默认贝塞尔曲线路径
+                        if (Math.abs(startY - endY) > 30) {
+                            // 垂直连接使用贝塞尔曲线
+                            d = `M ${startX} ${startY} C ${startX} ${startY + (endY > startY ? 40 : -40)}, ${endX} ${endY + (endY > startY ? -40 : 40)}, ${endX} ${endY}`;
+                        } else {
+                            // 水平连接使用贝塞尔曲线
+                            d = `M ${startX} ${startY} C ${startX + 50} ${startY}, ${endX - 50} ${endY}, ${endX} ${endY}`;
+                        }
+                    }
+                    
+                    // 创建并添加路径元素
+                    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                    path.setAttribute('d', d);
+                    path.setAttribute('stroke', '#667eea');
+                    path.setAttribute('stroke-width', '2');
+                    path.setAttribute('fill', 'none');
+                    path.setAttribute('marker-end', 'url(#arrowhead)');
+                    
+                    svg.appendChild(path);
                 });
+                
+                // 添加箭头标记（确保defs总是存在）
+                let defs = svg.querySelector('defs');
+                if (!defs) {
+                    defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+                    svg.insertBefore(defs, svg.firstChild);
+                }
+                
+                // 添加箭头标记
+                if (edges.length > 0 && !document.getElementById('arrowhead')) {
+                    const marker = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
+                    marker.setAttribute('id', 'arrowhead');
+                    marker.setAttribute('markerWidth', '10');
+                    marker.setAttribute('markerHeight', '7');
+                    marker.setAttribute('refX', '9');
+                    marker.setAttribute('refY', '3.5');
+                    marker.setAttribute('orient', 'auto');
+                    
+                    const polygon = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+                    polygon.setAttribute('points', '0 0, 10 3.5, 0 7');
+                    polygon.setAttribute('fill', '#667eea');
+                    
+                    marker.appendChild(polygon);
+                    defs.appendChild(marker);
+                }
             }
             
-            function resetZoom() {
-                zoom = 1;
-                canvas.style.transform = 'scale(1)';
+            // 全局工作流框拖拽状态管理
+            const workflowBoxDragState = {
+                isDragging: false,
+                isResizing: false,
+                currentBox: null,
+                startX: 0,
+                startY: 0,
+                initialX: 0,
+                initialY: 0,
+                initialWidth: 0,
+                initialHeight: 0,
+                currentDiv: null
+            };
+            
+            // 全局mousemove事件监听器（只注册一次）
+            document.addEventListener('mousemove', (e) => {
+                if (!workflowBoxDragState.isDragging && !workflowBoxDragState.isResizing) return;
+                
+                e.preventDefault();
+                
+                const dx = e.clientX - workflowBoxDragState.startX;
+                const dy = e.clientY - workflowBoxDragState.startY;
+                
+                if (workflowBoxDragState.isDragging && workflowBoxDragState.currentBox) {
+                    workflowBoxDragState.currentBox.x = workflowBoxDragState.initialX + dx;
+                    workflowBoxDragState.currentBox.y = workflowBoxDragState.initialY + dy;
+                    if (workflowBoxDragState.currentDiv) {
+                        workflowBoxDragState.currentDiv.style.left = workflowBoxDragState.currentBox.x + 'px';
+                        workflowBoxDragState.currentDiv.style.top = workflowBoxDragState.currentBox.y + 'px';
+                    }
+                } else if (workflowBoxDragState.isResizing && workflowBoxDragState.currentBox) {
+                    workflowBoxDragState.currentBox.width = Math.max(100, workflowBoxDragState.initialWidth + dx);
+                    workflowBoxDragState.currentBox.height = Math.max(100, workflowBoxDragState.initialHeight + dy);
+                    if (workflowBoxDragState.currentDiv) {
+                        workflowBoxDragState.currentDiv.style.width = workflowBoxDragState.currentBox.width + 'px';
+                        workflowBoxDragState.currentDiv.style.height = workflowBoxDragState.currentBox.height + 'px';
+                    }
+                }
+                
+                updateConnections();
+            });
+            
+            // 全局mouseup事件监听器（只注册一次）
+            document.addEventListener('mouseup', () => {
+                if (workflowBoxDragState.isDragging && workflowBoxDragState.currentDiv) {
+                    workflowBoxDragState.isDragging = false;
+                    workflowBoxDragState.currentDiv.style.cursor = 'grab';
+                    workflowBoxDragState.currentDiv.style.zIndex = '5'; // 恢复原始z-index
+                }
+                if (workflowBoxDragState.isResizing) {
+                    workflowBoxDragState.isResizing = false;
+                }
+                workflowBoxDragState.currentBox = null;
+                workflowBoxDragState.currentDiv = null;
+            });
+            
+            function renderWorkflowBox(workflowBox) {
+                const div = document.createElement('div');
+                div.className = 'workflow-box';
+                div.style.left = workflowBox.x + 'px';
+                div.style.top = workflowBox.y + 'px';
+                div.style.width = workflowBox.width + 'px';
+                div.style.height = workflowBox.height + 'px';
+                div.dataset.boxId = workflowBox.id;
+                
+                div.innerHTML = `
+                    <div class="workflow-box-header">
+                        ${workflowBox.config.name}
+                        <button class="workflow-box-delete" onclick="deleteWorkflowBox('${workflowBox.id}')">×</button>
+                    </div>
+                    <div class="workflow-box-connection" data-box-id="${workflowBox.id}" data-direction="top"></div>
+                    <div class="workflow-box-resizer" data-box-id="${workflowBox.id}"></div>
+                `;
+                
+                // 确保连接点位于工作流框顶部中央
+                const connectionPoint = div.querySelector('.workflow-box-connection');
+                connectionPoint.style.position = 'absolute';
+                connectionPoint.style.top = '-20px';
+                connectionPoint.style.left = '50%';
+                connectionPoint.style.transform = 'translateX(-50%)';
+                connectionPoint.style.width = '28px';
+                connectionPoint.style.height = '28px';
+                connectionPoint.style.background = '#ff6b6b';
+                connectionPoint.style.border = '4px solid white';
+                connectionPoint.style.borderRadius = '50%';
+                connectionPoint.style.cursor = 'crosshair';
+                connectionPoint.style.zIndex = '100';
+                connectionPoint.style.transition = 'all 0.2s ease';
+                connectionPoint.style.boxShadow = '0 0 15px rgba(255, 107, 107, 0.6);';
+                
+                // 点击选择
+                div.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    // 可以添加选择工作流框的逻辑
+                });
+                
+                // 拖拽移动 - 使用全局状态管理
+                div.addEventListener('mousedown', (e) => {
+                    // 只有点击工作流框本身时才能拖拽
+                    if (e.target.classList.contains('workflow-box-connection') || 
+                        e.target.classList.contains('workflow-box-resizer') ||
+                        e.target.classList.contains('workflow-box-delete')) return;
+                    
+                    e.stopPropagation();
+                    e.preventDefault();
+                    
+                    // 设置全局拖拽状态
+                    workflowBoxDragState.isDragging = true;
+                    workflowBoxDragState.currentBox = workflowBox;
+                    workflowBoxDragState.currentDiv = div;
+                    workflowBoxDragState.startX = e.clientX;
+                    workflowBoxDragState.startY = e.clientY;
+                    workflowBoxDragState.initialX = workflowBox.x;
+                    workflowBoxDragState.initialY = workflowBox.y;
+                    
+                    div.style.cursor = 'grabbing';
+                    div.style.zIndex = '100'; // 提升层级，确保在最上层
+                });
+                
+                // 拉伸调整大小 - 使用全局状态管理
+                const resizer = div.querySelector('.workflow-box-resizer');
+                resizer.addEventListener('mousedown', (e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    
+                    // 设置全局调整大小状态
+                    workflowBoxDragState.isResizing = true;
+                    workflowBoxDragState.currentBox = workflowBox;
+                    workflowBoxDragState.currentDiv = div;
+                    workflowBoxDragState.startX = e.clientX;
+                    workflowBoxDragState.startY = e.clientY;
+                    workflowBoxDragState.initialWidth = workflowBox.width;
+                    workflowBoxDragState.initialHeight = workflowBox.height;
+                });
+                
+                // 工作流框连接点 - 添加点击事件
+                connectionPoint.addEventListener('mousedown', (e) => {
+                    e.stopPropagation();
+                    startConnection(e, workflowBox.id, 'top');
+                });
+                
+                canvas.appendChild(div);
             }
+            
+            function renderNode(node) {
+                const div = document.createElement('div');
+                div.className = 'canvas-node';
+                div.id = node.id;
+                div.dataset.nodeId = node.id;
+                
+                // 节点头部
+                let headerHTML = `<div class="node-header">`;
+                switch (node.type) {
+                    case 'start':
+                        headerHTML += `<span>🚀</span> 开始节点`;
+                        break;
+                    case 'llm':
+                        headerHTML += `<span>🤖</span> LLM节点`;
+                        break;
+                    case 'tool':
+                        headerHTML += `<span>🔧</span> 工具节点`;
+                        break;
+                    case 'calculator':
+                        headerHTML += `<span>🧮</span> 计算节点`;
+                        break;
+                    case 'http':
+                        headerHTML += `<span>🌐</span> HTTP节点`;
+                        break;
+                    case 'condition':
+                        headerHTML += `<span>⚡</span> 条件节点`;
+                        break;
+                    case 'loop':
+                        headerHTML += `<span>🔄</span> 循环节点`;
+                        break;
+                    case 'parallel':
+                        headerHTML += `<span>⚙️</span> 并行节点`;
+                        break;
+                    case 'end':
+                        headerHTML += `<span>✅</span> 结束节点`;
+                        break;
+                }
+                headerHTML += `</div>`;
+                
+                // 节点内容
+                let contentHTML = `<div class="node-content">`;
+                switch (node.type) {
+                    case 'start':
+                        contentHTML += `输入: ${node.config.input || '用户输入'}`;
+                        break;
+                    case 'llm':
+                        contentHTML += `模型: ${node.config.model || 'glm-4-flash'}`;
+                        break;
+                    case 'tool':
+                        contentHTML += `工具: ${node.config.tool || '未选择'}`;
+                        if (node.config.params) {
+                            contentHTML += `<br>参数: ${node.config.params}`;
+                        }
+                        break;
+                    case 'calculator':
+                        contentHTML += `操作: ${node.config.operation || 'add'}`;
+                        break;
+                    case 'http':
+                        contentHTML += `方法: ${node.config.method || 'GET'}`;
+                        break;
+                    case 'condition':
+                        contentHTML += `条件: ${node.config.condition || 'true'}`;
+                        break;
+                    case 'loop':
+                        contentHTML += `类型: ${node.config.loop_type || 'array'}`;
+                        break;
+                    case 'parallel':
+                        contentHTML += `分支数: ${node.config.branch_count || 2}`;
+                        break;
+                    case 'end':
+                        contentHTML += `输出: ${node.config.output || '{{result}}'}`;
+                        break;
+                }
+                contentHTML += `</div>`;
+                
+                div.innerHTML = headerHTML + contentHTML;
+                
+                // 添加连接点
+                if (node.type !== 'start') {
+                    const leftPoint = document.createElement('div');
+                    leftPoint.className = 'connection-point left';
+                    leftPoint.dataset.nodeId = node.id;
+                    leftPoint.dataset.direction = 'left';
+                    leftPoint.addEventListener('mousedown', (e) => {
+                        e.stopPropagation();
+                        startConnection(e, node.id, 'left');
+                    });
+                    div.appendChild(leftPoint);
+                }
+                
+                if (node.type !== 'end') {
+                    const rightPoint = document.createElement('div');
+                    rightPoint.className = 'connection-point right';
+                    rightPoint.dataset.nodeId = node.id;
+                    rightPoint.dataset.direction = 'right';
+                    rightPoint.addEventListener('mousedown', (e) => {
+                        e.stopPropagation();
+                        startConnection(e, node.id, 'right');
+                    });
+                    div.appendChild(rightPoint);
+                }
+                
+                // 为循环节点添加上下连接点
+                if (node.type === 'loop') {
+                    const topPoint = document.createElement('div');
+                    topPoint.className = 'connection-point top';
+                    topPoint.dataset.nodeId = node.id;
+                    topPoint.dataset.direction = 'top';
+                    topPoint.addEventListener('mousedown', (e) => {
+                        e.stopPropagation();
+                        startConnection(e, node.id, 'top');
+                    });
+                    div.appendChild(topPoint);
+                    
+                    const bottomPoint = document.createElement('div');
+                    bottomPoint.className = 'connection-point bottom';
+                    bottomPoint.dataset.nodeId = node.id;
+                    bottomPoint.dataset.direction = 'bottom';
+                    bottomPoint.addEventListener('mousedown', (e) => {
+                        e.stopPropagation();
+                        startConnection(e, node.id, 'bottom');
+                    });
+                    div.appendChild(bottomPoint);
+                }
+                
+                // 点击选择节点
+                div.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    selectNode(node);
+                });
+                
+                // 拖拽移动节点
+                div.addEventListener('mousedown', (e) => {
+                    e.stopPropagation();
+                    if (e.target.classList.contains('connection-point')) return;
+                    
+                    // 先选中节点（关键修复：确保拖拽时 selectedNode 不为 null）
+                    selectNode(node);
+                    
+                    isDragging = true;
+                    dragStartX = e.clientX;
+                    dragStartY = e.clientY;
+                    initialX = node.x;
+                    initialY = node.y;
+                    div.style.cursor = 'grabbing';
+                    div.classList.add('dragging');
+                });
+                
+                canvas.appendChild(div);
+            }
+            
+            // 全局鼠标移动事件（用于节点拖拽）
+            document.addEventListener('mousemove', (e) => {
+                if (!isDragging || !selectedNode) return;
+                
+                const dx = e.clientX - dragStartX;
+                const dy = e.clientY - dragStartY;
+                
+                // 网格吸附（8px网格）
+                const GRID_SIZE = 8;
+                const newX = Math.round((initialX + dx) / GRID_SIZE) * GRID_SIZE;
+                const newY = Math.round((initialY + dy) / GRID_SIZE) * GRID_SIZE;
+                
+                selectedNode.x = newX;
+                selectedNode.y = newY;
+                
+                const nodeElement = document.getElementById(selectedNode.id);
+                if (nodeElement) {
+                    nodeElement.style.left = newX + 'px';
+                    nodeElement.style.top = newY + 'px';
+                }
+                
+                updateConnections();
+            });
+            
+            // 全局鼠标释放事件（用于节点拖拽）
+            document.addEventListener('mouseup', () => {
+                if (!isDragging || !selectedNode) return;
+                
+                isDragging = false;
+                const nodeElement = document.getElementById(selectedNode.id);
+                if (nodeElement) {
+                    nodeElement.style.cursor = 'move';
+                    nodeElement.classList.remove('dragging');
+                }
+                
+                // 如果位置发生变化，记录到命令栈
+                if (selectedNode.x !== initialX || selectedNode.y !== initialY) {
+                    const finalX = selectedNode.x;
+                    const finalY = selectedNode.y;
+                    
+                    const command = new Command(
+                        'moveNode',
+                        () => {
+                            selectedNode.x = finalX;
+                            selectedNode.y = finalY;
+                            const el = document.getElementById(selectedNode.id);
+                            if (el) {
+                                el.style.left = finalX + 'px';
+                                el.style.top = finalY + 'px';
+                            }
+                            updateConnections();
+                        },
+                        () => {
+                            selectedNode.x = initialX;
+                            selectedNode.y = initialY;
+                            const el = document.getElementById(selectedNode.id);
+                            if (el) {
+                                el.style.left = initialX + 'px';
+                                el.style.top = initialY + 'px';
+                            }
+                            updateConnections();
+                        }
+                    );
+                    executeCommand(command);
+                }
+            });
+            
+            function showProperties(node) {
+                propertiesContent.innerHTML = renderPropertyFields(node);
+            }
+            
+            function renderPropertyFields(node) {
+                let html = `
+                    <div class="form-group">
+                        <label>节点类型</label>
+                        <input type="text" value="${node.type}" disabled>
+                    </div>
+                    <div class="form-group">
+                        <label>节点ID</label>
+                        <input type="text" value="${node.id}" disabled>
+                    </div>
+                `;
+                
+                if (node.type === 'start') {
+                    html += `
+                        <div class="form-group">
+                            <label>输入</label>
+                            <input type="text" value="${node.config.input || '用户输入'}" onchange="updateNodeConfig('${node.id}', 'input', this.value)">
+                        </div>
+                    `;
+                } else if (node.type === 'llm') {
+                    html += `
+                        <div class="form-group">
+                            <label>提示词</label>
+                            <textarea onchange="updateNodeConfig('${node.id}', 'prompt', this.value)">${node.config.prompt || ''}</textarea>
+                        </div>
+                        <div class="form-group">
+                            <label>模型</label>
+                            <select onchange="updateNodeConfig('${node.id}', 'model', this.value)">
+                                <option value="glm-4-flash" ${node.config.model === 'glm-4-flash' ? 'selected' : ''}>glm-4-flash</option>
+                                <option value="gpt-4" ${node.config.model === 'gpt-4' ? 'selected' : ''}>gpt-4</option>
+                                <option value="claude-3" ${node.config.model === 'claude-3' ? 'selected' : ''}>claude-3</option>
+                            </select>
+                        </div>
+                    `;
+                } else if (node.type === 'tool') {
+                    html += `
+                        <div class="form-group">
+                            <label>工具</label>
+                            <div style="display: flex; gap: 8px;">
+                                <select id="tool-select-${node.id}" onchange="updateNodeConfig('${node.id}', 'tool', this.value)" style="flex: 1;">
+                                    <option value="">选择工具</option>
+                                    ${availableSkills && availableSkills.length > 0 ? 
+                                        availableSkills.map(skill => 
+                                            `<option value="${skill.name}" ${node.config.tool === skill.name ? 'selected' : ''}>${skill.icon || '🔧'} ${skill.description || skill.name}</option>`
+                                        ).join('') : 
+                                        '<option value="" disabled>加载中...</option>'
+                                    }
+                                </select>
+                                <button class="btn btn-primary" onclick="refreshSkills()" style="padding: 8px 12px; white-space: nowrap;" title="刷新工具列表">🔄</button>
+                            </div>
+                            <small style="color: #999; font-size: 11px;">如果列表为空，请点击🔄刷新或检查后端服务</small>
+                        </div>
+                        <div class="form-group">
+                            <label>参数</label>
+                            <div style="display: flex; gap: 8px;">
+                                <select id="tool-param-key-${node.id}" onchange="updateToolParam('${node.id}')" style="flex: 1;">
+                                    <option value="">选择参数</option>
+                                    <option value="city">城市</option>
+                                    <option value="query">查询内容</option>
+                                    <option value="url">网址</option>
+                                    <option value="text">文本</option>
+                                    <option value="number">数字</option>
+                                    <option value="language">语言</option>
+                                </select>
+                                <input type="text" id="tool-param-value-${node.id}" placeholder="输入值" onchange="updateToolParam('${node.id}')" style="flex: 1;">
+                            </div>
+                            <small>选择参数类型并输入对应值</small>
+                        </div>
+                    `;
+                } else if (node.type === 'calculator') {
+                    html += `
+                        <div class="form-group">
+                            <label>操作类型</label>
+                            <select onchange="updateNodeConfig('${node.id}', 'operation', this.value)">
+                                <option value="add" ${node.config.operation === 'add' ? 'selected' : ''}>加法</option>
+                                <option value="subtract" ${node.config.operation === 'subtract' ? 'selected' : ''}>减法</option>
+                                <option value="multiply" ${node.config.operation === 'multiply' ? 'selected' : ''}>乘法</option>
+                                <option value="divide" ${node.config.operation === 'divide' ? 'selected' : ''}>除法</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>操作数1</label>
+                            <input type="text" value="${node.config.operand1 || '1'}" onchange="updateNodeConfig('${node.id}', 'operand1', this.value)">
+                        </div>
+                        <div class="form-group">
+                            <label>操作数2</label>
+                            <input type="text" value="${node.config.operand2 || '2'}" onchange="updateNodeConfig('${node.id}', 'operand2', this.value)">
+                        </div>
+                    `;
+                } else if (node.type === 'http') {
+                    html += `
+                        <div class="form-group">
+                            <label>请求方法</label>
+                            <select onchange="updateNodeConfig('${node.id}', 'method', this.value)">
+                                <option value="GET" ${node.config.method === 'GET' ? 'selected' : ''}>GET</option>
+                                <option value="POST" ${node.config.method === 'POST' ? 'selected' : ''}>POST</option>
+                                <option value="PUT" ${node.config.method === 'PUT' ? 'selected' : ''}>PUT</option>
+                                <option value="DELETE" ${node.config.method === 'DELETE' ? 'selected' : ''}>DELETE</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>URL</label>
+                            <input type="text" value="${node.config.url || 'https://api.example.com'}" onchange="updateNodeConfig('${node.id}', 'url', this.value)">
+                        </div>
+                        <div class="form-group">
+                            <label>请求头</label>
+                            <input type="text" value="${node.config.headers || ''}" onchange="updateNodeConfig('${node.id}', 'headers', this.value)">
+                            <small>文本格式，例如: Content-Type=application/json</small>
+                        </div>
+                        <div class="form-group">
+                            <label>请求体</label>
+                            <input type="text" value="${node.config.body || ''}" onchange="updateNodeConfig('${node.id}', 'body', this.value)">
+                            <small>文本格式，例如: {"key": "value"}</small>
+                        </div>
+                    `;
+                } else if (node.type === 'condition') {
+                    html += `
+                        <div class="form-group">
+                            <label>条件表达式</label>
+                            <input type="text" value="${node.config.condition || '{{result}} > 10'}" onchange="updateNodeConfig('${node.id}', 'condition', this.value)">
+                            <small style="color: #999; font-size: 11px;">支持Jinja2语法，如: {{score}} >= 60 and {{passed}} == true</small>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label>真分支目标节点</label>
+                            <select onchange="updateNodeConfig('${node.id}', 'true_branch', this.value)">
+                                <option value="">-- 选择节点 --</option>
+                                ${nodes.filter(n => n.id !== node.id).map(n => 
+                                    `<option value="${n.id}" ${node.config.true_branch === n.id ? 'selected' : ''}>${n.id} (${n.type})</option>`
+                                ).join('')}
+                            </select>
+                            <small style="color: #999; font-size: 11px;">条件为真时执行的节点</small>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label>假分支目标节点</label>
+                            <select onchange="updateNodeConfig('${node.id}', 'false_branch', this.value)">
+                                <option value="">-- 选择节点 --</option>
+                                ${nodes.filter(n => n.id !== node.id).map(n => 
+                                    `<option value="${n.id}" ${node.config.false_branch === n.id ? 'selected' : ''}>${n.id} (${n.type})</option>`
+                                ).join('')}
+                            </select>
+                            <small style="color: #999; font-size: 11px;">条件为假时执行的节点</small>
+                        </div>
+                        
+                        <div style="background: #f0f7ff; padding: 12px; border-radius: 6px; margin-top: 12px;">
+                            <small style="color: #666; font-size: 11px; display: block; margin-bottom: 8px;">
+                                <strong>💡 常用条件示例：</strong>
+                            </small>
+                            <small style="color: #666; font-size: 11px; display: block; line-height: 1.8;">
+                                • 数值比较: {{value}} > 10<br>
+                                • 字符串匹配: {{status}} == "success"<br>
+                                • 布尔判断: {{is_valid}}<br>
+                                • 逻辑运算: {{a}} > 5 and {{b}} < 10<br>
+                                • 列表检查: {{items}} | length > 0
+                            </small>
+                        </div>
+                    `;
+                } else if (node.type === 'loop') {
+                    html += `
+                        <div class="form-group">
+                            <label>循环类型</label>
+                            <input type="text" value="${node.config.loop_type || 'array'}" onchange="updateNodeConfig('${node.id}', 'loop_type', this.value)">
+                            <small style="color: #999; font-size: 11px;">可选值: array(数组循环), times(固定次数循环), while(条件循环)</small>
+                        </div>
+                        <div class="form-group">
+                            <label>最大迭代次数</label>
+                            <input type="number" value="${node.config.max_iterations || 100}" onchange="updateNodeConfig('${node.id}', 'max_iterations', parseInt(this.value))" min="1" max="1000">
+                            <small style="color: #999; font-size: 11px;">防止无限循环</small>
+                        </div>
+                    `;
+                } else if (node.type === 'parallel') {
+                    html += `
+                        <div class="form-group">
+                            <label>并行分支数</label>
+                            <input type="number" value="${node.config.branch_count || 2}" onchange="updateNodeConfig('${node.id}', 'branch_count', parseInt(this.value))" min="2" max="10">
+                            <small style="color: #999; font-size: 11px;">建议2-5个分支</small>
+                        </div>
+                        <div class="form-group">
+                            <label>分支配置</label>
+                            <input type="text" placeholder="分支配置（文本格式）" value="${node.config.branches || ''}" onchange="updateNodeConfig('${node.id}', 'branches', this.value)">
+                            <small style="color: #999; font-size: 11px;">例如: branch1=分支1,branch2=分支2</small>
+                        </div>
+                        <div class="form-group">
+                            <label>同步模式</label>
+                            <select onchange="updateNodeConfig('${node.id}', 'sync_mode', this.value)">
+                                <option value="wait_all" ${node.config.sync_mode === 'wait_all' ? 'selected' : ''}>等待所有分支完成</option>
+                                <option value="first_completed" ${node.config.sync_mode === 'first_completed' ? 'selected' : ''}>取第一个完成的结果</option>
+                            </select>
+                            <small style="color: #999; font-size: 11px;">并行执行策略</small>
+                        </div>
+                    `;
+                } else if (node.type === 'database') {
+                    html += `
+                        <div class="form-group">
+                            <label>操作类型</label>
+                            <select onchange="updateNodeConfig('${node.id}', 'operation', this.value)">
+                                <option value="query" ${node.config.operation === 'query' ? 'selected' : ''}>查询 (SELECT)</option>
+                                <option value="insert" ${node.config.operation === 'insert' ? 'selected' : ''}>插入 (INSERT)</option>
+                                <option value="update" ${node.config.operation === 'update' ? 'selected' : ''}>更新 (UPDATE)</option>
+                                <option value="delete" ${node.config.operation === 'delete' ? 'selected' : ''}>删除 (DELETE)</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>连接名称</label>
+                            <input type="text" value="${node.config.connection || 'default'}" onchange="updateNodeConfig('${node.id}', 'connection', this.value)">
+                            <small style="color: #999; font-size: 11px;">数据库连接标识符</small>
+                        </div>
+                        <div class="form-group">
+                            <label>SQL语句</label>
+                            <textarea onchange="updateNodeConfig('${node.id}', 'sql', this.value)">${node.config.sql || 'SELECT * FROM table'}</textarea>
+                            <small style="color: #999; font-size: 11px;">支持变量替换，如: SELECT * FROM users WHERE id={{user_id}}</small>
+                        </div>
+                        <div class="form-group">
+                            <label>参数</label>
+                            <input type="text" value="${node.config.params || ''}" onchange="updateNodeConfig('${node.id}', 'params', this.value)">
+                            <small style="color: #999; font-size: 11px;">JSON格式，如: {"user_id": 123}</small>
+                        </div>
+                    `;
+                } else if (node.type === 'file') {
+                    html += `
+                        <div class="form-group">
+                            <label>操作类型</label>
+                            <select onchange="updateNodeConfig('${node.id}', 'operation', this.value)">
+                                <option value="read" ${node.config.operation === 'read' ? 'selected' : ''}>读取文件</option>
+                                <option value="write" ${node.config.operation === 'write' ? 'selected' : ''}>写入文件</option>
+                                <option value="append" ${node.config.operation === 'append' ? 'selected' : ''}>追加内容</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>文件路径</label>
+                            <input type="text" value="${node.config.path || '/path/to/file'}" onchange="updateNodeConfig('${node.id}', 'path', this.value)">
+                            <small style="color: #999; font-size: 11px;">支持绝对路径或相对路径</small>
+                        </div>
+                        <div class="form-group">
+                            <label>编码格式</label>
+                            <select onchange="updateNodeConfig('${node.id}', 'encoding', this.value)">
+                                <option value="utf-8" ${node.config.encoding === 'utf-8' ? 'selected' : ''}>UTF-8</option>
+                                <option value="gbk" ${node.config.encoding === 'gbk' ? 'selected' : ''}>GBK</option>
+                                <option value="ascii" ${node.config.encoding === 'ascii' ? 'selected' : ''}>ASCII</option>
+                            </select>
+                        </div>
+                    `;
+                } else if (node.type === 'transform') {
+                    html += `
+                        <div class="form-group">
+                            <label>转换类型</label>
+                            <select onchange="updateNodeConfig('${node.id}', 'transformation', this.value)">
+                                <option value="json_to_csv" ${node.config.transformation === 'json_to_csv' ? 'selected' : ''}>JSON转CSV</option>
+                                <option value="csv_to_json" ${node.config.transformation === 'csv_to_json' ? 'selected' : ''}>CSV转JSON</option>
+                                <option value="xml_to_json" ${node.config.transformation === 'xml_to_json' ? 'selected' : ''}>XML转JSON</option>
+                                <option value="filter" ${node.config.transformation === 'filter' ? 'selected' : ''}>数据过滤</option>
+                                <option value="sort" ${node.config.transformation === 'sort' ? 'selected' : ''}>数据排序</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>输入字段</label>
+                            <input type="text" value="${node.config.input_field || 'data'}" onchange="updateNodeConfig('${node.id}', 'input_field', this.value)">
+                            <small style="color: #999; font-size: 11px;">要转换的数据字段名</small>
+                        </div>
+                        <div class="form-group">
+                            <label>输出字段</label>
+                            <input type="text" value="${node.config.output_field || 'result'}" onchange="updateNodeConfig('${node.id}', 'output_field', this.value)">
+                            <small style="color: #999; font-size: 11px;">转换后的结果字段名</small>
+                        </div>
+                    `;
+                } else if (node.type === 'message_queue') {
+                    html += `
+                        <div class="form-group">
+                            <label>操作类型</label>
+                            <select onchange="updateNodeConfig('${node.id}', 'operation', this.value)">
+                                <option value="publish" ${node.config.operation === 'publish' ? 'selected' : ''}>发布消息</option>
+                                <option value="subscribe" ${node.config.operation === 'subscribe' ? 'selected' : ''}>订阅消息</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>队列名称</label>
+                            <input type="text" value="${node.config.queue || 'default'}" onchange="updateNodeConfig('${node.id}', 'queue', this.value)">
+                            <small style="color: #999; font-size: 11px;">消息队列名称</small>
+                        </div>
+                        <div class="form-group">
+                            <label>消息内容</label>
+                            <textarea onchange="updateNodeConfig('${node.id}', 'message', this.value)">${node.config.message || ''}</textarea>
+                            <small style="color: #999; font-size: 11px;">支持变量替换，如: {"user": "{{username}}"}</small>
+                        </div>
+                    `;
+                } else if (node.type === 'end') {
+                    html += `
+                        <div class="form-group">
+                            <label>输出</label>
+                            <div style="display: flex; gap: 8px;">
+                                <select id="end-output-type-${node.id}" onchange="updateEndOutput('${node.id}')" style="flex: 1;">
+                                    <option value="">选择输出类型</option>
+                                    <option value="{{result}}">执行结果</option>
+                                    <option value="{{input}}">输入值</option>
+                                    <option value="自定义">自定义文本</option>
+                                </select>
+                                <input type="text" id="end-output-value-${node.id}" value="${node.config.output || '{{result}}'}" onchange="updateEndOutput('${node.id}')" placeholder="输入自定义文本" style="flex: 1;">
+                            </div>
+                            <small style="color: #999; font-size: 11px;">选择输出类型或输入自定义文本</small>
+                        </div>
+                    `;
+                }
+                
+                // 添加删除按钮
+                html += `
+                    <div style="margin-top: 20px;">
+                        <button class="btn btn-danger" onclick="deleteNode('${node.id}')">删除节点</button>
+                    </div>
+                `;
+                
+                return html;
+            }
+            
+            function updateToolParam(nodeId) {
+                const keySelect = document.getElementById(`tool-param-key-${nodeId}`);
+                const valueInput = document.getElementById(`tool-param-value-${nodeId}`);
+                if (keySelect && valueInput) {
+                    const key = keySelect.value;
+                    const value = valueInput.value;
+                    const paramString = key && value ? `${key}=${value}` : '';
+                    updateNodeConfig(nodeId, 'params', paramString);
+                }
+            }
+            
+            function updateEndOutput(nodeId) {
+                const typeSelect = document.getElementById(`end-output-type-${nodeId}`);
+                const valueInput = document.getElementById(`end-output-value-${nodeId}`);
+                if (typeSelect && valueInput) {
+                    const type = typeSelect.value;
+                    let outputValue = valueInput.value;
+                    
+                    if (type && type !== '自定义') {
+                        outputValue = type;
+                        valueInput.value = type;
+                    }
+                    
+                    updateNodeConfig(nodeId, 'output', outputValue);
+                }
+            }
+            
+            function updateNodeConfig(nodeId, key, value) {
+                const node = nodes.find(n => n.id === nodeId);
+                if (node) {
+                    node.config[key] = value;
+                    
+                    // 对于工具节点，只更新显示文本，不重新渲染整个属性面板
+                    if (node.type === 'tool' && (key === 'tool' || key === 'params')) {
+                        const nodeElement = document.querySelector(`[data-node-id="${nodeId}"]`);
+                        if (nodeElement) {
+                            const contentElement = nodeElement.querySelector('.node-content');
+                            if (contentElement) {
+                                if (key === 'tool') {
+                                    contentElement.textContent = `工具: ${value || '未选择'}`;
+                                } else if (key === 'params' && node.config.tool) {
+                                    contentElement.textContent = `工具: ${node.config.tool}\n参数: ${value || '无'}`;
+                                }
+                            }
+                        }
+                    } else if (selectedNode && selectedNode.id === nodeId) {
+                        // 其他情况才重新渲染属性面板
+                        showProperties(node);
+                    }
+                    
+                    // 更新节点显示（除了工具节点已经处理过）
+                    if (node.type !== 'tool' || (key !== 'tool' && key !== 'params')) {
+                        const nodeElement = document.querySelector(`[data-node-id="${nodeId}"]`);
+                        if (nodeElement) {
+                            const contentElement = nodeElement.querySelector('.node-content');
+                            if (contentElement) {
+                                switch (node.type) {
+                                    case 'start':
+                                        contentElement.textContent = `输入: ${node.config.input || '用户输入'}`;
+                                        break;
+                                    case 'llm':
+                                        contentElement.textContent = `模型: ${node.config.model || 'glm-4-flash'}`;
+                                        break;
+                                    case 'calculator':
+                                        contentElement.textContent = `操作: ${node.config.operation || 'add'}`;
+                                        break;
+                                    case 'http':
+                                        contentElement.textContent = `方法: ${node.config.method || 'GET'}`;
+                                        break;
+                                    case 'condition':
+                                        contentElement.textContent = `条件: ${node.config.condition || 'true'}`;
+                                        break;
+                                    case 'loop':
+                                        contentElement.textContent = `类型: ${node.config.loop_type || 'array'}`;
+                                        break;
+                                    case 'parallel':
+                                        contentElement.textContent = `分支数: ${node.config.branch_count || 2}`;
+                                        break;
+                                    case 'end':
+                                        contentElement.textContent = `输出: ${node.config.output || '{{result}}'}`;
+                                        break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            function deleteWorkflowBox(boxId) {
+                if (confirm('确定删除此工作流框？')) {
+                    // 从workflowBoxes数组中删除工作流框
+                    const boxIndex = workflowBoxes.findIndex(box => box.id === boxId);
+                    if (boxIndex !== -1) {
+                        workflowBoxes.splice(boxIndex, 1);
+                    }
+                    
+                    // 从edges数组中删除与该工作流框相关的所有连线
+                    edges = edges.filter(edge => edge.source !== boxId && edge.target !== boxId);
+                    
+                    // 从DOM中删除工作流框元素
+                    const boxElement = document.querySelector(`[data-box-id="${boxId}"]`);
+                    if (boxElement) {
+                        boxElement.remove();
+                    }
+                    
+                    // 更新连线显示
+                    updateConnections();
+                }
+            }
+            
+            function createNode(type, x, y) {
+                if (type === 'workflow-box') {
+                    boxIdCounter++;
+                    const workflowBox = {
+                        id: `box_${boxIdCounter}`,
+                        type: 'workflow-box',
+                        x: x - 150, // 居中
+                        y: y - 100,
+                        width: 300,
+                        height: 200,
+                        config: {
+                            name: '循环体'
+                        }
+                    };
+                    workflowBoxes.push(workflowBox);
+                    renderWorkflowBox(workflowBox);
+                } else {
+                    nodeIdCounter++;
+                    const node = {
+                        id: `node_${nodeIdCounter}`,
+                        type: type,
+                        x: x - 90, // 居中
+                        y: y - 40,
+                        config: getDefaultConfig(type)
+                    };
+                    nodes.push(node);
+                    renderNode(node);
+                    
+                    // 如果是循环节点，自动生成工作流框并建立连接
+                    if (type === 'loop') {
+                        createLoopWorkflowBox(node);
+                    }
+                }
+            }
+            
+            // 为循环节点自动生成工作流框并建立连接
+            function createLoopWorkflowBox(loopNode) {
+                boxIdCounter++;
+                
+                // 创建工作流框（在循环节点下方）
+                const workflowBox = {
+                    id: `box_${boxIdCounter}`,
+                    type: 'workflow-box',
+                    x: loopNode.x - 60, // 居中对齐循环节点
+                    y: loopNode.y + 120, // 在循环节点下方
+                    width: 300,
+                    height: 200,
+                    config: {
+                        name: '循环体'
+                    }
+                };
+                workflowBoxes.push(workflowBox);
+                renderWorkflowBox(workflowBox);
+                
+                // 在工作流框内自动创建一个LLM节点作为示例
+                nodeIdCounter++;
+                const exampleNode = {
+                    id: `node_${nodeIdCounter}`,
+                    type: 'llm',
+                    x: workflowBox.x + 60, // 在工作流框内居中
+                    y: workflowBox.y + 40, // 在工作流框内靠上
+                    config: {
+                        prompt: '处理当前项: {{item}}',
+                        model: 'glm-4-flash'
+                    },
+                    parentBox: workflowBox.id // 标记此节点属于哪个工作流框
+                };
+                nodes.push(exampleNode);
+                renderNode(exampleNode);
+                
+                // 创建从工作流框顶部到示例节点的连接
+                const edge1 = {
+                    id: `edge_${Date.now()}_1`,
+                    source: workflowBox.id,
+                    target: exampleNode.id,
+                    sourceDirection: 'top',
+                    targetDirection: 'left'
+                };
+                edges.push(edge1);
+                
+                // 创建从循环节点到工作流框的连接（循环节点底部 -> 工作流框顶部）
+                const edge2 = {
+                    id: `edge_${Date.now()}_2`,
+                    source: loopNode.id,
+                    target: workflowBox.id,
+                    sourceDirection: 'bottom',
+                    targetDirection: 'top'
+                };
+                edges.push(edge2);
+                
+                // 创建从工作流框到循环节点的连接（工作流框底部 -> 循环节点顶部）
+                const edge3 = {
+                    id: `edge_${Date.now()}_3`,
+                    source: workflowBox.id,
+                    target: loopNode.id,
+                    sourceDirection: 'bottom',
+                    targetDirection: 'top'
+                };
+                edges.push(edge3);
+                
+                // 更新连线显示
+                updateConnections();
+            }
+            
+            function getDefaultConfig(type) {
+                const configs = {
+                    start: { input: '用户输入' },
+                    llm: { prompt: '', model: 'glm-4-flash' },
+                    tool: { tool: '', params: '' },
+                    calculator: { operation: 'add', operand1: '1', operand2: '2' },
+                    http: { method: 'GET', url: 'https://api.example.com', headers: '', body: '' },
+                    condition: { condition: '{{result}} > 10', true_branch: 'node_true', false_branch: 'node_false' },
+                    loop: { max_iterations: 100, loop_type: 'array' },
+                    parallel: { branches: '', branch_count: 2, sync_mode: 'wait_all' },
+                    database: { operation: 'query', connection: 'default', sql: 'SELECT * FROM table', params: '' },
+                    file: { operation: 'read', path: '/path/to/file', encoding: 'utf-8' },
+                    transform: { transformation: 'json_to_csv', input_field: 'data', output_field: 'result' },
+                    message_queue: { operation: 'publish', queue: 'default', message: '' },
+                    end: { output: '{{result}}' }
+                };
+                return configs[type] || {};
+            }
+            
+            // 点击画布取消选择
+            canvas.addEventListener('click', () => {
+                document.querySelectorAll('.canvas-node').forEach(n => n.classList.remove('selected'));
+                selectedNode = null;
+                propertiesContent.innerHTML = '<p style="color: #999;">选择一个节点查看属性</p>';
+            });
+            
+            // 拖拽添加节点
+            document.querySelectorAll('.node-item').forEach(item => {
+                item.addEventListener('dragstart', (e) => {
+                    e.dataTransfer.setData('text/plain', e.target.dataset.type);
+                });
+            });
+            
+            // 画布拖拽放置
+            canvas.addEventListener('drop', (e) => {
+                e.preventDefault();
+                const type = e.dataTransfer.getData('text/plain');
+                const rect = canvas.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+                addNode(type, x, y);
+            });
+            
+            // 画布拖拽放置区域
+            canvas.addEventListener('dragover', (e) => {
+                e.preventDefault();
+            });
             
             // 导出工作流
             function exportWorkflow() {
@@ -1063,7 +2505,7 @@
                             
                             // 重新渲染
                             canvas.innerHTML = '<svg id="connections"></svg>';
-                            const newSvg = document.getElementById('connections');
+                            svg = document.getElementById('connections');
                             
                             workflowBoxes.forEach(box => renderWorkflowBox(box));
                             nodes.forEach(node => renderNode(node));
@@ -1086,1139 +2528,20 @@
             
             // 显示结果
             function showResult(message, isError = false) {
-                const resultContent = document.getElementById('result-content');
                 resultContent.textContent = message;
                 resultContent.className = 'result-content' + (isError ? ' error' : ' success');
             }
-
-        // 拖拽添加节点
-        document.querySelectorAll('.node-item').forEach(item => {
-            item.addEventListener('dragstart', (e) => {
-                e.dataTransfer.setData('type', item.dataset.type);
-            });
-        });
-
-        canvas.addEventListener('dragover', (e) => {
-            e.preventDefault();
-        });
-
-        canvas.addEventListener('drop', (e) => {
-            e.preventDefault();
-            const type = e.dataTransfer.getData('type');
-            const rect = canvas.getBoundingClientRect();
-            const x = e.clientX - rect.left;
-            const y = e.clientY - rect.top;
-            createNode(type, x, y);
-        });
-
-        function createNode(type, x, y) {
-            if (type === 'workflow-box') {
-                boxIdCounter++;
-                const workflowBox = {
-                    id: `box_${boxIdCounter}`,
-                    type: 'workflow-box',
-                    x: x - 150, // 居中
-                    y: y - 100,
-                    width: 300,
-                    height: 200,
-                    config: {
-                        name: '循环体'
-                    }
+            
+            // 生成XML
+            function generateXML() {
+                const workflow = {
+                    id: `wf_${new Date().getTime()}`,
+                    name: '工作流',
+                    nodes: nodes,
+                    edges: edges
                 };
-                workflowBoxes.push(workflowBox);
-                renderWorkflowBox(workflowBox);
-            } else {
-                nodeIdCounter++;
-                const node = {
-                    id: `node_${nodeIdCounter}`,
-                    type: type,
-                    x: x - 90, // 居中
-                    y: y - 40,
-                    config: getDefaultConfig(type)
-                };
-                nodes.push(node);
-                renderNode(node);
                 
-                // 如果是循环节点，自动生成工作流框并建立连接
-                if (type === 'loop') {
-                    createLoopWorkflowBox(node);
-                }
-            }
-        }
-
-        // 为循环节点自动生成工作流框并建立连接
-        function createLoopWorkflowBox(loopNode) {
-            boxIdCounter++;
-            
-            // 创建工作流框（在循环节点下方）
-            const workflowBox = {
-                id: `box_${boxIdCounter}`,
-                type: 'workflow-box',
-                x: loopNode.x - 60, // 居中对齐循环节点
-                y: loopNode.y + 120, // 在循环节点下方
-                width: 300,
-                height: 200,
-                config: {
-                    name: '循环体'
-                }
-            };
-            workflowBoxes.push(workflowBox);
-            renderWorkflowBox(workflowBox);
-            
-            // 在工作流框内自动创建一个LLM节点作为示例
-            nodeIdCounter++;
-            const exampleNode = {
-                id: `node_${nodeIdCounter}`,
-                type: 'llm',
-                x: workflowBox.x + 60, // 在工作流框内居中
-                y: workflowBox.y + 40, // 在工作流框内靠上
-                config: {
-                    prompt: '处理当前项: {{item}}',
-                    model: 'glm-4-flash'
-                },
-                parentBox: workflowBox.id // 标记此节点属于哪个工作流框
-            };
-            nodes.push(exampleNode);
-            renderNode(exampleNode);
-            
-            // 创建从工作流框顶部到示例节点的连接
-            const edge1 = {
-                id: `edge_${Date.now()}_1`,
-                source: workflowBox.id,
-                target: exampleNode.id,
-                sourceDirection: 'top',
-                targetDirection: 'left'
-            };
-            edges.push(edge1);
-            
-            // 创建从循环节点到工作流框的连接（循环节点底部 -> 工作流框顶部）
-            const edge2 = {
-                id: `edge_${Date.now()}_2`,
-                source: loopNode.id,
-                target: workflowBox.id,
-                sourceDirection: 'bottom',
-                targetDirection: 'top'
-            };
-            edges.push(edge2);
-            
-            // 创建从工作流框到循环节点的连接（工作流框底部 -> 循环节点顶部）
-            const edge3 = {
-                id: `edge_${Date.now()}_3`,
-                source: workflowBox.id,
-                target: loopNode.id,
-                sourceDirection: 'bottom',
-                targetDirection: 'top'
-            };
-            edges.push(edge3);
-            
-            // 更新连线显示
-            updateConnections();
-        }
-
-        function getDefaultConfig(type) {
-            const configs = {
-                start: { input: '用户输入' },
-                llm: { prompt: '', model: 'glm-4-flash' },
-                tool: { tool: '', params: '' },
-                calculator: { operation: 'add', operand1: '1', operand2: '2' },
-                http: { method: 'GET', url: 'https://api.example.com', headers: '', body: '' },
-                condition: { condition: '{{result}} > 10', true_branch: 'node_true', false_branch: 'node_false' },
-                loop: { max_iterations: 100, loop_type: 'array' },
-                parallel: { branches: '', branch_count: 2, sync_mode: 'wait_all' },
-                end: { output: '{{result}}' }
-            };
-            return configs[type] || {};
-        }
-
-        // 全局工作流框拖拽状态管理
-        const workflowBoxDragState = {
-            isDragging: false,
-            isResizing: false,
-            currentBox: null,
-            startX: 0,
-            startY: 0,
-            initialX: 0,
-            initialY: 0,
-            initialWidth: 0,
-            initialHeight: 0,
-            currentDiv: null
-        };
-
-        // 全局mousemove事件监听器（只注册一次）
-        document.addEventListener('mousemove', (e) => {
-            if (!workflowBoxDragState.isDragging && !workflowBoxDragState.isResizing) return;
-            
-            e.preventDefault();
-            
-            const dx = e.clientX - workflowBoxDragState.startX;
-            const dy = e.clientY - workflowBoxDragState.startY;
-            
-            if (workflowBoxDragState.isDragging && workflowBoxDragState.currentBox) {
-                workflowBoxDragState.currentBox.x = workflowBoxDragState.initialX + dx;
-                workflowBoxDragState.currentBox.y = workflowBoxDragState.initialY + dy;
-                if (workflowBoxDragState.currentDiv) {
-                    workflowBoxDragState.currentDiv.style.left = workflowBoxDragState.currentBox.x + 'px';
-                    workflowBoxDragState.currentDiv.style.top = workflowBoxDragState.currentBox.y + 'px';
-                }
-            } else if (workflowBoxDragState.isResizing && workflowBoxDragState.currentBox) {
-                workflowBoxDragState.currentBox.width = Math.max(100, workflowBoxDragState.initialWidth + dx);
-                workflowBoxDragState.currentBox.height = Math.max(100, workflowBoxDragState.initialHeight + dy);
-                if (workflowBoxDragState.currentDiv) {
-                    workflowBoxDragState.currentDiv.style.width = workflowBoxDragState.currentBox.width + 'px';
-                    workflowBoxDragState.currentDiv.style.height = workflowBoxDragState.currentBox.height + 'px';
-                }
-            }
-            
-            updateConnections();
-        });
-
-        // 全局mouseup事件监听器（只注册一次）
-        document.addEventListener('mouseup', () => {
-            if (workflowBoxDragState.isDragging && workflowBoxDragState.currentDiv) {
-                workflowBoxDragState.isDragging = false;
-                workflowBoxDragState.currentDiv.style.cursor = 'grab';
-                workflowBoxDragState.currentDiv.style.zIndex = '5'; // 恢复原始z-index
-            }
-            if (workflowBoxDragState.isResizing) {
-                workflowBoxDragState.isResizing = false;
-            }
-            workflowBoxDragState.currentBox = null;
-            workflowBoxDragState.currentDiv = null;
-        });
-
-        function renderWorkflowBox(workflowBox) {
-            const div = document.createElement('div');
-            div.className = 'workflow-box';
-            div.style.left = workflowBox.x + 'px';
-            div.style.top = workflowBox.y + 'px';
-            div.style.width = workflowBox.width + 'px';
-            div.style.height = workflowBox.height + 'px';
-            div.dataset.boxId = workflowBox.id;
-
-            div.innerHTML = `
-                <div class="workflow-box-header">
-                    ${workflowBox.config.name}
-                    <button class="workflow-box-delete" onclick="deleteWorkflowBox('${workflowBox.id}')">×</button>
-                </div>
-                <div class="workflow-box-connection" data-box-id="${workflowBox.id}" data-direction="top"></div>
-                <div class="workflow-box-resizer" data-box-id="${workflowBox.id}"></div>
-            `;
-            
-            // 确保连接点位于工作流框顶部中央
-            const connectionPoint = div.querySelector('.workflow-box-connection');
-            connectionPoint.style.position = 'absolute';
-            connectionPoint.style.top = '-20px';
-            connectionPoint.style.left = '50%';
-            connectionPoint.style.transform = 'translateX(-50%)';
-            connectionPoint.style.width = '28px';
-            connectionPoint.style.height = '28px';
-            connectionPoint.style.background = '#ff6b6b';
-            connectionPoint.style.border = '4px solid white';
-            connectionPoint.style.borderRadius = '50%';
-            connectionPoint.style.cursor = 'crosshair';
-            connectionPoint.style.zIndex = '100';
-            connectionPoint.style.transition = 'all 0.2s ease';
-            connectionPoint.style.boxShadow = '0 0 15px rgba(255, 107, 107, 0.6);'
-
-            // 点击选择
-            div.addEventListener('click', (e) => {
-                e.stopPropagation();
-                // 可以添加选择工作流框的逻辑
-            });
-
-            // 拖拽移动
-            let isDragging = false;
-            let startX, startY, initialX, initialY;
-            let isResizing = false;
-            let initialWidth, initialHeight;
-
-            // 点击选择
-            div.addEventListener('click', (e) => {
-                e.stopPropagation();
-                // 可以添加选择工作流框的逻辑
-            });
-
-            // 拖拽移动 - 使用全局状态管理
-            div.addEventListener('mousedown', (e) => {
-                // 只有点击工作流框本身时才能拖拽
-                if (e.target.classList.contains('workflow-box-connection') || 
-                    e.target.classList.contains('workflow-box-resizer') ||
-                    e.target.classList.contains('workflow-box-delete')) return;
-                
-                e.stopPropagation();
-                e.preventDefault();
-                
-                // 设置全局拖拽状态
-                workflowBoxDragState.isDragging = true;
-                workflowBoxDragState.currentBox = workflowBox;
-                workflowBoxDragState.currentDiv = div;
-                workflowBoxDragState.startX = e.clientX;
-                workflowBoxDragState.startY = e.clientY;
-                workflowBoxDragState.initialX = workflowBox.x;
-                workflowBoxDragState.initialY = workflowBox.y;
-                
-                div.style.cursor = 'grabbing';
-                div.style.zIndex = '100'; // 提升层级，确保在最上层
-            });
-
-            // 拉伸调整大小 - 使用全局状态管理
-            const resizer = div.querySelector('.workflow-box-resizer');
-            resizer.addEventListener('mousedown', (e) => {
-                e.stopPropagation();
-                e.preventDefault();
-                
-                // 设置全局调整大小状态
-                workflowBoxDragState.isResizing = true;
-                workflowBoxDragState.currentBox = workflowBox;
-                workflowBoxDragState.currentDiv = div;
-                workflowBoxDragState.startX = e.clientX;
-                workflowBoxDragState.startY = e.clientY;
-                workflowBoxDragState.initialWidth = workflowBox.width;
-                workflowBoxDragState.initialHeight = workflowBox.height;
-            });
-
-            // 工作流框连接点 - 添加点击事件
-            connectionPoint.addEventListener('mousedown', (e) => {
-                e.stopPropagation();
-                startConnection(e, workflowBox.id, 'top');
-            });
-
-            canvas.appendChild(div);
-        }
-
-        function renderNode(node) {
-            const div = document.createElement('div');
-            div.className = 'canvas-node';
-            div.style.left = node.x + 'px';
-            div.style.top = node.y + 'px';
-            div.dataset.nodeId = node.id;
-
-            // 节点头部
-            let headerHTML = `<div class="node-header">`;
-            switch (node.type) {
-                case 'start':
-                    headerHTML += `<span>🚀</span> 开始节点`;
-                    break;
-                case 'llm':
-                    headerHTML += `<span>🤖</span> LLM节点`;
-                    break;
-                case 'tool':
-                    headerHTML += `<span>🔧</span> 工具节点`;
-                    break;
-                case 'calculator':
-                    headerHTML += `<span>🧮</span> 计算节点`;
-                    break;
-                case 'http':
-                    headerHTML += `<span>🌐</span> HTTP节点`;
-                    break;
-                case 'condition':
-                    headerHTML += `<span>⚡</span> 条件节点`;
-                    break;
-                case 'loop':
-                    headerHTML += `<span>🔄</span> 循环节点`;
-                    break;
-                case 'parallel':
-                    headerHTML += `<span>⚙️</span> 并行节点`;
-                    break;
-                case 'end':
-                    headerHTML += `<span>✅</span> 结束节点`;
-                    break;
-            }
-            headerHTML += `</div>`;
-
-            // 节点内容
-            let contentHTML = `<div class="node-content">`;
-            switch (node.type) {
-                case 'start':
-                    contentHTML += `输入: ${node.config.input || '用户输入'}`;
-                    break;
-                case 'llm':
-                    contentHTML += `模型: ${node.config.model || 'glm-4-flash'}`;
-                    break;
-                case 'tool':
-                    contentHTML += `工具: ${node.config.tool || '未选择'}`;
-                    if (node.config.params) {
-                        contentHTML += `<br>参数: ${node.config.params}`;
-                    }
-                    break;
-                case 'calculator':
-                    contentHTML += `操作: ${node.config.operation || 'add'}`;
-                    break;
-                case 'http':
-                    contentHTML += `方法: ${node.config.method || 'GET'}`;
-                    break;
-                case 'condition':
-                    contentHTML += `条件: ${node.config.condition || 'true'}`;
-                    break;
-                case 'loop':
-                    contentHTML += `类型: ${node.config.loop_type || 'array'}`;
-                    break;
-                case 'parallel':
-                    contentHTML += `分支数: ${node.config.branch_count || 2}`;
-                    break;
-                case 'end':
-                    contentHTML += `输出: ${node.config.output || '{{result}}'}`;
-                    break;
-            }
-            contentHTML += `</div>`;
-
-            div.innerHTML = headerHTML + contentHTML;
-
-            // 添加连接点
-            if (node.type !== 'start') {
-                const leftPoint = document.createElement('div');
-                leftPoint.className = 'connection-point left';
-                leftPoint.dataset.nodeId = node.id;
-                leftPoint.dataset.direction = 'left';
-                leftPoint.addEventListener('mousedown', (e) => {
-                    e.stopPropagation();
-                    startConnection(e, node.id, 'left');
-                });
-                div.appendChild(leftPoint);
-            }
-
-            if (node.type !== 'end') {
-                const rightPoint = document.createElement('div');
-                rightPoint.className = 'connection-point right';
-                rightPoint.dataset.nodeId = node.id;
-                rightPoint.dataset.direction = 'right';
-                rightPoint.addEventListener('mousedown', (e) => {
-                    e.stopPropagation();
-                    startConnection(e, node.id, 'right');
-                });
-                div.appendChild(rightPoint);
-            }
-
-            // 为循环节点添加上下连接点
-            if (node.type === 'loop') {
-                const topPoint = document.createElement('div');
-                topPoint.className = 'connection-point top';
-                topPoint.dataset.nodeId = node.id;
-                topPoint.dataset.direction = 'top';
-                topPoint.addEventListener('mousedown', (e) => {
-                    e.stopPropagation();
-                    startConnection(e, node.id, 'top');
-                });
-                div.appendChild(topPoint);
-
-                const bottomPoint = document.createElement('div');
-                bottomPoint.className = 'connection-point bottom';
-                bottomPoint.dataset.nodeId = node.id;
-                bottomPoint.dataset.direction = 'bottom';
-                bottomPoint.addEventListener('mousedown', (e) => {
-                    e.stopPropagation();
-                    startConnection(e, node.id, 'bottom');
-                });
-                div.appendChild(bottomPoint);
-            }
-
-            // 点击选择节点
-            div.addEventListener('click', (e) => {
-                e.stopPropagation();
-                selectNode(node);
-            });
-
-            // 拖拽移动节点
-            let isDragging = false;
-            let startX, startY, initialX, initialY;
-
-            div.addEventListener('mousedown', (e) => {
-                // 只有点击节点图标中心时才能拖拽
-                const rect = div.getBoundingClientRect();
-                const centerX = rect.left + rect.width / 2;
-                const centerY = rect.top + rect.height / 2;
-                const distance = Math.sqrt(Math.pow(e.clientX - centerX, 2) + Math.pow(e.clientY - centerY, 2));
-                
-                if (distance > 40) return; // 只有在中心40px范围内才能拖拽
-                
-                e.stopPropagation();
-                if (e.target.classList.contains('connection-point')) return;
-                isDragging = true;
-                startX = e.clientX;
-                startY = e.clientY;
-                initialX = node.x;
-                initialY = node.y;
-                div.style.cursor = 'grabbing';
-            });
-
-            document.addEventListener('mousemove', (e) => {
-                if (!isDragging) return;
-                const dx = e.clientX - startX;
-                const dy = e.clientY - startY;
-                node.x = initialX + dx;
-                node.y = initialY + dy;
-                div.style.left = node.x + 'px';
-                div.style.top = node.y + 'px';
-                updateConnections();
-            });
-
-            document.addEventListener('mouseup', () => {
-                isDragging = false;
-                div.style.cursor = 'move';
-            });
-
-            canvas.appendChild(div);
-        }
-
-        function selectNode(node) {
-            // 取消其他节点的选择
-            document.querySelectorAll('.canvas-node').forEach(n => n.classList.remove('selected'));
-            // 选择当前节点
-            const nodeElement = document.querySelector(`[data-node-id="${node.id}"]`);
-            if (nodeElement) {
-                nodeElement.classList.add('selected');
-            }
-            selectedNode = node;
-            showProperties(node);
-        }
-
-        function showProperties(node) {
-            const content = document.getElementById('properties-content');
-            content.innerHTML = renderPropertyFields(node);
-        }
-
-        function renderPropertyFields(node) {
-            let html = `
-                <div class="form-group">
-                    <label>节点类型</label>
-                    <input type="text" value="${node.type}" disabled>
-                </div>
-                <div class="form-group">
-                    <label>节点ID</label>
-                    <input type="text" value="${node.id}" disabled>
-                </div>
-            `;
-
-            if (node.type === 'start') {
-                html += `
-                    <div class="form-group">
-                        <label>输入</label>
-                        <input type="text" value="${node.config.input || '用户输入'}" onchange="updateNodeConfig('${node.id}', 'input', this.value)">
-                    </div>
-                `;
-            } else if (node.type === 'llm') {
-                html += `
-                    <div class="form-group">
-                        <label>提示词</label>
-                        <textarea onchange="updateNodeConfig('${node.id}', 'prompt', this.value)">${node.config.prompt || ''}</textarea>
-                    </div>
-                    <div class="form-group">
-                        <label>模型</label>
-                        <select onchange="updateNodeConfig('${node.id}', 'model', this.value)">
-                            <option value="glm-4-flash" ${node.config.model === 'glm-4-flash' ? 'selected' : ''}>glm-4-flash</option>
-                            <option value="gpt-4" ${node.config.model === 'gpt-4' ? 'selected' : ''}>gpt-4</option>
-                            <option value="claude-3" ${node.config.model === 'claude-3' ? 'selected' : ''}>claude-3</option>
-                        </select>
-                    </div>
-                `;
-            } else if (node.type === 'tool') {
-                html += `
-                    <div class="form-group">
-                        <label>工具</label>
-                        <div style="display: flex; gap: 8px;">
-                            <select id="tool-select-${node.id}" onchange="updateNodeConfig('${node.id}', 'tool', this.value)" style="flex: 1;">
-                                <option value="">选择工具</option>
-                                ${availableSkills && availableSkills.length > 0 ? 
-                                    availableSkills.map(skill => 
-                                        `<option value="${skill.name}" ${node.config.tool === skill.name ? 'selected' : ''}>${skill.icon || '🔧'} ${skill.description || skill.name}</option>`
-                                    ).join('') : 
-                                    '<option value="" disabled>加载中...</option>'
-                                }
-                            </select>
-                            <button class="btn btn-primary" onclick="refreshSkills()" style="padding: 8px 12px; white-space: nowrap;" title="刷新工具列表">🔄</button>
-                        </div>
-                        <small style="color: #999; font-size: 11px;">如果列表为空，请点击🔄刷新或检查后端服务</small>
-                    </div>
-                    <div class="form-group">
-                        <label>参数</label>
-                        <div style="display: flex; gap: 8px;">
-                            <select id="tool-param-key-${node.id}" onchange="updateToolParam('${node.id}')" style="flex: 1;">
-                                <option value="">选择参数</option>
-                                <option value="city">城市</option>
-                                <option value="query">查询内容</option>
-                                <option value="url">网址</option>
-                                <option value="text">文本</option>
-                                <option value="number">数字</option>
-                                <option value="language">语言</option>
-                            </select>
-                            <input type="text" id="tool-param-value-${node.id}" placeholder="输入值" onchange="updateToolParam('${node.id}')" style="flex: 1;">
-                        </div>
-                        <small>选择参数类型并输入对应值</small>
-                    </div>
-                `;
-            } else if (node.type === 'calculator') {
-                html += `
-                    <div class="form-group">
-                        <label>操作类型</label>
-                        <select onchange="updateNodeConfig('${node.id}', 'operation', this.value)">
-                            <option value="add" ${node.config.operation === 'add' ? 'selected' : ''}>加法</option>
-                            <option value="subtract" ${node.config.operation === 'subtract' ? 'selected' : ''}>减法</option>
-                            <option value="multiply" ${node.config.operation === 'multiply' ? 'selected' : ''}>乘法</option>
-                            <option value="divide" ${node.config.operation === 'divide' ? 'selected' : ''}>除法</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label>操作数1</label>
-                        <input type="text" value="${node.config.operand1 || '1'}" onchange="updateNodeConfig('${node.id}', 'operand1', this.value)">
-                    </div>
-                    <div class="form-group">
-                        <label>操作数2</label>
-                        <input type="text" value="${node.config.operand2 || '2'}" onchange="updateNodeConfig('${node.id}', 'operand2', this.value)">
-                    </div>
-                `;
-            } else if (node.type === 'http') {
-                html += `
-                    <div class="form-group">
-                        <label>请求方法</label>
-                        <select onchange="updateNodeConfig('${node.id}', 'method', this.value)">
-                            <option value="GET" ${node.config.method === 'GET' ? 'selected' : ''}>GET</option>
-                            <option value="POST" ${node.config.method === 'POST' ? 'selected' : ''}>POST</option>
-                            <option value="PUT" ${node.config.method === 'PUT' ? 'selected' : ''}>PUT</option>
-                            <option value="DELETE" ${node.config.method === 'DELETE' ? 'selected' : ''}>DELETE</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label>URL</label>
-                        <input type="text" value="${node.config.url || 'https://api.example.com'}" onchange="updateNodeConfig('${node.id}', 'url', this.value)">
-                    </div>
-                    <div class="form-group">
-                        <label>请求头</label>
-                        <input type="text" value="${node.config.headers || ''}" onchange="updateNodeConfig('${node.id}', 'headers', this.value)">
-                        <small>文本格式，例如: Content-Type=application/json</small>
-                    </div>
-                    <div class="form-group">
-                        <label>请求体</label>
-                        <input type="text" value="${node.config.body || ''}" onchange="updateNodeConfig('${node.id}', 'body', this.value)">
-                        <small>文本格式，例如: {"key": "value"}</small>
-                    </div>
-                `;
-            } else if (node.type === 'condition') {
-                html += `
-                    <div class="form-group">
-                        <label>条件表达式</label>
-                        <input type="text" value="${node.config.condition || '{{result}} > 10'}" onchange="updateNodeConfig('${node.id}', 'condition', this.value)">
-                        <small>例如: {{result}} > 10</small>
-                    </div>
-                    <div class="form-group">
-                        <label>真分支</label>
-                        <input type="text" value="${node.config.true_branch || 'node_true'}" onchange="updateNodeConfig('${node.id}', 'true_branch', this.value)">
-                    </div>
-                    <div class="form-group">
-                        <label>假分支</label>
-                        <input type="text" value="${node.config.false_branch || 'node_false'}" onchange="updateNodeConfig('${node.id}', 'false_branch', this.value)">
-                    </div>
-                `;
-            } else if (node.type === 'loop') {
-                html += `
-                    <div class="form-group">
-                        <label>循环类型</label>
-                        <input type="text" value="${node.config.loop_type || 'array'}" onchange="updateNodeConfig('${node.id}', 'loop_type', this.value)">
-                        <small style="color: #999; font-size: 11px;">可选值: array(数组循环), times(固定次数循环), while(条件循环)</small>
-                    </div>
-                    <div class="form-group">
-                        <label>最大迭代次数</label>
-                        <input type="number" value="${node.config.max_iterations || 100}" onchange="updateNodeConfig('${node.id}', 'max_iterations', parseInt(this.value))" min="1" max="1000">
-                        <small style="color: #999; font-size: 11px;">防止无限循环</small>
-                    </div>
-                `;
-            } else if (node.type === 'parallel') {
-                html += `
-                    <div class="form-group">
-                        <label>并行分支数</label>
-                        <input type="number" value="${node.config.branch_count || 2}" onchange="updateNodeConfig('${node.id}', 'branch_count', parseInt(this.value))" min="2" max="10">
-                        <small style="color: #999; font-size: 11px;">建议2-5个分支</small>
-                    </div>
-                    <div class="form-group">
-                        <label>分支配置</label>
-                        <input type="text" placeholder="分支配置（文本格式）" value="${node.config.branches || ''}" onchange="updateNodeConfig('${node.id}', 'branches', this.value)">
-                        <small style="color: #999; font-size: 11px;">例如: branch1=分支1,branch2=分支2</small>
-                    </div>
-                    <div class="form-group">
-                        <label>同步模式</label>
-                        <select onchange="updateNodeConfig('${node.id}', 'sync_mode', this.value)">
-                            <option value="wait_all" ${node.config.sync_mode === 'wait_all' ? 'selected' : ''}>等待所有分支完成</option>
-                            <option value="first_completed" ${node.config.sync_mode === 'first_completed' ? 'selected' : ''}>取第一个完成的结果</option>
-                        </select>
-                        <small style="color: #999; font-size: 11px;">并行执行策略</small>
-                    </div>
-                `;
-            } else if (node.type === 'end') {
-                html += `
-                    <div class="form-group">
-                        <label>输出</label>
-                        <div style="display: flex; gap: 8px;">
-                            <select id="end-output-type-${node.id}" onchange="updateEndOutput('${node.id}')" style="flex: 1;">
-                                <option value="">选择输出类型</option>
-                                <option value="{{result}}">执行结果</option>
-                                <option value="{{input}}">输入值</option>
-                                <option value="自定义">自定义文本</option>
-                            </select>
-                            <input type="text" id="end-output-value-${node.id}" value="${node.config.output || '{{result}}'}" onchange="updateEndOutput('${node.id}')" placeholder="输入自定义文本" style="flex: 1;">
-                        </div>
-                        <small style="color: #999; font-size: 11px;">选择输出类型或输入自定义文本</small>
-                    </div>
-                `;
-            }
-
-            // 添加删除按钮
-            html += `
-                <div style="margin-top: 20px;">
-                    <button class="btn btn-danger" onclick="deleteNode('${node.id}')">删除节点</button>
-                </div>
-            `;
-
-            return html;
-        }
-
-        function updateToolParam(nodeId) {
-            const keySelect = document.getElementById(`tool-param-key-${nodeId}`);
-            const valueInput = document.getElementById(`tool-param-value-${nodeId}`);
-            if (keySelect && valueInput) {
-                const key = keySelect.value;
-                const value = valueInput.value;
-                const paramString = key && value ? `${key}=${value}` : '';
-                updateNodeConfig(nodeId, 'params', paramString);
-            }
-        }
-
-        function updateEndOutput(nodeId) {
-            const typeSelect = document.getElementById(`end-output-type-${nodeId}`);
-            const valueInput = document.getElementById(`end-output-value-${nodeId}`);
-            if (typeSelect && valueInput) {
-                const type = typeSelect.value;
-                let outputValue = valueInput.value;
-                
-                if (type && type !== '自定义') {
-                    outputValue = type;
-                    valueInput.value = type;
-                }
-                
-                updateNodeConfig(nodeId, 'output', outputValue);
-            }
-        }
-
-        function updateNodeConfig(nodeId, key, value) {
-            const node = nodes.find(n => n.id === nodeId);
-            if (node) {
-                node.config[key] = value;
-                
-                // 对于工具节点，只更新显示文本，不重新渲染整个属性面板
-                if (node.type === 'tool' && (key === 'tool' || key === 'params')) {
-                    const nodeElement = document.querySelector(`[data-node-id="${nodeId}"]`);
-                    if (nodeElement) {
-                        const contentElement = nodeElement.querySelector('.node-content');
-                        if (contentElement) {
-                            if (key === 'tool') {
-                                contentElement.textContent = `工具: ${value || '未选择'}`;
-                            } else if (key === 'params' && node.config.tool) {
-                                contentElement.textContent = `工具: ${node.config.tool}\n参数: ${value || '无'}`;
-                            }
-                        }
-                    }
-                } else if (selectedNode && selectedNode.id === nodeId) {
-                    // 其他情况才重新渲染属性面板
-                    showProperties(node);
-                }
-                
-                // 更新节点显示（除了工具节点已经处理过）
-                if (node.type !== 'tool' || (key !== 'tool' && key !== 'params')) {
-                    const nodeElement = document.querySelector(`[data-node-id="${nodeId}"]`);
-                    if (nodeElement) {
-                        const contentElement = nodeElement.querySelector('.node-content');
-                        if (contentElement) {
-                            switch (node.type) {
-                                case 'start':
-                                    contentElement.textContent = `输入: ${node.config.input || '用户输入'}`;
-                                    break;
-                                case 'llm':
-                                    contentElement.textContent = `模型: ${node.config.model || 'glm-4-flash'}`;
-                                    break;
-                                case 'calculator':
-                                    contentElement.textContent = `操作: ${node.config.operation || 'add'}`;
-                                    break;
-                                case 'http':
-                                    contentElement.textContent = `方法: ${node.config.method || 'GET'}`;
-                                    break;
-                                case 'condition':
-                                    contentElement.textContent = `条件: ${node.config.condition || 'true'}`;
-                                    break;
-                                case 'loop':
-                                    contentElement.textContent = `类型: ${node.config.loop_type || 'array'}`;
-                                    break;
-                                case 'parallel':
-                                    contentElement.textContent = `分支数: ${node.config.branch_count || 2}`;
-                                    break;
-                                case 'end':
-                                    contentElement.textContent = `输出: ${node.config.output || '{{result}}'}`;
-                                    break;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        function deleteNode(nodeId) {
-            if (confirm('确定删除此节点吗？')) {
-                // 从nodes数组中删除节点
-                const nodeIndex = nodes.findIndex(n => n.id === nodeId);
-                if (nodeIndex !== -1) {
-                    nodes.splice(nodeIndex, 1);
-                }
-                
-                // 从edges数组中删除与该节点相关的所有连线
-                edges = edges.filter(edge => edge.source !== nodeId && edge.target !== nodeId);
-                
-                // 从DOM中删除节点元素
-                const nodeElement = document.querySelector(`[data-node-id="${nodeId}"]`);
-                if (nodeElement) {
-                    nodeElement.remove();
-                }
-                
-                // 如果删除的是当前选中的节点，清空选择
-                if (selectedNode && selectedNode.id === nodeId) {
-                    selectedNode = null;
-                    document.getElementById('properties-content').innerHTML = '<p style="color: #999;">选择一个节点查看属性</p>';
-                }
-                
-                // 更新连线显示
-                updateConnections();
-            }
-        }
-
-        function deleteWorkflowBox(boxId) {
-            if (confirm('确定删除此工作流框？')) {
-                // 从workflowBoxes数组中删除工作流框
-                const boxIndex = workflowBoxes.findIndex(box => box.id === boxId);
-                if (boxIndex !== -1) {
-                    workflowBoxes.splice(boxIndex, 1);
-                }
-                
-                // 从edges数组中删除与该工作流框相关的所有连线
-                edges = edges.filter(edge => edge.source !== boxId && edge.target !== boxId);
-                
-                // 从DOM中删除工作流框元素
-                const boxElement = document.querySelector(`[data-box-id="${boxId}"]`);
-                if (boxElement) {
-                    boxElement.remove();
-                }
-                
-                // 更新连线显示
-                updateConnections();
-            }
-        }
-
-        function startConnection(e, id, direction) {
-            isConnecting = true;
-            connectionStart = id;
-            connectionStartDirection = direction;
-            
-            // 创建临时连线
-            tempLine = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-            tempLine.setAttribute('stroke', '#667eea');
-            tempLine.setAttribute('stroke-width', '2');
-            tempLine.setAttribute('fill', 'none');
-            tempLine.setAttribute('stroke-dasharray', '5,5');
-            svg.appendChild(tempLine);
-            
-            // 监听鼠标移动更新临时连线
-            document.addEventListener('mousemove', updateTempLine);
-            // 监听鼠标释放结束连接
-            document.addEventListener('mouseup', endConnection);
-        }
-
-        function updateTempLine(e) {
-            if (!isConnecting) return;
-            
-            const rect = canvas.getBoundingClientRect();
-            const endX = e.clientX - rect.left;
-            const endY = e.clientY - rect.top;
-            
-            // 找到起始点
-            let startX, startY;
-            const sourceNode = nodes.find(n => n.id === connectionStart);
-            const sourceBox = workflowBoxes.find(b => b.id === connectionStart);
-            
-            if (sourceNode) {
-                if (connectionStartDirection === 'right') {
-                    startX = sourceNode.x + 180;
-                    startY = sourceNode.y + 40;
-                } else if (connectionStartDirection === 'left') {
-                    startX = sourceNode.x;
-                    startY = sourceNode.y + 40;
-                } else if (connectionStartDirection === 'top') {
-                    startX = sourceNode.x + 90;
-                    startY = sourceNode.y;
-                } else if (connectionStartDirection === 'bottom') {
-                    startX = sourceNode.x + 90;
-                    startY = sourceNode.y + 80;
-                }
-            } else if (sourceBox) {
-                startX = sourceBox.x + sourceBox.width / 2;
-                startY = sourceBox.y;
-            }
-            
-            // 更新临时连线
-            if (tempLine) {
-                const d = `M ${startX} ${startY} L ${endX} ${endY}`;
-                tempLine.setAttribute('d', d);
-            }
-        }
-
-        function endConnection(e) {
-            if (!isConnecting) return;
-            
-            // 移除临时连线
-            if (tempLine) {
-                tempLine.remove();
-                tempLine = null;
-            }
-            
-            // 检查是否连接到了目标
-            const target = e.target;
-            if (target.classList.contains('connection-point')) {
-                const targetId = target.dataset.nodeId;
-                const targetDirection = target.dataset.direction;
-                
-                // 确保不是连接到自身
-                if (connectionStart !== targetId) {
-                    // 检查是否已经存在相同的连线
-                    const existingEdge = edges.find(edge => 
-                        edge.source === connectionStart && edge.target === targetId
-                    );
-                    
-                    if (!existingEdge) {
-                        // 创建新连线
-                        const edge = {
-                            id: `edge_${Date.now()}`,
-                            source: connectionStart,
-                            target: targetId
-                        };
-                        edges.push(edge);
-                        updateConnections();
-                    }
-                }
-            } else if (target.classList.contains('workflow-box-connection')) {
-                const targetId = target.dataset.boxId;
-                
-                // 确保不是连接到自身
-                if (connectionStart !== targetId) {
-                    // 检查是否已经存在相同的连线
-                    const existingEdge = edges.find(edge => 
-                        edge.source === connectionStart && edge.target === targetId
-                    );
-                    
-                    if (!existingEdge) {
-                        // 创建新连线
-                        const edge = {
-                            id: `edge_${Date.now()}`,
-                            source: connectionStart,
-                            target: targetId
-                        };
-                        edges.push(edge);
-                        updateConnections();
-                    }
-                }
-            }
-            
-            // 清理
-            isConnecting = false;
-            connectionStart = null;
-            connectionStartDirection = null;
-            document.removeEventListener('mousemove', updateTempLine);
-            document.removeEventListener('mouseup', endConnection);
-        }
-
-        function updateConnections() {
-            svg.innerHTML = '';
-            const rect = canvas.getBoundingClientRect();
-            
-            edges.forEach(edge => {
-                let sourceNode = nodes.find(n => n.id === edge.source);
-                let targetNode = nodes.find(n => n.id === edge.target);
-                let sourceBox = workflowBoxes.find(b => b.id === edge.source);
-                let targetBox = workflowBoxes.find(b => b.id === edge.target);
-                
-                if (!sourceNode && !sourceBox) return;
-                if (!targetNode && !targetBox) return;
-                
-                let startX, startY, endX, endY;
-                let d; // 声明路径变量
-                
-                // 获取连接方向（默认为左右连接）
-                const sourceDir = edge.sourceDirection || 'right';
-                const targetDir = edge.targetDirection || 'left';
-                
-                // 计算起点位置（根据源节点类型和方向）
-                if (sourceNode) {
-                    switch (sourceDir) {
-                        case 'top':
-                            startX = sourceNode.x + 90;
-                            startY = sourceNode.y;
-                            break;
-                        case 'bottom':
-                            startX = sourceNode.x + 90;
-                            startY = sourceNode.y + 80;
-                            break;
-                        case 'left':
-                            startX = sourceNode.x;
-                            startY = sourceNode.y + 40;
-                            break;
-                        case 'right':
-                        default:
-                            startX = sourceNode.x + 180;
-                            startY = sourceNode.y + 40;
-                            break;
-                    }
-                } else if (sourceBox) {
-                    // 工作流框的连接点
-                    switch (sourceDir) {
-                        case 'top':
-                            startX = sourceBox.x + sourceBox.width / 2;
-                            startY = sourceBox.y;
-                            break;
-                        case 'bottom':
-                            startX = sourceBox.x + sourceBox.width / 2;
-                            startY = sourceBox.y + sourceBox.height;
-                            break;
-                        case 'left':
-                            startX = sourceBox.x;
-                            startY = sourceBox.y + sourceBox.height / 2;
-                            break;
-                        case 'right':
-                        default:
-                            startX = sourceBox.x + sourceBox.width;
-                            startY = sourceBox.y + sourceBox.height / 2;
-                            break;
-                    }
-                }
-                
-                // 计算终点位置（根据目标节点类型和方向）
-                if (targetNode) {
-                    switch (targetDir) {
-                        case 'top':
-                            endX = targetNode.x + 90;
-                            endY = targetNode.y;
-                            break;
-                        case 'bottom':
-                            endX = targetNode.x + 90;
-                            endY = targetNode.y + 80;
-                            break;
-                        case 'left':
-                            endX = targetNode.x;
-                            endY = targetNode.y + 40;
-                            break;
-                        case 'right':
-                        default:
-                            endX = targetNode.x + 180;
-                            endY = targetNode.y + 40;
-                            break;
-                    }
-                } else if (targetBox) {
-                    // 工作流框的连接点
-                    switch (targetDir) {
-                        case 'top':
-                            endX = targetBox.x + targetBox.width / 2;
-                            endY = targetBox.y;
-                            break;
-                        case 'bottom':
-                            endX = targetBox.x + targetBox.width / 2;
-                            endY = targetBox.y + targetBox.height;
-                            break;
-                        case 'left':
-                            endX = targetBox.x;
-                            endY = targetBox.y + targetBox.height / 2;
-                            break;
-                        case 'right':
-                        default:
-                            endX = targetBox.x + targetBox.width;
-                            endY = targetBox.y + targetBox.height / 2;
-                            break;
-                    }
-                }
-                
-                // 为循环节点到工作流框的连线优化路径（类似Coze风格）
-                if (sourceNode && sourceNode.type === 'loop' && targetBox && sourceDir === 'bottom' && targetDir === 'top') {
-                    // 循环节点底部 -> 工作流框顶部：垂直向下的直线 + 小弧度
-                    const midY = (startY + endY) / 2;
-                    d = `M ${startX} ${startY} C ${startX} ${midY}, ${endX} ${midY}, ${endX} ${endY}`;
-                    
-                    // 同时绘制返回的虚线（工作流框底部 -> 循环节点顶部）
-                    const returnStartX = targetBox.x + targetBox.width / 2;
-                    const returnStartY = targetBox.y + targetBox.height;
-                    const returnEndX = sourceNode.x + 90;
-                    const returnEndY = sourceNode.y;
-                    const returnMidY = (returnStartY + returnEndY) / 2;
-                    const returnD = `M ${returnStartX} ${returnStartY} C ${returnStartX + 60} ${returnMidY}, ${returnEndX - 60} ${returnMidY}, ${returnEndX} ${returnEndY}`;
-                    
-                    const returnPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-                    returnPath.setAttribute('d', returnD);
-                    returnPath.setAttribute('stroke', '#667eea');
-                    returnPath.setAttribute('stroke-width', '2');
-                    returnPath.setAttribute('fill', 'none');
-                    returnPath.setAttribute('marker-end', 'url(#arrowhead)');
-                    returnPath.setAttribute('stroke-dasharray', '8,4');
-                    svg.appendChild(returnPath);
-                } else {
-                    // 默认贝塞尔曲线路径
-                    if (Math.abs(startY - endY) > 30) {
-                        // �垂直到下连接
-                        d = `M ${startX} ${startY} C ${startX} ${startY + (endY > startY ? 40 : -40)}, ${endX} ${endY + (endY > startY ? -40 : 40)}, ${endX} ${endY}`;
-                    } else {
-                        // 水平连接
-                        d = `M ${startX} ${startY} C ${startX + 50} ${startY}, ${endX - 50} ${endY}, ${endX} ${endY}`;
-                    }
-                }
-                
-                // 创建并添加路径元素
-                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-                path.setAttribute('d', d);
-                path.setAttribute('stroke', '#667eea');
-                path.setAttribute('stroke-width', '2');
-                path.setAttribute('fill', 'none');
-                path.setAttribute('marker-end', 'url(#arrowhead)');
-                
-                svg.appendChild(path);
-            });
-            
-            // 添加箭头标记
-            if (edges.length > 0 && !document.getElementById('arrowhead')) {
-                const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
-                const marker = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
-                marker.setAttribute('id', 'arrowhead');
-                marker.setAttribute('markerWidth', '10');
-                marker.setAttribute('markerHeight', '7');
-                marker.setAttribute('refX', '9');
-                marker.setAttribute('refY', '3.5');
-                marker.setAttribute('orient', 'auto');
-                
-                const polygon = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
-                polygon.setAttribute('points', '0 0, 10 3.5, 0 7');
-                polygon.setAttribute('fill', '#667eea');
-                
-                marker.appendChild(polygon);
-                defs.appendChild(marker);
-                svg.insertBefore(defs, svg.firstChild);
-            }
-        }
-
-        // 点击画布取消选择
-        canvas.addEventListener('click', () => {
-            document.querySelectorAll('.canvas-node').forEach(n => n.classList.remove('selected'));
-            selectedNode = null;
-            document.getElementById('properties-content').innerHTML = '<p style="color: #999;">选择一个节点查看属性</p>';
-        });
-
-        // 生成XML
-        function generateXML() {
-            const workflow = {
-                id: `wf_${new Date().getTime()}`,
-                name: '工作流',
-                nodes: nodes,
-                edges: edges
-            };
-            
-            const xml = `<?xml version="1.0" encoding="UTF-8"?>
+                const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <workflow id="${workflow.id}" name="${workflow.name}">
   <nodes>
 ${nodes.map(node => `    <node id="${node.id}" type="${node.type}">
@@ -2231,170 +2554,379 @@ ${Object.entries(node.config).map(([key, value]) => `        <${key}>${typeof va
 ${edges.map(edge => `    <edge source="${edge.source}" target="${edge.target}"/>`).join('\n')}
   </edges>
 </workflow>`;
-            
-            // 显示XML
-            const aiPromptSection = document.getElementById('ai-prompt-section');
-            const aiPromptText = document.getElementById('ai-prompt-text');
-            aiPromptText.value = xml;
-            aiPromptSection.style.display = 'block';
-        }
-
-        // 复制AI提示词
-        function copyAIPrompt() {
-            const aiPromptText = document.getElementById('ai-prompt-text');
-            aiPromptText.select();
-            document.execCommand('copy');
-            showResult('✅ XML已复制到剪贴板！');
-        }
-
-        // 保存工作流
-        async function saveWorkflow() {
-            if (nodes.length === 0) {
-                showResult('请先添加节点', true);
-                return;
+                
+                // 显示XML
+                const aiPromptSection = document.getElementById('ai-prompt-section');
+                const aiPromptText = document.getElementById('ai-prompt-text');
+                aiPromptText.value = xml;
+                aiPromptSection.style.display = 'block';
             }
             
-            const workflow = {
-                id: `wf_${new Date().getTime()}`,
-                name: '工作流',
-                nodes: nodes,
-                edges: edges,
-                workflowBoxes: workflowBoxes
-            };
+            // 复制AI提示词
+            function copyAIPrompt() {
+                const aiPromptText = document.getElementById('ai-prompt-text');
+                aiPromptText.select();
+                document.execCommand('copy');
+                showResult('✅ XML已复制到剪贴板！');
+            }
             
-            try {
-                showResult('保存中...');
+            // 验证工作流
+            function validateWorkflow() {
+                const errors = [];
+                const warnings = [];
                 
-                const response = await fetch('http://localhost:8001/api/workflow/execute-data', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        workflow: workflow,
-                        input_data: {}
-                    })
+                // 检查是否有开始节点
+                const hasStart = nodes.some(n => n.type === 'start');
+                if (!hasStart) {
+                    errors.push('缺少开始节点（start）');
+                }
+                
+                // 检查是否有结束节点
+                const hasEnd = nodes.some(n => n.type === 'end');
+                if (!hasEnd) {
+                    errors.push('缺少结束节点（end）');
+                }
+                
+                // 检查节点ID唯一性
+                const nodeIds = nodes.map(n => n.id);
+                const duplicates = nodeIds.filter((id, index) => nodeIds.indexOf(id) !== index);
+                if (duplicates.length > 0) {
+                    errors.push(`存在重复的节点ID: ${[...new Set(duplicates)].join(', ')}`);
+                }
+                
+                // 检查连线有效性
+                const nodeIdSet = new Set(nodeIds);
+                edges.forEach(edge => {
+                    if (!nodeIdSet.has(edge.source)) {
+                        errors.push(`连线源节点不存在: ${edge.source}`);
+                    }
+                    if (!nodeIdSet.has(edge.target)) {
+                        errors.push(`连线目标节点不存在: ${edge.target}`);
+                    }
                 });
                 
-                const data = await response.json();
+                // 检查孤立节点
+                const connectedNodes = new Set();
+                edges.forEach(edge => {
+                    connectedNodes.add(edge.source);
+                    connectedNodes.add(edge.target);
+                });
                 
-                if (data.success) {
-                    // 只显示文本结果
-                    const textResult = data.result.output || JSON.stringify(data.result);
-                    showResult('✅ 工作流执行成功！\n\n结果：\n' + textResult);
+                nodes.forEach(node => {
+                    if (node.type !== 'start' && node.type !== 'end' && !connectedNodes.has(node.id)) {
+                        warnings.push(`节点 '${node.id}' (${node.type}) 未连接到工作流`);
+                    }
+                });
+                
+                // 检查条件节点配置
+                nodes.filter(n => n.type === 'condition').forEach(node => {
+                    if (!node.config.true_branch || !node.config.false_branch) {
+                        warnings.push(`条件节点 '${node.id}' 缺少true_branch或false_branch配置`);
+                    }
+                });
+                
+                // 检查循环节点配置
+                nodes.filter(n => n.type === 'loop').forEach(node => {
+                    const maxIter = node.config.max_iterations || 100;
+                    if (maxIter > 1000) {
+                        warnings.push(`循环节点 '${node.id}' 的最大迭代次数(${maxIter})过大`);
+                    }
+                });
+                
+                // 检查工作流复杂度
+                if (nodes.length > 50) {
+                    warnings.push(`工作流包含${nodes.length}个节点，建议拆分为多个子工作流`);
+                }
+                
+                return {
+                    valid: errors.length === 0,
+                    message: errors.length === 0 && warnings.length === 0 ? '✅ 验证通过' : 
+                             (errors.length > 0 ? `❌ 错误(${errors.length}): ${errors.join('; ')}` : '') +
+                             (warnings.length > 0 ? `\n⚠️ 警告(${warnings.length}): ${warnings.join('; ')}` : ''),
+                    errors,
+                    warnings
+                };
+            }
+            
+            // 验证并显示结果
+            function validateAndShow() {
+                const validation = validateWorkflow();
+                showResult(validation.message, !validation.valid);
+            }
+            
+            async function saveWorkflow() {
+                if (nodes.length === 0) {
+                    showResult('请先添加节点', true);
+                    return;
+                }
+                
+                // 执行前端验证
+                const validation = validateWorkflow();
+                if (!validation.valid) {
+                    showResult(validation.message, true);
+                    return;
+                }
+                
+                // 如果有警告，提示用户
+                if (validation.warnings.length > 0) {
+                    if (!confirm(`工作流存在以下警告：\n\n${validation.warnings.join('\n')}\n\n是否继续保存？`)) {
+                        return;
+                    }
+                }
+                
+                const workflow = {
+                    id: `wf_${new Date().getTime()}`,
+                    name: '工作流',
+                    nodes: nodes,
+                    edges: edges,
+                    workflowBoxes: workflowBoxes
+                };
+                
+                try {
+                    showResult('保存中...');
                     
-                    // 生成AI分析提示词
-                    generateAIPrompt(workflow.id);
-                } else {
-                    showResult('❌ 工作流执行失败：' + data.error, true);
+                    const response = await fetch('http://localhost:8001/api/workflow/execute-data', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            workflow: workflow,
+                            input_data: {}
+                        })
+                    });
+                    
+                    const data = await response.json();
+                    
+                    if (data.success) {
+                        // 只显示文本结果
+                        const textResult = data.result.output || JSON.stringify(data.result);
+                        showResult('✅ 工作流执行成功！\n\n结果：\n' + textResult);
+                        
+                        // 生成AI分析提示词
+                        generateAIPrompt(workflow.id);
+                    } else {
+                        showResult('❌ 工作流执行失败：' + data.error, true);
+                    }
+                } catch (error) {
+                    showResult('❌ 保存失败: ' + error.message + '\n\n请确保后端服务已启动 (localhost:8001)', true);
                 }
-            } catch (error) {
-                showResult('❌ 保存失败: ' + error.message + '\n\n请确保后端服务已启动 (localhost:8001)', true);
-            }
-        }
-
-        // 清空画布
-        function clearCanvas() {
-            if (confirm('确定清空画布吗？')) {
-                // 清空节点和连线
-                nodes = [];
-                edges = [];
-                workflowBoxes = [];
-                selectedNode = null;
-                
-                // 清空DOM
-                canvas.innerHTML = '<svg id="connections"></svg>';
-                
-                // 重置计数器
-                nodeIdCounter = 0;
-                boxIdCounter = 0;
-                
-                // 清空属性面板
-                document.getElementById('properties-content').innerHTML = '<p style="color: #999;">选择一个节点查看属性</p>';
-                document.getElementById('ai-prompt-section').style.display = 'none';
-            }
-        }
-
-        // 测试执行工作流
-        async function testWorkflow() {
-            if (nodes.length === 0) {
-                showResult('请先添加节点', true);
-                return;
             }
             
-            // 生成工作流数据
-            const workflowData = {
-                nodes: nodes,
-                edges: edges,
-                workflowBoxes: workflowBoxes
-            };
+            // 清空画布
+            function clearCanvas() {
+                if (confirm('确定清空画布吗？')) {
+                    // 清空节点和连线
+                    nodes = [];
+                    edges = [];
+                    workflowBoxes = [];
+                    selectedNode = null;
+                    
+                    // 清空DOM
+                    canvas.innerHTML = '<svg id="connections"></svg>';
+                    svg = document.getElementById('connections');
+                    
+                    // 重置计数器
+                    nodeIdCounter = 0;
+                    boxIdCounter = 0;
+                    
+                    // 清空属性面板
+                    propertiesContent.innerHTML = '<p style="color: #999;">选择一个节点查看属性</p>';
+                    document.getElementById('ai-prompt-section').style.display = 'none';
+                }
+            }
             
-            try {
-                // 显示加载状态
-                const toolbar = document.querySelector('.toolbar');
-                const testButton = toolbar.querySelector('button');
-                const originalText = testButton.textContent;
-                testButton.textContent = '执行中...';
-                testButton.disabled = true;
+            // 测试执行工作流
+            async function testWorkflow() {
+                if (nodes.length === 0) {
+                    showResult('请先添加节点', true);
+                    return;
+                }
                 
-                showResult('执行中...');
+                // 验证工作流结构
+                const validation = validateWorkflow();
+                if (!validation.valid) {
+                    showResult('❌ 工作流验证失败: ' + validation.message, true);
+                    return;
+                }
                 
-                // 发送执行请求到后端服务（8001端口）
-                const response = await fetch('http://localhost:8001/api/workflow/execute-data', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        workflow: workflowData,
-                        input_data: {
-                            list: [1, 2, 3],
-                            result: 15
-                        }
+                // 生成工作流数据（清理不必要的字段）
+                const workflowData = {
+                    id: `workflow_${Date.now()}`,
+                    name: '测试工作流',
+                    nodes: nodes.map(n => {
+                        return {
+                            id: n.id,
+                            type: n.type,
+                            config: n.config || {}
+                        };
+                    }),
+                    edges: edges.map(e => {
+                        return {
+                            id: e.id,
+                            source: e.source,
+                            target: e.target,
+                            sourceDirection: e.sourceDirection || 'right',
+                            targetDirection: e.targetDirection || 'left',
+                            condition: e.condition || ''
+                        };
                     })
-                });
+                };
                 
-                const result = await response.json();
-                
-                // 恢复按钮状态
-                testButton.textContent = originalText;
-                testButton.disabled = false;
-                
-                // 显示执行结果
-                if (result.success) {
-                    // 只显示文本结果
-                    const textResult = result.result.output || JSON.stringify(result.result);
-                    showResult('✅ 执行成功！\n\n结果：\n' + textResult);
-                } else {
-                    showResult('❌ 执行失败: ' + result.error, true);
+                try {
+                    // 显示加载状态
+                    const toolbar = document.querySelector('.toolbar');
+                    const testButton = toolbar.querySelector('button');
+                    const originalText = testButton.textContent;
+                    testButton.textContent = '执行中...';
+                    testButton.disabled = true;
+                    
+                    showResult('执行中...');
+                    
+                    // 发送执行请求到后端服务（使用相对路径）
+                    const response = await fetch('/api/workflow/execute-data', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            workflow: workflowData,
+                            input_data: {
+                                list: [1, 2, 3],
+                                result: 15
+                            }
+                        })
+                    });
+                    
+                    const result = await response.json();
+                    
+                    // 恢复按钮状态
+                    testButton.textContent = originalText;
+                    testButton.disabled = false;
+                    
+                    // 显示执行结果
+                    if (result.success) {
+                        // 格式化结果显示
+                        let textResult = '';
+                        if (result.result && typeof result.result === 'object') {
+                            if (result.result.output) {
+                                textResult = result.result.output;
+                            } else if (result.result.data) {
+                                textResult = typeof result.result.data === 'string' 
+                                    ? result.result.data 
+                                    : JSON.stringify(result.result.data, null, 2);
+                            } else {
+                                textResult = JSON.stringify(result.result, null, 2);
+                            }
+                        } else {
+                            textResult = String(result.result);
+                        }
+                        showResult('✅ 执行成功！\n\n结果：\n' + textResult);
+                    } else {
+                        showResult('❌ 执行失败: ' + (result.error || '未知错误'), true);
+                    }
+                } catch (error) {
+                    showResult('❌ 测试执行失败: ' + error.message + '\n\n请确保后端服务已启动', true);
+                    
+                    // 恢复按钮状态
+                    const toolbar = document.querySelector('.toolbar');
+                    const testButton = toolbar.querySelector('button');
+                    testButton.textContent = '测试执行';
+                    testButton.disabled = false;
                 }
-            } catch (error) {
-                showResult('❌ 测试执行失败: ' + error.message + '\n\n请确保后端服务已启动 (localhost:8001)', true);
-                
-                // 恢复按钮状态
-                const toolbar = document.querySelector('.toolbar');
-                const testButton = toolbar.querySelector('button');
-                testButton.textContent = '测试执行';
-                testButton.disabled = false;
             }
-        }
-
-        // 将需要全局访问的函数暴露到window对象
-        window.clearCanvas = clearCanvas;
-        window.generateXML = generateXML;
-        window.saveWorkflow = saveWorkflow;
-        window.testWorkflow = testWorkflow;
-        window.copyAIPrompt = copyAIPrompt;
-        window.deleteWorkflowBox = deleteWorkflowBox;
-        window.refreshSkills = refreshSkills;
-        window.deleteNode = deleteNode;
-        window.zoomIn = zoomIn;
-        window.zoomOut = zoomOut;
-        window.resetZoom = resetZoom;
-        window.exportWorkflow = exportWorkflow;
-        window.importWorkflow = importWorkflow;
-        window.toggleResultBox = toggleResultBox;
-    });
+            
+            function validateWorkflow() {
+                // 检查是否有开始节点
+                const hasStart = nodes.some(n => n.type === 'start');
+                if (!hasStart) {
+                    return { valid: false, message: '缺少开始节点' };
+                }
+                
+                // 检查是否有结束节点
+                const hasEnd = nodes.some(n => n.type === 'end');
+                if (!hasEnd) {
+                    return { valid: false, message: '缺少结束节点' };
+                }
+                
+                // 检查节点是否有必要的配置
+                for (const node of nodes) {
+                    if (node.type === 'llm' && !node.config?.prompt) {
+                        return { valid: false, message: `LLM节点 ${node.id} 缺少提示词配置` };
+                    }
+                    if (node.type === 'tool' && !node.config?.tool) {
+                        return { valid: false, message: `工具节点 ${node.id} 缺少工具名称配置` };
+                    }
+                    if (node.type === 'loop' && !node.config?.loop_type) {
+                        return { valid: false, message: `循环节点 ${node.id} 缺少循环类型配置` };
+                    }
+                }
+                
+                return { valid: true, message: '' };
+            }
+            
+            // 主题切换功能
+            function toggleTheme() {
+                document.body.classList.toggle('dark-mode');
+                const isDark = document.body.classList.contains('dark-mode');
+                localStorage.setItem('theme', isDark ? 'dark' : 'light');
+                const themeBtn = document.getElementById('theme-toggle');
+                if (themeBtn) {
+                    themeBtn.textContent = isDark ? '☀️' : '🌓';
+                }
+                
+                // 更新网格背景
+                updateGridBackground();
+            }
+            
+            // 更新网格背景
+            function updateGridBackground() {
+                const canvasElement = document.getElementById('workflow-canvas');
+                const isDark = document.body.classList.contains('dark-mode');
+                
+                if (!canvasElement) return;
+                
+                const gridSize = 24;
+                const gridColor = isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)';
+                
+                canvasElement.style.backgroundImage = `
+                    linear-gradient(${gridColor} 1px, transparent 1px),
+                    linear-gradient(90deg, ${gridColor} 1px, transparent 1px)
+                `;
+                canvasElement.style.backgroundSize = `${gridSize}px ${gridSize}px`;
+            }
+            
+            // 页面加载时恢复主题设置并初始化网格
+            const savedTheme = localStorage.getItem('theme');
+            if (savedTheme === 'dark') {
+                document.body.classList.add('dark-mode');
+                const themeBtn = document.getElementById('theme-toggle');
+                if (themeBtn) themeBtn.textContent = '☀️';
+            }
+            
+            // 延迟初始化网格背景（等待DOM完全加载）
+            setTimeout(updateGridBackground, 100);
+            
+            // 将需要全局访问的函数暴露到window对象
+            window.clearCanvas = clearCanvas;
+            window.generateXML = generateXML;
+            window.saveWorkflow = saveWorkflow;
+            window.testWorkflow = testWorkflow;
+            window.copyAIPrompt = copyAIPrompt;
+            window.deleteWorkflowBox = deleteWorkflowBox;
+            window.refreshSkills = refreshSkills;
+            window.deleteNode = deleteNode;
+            window.zoomIn = zoomIn;
+            window.zoomOut = zoomOut;
+            window.resetZoom = resetZoom;
+            window.exportWorkflow = exportWorkflow;
+            window.importWorkflow = importWorkflow;
+            window.toggleResultBox = toggleResultBox;
+            window.toggleTheme = toggleTheme;
+            window.validateAndShow = validateAndShow;
+            window.undo = undo;
+            window.redo = redo;
+        });
     </script>
 </body>
 </html>

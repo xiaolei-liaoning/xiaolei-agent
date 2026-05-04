@@ -8,7 +8,9 @@
 """
 
 import logging
+import time
 from collections import deque
+from functools import lru_cache
 from typing import List, Dict, Any, Optional, Callable
 from dataclasses import dataclass, field
 
@@ -47,6 +49,11 @@ class BFSTextProcessor:
         """
         self.max_depth = max_depth
         self.max_nodes = max_nodes
+        
+        # P0修复5：添加上下文缓存（TTL 60秒）
+        self._context_cache = {}
+        self._cache_ttl = 60  # 秒
+        
         logger.info("BFSTextProcessor 初始化完成 (max_depth=%d, max_nodes=%d)", 
                    max_depth, max_nodes)
     
@@ -325,22 +332,499 @@ class BFSTextProcessor:
         logger.info("关键词检索完成，返回 %d 个相关节点", len(result))
         return result
 
+    def add_node(self, user_id: int, role: str, content: str,
+                 summary: str = "", metadata: Dict[str, Any] = None) -> bool:
+        """添加节点到对话历史（兼容旧接口）
+
+        Args:
+            user_id: 用户ID
+            role: 角色 (user/assistant/system)
+            content: 内容
+            summary: 摘要
+            metadata: 元数据
+
+        Returns:
+            是否成功
+        """
+        try:
+            from core.database import get_session, ChatHistory
+            from datetime import datetime
+
+            session = get_session()
+            if session is None:
+                logger.debug("数据库会话未初始化，跳过BFS节点添加")
+                return True
+
+            record = ChatHistory(
+                user_id=user_id,
+                role=role,
+                content=content,
+                summary=summary,
+                metadata=metadata or {},
+                created_at=datetime.now()
+            )
+            session.add(record)
+            session.commit()
+            session.close()
+            logger.debug(f"BFS节点添加成功: user={user_id}, role={role}")
+            return True
+
+        except RuntimeError:
+            logger.debug("数据库未初始化，跳过BFS节点添加")
+            return True
+        except Exception as e:
+            logger.debug(f"添加BFS节点失败: {e}")
+            return True
+
+    def get_context(self, user_id: int, depth: int = 2, limit: int = 10) -> List[Dict[str, Any]]:
+        """获取用户对话上下文历史 - P0修复：添加缓存
+        
+        Args:
+            user_id: 用户ID
+            depth: 获取的对话深度（往返次数）
+            limit: 返回的最大记录数
+            
+        Returns:
+            用户的对话上下文历史列表
+        """
+        # P0修复：检查缓存
+        cache_key = f"{user_id}_{depth}_{limit}"
+        now = time.time()
+        
+        if cache_key in self._context_cache:
+            cached_time, cached_data = self._context_cache[cache_key]
+            if now - cached_time < self._cache_ttl:
+                logger.debug(f"BFS上下文缓存命中: user={user_id}")
+                return cached_data
+        
+        try:
+            from core.database import get_session, ChatHistory
+            
+            session = get_session()
+            if session is None:
+                logger.warning("数据库会话未初始化，返回空上下文")
+                return []
+            
+            from sqlalchemy import desc
+            history_records = session.query(ChatHistory).filter(
+                ChatHistory.user_id == user_id
+            ).order_by(
+                desc(ChatHistory.created_at)
+            ).limit(limit).all()
+            
+            session.close()
+            
+            context = []
+            for record in history_records:
+                context.append({
+                    "id": record.id,
+                    "role": record.role,
+                    "content": record.content,
+                    "created_at": record.created_at.isoformat() if record.created_at else None
+                })
+
+            logger.debug(f"获取用户{user_id}的上下文: {len(context)}条记录")
+            
+            # P0修复：更新缓存
+            self._context_cache[cache_key] = (now, context)
+            
+            # 清理过期缓存
+            self._cleanup_cache(now)
+            
+            return context
+
+        except RuntimeError:
+            logger.debug("数据库未初始化，跳过获取用户上下文")
+            return []
+        except Exception as e:
+            logger.debug(f"获取用户上下文失败: {e}")
+            return []
+    
+    def _cleanup_cache(self, now: float):
+        """清理过期缓存"""
+        expired_keys = [
+            key for key, (cached_time, _) in self._context_cache.items()
+            if now - cached_time >= self._cache_ttl
+        ]
+        for key in expired_keys:
+            del self._context_cache[key]
+
 
 # 全局单例实例
 _bfs_processor_instance = None
+_bfs_processor_config = {"max_depth": 5, "max_nodes": 100}
 
 
-def get_bfs_processor(max_depth: int = 5, max_nodes: int = 100) -> BFSTextProcessor:
+def get_bfs_processor(max_depth: int = None, max_nodes: int = None) -> BFSTextProcessor:
     """获取BFS文本处理器单例
     
+    注意：单例模式只考虑首次调用时的参数配置，后续调用忽略参数差异
+    
     Args:
-        max_depth: 最大遍历深度
-        max_nodes: 最大节点数量
+        max_depth: 最大遍历深度（仅首次调用生效）
+        max_nodes: 最大节点数量（仅首次调用生效）
         
     Returns:
         BFSTextProcessor实例
     """
-    global _bfs_processor_instance
+    global _bfs_processor_instance, _bfs_processor_config
     if _bfs_processor_instance is None:
-        _bfs_processor_instance = BFSTextProcessor(max_depth=max_depth, max_nodes=max_nodes)
+        if max_depth is not None:
+            _bfs_processor_config["max_depth"] = max_depth
+        if max_nodes is not None:
+            _bfs_processor_config["max_nodes"] = max_nodes
+        _bfs_processor_instance = BFSTextProcessor(
+            max_depth=_bfs_processor_config["max_depth"],
+            max_nodes=_bfs_processor_config["max_nodes"]
+        )
+        logger.info(f"BFS处理器单例已创建: max_depth={_bfs_processor_config['max_depth']}, max_nodes={_bfs_processor_config['max_nodes']}")
     return _bfs_processor_instance
+
+
+"""BFS任务调度器 - 真正的任务分解与执行引擎
+
+实现基于BFS的任务调度机制：
+- 任务树构建：将复杂任务分解为多层级子任务
+- BFS队列管理：按层级顺序处理任务节点
+- 动态任务分解：功能节点自动展开为子任务
+- 叶子节点执行：直接执行可操作的任务
+
+核心流程：
+1. 从根节点开始，将任务加入BFS队列
+2. 取出队首节点
+3. 如果是功能节点（需要分解）：展开子任务并入队
+4. 如果是叶子节点（可执行）：直接执行并收集结果
+5. 重复直到队列为空
+"""
+
+import logging
+from collections import deque
+from typing import List, Dict, Any, Optional, Callable
+from dataclasses import dataclass, field
+from enum import Enum
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+logger = logging.getLogger(__name__)
+
+
+class NodeType(Enum):
+    """节点类型枚举"""
+    ROOT = "root"              # 根节点：总任务
+    FUNCTION = "function"      # 功能层：需要分解的任务（如"爬取"）
+    TEXT = "text"             # 文本层：具体任务（如"文章1"）
+    PARAGRAPH = "paragraph"   # 段落层：细分任务（如"段落1"）
+    LEAF = "leaf"             # 叶子节点：可直接执行的任务
+
+
+@dataclass
+class TaskNode:
+    """任务节点
+    
+    对应你画的图中的所有节点类型
+    """
+    name: str                   # 节点名称（如"根"、"爬"、"文章1"、"段落1全文"）
+    node_type: NodeType         # 节点类型
+    children: List['TaskNode'] = field(default_factory=list)  # 子节点列表
+    task_data: Optional[Dict[str, Any]] = None  # 任务数据（叶子节点才有）
+    parent: Optional['TaskNode'] = None  # 父节点引用
+    metadata: Dict[str, Any] = field(default_factory=dict)  # 元数据
+    
+    def is_function_node(self) -> bool:
+        """判断是否为功能节点（需要继续分解）
+        
+        Returns:
+            True表示需要分解，False表示是叶子节点可直接执行
+        """
+        return self.node_type in [NodeType.ROOT, NodeType.FUNCTION, 
+                                  NodeType.TEXT, NodeType.PARAGRAPH]
+    
+    def is_leaf_node(self) -> bool:
+        """判断是否为叶子节点（可直接执行）"""
+        return self.node_type == NodeType.LEAF
+    
+    def __str__(self):
+        return f"TaskNode(name={self.name}, type={self.node_type.value}, has_task={self.task_data is not None})"
+
+
+class BFSTaskScheduler:
+    """BFS任务调度器（已废弃 - DEPRECATED）
+    
+    ⚠️ 此模块当前未被主流程使用，仅在测试文件中引用。
+    如需任务树功能，请使用 TaskExecutor + NaturalLanguageTaskParser。
+    
+    实现你画的两张图的核心逻辑：
+    - 图1：任务树的层级结构（根→功能→文本→段落→叶子）
+    - 图2：BFS队列的工作方式（功能节点出队→子节点入队→叶子节点执行）
+    """
+    
+    def __init__(self, max_concurrent: int = 5):
+        """初始化调度器
+        
+        Args:
+            max_concurrent: 最大并发任务数（用于多线程扩展）
+        """
+        self.max_concurrent = max_concurrent
+        self.execution_log: List[Dict[str, Any]] = []  # 执行日志
+        self._queue_lock = threading.Lock()  # 队列锁（多线程用）
+        logger.info("BFSTaskScheduler 初始化完成 (max_concurrent=%d)", max_concurrent)
+    
+    def execute_bfs(self, root: TaskNode, 
+                   executor: Optional[Callable] = None) -> List[Any]:
+        """执行BFS任务调度（核心算法）
+        
+        对应你图2的队列流程：
+        1. 队列初始化：queue = deque([root])
+        2. 取出队首：current_node = queue.popleft()
+        3. 判断类型：
+           - 功能节点：子节点全部入队
+           - 叶子节点：执行任务
+        4. 循环直到队列为空
+        
+        Args:
+            root: 任务树的根节点
+            executor: 任务执行函数，签名为 func(task_data: dict) -> result
+                     如果为None，则返回task_data本身
+            
+        Returns:
+            所有叶子节点的执行结果列表
+        """
+        if executor is None:
+            executor = lambda task_data: task_data
+        
+        # 初始化BFS队列
+        queue = deque([root])
+        all_results = []
+        
+        logger.info("🚀 开始BFS任务调度，根节点: %s", root.name)
+        
+        while queue:
+            # 1. 取出队首节点（先进先出，BFS核心）
+            current_node = queue.popleft()
+            logger.debug("📋 处理节点: %s (类型: %s)", 
+                        current_node.name, current_node.node_type.value)
+            
+            # 记录执行日志
+            log_entry = {
+                "node_name": current_node.name,
+                "node_type": current_node.node_type.value,
+                "action": "decomposed" if current_node.is_function_node() else "executed"
+            }
+            
+            # 2. 判断节点类型
+            if current_node.is_leaf_node():
+                # 叶子节点：直接执行任务
+                logger.info("✅ 执行叶子任务: %s", current_node.name)
+                
+                try:
+                    result = executor(current_node.task_data)
+                    all_results.append({
+                        "node": current_node.name,
+                        "result": result
+                    })
+                    log_entry["result"] = "success"
+                except Exception as e:
+                    logger.error("❌ 任务执行失败: %s, 错误: %s", 
+                               current_node.name, str(e))
+                    log_entry["result"] = f"failed: {str(e)}"
+            else:
+                # 功能节点：把所有子节点入队
+                logger.info("🔀 分解功能节点: %s → %d 个子任务", 
+                           current_node.name, len(current_node.children))
+                
+                for child in current_node.children:
+                    queue.append(child)
+                    logger.debug("  ➕ 子任务入队: %s", child.name)
+                
+                log_entry["children_count"] = len(current_node.children)
+            
+            self.execution_log.append(log_entry)
+        
+        logger.info("🎉 BFS任务调度完成，共执行 %d 个叶子任务", len(all_results))
+        return all_results
+
+    def execute_bfs_parallel(self, root: TaskNode,
+                            executor: Optional[Callable] = None) -> List[Any]:
+        """并行版BFS任务调度（多线程扩展）
+        
+        使用线程池并行执行叶子节点任务，适合I/O密集型任务（如网络爬取）
+        
+        Args:
+            root: 任务树的根节点
+            executor: 任务执行函数
+            
+        Returns:
+            所有叶子节点的执行结果列表
+        """
+        if executor is None:
+            executor = lambda task_data: task_data
+        
+        # 第一阶段：BFS遍历，收集所有叶子节点
+        queue = deque([root])
+        leaf_nodes = []
+        
+        logger.info("🚀 开始并行BFS任务调度")
+        
+        while queue:
+            current_node = queue.popleft()
+            
+            if current_node.is_leaf_node():
+                leaf_nodes.append(current_node)
+            else:
+                for child in current_node.children:
+                    queue.append(child)
+        
+        logger.info("📊 共发现 %d 个叶子任务，启动 %d 个线程并行执行", 
+                   len(leaf_nodes), self.max_concurrent)
+        
+        # 第二阶段：并行执行叶子节点
+        all_results = []
+        with ThreadPoolExecutor(max_workers=self.max_concurrent) as pool:
+            future_to_node = {}
+            
+            # 提交所有任务到线程池
+            for node in leaf_nodes:
+                future = pool.submit(executor, node.task_data)
+                future_to_node[future] = node
+            
+            # 收集结果
+            for future in as_completed(future_to_node):
+                node = future_to_node[future]
+                try:
+                    result = future.result()
+                    all_results.append({
+                        "node": node.name,
+                        "result": result
+                    })
+                    logger.info("✅ 完成: %s", node.name)
+                except Exception as e:
+                    logger.error("❌ 失败: %s, 错误: %s", node.name, str(e))
+                    all_results.append({
+                        "node": node.name,
+                        "result": {"error": str(e)}
+                    })
+        
+        logger.info("🎉 并行BFS调度完成")
+        return all_results
+    
+    def build_sample_crawl_tree(self) -> TaskNode:
+        """构建示例爬取任务树（完全对应你画的图1）
+        
+        树结构：
+        根
+        └─ 爬（功能层）
+           ├─ 文章1（文本层）
+           │  ├─ P1（段落层）
+           │  │  └─ 段落1全文（叶子）
+           │  ├─ P2（段落层）
+           │  │  └─ 段落2全文（叶子）
+           │  └─ P3（段落层）
+           │     └─ 段落3全文（叶子）
+           ├─ 文章2（文本层）
+           └─ 文章3（文本层）
+        
+        Returns:
+            根节点
+        """
+        # ===== 第4层：叶子节点（可直接执行的爬取任务）=====
+        p1_full = TaskNode(
+            name="段落1全文",
+            node_type=NodeType.LEAF,
+            task_data={"url": "https://example.com/article1/para1", "type": "crawl"}
+        )
+        p2_full = TaskNode(
+            name="段落2全文",
+            node_type=NodeType.LEAF,
+            task_data={"url": "https://example.com/article1/para2", "type": "crawl"}
+        )
+        p3_full = TaskNode(
+            name="段落3全文",
+            node_type=NodeType.LEAF,
+            task_data={"url": "https://example.com/article1/para3", "type": "crawl"}
+        )
+        
+        # ===== 第3层：段落层（需要分解为叶子节点）=====
+        p1 = TaskNode(name="P1", node_type=NodeType.PARAGRAPH, children=[p1_full])
+        p2 = TaskNode(name="P2", node_type=NodeType.PARAGRAPH, children=[p2_full])
+        p3 = TaskNode(name="P3", node_type=NodeType.PARAGRAPH, children=[p3_full])
+        
+        # ===== 第2层：文本层（文章任务）=====
+        article1 = TaskNode(
+            name="文章1",
+            node_type=NodeType.TEXT,
+            children=[p1, p2, p3],
+            task_data={"article_id": 1, "title": "第一篇文章"}
+        )
+        article2 = TaskNode(
+            name="文章2",
+            node_type=NodeType.TEXT,
+            children=[],  # 简化示例，没有段落
+            task_data={"article_id": 2, "title": "第二篇文章"}
+        )
+        article3 = TaskNode(
+            name="文章3",
+            node_type=NodeType.TEXT,
+            children=[],
+            task_data={"article_id": 3, "title": "第三篇文章"}
+        )
+        
+        # ===== 第1层：功能层（爬取任务）=====
+        crawl = TaskNode(
+            name="爬",
+            node_type=NodeType.FUNCTION,
+            children=[article1, article2, article3],
+            task_data={"task_type": "web_crawling"}
+        )
+        
+        # ===== 第0层：根节点 =====
+        root = TaskNode(
+            name="根",
+            node_type=NodeType.ROOT,
+            children=[crawl],
+            task_data={"project": "文章爬取项目"}
+        )
+        
+        logger.info("✅ 示例任务树构建完成")
+        return root
+
+
+# ==================== 使用示例 ====================
+if __name__ == "__main__":
+    # 配置日志
+    logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+    
+    print("\n" + "="*80)
+    print("演示1: 单线程BFS调度")
+    print("="*80)
+    
+    # 创建调度器
+    scheduler = BFSTaskScheduler(max_concurrent=5)
+    
+    # 构建任务树
+    tree = scheduler.build_sample_crawl_tree()
+    
+    # 定义任务执行函数（模拟爬取）
+    def mock_crawler(task_data):
+        """模拟爬取任务执行"""
+        import time
+        if task_data and "url" in task_data:
+            time.sleep(0.5)  # 模拟网络延迟
+            print(f"  🕷️  正在爬取: {task_data['url']}")
+            return {"status": "success", "content_length": 1024}
+        return {"status": "skipped"}
+    
+    # 执行BFS调度
+    results = scheduler.execute_bfs(tree, executor=mock_crawler)
+    
+    # 输出结果
+    print(f"\n总计执行了 {len(results)} 个叶子任务\n")
+    
+    # 演示2: 多线程并行BFS调度
+    print("\n" + "="*80)
+    print("演示2: 多线程并行BFS调度")
+    print("="*80)
+    
+    tree2 = scheduler.build_sample_crawl_tree()
+    results_parallel = scheduler.execute_bfs_parallel(tree2, executor=mock_crawler)
+    
+    print(f"\n总计执行了 {len(results_parallel)} 个叶子任务")

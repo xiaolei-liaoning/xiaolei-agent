@@ -6,6 +6,7 @@
 - 单步任务处理
 - 闲聊处理
 - 数据持久化辅助函数
+- BFS上下文记忆管理
 """
 
 import asyncio
@@ -19,6 +20,16 @@ from typing import Dict, Any, Optional, List
 from fastapi import WebSocket
 
 logger = logging.getLogger(__name__)
+
+# ==================== BFS上下文记忆全局实例 ====================
+from core.bfs_processor import get_bfs_processor
+from core.short_term_memory import ShortTermMemoryManager
+
+# 全局BFS处理器实例（单例，所有调用共享）
+bfs_processor = get_bfs_processor()
+
+# 全局短时记忆管理器（支持分层树状索引 + BFS队列）
+short_term_memory = ShortTermMemoryManager(cache_size=50)
 
 # ---------------------------------------------------------------------------
 # 全局状态引用（由 main.py 注入）
@@ -50,10 +61,98 @@ def set_global_refs(
     _db_initialized = db_initialized
 
 
+def _check_global_refs() -> None:
+    """检查全局引用是否已初始化
+    
+    Raises:
+        RuntimeError: 如果全局引用未初始化
+    """
+    if _dispatcher is None:
+        raise RuntimeError(
+            "系统尚未初始化完成，请确保 main.py 已启动并完成初始化。"
+            "如果问题持续存在，请检查 SkillDispatcher 是否正确初始化。"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Action到自然语言的转换工具
+# ---------------------------------------------------------------------------
+def _convert_action_to_natural_language(action: str, params: Dict[str, Any]) -> str:
+    """将技能action和params转换为自然语言描述
+    
+    Args:
+        action: 技能名称
+        params: 技能参数
+        
+    Returns:
+        自然语言描述
+    """
+    # GUI自动化
+    if action == "gui_automation":
+        app = params.get("application", "")
+        act = params.get("action", "打开")
+        if app:
+            return f"{act}{app}"
+        return "执行GUI操作"
+    
+    # 网页爬取
+    elif action == "web_scraper":
+        site = params.get("site_name", "")
+        act = params.get("action", "")
+        if site and act:
+            return f"爬取{site}的{act}"
+        elif site:
+            return f"爬取{site}"
+        return "爬取网页数据"
+    
+    # RAG搜索
+    elif action == "rag_search":
+        query = params.get("query", "")
+        if query:
+            return f"搜索{query}"
+        return "执行搜索"
+    
+    # 天气查询
+    elif action == "weather":
+        city = params.get("city", "")
+        if city:
+            return f"查询{city}的天气"
+        return "查询天气"
+    
+    # 翻译
+    elif action == "translator":
+        text = params.get("text", "")
+        target = params.get("target_lang", "")
+        if text:
+            return f"翻译: {text[:30]}"
+        return "执行翻译"
+    
+    # 数据分析
+    elif action == "data_analysis":
+        return "分析数据"
+    
+    # 文本分析
+    elif action == "text_analyzer":
+        text = params.get("text", "")
+        if text:
+            return f"分析文本: {text[:20]}"
+        return "分析文本"
+    
+    # 聊天/写故事等
+    elif action == "chat":
+        msg = params.get("message", "")
+        if msg:
+            return msg
+        return "进行对话"
+    
+    # 默认返回
+    return f"执行{action}"
+
+
 # ---------------------------------------------------------------------------
 # 任务处理器适配器
 # ---------------------------------------------------------------------------
-async def _process_task_with_processor(task: Dict[str, Any], user_id: int = 1) -> List[Dict[str, Any]]:
+async def _process_task_with_processor(task: Dict[str, Any], user_id: int = 1) -> Dict[str, Any]:
     """使用 TaskProcessor 处理任务，并转换为 TaskPlanner 格式
     
     Args:
@@ -61,7 +160,7 @@ async def _process_task_with_processor(task: Dict[str, Any], user_id: int = 1) -
         user_id: 用户ID
         
     Returns:
-        TaskPlanner 格式的子任务列表
+        包含子任务列表和处理路径的字典
     """
     from core.task_processor import task_processor
     
@@ -73,10 +172,13 @@ async def _process_task_with_processor(task: Dict[str, Any], user_id: int = 1) -
     # 转换为 TaskPlanner 格式
     sub_tasks = []
     for i, subtask in enumerate(result.subtasks):
+        # 将action和params转换为自然语言描述
+        action_desc = _convert_action_to_natural_language(subtask.action, subtask.params)
+        
         sub_task = {
             "task_id": task.get("task_id", 1) * 100 + i + 1,
             "user_id": user_id,
-            "user_message": f"{subtask.action}: {subtask.params}",
+            "user_message": action_desc,  # 使用自然语言描述
             "ai_response": f"执行: {subtask.action}",
             "tool_call": {
                 "name": subtask.action,
@@ -89,9 +191,9 @@ async def _process_task_with_processor(task: Dict[str, Any], user_id: int = 1) -
     
     # 如果没有子任务，返回原任务
     if not sub_tasks:
-        return [task]
+        return {"sub_tasks": [task], "path": "none"}
     
-    return sub_tasks
+    return {"sub_tasks": sub_tasks, "path": result.path.value}
 
 
 # ---------------------------------------------------------------------------
@@ -170,9 +272,17 @@ async def handle_multi_step(message: str, user_id: int) -> Dict[str, Any]:
     }
 
     # 规则分解
-    sub_tasks: List[Dict[str, Any]] = await _process_task_with_processor(task, user_id)
+    process_result = await _process_task_with_processor(task, user_id)
+    sub_tasks = process_result["sub_tasks"]
+    path = process_result["path"]
 
-    # 仍无法分解，降级为单步处理
+    # 规则匹配且只有1个子任务 → 直接用这个子任务的skill去handle_single_step
+    if len(sub_tasks) == 1 and path == "rule":
+        first_subtask = sub_tasks[0]
+        skill_name = first_subtask["tool_call"]["name"]
+        return await handle_single_step(message, user_id, skill_name, "default")
+
+    # 仍无法分解（没有子任务或AI分解失败） → 降级为单步处理
     if len(sub_tasks) <= 1:
         return await handle_single_step(message, user_id, "chat", "default")
 
@@ -224,7 +334,22 @@ async def handle_multi_step_streaming(
     }
 
     # 规则分解
-    sub_tasks: List[Dict[str, Any]] = await _process_task_with_processor(task, user_id)
+    process_result = await _process_task_with_processor(task, user_id)
+    sub_tasks = process_result["sub_tasks"]
+    path = process_result["path"]
+
+    # 规则匹配且只有1个子任务 → 直接用这个子任务的skill去handle_single_step
+    if len(sub_tasks) == 1 and path == "rule":
+        first_subtask = sub_tasks[0]
+        skill_name = first_subtask["tool_call"]["name"]
+        single_result = await handle_single_step(message, user_id, skill_name, "default")
+        await websocket.send_json({
+            "reply": single_result.get("reply", "处理完成"),
+            "skill": skill_name,
+            "success": single_result.get("success", True),
+            "is_subtask": False,
+        })
+        return single_result
 
     # 仍无法分解，降级为单步处理
     if len(sub_tasks) <= 1:
@@ -306,6 +431,8 @@ async def handle_single_step(
     Returns:
         包含 reply / tool_call / success 的字典
     """
+    _check_global_refs()
+    
     # 闲聊
     if skill_name == "chat":
         return await handle_chat(message, user_id, agent_id)
@@ -439,10 +566,11 @@ async def handle_single_step(
     # 处理文本分析
     elif skill_name == "text_analyzer":
         try:
-            from core.multi_agent_system import TextAnalyzerAgent
+            from core.task_execution_interface import get_text_analyzer_agent
             from core.keyword_extractor import get_keyword_extractor
             
-            analyzer = TextAnalyzerAgent()
+            analyzer_class = get_text_analyzer_agent()
+            analyzer = analyzer_class()
             text_content = message.replace("文本分析:", "").strip()
             extractor = get_keyword_extractor()
             extraction = await extractor.extract(text_content)
@@ -513,6 +641,9 @@ async def handle_single_step(
             from tools.tool_manager import ToolManager
             tm = ToolManager.get_instance()
             result = tm.execute(skill_name, **params)
+            # ✅ 修复：等待协程完成
+            if asyncio.iscoroutine(result):
+                result = await result
         except Exception as e:
             logger.error("工具 %s 执行异常: %s", skill_name, e)
             result = {"success": False, "error": str(e)}
@@ -527,18 +658,129 @@ async def handle_single_step(
         try:
             from core.result_summarizer import get_result_summarizer
             summarizer = get_result_summarizer()
+            logger.info(f"技能 [{skill_name}] 开始智能总结，result类型: {type(result)}")
             summarized_reply = await summarizer.summarize(
                 skill_name=skill_name,
                 result=result,
                 user_message=message
             )
             result["reply"] = summarized_reply
-            result["original_data"] = result.get("result")
-            logger.info(f"技能 [{skill_name}] 已应用智能总结")
+            logger.info(f"技能 [{skill_name}] 智能总结完成")
+
         except Exception as e:
             logger.warning(f"智能总结失败，使用原始回复: {e}")
     
     return result
+
+
+# ---------------------------------------------------------------------------
+# BFS上下文记忆管理
+# ---------------------------------------------------------------------------
+def add_to_context_memory(user_id: str, message: str, role: str = "user", skill_name: str = "chat"):
+    """将消息添加到BFS上下文记忆中
+    
+    使用树与队列的BFS机制管理上下文：
+    - 第1层：全局唯一根节点（root_{user_id}）
+    - 第2层：按 skill 分类的功能节点（func_{user_id}_{skill_name}）
+    - 第3层：文本层节点（text_{user_id}_{序号}）
+    - 第4层：段落层节点（para_{user_id}_{序号}）
+    
+    Args:
+        user_id: 用户ID
+        message: 消息内容
+        role: 角色类型 (user/assistant)
+        skill_name: 技能名称（用于第2层分类）
+    
+    Returns:
+        上下文节点ID
+    """
+    try:
+        # 使用BFS处理器处理消息，构建内容树
+        bfs_result = bfs_processor.process_text(message)
+        
+        if bfs_result.get("success"):
+            # 将上下文加入短时记忆（使用 skill_name 作为分类）
+            context_type = f"{role}_{skill_name}"
+            context_id = short_term_memory.add_context(
+                user_id=str(user_id),
+                content=message,
+                context_type=context_type
+            )
+            
+            logger.info("BFS上下文记忆已更新 - 用户: %s, Skill: %s, 节点数: %d", 
+                       user_id, skill_name, len(short_term_memory.nodes))
+            
+            return {
+                "success": True,
+                "context_id": context_id,
+                "queue_size": len(short_term_memory.queue),
+                "nodes_count": len(short_term_memory.nodes)
+            }
+        else:
+            logger.warning("BFS上下文处理失败: %s", bfs_result.get("error"))
+            return {"success": False, "error": bfs_result.get("error")}
+    except Exception as e:
+        logger.error("添加上下文记忆失败: %s", e, exc_info=True)
+        return {"success": False, "error": str(e)}
+
+
+def get_context_for_llm(user_id: str, depth: int = 2) -> str:
+    """获取用于LLM的上下文消息
+    
+    从BFS队列中提取相关上下文，构建prompt格式
+    
+    Args:
+        user_id: 用户ID
+        depth: 展开深度 (1:功能层, 2:文本层, 3:段落层)
+    
+    Returns:
+        格式化的上下文字符串
+    """
+    context_messages = short_term_memory.get_context(str(user_id), depth=depth)
+    
+    if not context_messages:
+        return ""
+    
+    # 构建上下文字符串
+    context_parts = []
+    for msg in context_messages:
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+        context_parts.append(f"{role}: {content}")
+    
+    return "\n".join(context_parts)
+
+
+def search_context_by_keywords(user_id: str, keywords: List[str], top_k: int = 5) -> List[Dict[str, Any]]:
+    """基于关键词搜索上下文记忆
+    
+    Args:
+        user_id: 用户ID
+        keywords: 关键词列表
+        top_k: 返回数量
+    
+    Returns:
+        相关上下文节点列表
+    """
+    try:
+        # 获取队列中的节点
+        queue_nodes = []
+        for node_id in list(short_term_memory.queue):
+            if node_id in short_term_memory.nodes:
+                queue_nodes.append(short_term_memory.nodes[node_id])
+        
+        # 使用BFS处理器进行关键词检索
+        from collections import deque
+        context_queue = deque(queue_nodes)
+        results = bfs_processor.extract_context_by_keywords(context_queue, keywords, top_k)
+        
+        logger.info("上下文关键词检索完成 - 用户: %s, 找到: %d 个相关节点", 
+                   user_id, len(results))
+        
+        return results
+    except Exception as e:
+        logger.error("上下文关键词检索失败: %s", e, exc_info=True)
+        return []
 
 
 # ---------------------------------------------------------------------------
@@ -547,7 +789,7 @@ async def handle_single_step(
 async def handle_chat(
     message: str, user_id: int, agent_id: str
 ) -> Dict[str, Any]:
-    """处理闲聊对话（GLM 后端 + 角色扮演）。
+    """处理闲聊对话（GLM 后端 + 角色扮演 + BFS上下文记忆 + 深度思考）。
 
     Args:
         message: 用户消息
@@ -555,26 +797,62 @@ async def handle_chat(
         agent_id: Agent ID
 
     Returns:
-        包含 reply 和 success 的字典
+        包含 reply、success 和 thinking_process 的字典
     """
+    # ✅ 新增：将用户消息添加到BFS上下文记忆（skill=chat）
+    add_to_context_memory(user_id, message, role="user", skill_name="chat")
+    
+    # ✅ 新增：获取历史上下文
+    context_str = get_context_for_llm(user_id, depth=2)
+    
+    # 构建包含上下文的系统提示词
     system_prompt: str = get_system_prompt(agent_id)
+    
+    # 如果有上下文，添加到系统提示词
+    if context_str:
+        system_prompt += f"\n\n历史对话上下文（用于理解当前问题）：\n{context_str}"
 
+    thinking_process = None
+    
+    # ✅ 新增：使用深度思考引擎处理复杂问题（使用单例模式）
     try:
-        from core.llm_backend import get_llm_router
-        router = get_llm_router()
-        reply: str = await router.simple_chat(message, system_prompt=system_prompt)
-        return {
-            "reply": reply,
-            "success": True,
-            "tool_call": {"name": "chat", "params": {}},
-        }
+        from core.reasoning_engine import get_reasoning_engine
+        
+        reasoning_engine = get_reasoning_engine()
+        reasoning_result = await reasoning_engine.process(message, user_id)
+        
+        thinking_process = reasoning_result.get("thinking_process")
+        final_answer = reasoning_result.get("final_answer")
+        
+        # 如果思考引擎返回了答案，使用它
+        if final_answer and final_answer != message:
+            reply = final_answer
+        else:
+            # 否则使用普通对话
+            from core.llm_backend import get_llm_router
+            router = get_llm_router()
+            reply: str = await router.simple_chat(message, system_prompt=system_prompt)
+            
     except Exception as e:
-        logger.warning("LLM 对话失败: %s", e)
-        return {
-            "reply": f"你好！有什么可以帮你的吗？（LLM 未配置: {e}）",
-            "success": True,
-            "tool_call": {"name": "chat", "params": {}},
-        }
+        logger.debug("深度思考引擎未启用或失败: %s", e)
+        # 回退到普通对话
+        try:
+            from core.llm_backend import get_llm_router
+            router = get_llm_router()
+            reply: str = await router.simple_chat(message, system_prompt=system_prompt)
+        except Exception as llm_e:
+            logger.warning("LLM 对话失败: %s", llm_e)
+            reply = f"你好！有什么可以帮你的吗？（LLM 未配置: {llm_e}）"
+    
+    # ✅ 新增：将AI回复也添加到上下文记忆（skill=chat）
+    add_to_context_memory(user_id, reply, role="assistant", skill_name="chat")
+    
+    return {
+        "reply": reply,
+        "success": True,
+        "tool_call": {"name": "chat", "params": {}},
+        "thinking_process": thinking_process,
+    }
 
 
 def get_system_prompt(agent_id: str) -> str:
@@ -623,8 +901,8 @@ def save_chat_history(
     role: str,
     content: str,
     tool_call: Optional[Dict[str, Any]] = None,
-) -> None:
-    """异步保存聊天记录到 MySQL（失败静默，不影响用户体验）。
+) -> Optional[int]:
+    """保存聊天记录到 MySQL，返回消息ID。
 
     Args:
         user_id: 用户ID
@@ -632,9 +910,17 @@ def save_chat_history(
         role: 角色 (user / assistant)
         content: 消息内容
         tool_call: 工具调用信息（可选）
+
+    Returns:
+        消息ID，失败返回 None
     """
     if not _db_initialized:
-        return
+        return None
+    
+    if not content or not content.strip():
+        logger.debug("空内容不保存到聊天历史")
+        return None
+    
     try:
         from core.database import get_session, ChatHistory
         session = get_session()
@@ -645,13 +931,18 @@ def save_chat_history(
                 role=role,
                 content=content[:5000],
                 tool_call=tool_call,
+                user_message=content if role == "user" else "",
+                ai_response=content if role == "assistant" else "",
             )
             session.add(record)
             session.commit()
+            return record.id
         finally:
             session.close()
     except Exception as e:
         logger.debug("保存聊天历史失败: %s", e)
+        return None
+
 
 
 def save_task_log(

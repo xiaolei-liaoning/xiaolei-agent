@@ -1,7 +1,7 @@
-"""RAG智能搜索引擎 - DuckDuckGo + ChromaDB + BeautifulSoup
+"""RAG智能搜索引擎 - 多引擎支持 + ChromaDB + BeautifulSoup
 
 工业级检索增强生成引擎：
-- DuckDuckGo搜索（兼容新版ddgs库）
+- 多搜索引擎支持（百度/Bing/DuckDuckGo，自动选择可用引擎）
 - httpx异步HTTP客户端（超时15s、跟随重定向、浏览器UA）
 - BeautifulSoup网页正文提取（去script/style/nav/footer，智能截取3000字）
 - ChromaDB向量存储（通过VectorMemoryStore单例，余弦相似度）
@@ -35,7 +35,7 @@ _BROWSER_UA = (
     "Chrome/124.0.0.0 Safari/537.36"
 )
 
-_HTTP_TIMEOUT = 15.0  # 秒
+_HTTP_TIMEOUT = 3.0  # 秒 - 从15s降至3s，避免长时间等待
 
 # ─── 批量写入缓冲区配置 ─────────────────────────────────────────────────────
 _BUFFER_SIZE = 10
@@ -54,7 +54,7 @@ class RAGSearchEngine:
     """RAG搜索引擎 — 搜索、学习、检索一体化"""
 
     def __init__(self) -> None:
-        self._ddgs = None
+        self._search_engine = None  # 统一搜索引擎接口
         self._vector_store = None
         self._write_buffer: List[Tuple[str, str, Dict[str, Any]]] = []
         self._buffer_lock = threading.Lock()
@@ -66,22 +66,15 @@ class RAGSearchEngine:
 
     # ── 初始化 ──────────────────────────────────────────────────────────────
     def _init_search_engine(self) -> None:
-        """初始化 DuckDuckGo 搜索客户端（兼容新版 ddgs 库）"""
-        for import_path in ("duckduckgo_search.DDGS", "ddgs.DDGS"):
-            try:
-                module_path, class_name = import_path.rsplit(".", 1)
-                module = __import__(module_path, fromlist=[class_name])
-                DDGS = getattr(module, class_name)
-                self._ddgs = DDGS()
-                self._search_engine_ok = True
-                logger.info("DuckDuckGo搜索引擎初始化成功 (%s)", module_path)
-                return
-            except ImportError:
-                continue
-            except Exception as exc:
-                logger.warning("DuckDuckGo初始化异常 (%s): %s", import_path, exc)
-                continue
-        logger.warning("duckduckgo-search / ddgs 均未安装，联网搜索不可用")
+        """初始化搜索引擎（支持多种引擎，自动选择可用的）"""
+        try:
+            from core.search_engine_factory import get_search_engine
+            self._search_engine = get_search_engine()
+            self._search_engine_ok = True
+            engine_name = self._search_engine.__class__.__name__
+            logger.info(f"搜索引擎初始化成功: {engine_name}")
+        except Exception as exc:
+            logger.warning(f"搜索引擎初始化失败: {exc}")
 
     def _init_vector_store(self) -> None:
         """延迟初始化 VectorMemoryStore 单例"""
@@ -159,7 +152,15 @@ class RAGSearchEngine:
             }
 
         # 2. 联网搜索
-        search_results = await self._web_search(query, max_results)
+        try:
+            search_results = await asyncio.wait_for(
+                self._web_search(query, max_results),
+                timeout=10.0
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"搜索超时: {query[:50]}")
+            search_results = []
+        
         if not search_results:
             return {
                 "query": query,
@@ -198,7 +199,7 @@ class RAGSearchEngine:
             "timestamp": datetime.now().isoformat(),
             "enhanced": enhance,
         }
-    
+
     async def search_by_topic(self, topic: str, user_id: int = 1, max_results: int = 10) -> Dict[str, Any]:
         """按主题搜索知识
         
@@ -211,163 +212,226 @@ class RAGSearchEngine:
             搜索结果
         """
         try:
-            # 1. 从知识索引中查找相关主题
-            index = self._load_knowledge_index()
-            topics = index.get("topics", {})
+            # 先查主题索引
+            topic_data = self._load_knowledge_index().get(topic, {})
+            if topic_data:
+                return {
+                    "topic": topic,
+                    "from_cache": True,
+                    "results": topic_data.get("knowledge_points", []),
+                    "timestamp": datetime.now().isoformat()
+                }
             
-            # 查找相关主题
-            related_topics = []
-            for t in topics:
-                if topic in t or t in topic:
-                    related_topics.append(t)
-            
-            # 2. 从向量库中搜索
-            results = self._check_existing_knowledge(topic, user_id)
-            
-            # 3. 从知识索引中获取相关知识
-            knowledge_points = []
-            for t in related_topics:
-                points = topics.get(t, [])
-                for point in points[:5]:  # 每个主题最多取5条
-                    knowledge_points.append({
-                        "content": point.get("point", ""),
-                        "timestamp": point.get("timestamp", ""),
-                        "topic": t
-                    })
-            
-            return {
-                "topic": topic,
-                "related_topics": related_topics,
-                "vector_results": results or [],
-                "knowledge_points": knowledge_points,
-                "total_results": len(results or []) + len(knowledge_points),
-                "timestamp": datetime.now().isoformat(),
-            }
+            # 没有索引，执行搜索
+            return await self.search_and_learn(
+                query=topic,
+                user_id=user_id,
+                max_results=max_results
+            )
         except Exception as e:
             logger.error(f"按主题搜索失败: {e}")
-            return {
-                "topic": topic,
-                "error": str(e),
-                "timestamp": datetime.now().isoformat(),
-            }
-    
-    def get_knowledge_summary(self, topic: str = None) -> Dict[str, Any]:
-        """获取知识摘要（增强版 - 自动生成摘要）
-        
-        Args:
-            topic: 可选的主题过滤
-            
-        Returns:
-            知识摘要（包含自动生成的文本摘要）
-        """
+            return {"topic": topic, "error": str(e)}
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  搜索
+    # ══════════════════════════════════════════════════════════════════════
+
+    async def _web_search(self, query: str, num_results: int) -> List[Dict[str, Any]]:
+        """多引擎异步搜索"""
+        if not self._search_engine:
+            logger.warning("搜索引擎未初始化")
+            return []
+
         try:
-            index = self._load_knowledge_index()
-            topics = index.get("topics", {})
-            
-            summary = {
-                "total_topics": len(topics),
-                "total_knowledge_points": index.get("total_knowledge_points", 0),
-                "last_updated": index.get("last_updated", ""),
-                "topics": {},
-                "topic_summaries": {}  # 新增：主题摘要
-            }
-            
-            if topic:
-                # 只返回相关主题
-                for t in topics:
-                    if topic in t or t in topic:
-                        points = topics[t]
-                        summary["topics"][t] = len(points)
-                        # 生成主题摘要
-                        summary["topic_summaries"][t] = self._generate_topic_summary(t, points)
-            else:
-                # 返回所有主题（限制数量）
-                for t in list(topics.keys())[:20]:  # 最多20个主题
-                    points = topics[t]
-                    summary["topics"][t] = len(points)
-                    # 生成主题摘要
-                    summary["topic_summaries"][t] = self._generate_topic_summary(t, points)
-            
-            return summary
-        except Exception as e:
-            logger.error(f"获取知识摘要失败: {e}")
-            return {
-                "error": str(e)
-            }
-    
-    def _generate_topic_summary(self, topic: str, knowledge_points: List[Dict]) -> str:
-        """生成主题摘要
-        
-        Args:
-            topic: 主题名称
-            knowledge_points: 知识点列表
-            
-        Returns:
-            生成的摘要文本
-        """
-        if not knowledge_points:
-            return f"主题「{topic}」暂无相关知识"
-        
-        # 提取关键信息
-        total_points = len(knowledge_points)
-        latest_point = max(knowledge_points, key=lambda x: x.get("timestamp", ""))
-        latest_time = latest_point.get("timestamp", "")[:10] if latest_point else "未知"
-        
-        # 提取前3个知识点的内容
-        sample_contents = []
-        for point in knowledge_points[:3]:
-            content = point.get("point", "")
-            if content:
-                # 截取前50字符
-                sample_contents.append(content[:50])
-        
-        # 生成摘要
-        summary_parts = [
-            f"主题「{topic}」共有 {total_points} 条知识点",
-            f"最近更新时间: {latest_time}",
+            loop = asyncio.get_running_loop()
+            results = await asyncio.wait_for(
+                loop.run_in_executor(None, self._search_engine.search, query, num_results),
+                timeout=10.0
+            )
+            return results
+        except asyncio.TimeoutError:
+            logger.warning(f"搜索超时: {query[:50]}")
+            return []
+        except Exception as exc:
+            logger.error(f"搜索失败: {exc}")
+            return []
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  网页内容增强
+    # ══════════════════════════════════════════════════════════════════════
+
+    async def _enrich_with_page_content(self, search_results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """异步抓取网页正文，增强搜索结果"""
+        if not search_results:
+            return search_results
+
+        tasks = [
+            self._fetch_page_content(result["url"])
+            for result in search_results
+            if result.get("url")
         ]
         
-        if sample_contents:
-            summary_parts.append("主要内容:")
-            for i, content in enumerate(sample_contents, 1):
-                summary_parts.append(f"  {i}. {content}...")
+        contents = await asyncio.gather(*tasks, return_exceptions=True)
         
-        return " | ".join(summary_parts)
+        for i, content in enumerate(contents):
+            if isinstance(content, str):
+                search_results[i]["content"] = self._clean_html(content)
+        
+        return search_results
 
-    def cleanup_old_knowledge(self, days: int = 30) -> Dict[str, Any]:
-        """清理过期知识（ChromaDB不支持按时间删除，标记清理状态）"""
-        logger.info("RAG知识清理请求：保留最近 %d 天的知识", days)
+    async def _fetch_page_content(self, url: str) -> str:
+        """异步获取网页内容"""
         try:
-            index = self._load_knowledge_index()
-            cutoff = datetime.now().isoformat()[:10]
-            cleaned = 0
-            for topic in list(index.get("topics", {})):
-                points = index["topics"][topic]
-                before = len(points)
-                points[:] = [
-                    p for p in points
-                    if p.get("timestamp", "9999") >= cutoff
-                ]
-                cleaned += before - len(points)
-                if not points:
-                    del index["topics"][topic]
-
-            self._save_knowledge_index(index)
-            return {"cleaned": cleaned, "remaining_topics": len(index.get("topics", {}))}
+            import httpx
+            async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT, follow_redirects=True, verify=False) as client:
+                response = await client.get(url, headers={"User-Agent": _BROWSER_UA})
+                return response.text
         except Exception as exc:
-            logger.error("知识清理失败: %s", exc)
-            return {"cleaned": 0, "error": str(exc)}
+            logger.warning(f"抓取网页失败 {url[:50]}: {exc}")
+            return ""
 
-    def get_stats(self) -> Dict[str, Any]:
-        """获取RAG引擎统计信息"""
-        vs = self.vector_store
+    def _clean_html(self, html: str) -> str:
+        """清理HTML，提取正文"""
         try:
-            index = self._load_knowledge_index()
-            topic_count = len(index.get("topics", {}))
-            total_points = index.get("total_knowledge_points", 0)
-        except Exception:
-            topic_count = 0
-            total_points = 0
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(html, "lxml")
+            
+            # 移除不需要的标签
+            for tag in soup(_REMOVE_TAGS):
+                tag.decompose()
+            
+            # 提取正文
+            text = soup.get_text(separator="\n", strip=True)
+            
+            # 限制长度
+            if len(text) > _MAX_CONTENT_LENGTH:
+                text = text[:_MAX_CONTENT_LENGTH] + "..."
+            
+            return text
+        except Exception as exc:
+            logger.warning(f"HTML解析失败: {exc}")
+            return html[:_MAX_CONTENT_LENGTH] if len(html) > _MAX_CONTENT_LENGTH else html
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  知识提取与索引
+    # ══════════════════════════════════════════════════════════════════════
+
+    def _extract_knowledge(self, results: List[Dict[str, Any]], query: str) -> List[str]:
+        """从搜索结果中提取知识点"""
+        knowledge_points = []
+        
+        for result in results:
+            content = result.get("content", "") or result.get("snippet", "")
+            if content:
+                # 提取关键句子
+                sentences = re.split(r"[。！？.!?]", content)
+                for sentence in sentences:
+                    sentence = sentence.strip()
+                    if len(sentence) > 10 and len(sentence) < 500:
+                        knowledge_points.append(sentence)
+        
+        return knowledge_points[:10]  # 最多提取10个知识点
+
+    def _update_knowledge_index(self, topic: str, knowledge_points: List[str]) -> None:
+        """更新知识索引文件"""
+        index = self._load_knowledge_index()
+        
+        if topic not in index:
+            index[topic] = {
+                "created_at": datetime.now().isoformat(),
+                "knowledge_points": []
+            }
+        
+        for kp in knowledge_points:
+            if kp not in index[topic]["knowledge_points"]:
+                index[topic]["knowledge_points"].append(kp)
+        
+        self._save_knowledge_index(index)
+
+    def _load_knowledge_index(self) -> Dict[str, Any]:
+        """加载知识索引文件"""
+        if INDEX_FILE.exists():
+            try:
+                with open(INDEX_FILE, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception as exc:
+                logger.warning(f"加载知识索引失败: {exc}")
+        return {}
+
+    def _save_knowledge_index(self, index: Dict[str, Any]) -> None:
+        """保存知识索引文件"""
+        try:
+            with open(INDEX_FILE, "w", encoding="utf-8") as f:
+                json.dump(index, f, ensure_ascii=False, indent=2)
+        except Exception as exc:
+            logger.error(f"保存知识索引失败: {exc}")
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  向量存储操作
+    # ══════════════════════════════════════════════════════════════════════
+
+    def _check_existing_knowledge(self, query: str, user_id: int) -> Optional[List[Dict[str, Any]]]:
+        """检查向量库中是否已有相关知识"""
+        vs = self.vector_store
+        if not vs:
+            return None
+        
+        try:
+            results = vs.search_memories(query, user_id=user_id, top_k=3)
+            if results:
+                # 检查相似度（distance < 0.3 视为命中）
+                if any(r.get("distance", 1.0) < _COSINE_HIT_THRESHOLD for r in results):
+                    return results
+        except Exception as exc:
+            logger.warning(f"向量库查询失败: {exc}")
+        
+        return None
+
+    def _buffered_add_memory(self, user_id: int, content: str, metadata: Dict[str, Any]) -> None:
+        """缓冲添加记忆（批量写入优化）"""
+        with self._buffer_lock:
+            self._write_buffer.append((user_id, content, metadata))
+            
+            # 检查是否需要flush
+            current_time = time.time()
+            if (len(self._write_buffer) >= _BUFFER_SIZE or 
+                current_time - self._last_flush_time >= _FLUSH_INTERVAL):
+                self._flush_buffer()
+
+    def _flush_buffer(self) -> None:
+        """批量写入向量库"""
+        with self._buffer_lock:
+            if not self._write_buffer:
+                return
+            
+            try:
+                vs = self.vector_store
+                if vs:
+                    for user_id, content, metadata in self._write_buffer:
+                        vs.add_memory(content, user_id=user_id, metadata=metadata)
+                
+                logger.info(f"批量写入 {len(self._write_buffer)} 条记录到向量库")
+            except Exception as exc:
+                logger.error(f"批量写入失败: {exc}")
+            finally:
+                self._write_buffer.clear()
+                self._last_flush_time = time.time()
+
+    def _update_knowledge_index(self, topic: str, knowledge_points: List[str]) -> None:
+        """更新知识索引文件（已在上文定义）"""
+        pass  # 已定义
+
+    def get_status(self) -> Dict[str, Any]:
+        """获取引擎状态"""
+        vs = self.vector_store
+        topic_count = len(self._load_knowledge_index())
+        
+        total_points = 0
+        if vs:
+            try:
+                total_points = vs.count()
+            except Exception:
+                pass
 
         return {
             "total_memories": vs.count() if vs else 0,
@@ -377,293 +441,3 @@ class RAGSearchEngine:
             "knowledge_topics": topic_count,
             "knowledge_points_indexed": total_points,
         }
-
-    # ══════════════════════════════════════════════════════════════════════
-    #  搜索
-    # ══════════════════════════════════════════════════════════════════════
-
-    async def _web_search(self, query: str, num_results: int) -> List[Dict[str, Any]]:
-        """DuckDuckGo异步搜索（在线程池中执行同步API调用）"""
-        if not self._ddgs:
-            return []
-
-        try:
-            loop = asyncio.get_running_loop()
-            results = await loop.run_in_executor(
-                None, self._sync_ddg_search, query, num_results
-            )
-            return results
-        except Exception as exc:
-            logger.error("DuckDuckGo搜索失败: %s", exc)
-            return []
-
-    def _sync_ddg_search(self, query: str, num_results: int) -> List[Dict[str, Any]]:
-        """同步DDG搜索（在线程池中运行）"""
-        results: List[Dict[str, Any]] = []
-        try:
-            items = self._ddgs.text(query, max_results=num_results)
-            for item in items:
-                results.append({
-                    "title": item.get("title", ""),
-                    "url": item.get("href", ""),
-                    "snippet": item.get("body", ""),
-                    "source": "duckduckgo",
-                    "content": "",  # 由 _enrich_with_page_content 填充
-                })
-        except Exception as exc:
-            logger.error("DDG搜索结果解析异常: %s", exc)
-        return results
-
-    # ══════════════════════════════════════════════════════════════════════
-    #  网页内容提取
-    # ══════════════════════════════════════════════════════════════════════
-
-    async def _fetch_page_content(self, url: str) -> str:
-        """异步抓取网页正文（httpx + BeautifulSoup）"""
-        try:
-            import httpx
-            from bs4 import BeautifulSoup
-
-            async with httpx.AsyncClient(
-                timeout=_HTTP_TIMEOUT,
-                follow_redirects=True,
-                headers={"User-Agent": _BROWSER_UA},
-            ) as client:
-                resp = await client.get(url)
-                resp.raise_for_status()
-
-            soup = BeautifulSoup(resp.text, "html.parser")
-
-            # 移除无关标签
-            for tag_name in _REMOVE_TAGS:
-                for tag in soup.find_all(tag_name):
-                    tag.decompose()
-
-            # 尝试提取正文（优先 article/main/body）
-            article = soup.find("article") or soup.find("main") or soup.find("body")
-            if not article:
-                article = soup
-
-            text = article.get_text(separator="\n", strip=True)
-            # 去除多余空行
-            lines = [ln for ln in text.splitlines() if ln.strip()]
-            cleaned = "\n".join(lines)
-
-            # 智能截取前3000字符（在句号/换行处截断）
-            if len(cleaned) > _MAX_CONTENT_LENGTH:
-                cut = cleaned[:_MAX_CONTENT_LENGTH]
-                # 找最后一个句号/换行
-                last_break = max(cut.rfind("。"), cut.rfind("\n"))
-                if last_break > _MAX_CONTENT_LENGTH * 0.5:
-                    cut = cut[: last_break + 1]
-                cleaned = cut
-
-            return cleaned
-
-        except ImportError:
-            logger.warning("httpx 或 beautifulsoup4 未安装，无法抓取网页")
-            return ""
-        except Exception as exc:
-            logger.debug("网页抓取失败 [%s]: %s", url[:80], exc)
-            return ""
-
-    async def _enrich_with_page_content(
-        self, results: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
-        """为搜索结果批量抓取正文（并行）"""
-        tasks = []
-        urls_to_fetch: List[str] = []
-        for r in results:
-            url = r.get("url", "")
-            if url:
-                tasks.append(self._fetch_page_content(url))
-                urls_to_fetch.append(url)
-            else:
-                tasks.append(asyncio.coroutine(lambda: "")())
-
-        contents = await asyncio.gather(*tasks, return_exceptions=True)
-
-        enriched = []
-        for r, url, content in zip(results, urls_to_fetch, contents):
-            r_copy = dict(r)
-            r_copy["content"] = content if isinstance(content, str) else ""
-            enriched.append(r_copy)
-        return enriched
-
-    # ══════════════════════════════════════════════════════════════════════
-    #  知识提取与索引
-    # ══════════════════════════════════════════════════════════════════════
-
-    def _extract_knowledge(
-        self, search_results: List[Dict[str, Any]], query: str
-    ) -> List[str]:
-        """从搜索结果中提取关键知识点
-
-        优先使用正文内容（content），回退到 snippet。
-        每个结果最多生成1条知识点，最多返回5条。
-        """
-        knowledge_points: List[str] = []
-        for result in search_results:
-            title = result.get("title", "").strip()
-            # 优先正文，回退snippet
-            body = result.get("content", "") or result.get("snippet", "")
-            body = body.strip()
-
-            if not body or len(body) < 15:
-                continue
-
-            # 截取正文前500字作为知识摘要
-            summary = body[:500]
-            if len(body) > 500:
-                last_period = summary.rfind("。")
-                if last_period > 250:
-                    summary = summary[: last_period + 1]
-
-            kp = f"[{title}] {summary}"
-            if len(kp) > 10:
-                knowledge_points.append(kp)
-
-        return knowledge_points[:5]
-
-    def _update_knowledge_index(self, topic: str, knowledge_points: List[str]) -> None:
-        """更新JSON知识索引文件"""
-        try:
-            index = self._load_knowledge_index()
-
-            if topic not in index["topics"]:
-                index["topics"][topic] = []
-
-            ts = datetime.now().isoformat()
-            for kp in knowledge_points:
-                index["topics"][topic].append({
-                    "point": kp,
-                    "timestamp": ts,
-                })
-
-            # 防止单个主题无限膨胀，保留最近100条
-            if len(index["topics"][topic]) > 100:
-                index["topics"][topic] = index["topics"][topic][-100:]
-
-            index["total_knowledge_points"] = sum(
-                len(v) for v in index["topics"].values()
-            )
-            index["last_updated"] = ts
-
-            self._save_knowledge_index(index)
-        except Exception as exc:
-            logger.error("知识索引更新失败: %s", exc)
-
-    # ── 缓存查询 ────────────────────────────────────────────────────────────
-    def _check_existing_knowledge(
-        self, query: str, user_id: int
-    ) -> Optional[List[Dict[str, Any]]]:
-        """检查向量库是否已有足够相似的知识（distance < 0.3 视为命中）"""
-        vs = self.vector_store
-        if not vs:
-            return None
-
-        try:
-            memories = vs.search_memories(query, user_id, top_k=3)
-            if memories and memories[0].get("distance", 1.0) < _COSINE_HIT_THRESHOLD:
-                return [
-                    {
-                        "content": m["content"],
-                        "distance": m.get("distance", 0),
-                        "source": "vector_cache",
-                    }
-                    for m in memories
-                ]
-        except Exception as exc:
-            logger.error("向量库查询失败: %s", exc)
-        return None
-
-    # ── 批量写入缓冲 ────────────────────────────────────────────────────────
-    def _buffered_add_memory(
-        self,
-        user_id: int,
-        content: str,
-        metadata: Optional[Dict[str, Any]] = None,
-    ) -> Optional[str]:
-        """缓冲写入向量库，减少I/O开销"""
-        vs = self.vector_store
-        if not vs:
-            return None
-
-        memory_id = f"rag_{user_id}_{int(time.time() * 1000)}"
-        meta = metadata or {}
-        meta.update({
-            "user_id": str(user_id),
-            "category": "fact",
-            "timestamp": datetime.now().isoformat(),
-        })
-
-        with self._buffer_lock:
-            self._write_buffer.append((memory_id, content, meta))
-            should_flush = (
-                len(self._write_buffer) >= _BUFFER_SIZE
-                or (time.time() - self._last_flush_time) >= _FLUSH_INTERVAL
-            )
-            if should_flush:
-                self._flush_write_buffer()
-
-        return memory_id
-
-    def _flush_write_buffer(self) -> None:
-        """将缓冲区内容批量写入ChromaDB"""
-        if not self._write_buffer:
-            return
-
-        vs = self.vector_store
-        if not vs or not vs._collection:
-            return
-
-        items = list(self._write_buffer)
-        try:
-            ids = [item[0] for item in items]
-            docs = [item[1] for item in items]
-            metas = [item[2] for item in items]
-            vs._collection.add(ids=ids, documents=docs, metadatas=metas)
-            logger.info("RAG批量写入 %d 条知识到ChromaDB", len(items))
-        except Exception as exc:
-            logger.error("批量写入ChromaDB失败: %s", exc)
-        finally:
-            self._write_buffer.clear()
-            self._last_flush_time = time.time()
-
-    # ── 知识索引文件IO ──────────────────────────────────────────────────────
-    @staticmethod
-    def _load_knowledge_index() -> Dict[str, Any]:
-        """加载JSON知识索引"""
-        if INDEX_FILE.exists():
-            try:
-                with open(INDEX_FILE, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            except (json.JSONDecodeError, IOError) as exc:
-                logger.warning("知识索引加载失败，将重建: %s", exc)
-        return {"topics": {}, "total_knowledge_points": 0}
-
-    @staticmethod
-    def _save_knowledge_index(index: Dict[str, Any]) -> None:
-        """保存JSON知识索引"""
-        try:
-            with open(INDEX_FILE, "w", encoding="utf-8") as f:
-                json.dump(index, f, ensure_ascii=False, indent=2)
-        except IOError as exc:
-            logger.error("知识索引保存失败: %s", exc)
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-#  全局单例
-# ═══════════════════════════════════════════════════════════════════════════
-_rag_instance: Optional[RAGSearchEngine] = None
-_rag_lock = threading.Lock()
-
-
-def get_rag_engine() -> RAGSearchEngine:
-    """获取RAG搜索引擎全局单例"""
-    global _rag_instance
-    if _rag_instance is None:
-        with _rag_lock:
-            if _rag_instance is None:
-                _rag_instance = RAGSearchEngine()
-    return _rag_instance

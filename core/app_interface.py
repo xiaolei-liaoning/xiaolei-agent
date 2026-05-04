@@ -191,7 +191,6 @@ class WeChatInterface(AppInterface):
         
         # 示例数据
         contacts = [
-            {"name": "豆包", "id": "doubao"},
             {"name": "女神", "id": "goddess"},
             {"name": "初恋", "id": "first_love"},
             {"name": "好朋友", "id": "bestfriend"}
@@ -234,7 +233,6 @@ class WeChatInterface(AppInterface):
         
         # 示例实现
         all_contacts = [
-            {"name": "豆包", "id": "doubao"},
             {"name": "女神", "id": "goddess"},
             {"name": "初恋", "id": "first_love"},
             {"name": "好朋友", "id": "bestfriend"}

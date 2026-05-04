@@ -184,6 +184,7 @@ class ScraperDispatcher:
                 "data": List[Dict],
                 "reply": str,          # 格式化回复文本
                 "csv_path": str|None,  # CSV保存路径
+                "md_path": str|None,   # ✅ MD报告路径
             }
         """
         # 规范化站点名称
@@ -199,6 +200,7 @@ class ScraperDispatcher:
                 'data': [],
                 'reply': f'不支持的站点「{site_name}」，当前支持: {", ".join(available) if available else "无可用站点"}',
                 'csv_path': None,
+                'md_path': None,
                 'error': f'不支持的站点: {site_name}',
             }
 
@@ -208,7 +210,7 @@ class ScraperDispatcher:
         try:
             # 重置上次结果
             self._last_scrape_result = None
-            
+
             # 路由action到对应方法
             results = self._route_action(scraper, action, **kwargs)
 
@@ -217,14 +219,20 @@ class ScraperDispatcher:
             else:
                 csv_path = None
 
+            # ✅ 从_last_scrape_result获取md_path
+            md_path = None
+            if self._last_scrape_result is not None:
+                md_path = self._last_scrape_result.get('md_path')
+
             return {
                 'success': True,
                 'site': normalized,
                 'action': action,
                 'count': len(results) if results else 0,
                 'data': results or [],
-                'reply': self._format_reply(normalized, results, action),
+                'reply': self._format_reply(normalized, results, action) + (f"\n\n📄 报告已保存: output/reports/{Path(md_path).name}" if md_path else ""),
                 'csv_path': str(csv_path) if csv_path else None,
+                'md_path': str(md_path) if md_path else None,
                 # 添加下载结果
                 'images': self._last_scrape_result.get('images', []) if self._last_scrape_result is not None else [],
                 'videos': self._last_scrape_result.get('videos', []) if self._last_scrape_result is not None else [],
@@ -242,6 +250,7 @@ class ScraperDispatcher:
                 'data': [],
                 'reply': f'爬取「{normalized}」{action}时出错: {e}',
                 'csv_path': None,
+                'md_path': None,
                 'error': str(e),
             }
 
@@ -263,11 +272,11 @@ class ScraperDispatcher:
             结果列表
         """
         import asyncio
-        
+
         # 对于GitHub爬虫，优先使用get_hot_list方法（同步版本）
         if scraper.__class__.__name__ == 'GitHubTrendingScraper':
             return scraper.get_hot_list(top_n=kwargs.get('top_n', 10))
-        
+
         # 检查是否有新的scrape方法
         if hasattr(scraper, 'scrape') and callable(getattr(scraper, 'scrape')):
             try:
@@ -275,12 +284,13 @@ class ScraperDispatcher:
                 scrape_kwargs = {
                     'action': action,
                     'top_n': kwargs.get('top_n', 10),
+                    'generate_report': True,  # ✅ 新增：始终生成MD报告
                 }
-                
+
                 # 如果有keyword参数，也传递过去
                 if 'keyword' in kwargs:
                     scrape_kwargs['keyword'] = kwargs['keyword']
-                
+
                 # 规范化action参数，确保与爬虫期望的格式一致
                 action_mapping = {
                     '热搜top10': '热搜',
@@ -290,10 +300,10 @@ class ScraperDispatcher:
                     'search': '搜索',
                     '搜索': '搜索',
                 }
-                
+
                 normalized_action = action_mapping.get(action, action)
                 scrape_kwargs['action'] = normalized_action
-                
+
                 # 检查是否已经在事件循环中
                 try:
                     loop = asyncio.get_running_loop()
@@ -305,16 +315,16 @@ class ScraperDispatcher:
                 except RuntimeError:
                     # 没有运行的事件循环，直接运行
                     result = asyncio.run(scraper.scrape(**scrape_kwargs))
-                
+
                 if result.get('success'):
-                    # 保存完整结果
+                    # 保存完整结果（包括md_path）
                     self._last_scrape_result = result
                     return result.get('data', [])
                 return []
             except Exception as e:
                 logger.error("爬虫执行失败: %s", e)
                 return []
-        
+
         # 旧接口兼容
         top_n = kwargs.get('top_n', 10)
 

@@ -60,80 +60,143 @@ class TaskSplitter:
     """任务拆解器（增强版）"""
     
     def __init__(self, cache_max_size: int = 100, cache_ttl: int = 3600):
-        # 任务拆解规则（扩展版）
-        self.split_rules = {
+        # 预定义的拆解规则（增强版：注入系统Agent实现分层处理）
+        self.decomposition_rules = {
             "research_topic": {
-                "description": "研究一个主题",
+                "description": "研究主题任务（分层处理）",
                 "steps": [
-                    {"type": "search", "params": {"query": "$topic"}},
-                    {"type": "scrape", "params": {"url": "$search_result"}},
-                    {"type": "analyze", "params": {"data": "$scraped_content"}},
-                    {"type": "summarize", "params": {"text": "$analysis_result"}}
+                    # 阶段1: 任务规划（PlanningAgent - 系统Agent）
+                    {
+                        "type": "create_plan",
+                        "params": {
+                            "goal": "研究主题: $query",
+                            "constraints": ["需要搜索", "需要分析", "需要总结"]
+                        }
+                    },
+                    # 阶段2: 功能执行（ScraperAgent - 功能Agent）
+                    {
+                        "type": "search",
+                        "params": {
+                            "query": "$query"
+                        }
+                    },
+                    # 阶段3: 数据分析（DataAnalysisAgent - 功能Agent）
+                    {
+                        "type": "analyze",
+                        "params": {
+                            "task": "研究主题: $query"
+                        }
+                    },
+                    # 阶段4: 安全检查（VulnerabilityAgent - 系统Agent）
+                    {
+                        "type": "scan",
+                        "params": {
+                            "target": "分析结果"
+                        }
+                    },
+                    # 阶段5: 总结报告（SummarizerAgent - 系统Agent）
+                    {
+                        "type": "summary",
+                        "params": {
+                            "text": "安全检查后的最终结果"
+                        }
+                    }
+                ],
+                "requires_context": True
+            },
+            "data_analysis": {
+                "description": "数据分析任务（分层处理）",
+                "steps": [
+                    # 阶段1: 文本/意图分析
+                    {
+                        "type": "analyze_text",
+                        "params": {
+                            "text": "数据分析任务: $query"
+                        }
+                    },
+                    # 阶段2: 核心数据分析
+                    {
+                        "type": "analyze",
+                        "params": {
+                            "data": "$query"
+                        }
+                    },
+                    # 阶段3: 安全检查
+                    {
+                        "type": "scan",
+                        "params": {
+                            "target": "$query"
+                        }
+                    },
+                    # 阶段4: 总结报告
+                    {
+                        "type": "summary",
+                        "params": {
+                            "text": "$query"
+                        }
+                    }
                 ],
                 "requires_context": False
             },
             "compare_products": {
-                "description": "比较两个产品",
+                "description": "比较多个产品",
                 "steps": [
                     {"type": "search", "params": {"query": "$product1"}},
                     {"type": "search", "params": {"query": "$product2"}},
-                    {"type": "scrape", "params": {"url": "$search_result1"}},
-                    {"type": "scrape", "params": {"url": "$search_result2"}},
-                    {"type": "analyze", "params": {"data": "$scraped_content1"}},
-                    {"type": "analyze", "params": {"data": "$scraped_content2"}},
-                    {"type": "summarize", "params": {"text": "$analysis_result1"}},
-                    {"type": "summarize", "params": {"text": "$analysis_result2"}},
-                    {"type": "compare", "params": {"item1": "$summary1", "item2": "$summary2"}}
+                    {"type": "analyze", "params": {"data": "比较 $product1 和 $product2"}},
+                    {"type": "summary", "params": {"text": "产品对比分析结果"}}
                 ],
                 "requires_context": False
             },
-            "analyze_website": {
-                "description": "分析网站内容",
+            "analyze_news": {
+                "description": "分析新闻事件",
                 "steps": [
-                    {"type": "scrape", "params": {"url": "$url"}},
-                    {"type": "analyze", "params": {"data": "$scraped_content"}},
-                    {"type": "summarize", "params": {"text": "$analysis_result"}}
+                    {"type": "search", "params": {"query": "$event"}},
+                    {"type": "analyze_text", "params": {"text": "$event"}},
+                    {"type": "summary", "params": {"text": "$event"}}
                 ],
                 "requires_context": False
-            },
-            "research_ai": {
-                "description": "研究AI相关主题",
-                "steps": [
-                    {"type": "search", "params": {"query": "人工智能最新发展"}},
-                    {"type": "search", "params": {"query": "人工智能应用领域"}},
-                    {"type": "search", "params": {"query": "人工智能未来趋势"}},
-                    {"type": "scrape", "params": {"url": "$search_result1"}},
-                    {"type": "scrape", "params": {"url": "$search_result2"}},
-                    {"type": "scrape", "params": {"url": "$search_result3"}},
-                    {"type": "analyze", "params": {"data": "$scraped_content1"}},
-                    {"type": "analyze", "params": {"data": "$scraped_content2"}},
-                    {"type": "analyze", "params": {"data": "$scraped_content3"}},
-                    {"type": "summarize", "params": {"text": "$analysis_result1"}},
-                    {"type": "summarize", "params": {"text": "$analysis_result2"}},
-                    {"type": "summarize", "params": {"text": "$analysis_result3"}},
-                    {"type": "summarize", "params": {"text": "$summary1 $summary2 $summary3"}}
-                ],
-                "requires_context": False
-            },
-            "multi_step_action": {
-                "description": "多步骤操作任务",
-                "steps": [
-                    {"type": "search", "params": {"query": "$query1"}},
-                    {"type": "process", "params": {"input": "$search_result"}},
-                    {"type": "summarize", "params": {"text": "$processed_result"}}
-                ],
-                "requires_context": True
             },
             "data_pipeline": {
                 "description": "数据处理管道",
                 "steps": [
-                    {"type": "fetch", "params": {"source": "$source"}},
-                    {"type": "process", "params": {"data": "$fetched_data"}},
+                    {"type": "search", "params": {"query": "$source"}},
+                    {"type": "analyze_text", "params": {"text": "$fetched_data"}},
                     {"type": "analyze", "params": {"data": "$processed_data"}},
-                    {"type": "generate", "params": {"input": "$analysis_result"}}
+                    {"type": "summary", "params": {"text": "$analysis_result"}}
                 ],
                 "requires_context": False
-            }
+            },
+            "research_with_dependencies": {
+                "description": "真实数据依赖的复杂任务",
+                "steps": [
+                    {
+                        "type": "search",
+                        "params": {
+                            "query": "$query"
+                        }
+                    },
+                    {
+                        "type": "scrape",
+                        "params": {
+                            "urls": "$search_result"  # 真正依赖search的结果
+                        }
+                    },
+                    {
+                        "type": "analyze",
+                        "params": {
+                            "content": "$scraped_content"  # 真正依赖scrape的结果
+                        }
+                    },
+                    {
+                        "type": "scan",
+                        "params": {
+                            "target": "$analysis_result"  # 真正依赖analyze的结果
+                        }
+                    }
+                ],
+                "requires_context": True
+            },
         }
         self.router = get_llm_router()
         
@@ -156,9 +219,47 @@ class TaskSplitter:
         Returns:
             缓存键
         """
-        params_str = json.dumps(params, sort_keys=True, ensure_ascii=False)
+        # 深度复制并标准化参数，确保相同内容生成相同键
+        normalized_params = self._normalize_params(params)
+        params_str = json.dumps(normalized_params, sort_keys=True, ensure_ascii=False, separators=(',', ':'))
         key_str = f"{task_type}:{params_str}"
-        return hashlib.md5(key_str.encode()).hexdigest()
+        return hashlib.md5(key_str.encode('utf-8')).hexdigest()
+    
+    def _normalize_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """标准化参数，确保缓存键一致性"""
+        if not isinstance(params, dict):
+            return {}
+        
+        normalized = {}
+        for key, value in params.items():
+            if isinstance(value, (str, int, float, bool, type(None))):
+                normalized[key] = value
+            elif isinstance(value, (list, tuple)):
+                normalized[key] = [self._normalize_value(v) for v in value]
+            elif isinstance(value, dict):
+                normalized[key] = self._normalize_params(value)
+            else:
+                # 对于复杂对象，转换为字符串表示
+                normalized[key] = str(value)
+        return normalized
+    
+    def _normalize_value(self, value: Any) -> Any:
+        """标准化单个值"""
+        if isinstance(value, (str, int, float, bool, type(None))):
+            return value
+        elif isinstance(value, (list, tuple)):
+            return [self._normalize_value(v) for v in value]
+        elif isinstance(value, dict):
+            return self._normalize_params(value)
+        else:
+            return str(value)
+    
+    def _generate_global_cache_key(self, task_type: str, params: Dict[str, Any]) -> str:
+        """生成全局缓存键"""
+        normalized_params = self._normalize_params(params)
+        params_str = json.dumps(normalized_params, sort_keys=True, ensure_ascii=False, separators=(',', ':'))
+        key_str = f"GLOBAL:{task_type}:{params_str}"
+        return hashlib.md5(key_str.encode('utf-8')).hexdigest()
     
     def _get_from_cache(self, cache_key: str) -> List[Dict[str, Any]]:
         """从缓存获取
@@ -256,62 +357,44 @@ class TaskSplitter:
         self._cache_access_order.clear()
         logger.info("缓存已清空")
     
-    async def split(self, task_type: str, params: Dict[str, Any], 
-                    context: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-        """拆解任务（增强版）
+    async def split(self, task_type: str, params: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """拆解复杂任务为子任务序列"""
+        if task_type not in self.decomposition_rules:
+            # 不支持的任务类型，返回原任务
+            return [{"type": task_type, "params": params}]
         
-        Args:
-            task_type: 任务类型
-            params: 任务参数
-            context: 上下文信息（可选）
-            
-        Returns:
-            子任务列表
-        """
-        # 1. 清理过期缓存
-        self._clean_expired_cache()
-        _global_clean_expired_cache()
+        rule = self.decomposition_rules[task_type]
+        steps = rule["steps"]
         
-        # 2. 检查全局缓存
-        global_cache_key = self._generate_global_cache_key(task_type, params)
-        global_cached = self._get_from_global_cache(global_cache_key)
-        if global_cached is not None:
-            logger.info(f"使用全局缓存拆解任务 {task_type}，生成 {len(global_cached)} 个子任务")
-            return global_cached
+        # 替换占位符
+        processed_steps = []
+        for step in steps:
+            processed_step = step.copy()
+            processed_step["params"] = self._replace_placeholders(step["params"], params)
+            processed_steps.append(processed_step)
         
-        # 3. 规则兜底
-        if task_type in self.split_rules:
-            sub_tasks = self._split_by_rule(task_type, params)
-            
-            # 验证子任务
-            if self._validate_subtasks(sub_tasks):
-                logger.info(f"使用规则拆解任务 {task_type}，生成 {len(sub_tasks)} 个子任务")
-                self._save_to_global_cache(global_cache_key, sub_tasks)
-                return sub_tasks
+        return processed_steps
+    
+    def _replace_placeholders(self, params: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+        """替换参数中的占位符"""
+        import re
+        
+        result = {}
+        for key, value in params.items():
+            if isinstance(value, str):
+                # 在字符串中查找并替换所有 $xxx 占位符
+                def replace_match(match):
+                    placeholder_name = match.group(1)
+                    if placeholder_name in context:
+                        return str(context[placeholder_name])
+                    else:
+                        return match.group(0)  # 保持原样
+                
+                replaced_value = re.sub(r'\$(\w+)', replace_match, value)
+                result[key] = replaced_value
             else:
-                logger.warning("规则拆解的子任务验证失败，尝试LLM路径")
-        
-        # 4. 检查本地缓存
-        cache_key = self._generate_cache_key(task_type, params)
-        cached_result = self._get_from_cache(cache_key)
-        if cached_result is not None:
-            logger.info(f"使用本地缓存拆解任务 {task_type}，生成 {len(cached_result)} 个子任务")
-            self._save_to_global_cache(global_cache_key, cached_result)
-            return cached_result
-        
-        # 5. LLM智能泛化（带上下文）
-        sub_tasks = await self._split_by_llm(task_type, params, context)
-        
-        # 6. 验证并修复
-        if not self._validate_subtasks(sub_tasks):
-            sub_tasks = self._fix_subtasks(sub_tasks)
-        
-        # 7. 保存到缓存
-        self._save_to_cache(cache_key, sub_tasks)
-        self._save_to_global_cache(global_cache_key, sub_tasks)
-        
-        logger.info(f"使用LLM拆解任务 {task_type}，生成 {len(sub_tasks)} 个子任务")
-        return sub_tasks
+                result[key] = value
+        return result
     
     def _validate_subtasks(self, sub_tasks: List[Dict[str, Any]]) -> bool:
         """验证子任务列表
@@ -355,12 +438,6 @@ class TaskSplitter:
             fixed.append(fixed_task)
         
         return fixed
-    
-    def _generate_global_cache_key(self, task_type: str, params: Dict[str, Any]) -> str:
-        """生成全局缓存键"""
-        params_str = json.dumps(params, sort_keys=True, ensure_ascii=False)
-        key_str = f"GLOBAL:{task_type}:{params_str}"
-        return hashlib.md5(key_str.encode()).hexdigest()
     
     def _get_from_global_cache(self, cache_key: str) -> Optional[List[Dict[str, Any]]]:
         """从全局缓存获取"""
@@ -442,11 +519,10 @@ class TaskSplitter:
         return cached
     
     def _split_by_rule(self, task_type: str, params: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """基于规则拆解任务（支持新旧格式）"""
-        sub_tasks = []
-        
+        """根据预定义规则拆解任务"""
         # 获取规则配置
-        rule_config = self.split_rules.get(task_type)
+        rule_config = self.decomposition_rules.get(task_type)  # 修正：split_rules → decomposition_rules
+        
         if not rule_config:
             return []
         
@@ -458,6 +534,8 @@ class TaskSplitter:
         else:
             return []
         
+        # 初始化sub_tasks列表
+        sub_tasks = []
         for i, sub_task_template in enumerate(rule):
             sub_task = {
                 "type": sub_task_template["type"],
@@ -466,7 +544,7 @@ class TaskSplitter:
             
             # 替换参数中的占位符
             for key, value in sub_task_template["params"].items():
-                if value.startswith("$"):
+                if isinstance(value, str) and value.startswith("$"):
                     # 从原始参数中获取值
                     param_name = value[1:]
                     sub_task["params"][key] = params.get(param_name, value)
@@ -500,7 +578,7 @@ class TaskSplitter:
 1. 分解为多个具体的子任务，每个子任务必须包含 type 和 params 字段
 2. 子任务应该按逻辑执行顺序排列
 3. 子任务类型可以是：search, scrape, analyze, summarize, compare, fetch, process, generate, transform 等
-4. params 中可以使用 $ 开头的占位符表示依赖前序任务的结果
+4. 功能Agent使用独立参数，不需要复杂的依赖处理，请勿添加 id 或 depends_on 字段
 5. 复杂任务考虑并发执行可能性
 6. 返回JSON格式，不要包含其他内容
 
@@ -522,7 +600,7 @@ class TaskSplitter:
             if not response or not response.strip():
                 raise ValueError("LLM返回空响应")
             
-            # 处理可能的markdown代码块
+            # 处理可能的代码块
             response = response.strip()
             if response.startswith("```"):
                 lines = response.split("\n")

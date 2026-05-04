@@ -158,6 +158,10 @@
     background: white;
     border-top: 1px solid #e5e7eb;
     box-shadow: 0 -1px 3px rgba(0,0,0,0.05);
+    position: relative;
+    border-radius: 12px;
+    border: 1px solid #e5e7eb;
+    margin-bottom: 16px;
 }
 
 .coze-tool-btn {

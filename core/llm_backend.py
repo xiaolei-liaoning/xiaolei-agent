@@ -30,7 +30,7 @@ SUPPORTED_MODELS = ["glm-4-flash", "glm-4-plus", "glm-4-air", "deepseek-v3", "de
 DEFAULT_MODEL: str = "glm-4-flash"
 MAX_RETRIES: int = 3
 BACKOFF_BASE: float = 1.0  # 指数退避基数（秒）
-RATE_LIMIT_RPM: int = 60  # 每分钟最大请求数
+RATE_LIMIT_RPM: int = 120  # 每分钟最大请求数（已从60提升到120）
 
 
 # ============================================================
@@ -95,15 +95,15 @@ class TokenStats:
 class RateLimiter:
     """滑动窗口速率限制器。
 
-    限制每分钟最多 RPM 次调用。
+    限制每分钟最多 RPM 次调用（异步版本）。
     """
 
     def __init__(self, rpm: int = RATE_LIMIT_RPM) -> None:
         self._rpm: int = rpm
         self._timestamps: List[float] = []
-        self._lock: threading.Lock = threading.Lock()
+        self._lock: asyncio.Lock = asyncio.Lock()
 
-    def acquire(self, timeout: float = 30.0) -> bool:
+    async def acquire(self, timeout: float = 30.0) -> bool:
         """获取一个调用许可。
 
         Args:
@@ -114,7 +114,7 @@ class RateLimiter:
         """
         deadline = time.time() + timeout
         while time.time() < deadline:
-            with self._lock:
+            async with self._lock:
                 now = time.time()
                 # 清除超过 60 秒的时间戳
                 self._timestamps = [t for t in self._timestamps if now - t < 60]
@@ -123,17 +123,16 @@ class RateLimiter:
                     return True
                 # 计算需要等待的时间
                 wait = 60 - (now - self._timestamps[0]) + 0.01
-            time.sleep(min(wait, 1.0))
+            await asyncio.sleep(min(wait, 1.0))
         logger.warning("速率限制等待超时 (%.1fs)", timeout)
         return False
 
     @property
     def available(self) -> int:
         """当前剩余可用调用次数。"""
-        with self._lock:
-            now = time.time()
-            self._timestamps = [t for t in self._timestamps if now - t < 60]
-            return self._rpm - len(self._timestamps)
+        now = time.time()
+        self._timestamps = [t for t in self._timestamps if now - t < 60]
+        return self._rpm - len(self._timestamps)
 
 
 # ============================================================
@@ -275,7 +274,7 @@ class GLMBackend:
         target_model = model or self.model
 
         # 速率限制
-        if not self._rate_limiter.acquire(timeout=30.0):
+        if not await self._rate_limiter.acquire(timeout=30.0):
             return "请求过于频繁，请稍后再试"
 
         # 首先尝试 GLM API
@@ -408,7 +407,7 @@ class GLMBackend:
         target_model = model or self.model
 
         # 速率限制
-        if not self._rate_limiter.acquire(timeout=30.0):
+        if not await self._rate_limiter.acquire(timeout=30.0):
             yield "请求过于频繁，请稍后再试"
             return
 
@@ -524,8 +523,8 @@ class GLMBackend:
 
     def is_available(self) -> bool:
         """检查 GLM 后端是否可用。"""
-        # 暂时返回False，强制使用备用逻辑
-        return False
+        # 检查是否有有效的客户端
+        return self.client is not None or self.deepseek_client is not None
 
 
 # ============================================================

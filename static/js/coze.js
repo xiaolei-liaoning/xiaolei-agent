@@ -382,6 +382,130 @@ function addMessage(role, content, useMarkdown = true) {
     updateMessageStats();
 }
 
+// 添加带深度思考过程的消息
+function addMessageWithThinking(role, content, thinkingProcess, useMarkdown = true) {
+    const chatMessages = document.getElementById('chat-messages');
+    if (!chatMessages) return;
+
+    const messageDiv = document.createElement('div');
+    messageDiv.className = `flex ${role === 'user' ? 'justify-end' : 'justify-start'} mb-4`;
+
+    const bubble = document.createElement('div');
+    bubble.className = role === 'user' 
+        ? 'max-w-[70%] bg-gradient-to-r from-blue-600 to-purple-600 text-white px-4 py-2 rounded-2xl rounded-tr-sm'
+        : 'max-w-[85%] bg-white px-4 py-3 rounded-2xl rounded-tl-sm shadow-md';
+
+    let htmlContent = '';
+
+    // 如果有深度思考过程，先显示折叠面板
+    if (thinkingProcess && Object.keys(thinkingProcess).length > 0) {
+        const thinkingId = 'thinking-' + Date.now();
+        htmlContent += `
+            <div class="mb-3 border-l-4 border-purple-500 pl-3">
+                <button onclick="toggleThinking('${thinkingId}')" class="flex items-center text-purple-600 hover:text-purple-800 font-medium text-sm cursor-pointer">
+                    <i class="fa fa-brain mr-2"></i>
+                    <span>深度思考过程</span>
+                    <i id="${thinkingId}-icon" class="fa fa-chevron-down ml-2 transition-transform"></i>
+                </button>
+                <div id="${thinkingId}" class="hidden mt-2 text-sm text-gray-600 space-y-2">
+                    ${renderThinkingProcess(thinkingProcess)}
+                </div>
+            </div>
+        `;
+    }
+
+    // 添加最终回复内容
+    if (useMarkdown && role === 'assistant') {
+        htmlContent += `<div>${markdownToHtml(content)}</div>`;
+    } else {
+        htmlContent += `<div>${content}</div>`;
+    }
+
+    bubble.innerHTML = htmlContent;
+    messageDiv.appendChild(bubble);
+    chatMessages.appendChild(messageDiv);
+
+    // 滚动到底部
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+    
+    // 更新消息计数
+    messageCount++;
+    updateMessageStats();
+}
+
+// 渲染深度思考过程
+function renderThinkingProcess(thinkingProcess) {
+    let html = '';
+    
+    // 渲染搜索步骤
+    if (thinkingProcess.search_steps && thinkingProcess.search_steps.length > 0) {
+        html += '<div class="space-y-1">';
+        thinkingProcess.search_steps.forEach((step, index) => {
+            html += `
+                <div class="flex items-start">
+                    <span class="text-purple-500 mr-2">${index + 1}.</span>
+                    <span>${escapeHtml(step)}</span>
+                </div>
+            `;
+        });
+        html += '</div>';
+    }
+    
+    // 渲染搜索结果
+    if (thinkingProcess.search_results && thinkingProcess.search_results.length > 0) {
+        html += '<div class="mt-2 pt-2 border-t border-gray-200">';
+        html += '<div class="text-xs text-gray-500 mb-1">📚 参考来源：</div>';
+        html += '<ul class="list-disc list-inside space-y-1">';
+        thinkingProcess.search_results.slice(0, 3).forEach(result => {
+            const title = result.title || '未知来源';
+            const url = result.url || '';
+            html += `<li class="text-xs"><a href="${url}" target="_blank" class="text-blue-600 hover:underline">${escapeHtml(title)}</a></li>`;
+        });
+        html += '</ul></div>';
+    }
+    
+    // 渲染推理链
+    if (thinkingProcess.reasoning_chain && thinkingProcess.reasoning_chain.length > 0) {
+        html += '<div class="mt-2 pt-2 border-t border-gray-200">';
+        html += '<div class="text-xs text-gray-500 mb-1">🔗 推理链路：</div>';
+        html += '<div class="space-y-1">';
+        thinkingProcess.reasoning_chain.forEach((step, index) => {
+            html += `
+                <div class="flex items-start text-xs">
+                    <i class="fa fa-arrow-right text-purple-400 mr-2 mt-0.5"></i>
+                    <span>${escapeHtml(step)}</span>
+                </div>
+            `;
+        });
+        html += '</div></div>';
+    }
+    
+    return html || '<div class="text-gray-400 italic">思考过程数据不可用</div>';
+}
+
+// HTML转义函数
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// 切换思考过程显示/隐藏
+function toggleThinking(thinkingId) {
+    const element = document.getElementById(thinkingId);
+    const icon = document.getElementById(thinkingId + '-icon');
+    
+    if (element && icon) {
+        if (element.classList.contains('hidden')) {
+            element.classList.remove('hidden');
+            icon.style.transform = 'rotate(180deg)';
+        } else {
+            element.classList.add('hidden');
+            icon.style.transform = 'rotate(0deg)';
+        }
+    }
+}
+
 // 简单的Markdown转HTML函数
 function markdownToHtml(markdown) {
     let html = markdown;
@@ -450,7 +574,11 @@ function showTypingEffect(text) {
         } else {
             // 打字完成，替换为Markdown渲染
             typingElement.classList.remove('typing-cursor');
-            typingElement.innerHTML = marked.parse(text);
+            if (typeof marked !== 'undefined' && marked.parse) {
+                typingElement.innerHTML = marked.parse(text);
+            } else {
+                typingElement.innerHTML = markdownToHtml(text);
+            }
         }
     }
     
@@ -524,7 +652,13 @@ function sendMessage() {
         .then(response => response.json())
         .then(data => {
             hideLoading();
-            showTypingEffect(data.reply);
+            
+            // 检查是否有深度思考过程
+            if (data.thinking_process && Object.keys(data.thinking_process).length > 0) {
+                addMessageWithThinking('assistant', data.reply, data.thinking_process);
+            } else {
+                showTypingEffect(data.reply);
+            }
             
             // ✅ 保存AI回复到历史记录
             MessageHistory.add('assistant', data.reply);
@@ -610,13 +744,14 @@ const QuickCommandAutocomplete = {
         box.style.cssText = `
             position: absolute;
             bottom: 100%;
-            left: 0;
-            right: 0;
+            left: -50px;
+            right: -50px;
+            min-width: 400px;
             background: white;
             border: 1px solid #e5e7eb;
             border-radius: 8px;
             box-shadow: 0 -4px 6px -1px rgba(0, 0, 0, 0.1);
-            max-height: 200px;
+            max-height: 300px;
             overflow-y: auto;
             z-index: 1000;
             display: none;
@@ -903,11 +1038,229 @@ function createNewPlan(event) {
     const goal = goalInput.value.trim();
     console.log('计划目标:', goal);
     
-    // 显示创建提示
-    alert(`✅ 计划创建成功！\n\n目标：${goal}\n\n实际功能：\n1. 使用PlanningAgent拆解任务\n2. 生成可执行的步骤计划\n3. 添加到"我的计划"列表\n\n（此功能待后端支持）`);
+    // 调用后端API创建计划
+    fetch('/api/plans', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            goal: goal,
+            user_id: 1
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            alert(`✅ 计划创建成功！\n\n目标：${goal}\n\n计划ID：${data.plan_id}`);
+            goalInput.value = '';
+            // 重新加载计划列表
+            loadPlans();
+        } else {
+            alert('❌ 创建失败：' + data.detail);
+        }
+    })
+    .catch(error => {
+        console.error('创建计划失败:', error);
+        alert('❌ 创建计划失败，请稍后重试');
+    });
+}
+
+// 加载计划列表
+function loadPlans() {
+    console.log('加载计划列表...');
     
-    // 清空输入
-    goalInput.value = '';
+    // 加载计划统计数据
+    fetch('/api/plans/stats')
+    .then(response => response.json())
+    .then(stats => {
+        // 更新统计数据
+        const totalEl = document.querySelector('#plan .grid .bg-white:nth-child(1) .text-2xl');
+        const inProgressEl = document.querySelector('#plan .grid .bg-white:nth-child(2) .text-2xl');
+        const pendingEl = document.querySelector('#plan .grid .bg-white:nth-child(3) .text-2xl');
+        
+        if (totalEl) totalEl.textContent = stats.total || 0;
+        if (inProgressEl) inProgressEl.textContent = stats.in_progress || 0;
+        if (pendingEl) pendingEl.textContent = stats.pending || 0;
+    })
+    .catch(error => {
+        console.error('加载计划统计失败:', error);
+    });
+    
+    // 加载计划列表
+    fetch('/api/plans?limit=50')
+    .then(response => response.json())
+    .then(data => {
+        const plansList = document.getElementById('plans-list');
+        if (!plansList) return;
+        
+        // 清空现有内容（保留空状态提示）
+        const emptyState = document.getElementById('empty-plans');
+        plansList.innerHTML = '';
+        if (emptyState) {
+            plansList.appendChild(emptyState);
+        }
+        
+        if (!data.plans || data.plans.length === 0) {
+            if (emptyState) {
+                emptyState.classList.remove('hidden');
+            }
+            return;
+        }
+        
+        if (emptyState) {
+            emptyState.classList.add('hidden');
+        }
+        
+        // 渲染计划卡片
+        data.plans.forEach(plan => {
+            const statusClass = plan.status === '进行中' ? 'bg-green-100 text-green-700' :
+                               plan.status === '已完成' ? 'bg-blue-100 text-blue-700' :
+                               plan.status === '已暂停' ? 'bg-gray-100 text-gray-700' :
+                               'bg-orange-100 text-orange-700';
+            
+            const progressColor = plan.progress >= 60 ? 'bg-blue-600' :
+                                 plan.progress >= 30 ? 'bg-green-500' :
+                                 'bg-orange-400';
+            
+            const card = document.createElement('div');
+            card.className = 'plan-card bg-white rounded-xl shadow-md p-5 cursor-pointer hover:shadow-lg transition';
+            card.setAttribute('data-status', plan.status);
+            card.setAttribute('data-plan-id', plan.id);
+            
+            card.innerHTML = `
+                <div class="flex justify-between items-start mb-3">
+                    <div>
+                        <h4 class="font-medium text-lg">${plan.name}</h4>
+                        <p class="text-sm text-gray-500 mt-1">开始时间: ${plan.start_date || '未设置'}</p>
+                    </div>
+                    <span class="px-3 py-1 rounded-full text-xs font-medium ${statusClass}">${plan.status}</span>
+                </div>
+                <div class="mb-3">
+                    <div class="flex justify-between text-sm text-gray-600 mb-1">
+                        <span>进度</span>
+                        <span class="font-semibold">${plan.progress}%</span>
+                    </div>
+                    <div class="w-full bg-gray-200 rounded-full h-2">
+                        <div class="${progressColor} h-2 rounded-full" style="width: ${plan.progress}%"></div>
+                    </div>
+                </div>
+                <div class="flex justify-between text-xs text-gray-500">
+                    <span>预计完成: ${plan.end_date || '未设置'}</span>
+                    <div class="flex gap-2">
+                        <button class="text-blue-600 hover:underline" onclick="viewPlanDetails(event, '${plan.name.replace(/'/g, "\\'")}')">查看详情</button>
+                        <button class="text-red-600 hover:underline" onclick="deletePlan(event, '${plan.name.replace(/'/g, "\\'")}')">删除</button>
+                    </div>
+                </div>
+            `;
+            
+            plansList.appendChild(card);
+        });
+    })
+    .catch(error => {
+        console.error('加载计划列表失败:', error);
+    });
+}
+
+// 查看计划详情
+function viewPlanDetails(event, planName) {
+    event.stopPropagation();
+    console.log('查看计划详情:', planName);
+    
+    // 先通过名称查找计划ID
+    const planCards = document.querySelectorAll('.plan-card');
+    let planId = null;
+    
+    planCards.forEach(card => {
+        if (card.querySelector('h4')?.textContent === planName) {
+            planId = card.getAttribute('data-plan-id');
+        }
+    });
+    
+    if (!planId) {
+        alert('❌ 未找到计划ID');
+        return;
+    }
+    
+    // 调用后端API获取计划详情
+    fetch(`/api/plans/${planId}`)
+    .then(response => response.json())
+    .then(data => {
+        if (data.id) {
+            let details = `📋 计划详情：${data.name}\n\n`;
+            details += `目标：${data.goal}\n`;
+            details += `状态：${data.status}\n`;
+            details += `进度：${data.progress}%\n`;
+            
+            if (data.start_date) {
+                details += `开始时间：${data.start_date}\n`;
+            }
+            if (data.end_date) {
+                details += `预计完成：${data.end_date}\n`;
+            }
+            
+            if (data.steps && data.steps.length > 0) {
+                details += `\n计划步骤：\n`;
+                data.steps.forEach((step, index) => {
+                    details += `${index + 1}. ${step.description || step}\n`;
+                });
+            }
+            
+            alert(details);
+        } else {
+            alert(' 获取计划详情失败：' + data.detail);
+        }
+    })
+    .catch(error => {
+        console.error('获取计划详情失败:', error);
+        alert('❌ 获取计划详情失败，请稍后重试');
+    });
+}
+
+// 删除计划
+function deletePlan(event, planName) {
+    event.stopPropagation();
+    
+    if (confirm(`确定要删除计划"${planName}"吗？`)) {
+        // 先通过名称查找计划ID
+        const planCards = document.querySelectorAll('.plan-card');
+        let planId = null;
+        
+        planCards.forEach(card => {
+            if (card.querySelector('h4')?.textContent === planName) {
+                planId = card.getAttribute('data-plan-id');
+            }
+        });
+        
+        if (!planId) {
+            alert('❌ 未找到计划ID');
+            return;
+        }
+        
+        // 调用后端API删除计划
+        fetch(`/api/plans/${planId}`, {
+            method: 'DELETE'
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                alert(`✅ ${data.message}`);
+                // 从DOM中移除该计划卡片
+                const card = document.querySelector(`.plan-card[data-plan-id="${planId}"]`);
+                if (card) {
+                    card.remove();
+                }
+                // 重新加载计划列表
+                loadPlans();
+            } else {
+                alert('❌ 删除失败：' + data.detail);
+            }
+        })
+        .catch(error => {
+            console.error('删除计划失败:', error);
+            alert('❌ 删除计划失败，请稍后重试');
+        });
+    }
 }
 
 // 技能搜索和筛选
@@ -1007,40 +1360,6 @@ function filterPlans(status) {
             emptyState.classList.remove('hidden');
         } else {
             emptyState.classList.add('hidden');
-        }
-    }
-}
-
-// 查看计划详情
-function viewPlanDetails(event, planName) {
-    event.stopPropagation();
-    console.log('查看计划详情:', planName);
-    
-    alert(`📋 计划详情：${planName}\n\n✅ 实际功能：\n1. 显示计划完整步骤\n2. 查看任务进度\n3. 编辑计划内容\n4. 调整时间节点\n\n（此功能待后端支持）`);
-}
-
-// 删除计划
-function deletePlan(event, planName) {
-    event.stopPropagation();
-    
-    if (confirm(`确定要删除计划"${planName}"吗？`)) {
-        console.log('删除计划:', planName);
-        
-        // 从DOM中移除该计划卡片
-        const planCards = document.querySelectorAll('.plan-card');
-        planCards.forEach(card => {
-            if (card.querySelector('h4')?.textContent === planName) {
-                card.remove();
-            }
-        });
-        
-        alert(`✅ 计划"${planName}"已删除`);
-        
-        // 检查是否为空
-        const remainingPlans = document.querySelectorAll('.plan-card:not(.hidden)');
-        const emptyState = document.getElementById('empty-plans');
-        if (remainingPlans.length === 0 && emptyState) {
-            emptyState.classList.remove('hidden');
         }
     }
 }
@@ -1242,18 +1561,26 @@ async function loadAgentGroups() {
         if (!response.ok) {
             throw new Error('获取小组列表失败');
         }
-        
+
         const data = await response.json();
         console.log('获取到Agent小组列表:', data);
-        
-        // 清空现有列表
-        const grid = document.getElementById('agent-groups-grid');
+
+        // 清空现有列表 - 使用正确的元素ID
+        const grid = document.getElementById('agent-groups-list');
+        if (!grid) {
+            console.error('找不到 agent-groups-list 元素');
+            return;
+        }
         grid.innerHTML = '';
-        
+
         // 添加小组卡片
-        data.groups.forEach(group => {
-            addGroupCardToGrid(group);
-        });
+        if (data.groups && data.groups.length > 0) {
+            data.groups.forEach(group => {
+                addGroupCardToGrid(group);
+            });
+        } else {
+            grid.innerHTML = '<p class="text-gray-500 text-center py-8">暂无Agent小组，点击上方按钮创建一个吧！</p>';
+        }
     } catch (error) {
         console.error('加载Agent小组列表失败:', error);
     }
@@ -1261,7 +1588,11 @@ async function loadAgentGroups() {
 
 // 添加小组卡片到网格
 function addGroupCardToGrid(groupData) {
-    const grid = document.getElementById('agent-groups-grid');
+    const grid = document.getElementById('agent-groups-list');
+    if (!grid) {
+        console.error('找不到 agent-groups-list 元素');
+        return;
+    }
     
     const statusConfig = {
         '运行中': { bg: 'bg-green-100', text: 'text-green-800', dot: 'bg-green-500', button: 'bg-gray-100 text-gray-700 hover:bg-gray-200', buttonText: '停止小组', action: 'stop' },
@@ -1902,3 +2233,56 @@ document.addEventListener('DOMContentLoaded', () => {
         console.log('✅ 文件拖拽上传功能已初始化');
     }, 1000);
 });
+
+// 暴露全局函数到window对象（遵循前端模块化规范）
+
+// 核心对象
+window.MessageHistory = MessageHistory;
+window.UserPreferences = UserPreferences;
+
+// 深度思考相关函数
+window.toggleThinking = toggleThinking;
+window.addMessageWithThinking = addMessageWithThinking;
+window.renderThinkingProcess = renderThinkingProcess;
+
+// 设置相关函数
+window.openSettings = openSettings;
+window.closeSettings = closeSettings;
+window.setFontSize = setFontSize;
+window.resetSettings = resetSettings;
+window.setLanguage = typeof setLanguage !== 'undefined' ? setLanguage : function() {};
+window.toggleSound = typeof toggleSound !== 'undefined' ? toggleSound : function() {};
+window.toggleAutosave = typeof toggleAutosave !== 'undefined' ? toggleAutosave : function() {};
+window.toggleLineNumbers = typeof toggleLineNumbers !== 'undefined' ? toggleLineNumbers : function() {};
+
+// 计划管理相关函数
+window.createNewPlan = createNewPlan;
+window.filterPlans = filterPlans;
+window.viewPlanDetails = viewPlanDetails;
+window.deletePlan = deletePlan;
+window.loadPlans = typeof loadPlans !== 'undefined' ? loadPlans : function() {};
+
+// 技能管理相关函数
+window.filterByCategory = typeof filterByCategory !== 'undefined' ? filterByCategory : function() {};
+window.createCustomSkill = typeof createCustomSkill !== 'undefined' ? createCustomSkill : function() {};
+window.filterSkills = typeof filterSkills !== 'undefined' ? filterSkills : function() {};
+
+// Agent小组相关函数
+window.showCreateGroupModal = typeof showCreateGroupModal !== 'undefined' ? showCreateGroupModal : function() {};
+
+// 历史记录相关函数
+window.searchHistory = typeof searchHistory !== 'undefined' ? searchHistory : function() {};
+window.filterHistory = typeof filterHistory !== 'undefined' ? filterHistory : function() {};
+window.exportHistory = typeof exportHistory !== 'undefined' ? exportHistory : function() {};
+window.clearAllHistory = typeof clearAllHistory !== 'undefined' ? clearAllHistory : function() {};
+window.showHistoryView = typeof showHistoryView !== 'undefined' ? showHistoryView : function() {};
+
+// 代码生成相关函数
+window.loadTemplate = typeof loadTemplate !== 'undefined' ? loadTemplate : function() {};
+window.optimizeRequirement = typeof optimizeRequirement !== 'undefined' ? optimizeRequirement : function() {};
+window.clearRequirement = typeof clearRequirement !== 'undefined' ? clearRequirement : function() {};
+window.generateCode = typeof generateCode !== 'undefined' ? generateCode : function() {};
+
+// 聊天相关函数
+window.clearChat = typeof clearChat !== 'undefined' ? clearChat : function() {};
+window.updateResponseTimeStats = typeof updateResponseTimeStats !== 'undefined' ? updateResponseTimeStats : function() {};

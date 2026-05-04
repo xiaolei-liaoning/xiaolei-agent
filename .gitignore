@@ -1,0 +1,96 @@
+# Environment variables (包含敏感信息，不要提交到版本控制
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+logs/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Test reports
+test_reports/
+pytest-*
+.coverage
+htmlcov/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Vector DB
+chroma_db/
+faiss_index/
+
+# Cache
+.cache/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Output files (reports, scraped data, uploads)
+output/
+skills/web_scraper/output/
+skills/data_analysis/output/
+skills/output/
+uploads/
+
+# Test temporary files
+test_*.py
+quick*.py
+run_*.py
+sync_test.py
+sync_tests.py
+*.sh
+task_decomposer_test_report.json
+tasks/
+workflow_editor_test_report*.txt
+view_*.py
+visualize_performance.py
+example_*.py
+
+# Project management
+uv.lock
+todo.md
+
+# Archive
+*.zip
+*.tar.gz
+
+# Misc
+docs/*.html

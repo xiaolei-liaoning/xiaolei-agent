@@ -385,11 +385,16 @@ class AutomationWorkflowEngine:
         if need_report:
             report_path = self._generate_desktop_report(workflow_name, all_results, total_time)
 
-        success = all(r.get("success", False) for r in all_results) if all_results else False
+        # 计算成功状态（修复生成器对象问题）
+        success = all(bool(r.get("success", False)) for r in all_results) if all_results else False
+
+        # 汇总结果
+        succeeded_count = sum(1 for r in all_results if r.get("success", False))
+        failed_count = len(all_results) - succeeded_count
 
         logger.info(
-            "工作流执行完成: %s, 总耗时 %.2fs, 成功=%s",
-            workflow_name, total_time, success,
+            "工作流执行完成: %s, 总耗时 %.2fs, 成功=%d/%d",
+            workflow_name, total_time, succeeded_count, len(all_results),
         )
 
         return {
@@ -397,6 +402,8 @@ class AutomationWorkflowEngine:
             "total_time": round(total_time, 2),
             "results": all_results,
             "report_path": report_path,
+            "success_count": succeeded_count,
+            "failed_count": failed_count,
             "success": success,
         }
 
