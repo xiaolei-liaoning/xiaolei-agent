@@ -301,6 +301,25 @@ class GUIAutomationHandler:
             'control': 'control down', 'ctrl': 'control down',
         }
 
+        key_code_map: Dict[str, int] = {
+            'enter': 36, 'return': 36,
+            'tab': 48,
+            'space': 49,
+            'escape': 53, 'esc': 53,
+            'delete': 51, 'backspace': 51,
+            'up': 126,
+            'down': 125,
+            'left': 123,
+            'right': 124,
+            'home': 115,
+            'end': 119,
+            'pageup': 116,
+            'pagedown': 121,
+            'f1': 122, 'f2': 120, 'f3': 99, 'f4': 118,
+            'f5': 96, 'f6': 97, 'f7': 98, 'f8': 100,
+            'f9': 101, 'f10': 109, 'f11': 103, 'f12': 111,
+        }
+
         key_name_map: Dict[str, str] = {
             'enter': 'return', 'return': 'return', 'tab': 'tab',
             'space': 'space', 'escape': 'escape', 'esc': 'escape',
@@ -321,10 +340,13 @@ class GUIAutomationHandler:
                 modifiers.append(mapped)
 
         keystroke = key_name_map.get(main_key, main_key)
+        key_code = key_code_map.get(main_key)
 
         if modifiers:
             mod_str = ' & '.join(modifiers)
             script = f'tell application "System Events" to keystroke "{keystroke}" using {{{mod_str}}}'
+        elif key_code:
+            script = f'tell application "System Events" to key code {key_code}'
         else:
             script = f'tell application "System Events" to keystroke "{keystroke}"'
 

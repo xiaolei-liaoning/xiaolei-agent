@@ -17,25 +17,43 @@ logger = logging.getLogger(__name__)
 SKILL_CONFIGS: List[tuple] = [
     (
         "weather",
-        ["天气", "气温", "温度", "下雨", "下雪", "刮风", "weather", "天气预报"],
+        [
+            # 核心关键词
+            "天气", "气温", "温度", "下雨", "下雪", "刮风", "weather", "天气预报",
+            # 口语化变体
+            "天气怎么样", "天气如何", "今天天气", "明天天气", "多少度", "几度",
+            "热不热", "冷不冷", "会不会下雨", "要带伞吗", "适合出门吗",
+            # 英文变体
+            "how is the weather", "temperature", "forecast",
+        ],
         5,
     ),
     (
         "web_scraper",
         [
+            # 核心关键词
             "爬取", "抓取", "热搜", "热榜", "微博热搜", "百度热搜",
             "b站", "bilibili", "抖音", "douyin", "爬虫", "scrape", "crawl",
             "知乎", "今日头条", "头条", "toutiao", "zhihu",
             "github", "git", "trending", "趋势", "仓库",
+            # 扩展关键词（修复：口语化+变体）
+            "热点", "微博热点", "热点新闻", "爬一下", "抓一下",
+            "排行榜", "b站排行", "抖音热榜", "微博榜单",
         ],
         5,
     ),
     (
         "data_analysis",
         [
+            # 核心关键词
             "数据分析", "统计图表", "可视化", "趋势分析", "词云图",
             "饼图", "柱状图", "折线图", "analyze data", "chart", "数据统计",
             "预测模型", "机器学习", "时间序列", "forecast", "predict",
+            # 扩展关键词（修复：口语化+变体）
+            "做个分析", "分析一下", "做个图表", "画个图", "统计数据",
+            "数据处理", "数据挖掘", "报表", "生成图表",
+            # 修复：添加独立关键词
+            "分析", "帮我分析", "分析数据", "数据分析一下",
         ],
         4,
     ),
@@ -45,52 +63,55 @@ SKILL_CONFIGS: List[tuple] = [
             # 基础动作
             "打开", "点击", "发送", "关闭", "退出", "最小化", "最大化",
             "自动化", "打开app", "启动", "运行", "launch", "open", "click", "send", "automate",
-            
+
             # 社交应用
-            "微信", "wechat", "weixin", "qq", "QQ", "钉钉", "dingtalk", 
+            "微信", "wechat", "weixin", "qq", "QQ", "钉钉", "dingtalk",
             "飞书", "feishu", "企业微信", "企业微信", "slack", "telegram",
-            
+
             # 办公应用
             "邮件", "mail", "email", "outlook", "foxmail",
             "日历", "calendar", "提醒", "reminder", "备忘录", "notes",
             "文档", "word", "excel", "ppt", "powerpoint", "wps",
             "pdf", "阅读器", "reader",
-            
+
             # 浏览器
             "浏览器", "browser", "chrome", "safari", "firefox", "edge",
             "chromium", "opera", " Brave", "网址", "网页", "website",
-            
+
             # 媒体应用
             "音乐", "music", "spotify", "网易云", "qq音乐", "酷狗",
             "视频", "video", "播放器", "player", "vlc", "potplayer",
             "照片", "photo", "图片", "image", "相册", "gallery",
-            
+
             # 开发工具
             "终端", "terminal", "命令行", "cmd", "powershell",
             "代码", "code", "vscode", "visual studio", "pycharm", "idea",
             "git", "github", "sublime", "atom",
-            
+
             # 系统控制
             "截图", "截屏", "screenshot", "录屏", "screen recording",
             "ocr", "识别文字", "文字识别", "text recognition",
             "缩放", "放大", "缩小", "zoom", "scale", "页面缩放",
-            "实际大小", "适合页面", "适合页宽", 
+            "实际大小", "适合页面", "适合页宽",
             "50%", "75%", "100%", "125%", "150%", "200%", "300%", "400%",
             "音量", "volume", "声音", "静音", "mute",
             "亮度", "brightness", "屏幕亮度", "display",
             "通知", "notification", "消息中心", "notification center",
             "窗口", "window", "全屏", "fullscreen",
             "关闭应用", "退出应用", "quit", "force quit", "强制退出",
-            
+
             # 文件管理
             "文件夹", "folder", "finder", "资源管理器", "explorer",
             "文件", "file", "目录", "directory", "下载", "download",
-            
+
             # 其他常用
             "计算器", "calculator", "时钟", "clock", "闹钟", "alarm",
             "地图", "map", "导航", "navigation", "定位", "location",
             "设置", "settings", "偏好设置", "preferences", "系统设置",
             "商店", "store", "app store", "应用商店",
+
+            # 扩展：修复截图识别
+            "截个图", "截个屏", "屏幕截图",
         ],
         4,
     ),
@@ -99,6 +120,8 @@ SKILL_CONFIGS: List[tuple] = [
         [
             "翻译", "translate", "中英", "英文", "日文", "韩文", "互译",
             "批量翻译", "batch", "翻译历史", "history", "翻译记录",
+            # 扩展
+            "翻译成", "翻译一下", "翻译这段", "翻一下", "翻译这段话",
         ],
         6,
     ),
@@ -109,13 +132,21 @@ SKILL_CONFIGS: List[tuple] = [
     ),
     (
         "rag_search",
-        ["搜索", "查询", "了解", "是什么", "什么是", "如何", "怎么", "为什么", "search", "lookup", "learn"],
+        [
+            # 核心关键词（降低冲突：移除与其他技能重叠的）
+            "是什么", "什么是", "如何", "为什么",
+            "search", "lookup", "learn", "了解一下",
+            # 移除"查询"因为与weather/data_analysis重叠
+            # 移除"了解"因为太泛
+            # 保留明确的知识性问题
+            "概念", "原理", "解释", "定义", "含义",
+        ],
         9,
     ),
     (
         "system_toolbox",
         [
-            "系统时间", "当前时间", "现在几点", "日期", "今天几号", "星期几", 
+            "系统时间", "当前时间", "现在几点", "日期", "今天几号", "星期几",
             "内存使用", "磁盘空间", "cpu使用率", "系统信息", "hostname",
             "进程列表", "网络连接", "网速测试", "ip地址",
             "文件列表", "文件夹内容", "目录结构",
@@ -125,7 +156,11 @@ SKILL_CONFIGS: List[tuple] = [
     ),
     (
         "multi_step",
-        ["先", "然后", "接着", "再", "最后", "之后", "并", "和", "同时", "帮我", "完成以下", "执行", "多步"],
+        # 修复：移除"帮我"，它太宽泛会导致误触发
+        ["先", "然后", "接着", "再", "最后", "之后", "并且", "同时",
+         "完成以下", "执行以下", "多步", "第一步", "第二步",
+         "接下来", "之后帮我",
+        ],
         6,
     ),
     (
@@ -148,7 +183,7 @@ SKILL_CONFIGS: List[tuple] = [
 # 多步任务指示词
 _MULTI_STEP_INDICATORS = [
     "先", "然后", "接着", "再", "最后", "之后", "并且", "同时",
-    "再帮我", "还有", "还要", "查完", "做完",
+    "再帮我", "还有", "还要", "查完", "做完", "接下来",
 ]
 
 # ─── 翻译目标语言映射 ────────────────────────────────────────────────────────
@@ -166,34 +201,69 @@ _LANG_MAP = {
 _INTENT_SKILL_MAP = {
     # 数学计算 → chat（由LLM处理）
     "math_calculation": {"keywords": ["加", "减", "乘", "除", "等于", "计算", "+", "-", "*", "/"], "skill": "chat"},
-    
+
     # 闲聊问候 → chat
     "greeting": {"keywords": ["你好", "嗨", "hello", "hi", "在吗"], "skill": "chat"},
-    
-    # 天气查询 → weather
-    "weather_query": {"keywords": ["天气", "气温", "温度", "下雨", "下雪", "刮风", "预报"], "skill": "weather"},
-    
+
+    # 天气查询 → weather（优化：降低阈值，让单个关键词也能触发）
+    "weather_query": {
+        "keywords": ["天气", "气温", "温度", "下雨", "下雪", "刮风", "预报", "天气怎么样", "天气如何",
+                     "多少度", "几度", "会不会下雨", "热不热", "冷不冷"],
+        "skill": "weather",
+        "min_hits": 1  # 天气关键词强，单个即可触发
+    },
+
     # 网页爬取 → web_scraper
-    "web_scraping": {"keywords": ["热搜", "热榜", "爬取", "抓取", "微博", "抖音", "知乎", "b站", "github"], "skill": "web_scraper"},
-    
+    "web_scraping": {
+        "keywords": ["热搜", "热榜", "爬取", "抓取", "微博", "抖音", "知乎", "b站", "github",
+                     "热点", "排行榜", "爬虫"],
+        "skill": "web_scraper",
+        "min_hits": 1
+    },
+
     # 系统信息 → system_toolbox
     "system_info": {"keywords": ["系统时间", "内存", "磁盘", "cpu", "进程", "网络", "现在几点", "今天几号"], "skill": "system_toolbox"},
-    
+
     # 翻译 → translator
-    "translation": {"keywords": ["翻译", "translate", "中英互译", "翻译成"], "skill": "translator"},
-    
-    # GUI自动化 → gui_automation
-    "gui_control": {"keywords": ["打开", "点击", "截图", "音量", "亮度", "微信", "浏览器", "关闭"], "skill": "gui_automation"},
-    
+    "translation": {
+        "keywords": ["翻译", "translate", "中英互译", "翻译成", "翻一下", "翻译这段"],
+        "skill": "translator",
+        "min_hits": 1
+    },
+
+    # GUI自动化 → gui_automation（优化：扩大关键词范围）
+    "gui_control": {
+        "keywords": ["打开", "点击", "截图", "截屏", "音量", "亮度", "微信", "浏览器", "关闭",
+                     "截个图", "截个屏", "飞书", "钉钉", "邮件", "日历"],
+        "skill": "gui_automation",
+        "min_hits": 1
+    },
+
+    # 数据分析 → data_analysis（新增）
+    "data_analysis": {
+        "keywords": ["数据分析", "分析一下", "统计", "可视化", "图表", "做个分析", "做个图表",
+                     "画个图", "柱状图", "饼图", "折线图", "词云"],
+        "skill": "data_analysis",
+        "min_hits": 1
+    },
+
     # RAG搜索 → rag_search
-    "knowledge_search": {"keywords": ["什么是", "如何", "为什么", "了解一下", "查询", "是什么", "搜索", "搜一下", "搜一搜"], "skill": "rag_search"},
-    
+    "knowledge_search": {
+        "keywords": ["是什么", "如何", "为什么", "了解一下", "概念", "原理", "解释", "定义"],
+        "skill": "rag_search",
+        "min_hits": 1
+    },
+
     # 深度思考 → deep_thinking
     "deep_analysis": {"keywords": ["深度思考", "自主搜索", "最新信息", "分析一下", "研究一下", "最新动态"], "skill": "deep_thinking"},
-    
-    # 多步任务 → multi_step
-    "multi_step_task": {"keywords": ["先", "然后", "接着", "再", "最后"], "skill": "multi_step"},
-    
+
+    # 多步任务 → multi_step（优化：只有明确的多步指示词才触发）
+    "multi_step_task": {
+        "keywords": ["先", "然后", "接着", "再", "最后", "下一步", "接下来", "第一步", "第二步"],
+        "skill": "multi_step",
+        "min_hits": 2  # 提高阈值，必须有明确的多步指示词
+    },
+
     # 文本分析 → text_analyzer
     "text_analysis": {"keywords": ["分析文本", "拆解", "提取概要", "生成标题", "文本分析", "长文本", "主要观点", "段落"], "skill": "text_analyzer"},
 }
@@ -219,51 +289,55 @@ class SkillDispatcher:
 
     # ── 意图匹配 ─────────────────────────────────────────────────────────────
     def match_skill(self, message: str) -> str:
-        """基于关键词权重匹配，返回最佳技能名 - P1修复：添加映射表快速路由
+        """基于关键词权重匹配，返回最佳技能名 - 优化版
 
         score = 命中关键词数 × 优先级
-        
-        修复：只有当用户明确提到第三方应用名称时才调用，避免误触发
+
+        优化：
+        1. @skill名格式最高优先级
+        2. 多步任务检测优先（防止关键词权重覆盖）
+        3. 否定处理
+        4. 意图映射表快速路径
         """
         message_lower = message.lower()
-        
-        # P1修复3：优先检查意图映射表（快速路径）
-        for intent_name, config in _INTENT_SKILL_MAP.items():
-            keywords = config["keywords"]
-            skill = config["skill"]
-            
-            # 如果命中2个及以上关键词，直接使用映射的技能
-            hits = sum(1 for kw in keywords if kw.lower() in message_lower)
-            if hits >= 2:
-                logger.debug(f"意图映射快速路由: {intent_name} -> {skill} (hits={hits})")
-                return skill
-            
-            # P1修复9：对于高优先级技能（priority>=7），1个关键词也足够
-            # 获取该技能在静态配置中的优先级
-            for name, _, priority in self.skill_configs:
-                if name == skill and priority >= 7 and hits >= 1:
-                    logger.debug(f"高优先级技能快速路由: {intent_name} -> {skill} (hits={hits}, priority={priority})")
-                    return skill
-        
-        best_match = "chat"
-        best_score = 0
-        best_is_third_party = False
 
-        # 检查@skill名格式
+        # 优化1：先检查@skill名格式（最高优先级）
         import re
         at_skill_match = re.match(r'@(\w+)\s', message_lower)
         if at_skill_match:
             skill_name = at_skill_match.group(1)
-            # 检查技能是否存在
             skill_names = [c[0] for c in self.skill_configs] + list(self._dynamic_registry.keys())
             if skill_name in skill_names:
                 logger.debug("技能匹配: '%s' -> %s (at格式)", message[:40], skill_name)
                 return skill_name
 
-        # 关键修复：检测多步任务指示词，优先选择multi_step技能
+        # 优化2：多步任务检测（优先于意图映射表，防止关键词权重覆盖）
         if self.is_multi_step(message):
             logger.debug("检测到多步任务指示词，优先选择multi_step技能")
             return "multi_step"
+
+        # 优化3：否定处理
+        has_neg, intent_after_neg = self.has_negation(message)
+        if has_neg and intent_after_neg:
+            matched_skill = self.match_skill(intent_after_neg)
+            if matched_skill != "chat":
+                logger.debug(f"否定处理：从'{message}'提取意图'{intent_after_neg}' -> {matched_skill}")
+                return matched_skill
+
+        # 优化4：意图映射表快速路径（支持min_hits）
+        for intent_name, config in _INTENT_SKILL_MAP.items():
+            keywords = config["keywords"]
+            skill = config["skill"]
+            min_hits = config.get("min_hits", 2)  # 默认需要2个关键词
+
+            hits = sum(1 for kw in keywords if kw.lower() in message_lower)
+            if hits >= min_hits:
+                logger.debug(f"意图映射快速路由: {intent_name} -> {skill} (hits={hits}, min={min_hits})")
+                return skill
+
+        best_match = "chat"
+        best_score = 0
+        best_is_third_party = False
 
         # 检查动态注册的第三方应用技能
         # 关键修复：只有明确提到应用名称时才调用第三方应用
@@ -369,8 +443,129 @@ class SkillDispatcher:
 
     # ── 多步检测 ─────────────────────────────────────────────────────────────
     def is_multi_step(self, message: str) -> bool:
-        """检测多步任务指示词"""
-        return any(ind in message for ind in _MULTI_STEP_INDICATORS)
+        """检测多步任务指示词（优化版）
+
+        规则：
+        1. 检测明确的序列模式：先...然后、先...再、先...接着
+        2. 检测"X之后Y"模式
+        3. 检测"接着"、"然后"等单一步骤指示词 + 技能关键词
+        """
+        message_lower = message.lower()
+
+        # 明确的序列模式（最高优先级）
+        multi_step_patterns = [
+            "先", "然后", "接着", "再", "最后",
+        ]
+
+        # 检查是否包含序列模式
+        pattern_count = sum(1 for p in multi_step_patterns if p in message_lower)
+
+        # 如果有2个及以上序列词，或者有明确的"先...然后"等模式
+        if pattern_count >= 2:
+            return True
+
+        # 检查明确的序列模式
+        explicit_patterns = [
+            ("先", "然后"), ("先", "接着"), ("先", "再"),
+            ("然后", "接着"), ("之后", "再"), ("接着", "再"),
+        ]
+        for p1, p2 in explicit_patterns:
+            if p1 in message_lower and p2 in message_lower:
+                return True
+
+        # 检查"X之后Y"模式
+        if "之后" in message_lower or "做完" in message_lower or "查完" in message_lower:
+            skill_keywords = ["爬", "抓", "翻译", "分析", "生成", "查", "看"]
+            if any(kw in message_lower for kw in skill_keywords):
+                return True
+
+        # 修复：单一步骤指示词（接着/然后）+ 技能关键词 也算多步
+        if "接着" in message_lower or "然后" in message_lower or "再" in message_lower:
+            skill_keywords = ["爬", "抓", "翻译", "分析", "生成", "查", "看", "生成报告"]
+            if any(kw in message_lower for kw in skill_keywords):
+                return True
+
+        return False
+
+    # ── 多Agent模式检测 ────────────────────────────────────────────────────────
+    def is_multi_agent_required(self, message: str) -> bool:
+        """检测是否需要使用多Agent模式（深度思考场景）
+        
+        触发条件：
+        1. 明确提到"深度思考"、"自主搜索"等
+        2. 需要多步协作的复杂任务
+        3. 需要多个技能配合完成的任务
+        """
+        message_lower = message.lower()
+        
+        # 明确的深度思考触发词
+        deep_thinking_triggers = [
+            "深度思考", "自主搜索", "联网查询", "最新信息", 
+            "研究一下", "详细分析", "深入探讨", "最新动态",
+            "综合分析", "全面评估", "系统分析", "多维度分析"
+        ]
+        
+        # 检查是否有深度思考触发词
+        if any(trigger in message_lower for trigger in deep_thinking_triggers):
+            logger.debug("检测到深度思考触发词，需要多Agent模式")
+            return True
+        
+        # 检查是否需要多技能协作
+        skill_keywords = [
+            ("爬取", "分析"), ("抓取", "分析"), ("搜索", "分析"),
+            ("收集", "整理"), ("获取", "分析"), ("下载", "分析"),
+            ("分析", "生成"), ("整理", "生成"), ("收集", "生成")
+        ]
+        
+        for kw1, kw2 in skill_keywords:
+            if kw1 in message_lower and kw2 in message_lower:
+                logger.debug(f"检测到多技能协作需求: {kw1} + {kw2}")
+                return True
+        
+        # 检查是否有明确的多步复杂任务指示
+        complex_task_patterns = [
+            "帮我完成", "帮我做", "帮我研究", "帮我分析",
+            "制定方案", "提供建议", "给出方案", "综合评估"
+        ]
+        
+        if any(pattern in message_lower for pattern in complex_task_patterns):
+            # 需要配合其他关键词
+            additional_keywords = ["报告", "分析", "研究", "方案", "建议", "总结"]
+            if any(kw in message_lower for kw in additional_keywords):
+                logger.debug("检测到复杂任务需求，需要多Agent模式")
+                return True
+        
+        return False
+
+    # ── 否定检测 ─────────────────────────────────────────────────────────────
+    def has_negation(self, message: str) -> tuple:
+        """检测否定词，返回(是否有否定, 否定后的意图)
+
+        规则：
+        1. 检测"不要"、"别"、"不是"等否定词
+        2. 返回否定词后面的内容作为真实意图
+        """
+        import re
+
+        # 否定词模式（按优先级排序）
+        negation_patterns = [
+            (r"不要(.+?)，我要(.+)", 2),  # 不要X，我要Y -> 取Y
+            (r"别(.+?)，帮我(.+)", 2),     # 别X，帮我Y -> 取Y
+            (r"不是(.+?)，是(.+)", 2),     # 不是X，是Y -> 取Y
+            (r"不要(.+)", 1),              # 不要X -> 取X
+            (r"别(.+)", 1),               # 别X -> 取X
+        ]
+
+        for pattern, group_idx in negation_patterns:
+            match = re.search(pattern, message)
+            if match:
+                groups = match.groups()
+                if len(groups) >= group_idx:
+                    intent = groups[group_idx - 1]
+                    if intent and intent.strip():
+                        return True, intent.strip()
+
+        return False, None
     
     # P1修复4：添加调试方法，查看技能匹配详情
     def debug_match(self, message: str) -> Dict[str, Any]:

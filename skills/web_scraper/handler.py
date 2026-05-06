@@ -273,9 +273,13 @@ class ScraperDispatcher:
         """
         import asyncio
 
-        # 对于GitHub爬虫，优先使用get_hot_list方法（同步版本）
+        # 对于GitHub爬虫，根据action选择方法（同步版本）
         if scraper.__class__.__name__ == 'GitHubTrendingScraper':
-            return scraper.get_hot_list(top_n=kwargs.get('top_n', 10))
+            if action in ('搜索', 'search', '搜'):
+                keyword = kwargs.get('keyword', '')
+                return scraper.search(keyword, top_n=kwargs.get('top_n', 10))
+            else:
+                return scraper.get_hot_list(top_n=kwargs.get('top_n', 10))
 
         # 检查是否有新的scrape方法
         if hasattr(scraper, 'scrape') and callable(getattr(scraper, 'scrape')):

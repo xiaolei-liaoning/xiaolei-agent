@@ -51,13 +51,34 @@ REPORT_KEYWORDS: List[str] = [
     "报告", "保存", "导出", "生成", "桌面",
 ]
 
+# 问候语关键词
+GREETING_KEYWORDS: List[str] = [
+    "你好", "您好", "哈喽", "hi", "hello", "嗨", "早上好", "下午好", "晚上好",
+    "你是谁", "你叫什么名字", "介绍一下", "认识一下",
+    "谢谢", "感谢", "辛苦了",
+    "再见", "拜拜", "下次见",
+]
+
+# 闲聊关键词
+CHAT_KEYWORDS: List[str] = [
+    "天气", "时间", "日期", "今天几号", "现在几点",
+    "讲个笑话", "讲笑话", "笑话",
+    "唱歌", "放首歌",
+    "故事", "讲故事",
+]
+
 # ─── GUI自动化动作映射 ─────────────────────────────────────────────────────
 AUTOMATE_ACTIONS: Dict[str, str] = {
     # 应用/文件操作
+    "打开": "open_app",
     "打开应用": "open_app",
+    "启动": "open_app",
+    "启动应用": "open_app",
     "打开网址": "open_url",
     "打开链接": "open_url",
+    "访问": "open_url",
     "退出应用": "quit_app",
+    "关闭应用": "quit_app",
     "截屏": "screenshot",
     "截图": "screenshot",
     # 输入操作
@@ -136,15 +157,47 @@ class AutomationWorkflowEngine:
     #  智能意图识别 → 工作流创建
     # ══════════════════════════════════════════════════════════════════════
 
+    def _get_greeting_response(self, user_request: str) -> Optional[str]:
+        """根据问候语返回响应消息"""
+        greetings = ["你好", "您好", "哈喽", "hi", "hello", "嗨", "早上好", "下午好", "晚上好"]
+        introductions = ["你是谁", "你叫什么名字", "介绍一下", "认识一下"]
+        thanks = ["谢谢", "感谢", "辛苦了"]
+        goodbyes = ["再见", "拜拜", "下次见"]
+        
+        for g in greetings:
+            if g in user_request:
+                hour = datetime.now().hour
+                if hour < 12:
+                    return "早上好！我是小雷版小龙虾 AI Agent，很高兴为你服务！😊"
+                elif hour < 18:
+                    return "下午好！我是小雷版小龙虾 AI Agent，请问有什么可以帮你的？😊"
+                else:
+                    return "晚上好！我是小雷版小龙虾 AI Agent，很高兴为你服务！😊"
+        
+        for i in introductions:
+            if i in user_request:
+                return "我是小雷版小龙虾 AI Agent，是一款强大的智能助手！我可以帮你：\n\n• 爬取微博、B站、抖音等网站的热门数据\n• 进行数据分析和可视化\n• 发送微信消息\n• 控制电脑应用和系统\n• 执行各种自动化任务\n\n有什么需要帮助的吗？"
+        
+        for t in thanks:
+            if t in user_request:
+                return "不客气！能帮到你我很开心！如果还有其他需求随时告诉我！😊"
+        
+        for g in goodbyes:
+            if g in user_request:
+                return "再见！祝你一天愉快！有需要随时回来找我！👋"
+        
+        return None
+
     def create_smart_workflow(self, user_request: str) -> Dict[str, Any]:
         """智能识别用户意图并创建结构化工作流
 
         检测逻辑：
-        1. 站点关键词 → 爬取步骤
-        2. 分析关键词 → 分析步骤（自动检测图表类型）
-        3. 报告关键词 / 有分析 → 生成报告标记
-        4. 组合检测：爬取+分析+报告自动串联
-        5. 兜底：识别为GUI自动化操作
+        1. 问候语检测 → 直接回复
+        2. 站点关键词 → 爬取步骤
+        3. 分析关键词 → 分析步骤（自动检测图表类型）
+        4. 报告关键词 / 有分析 → 生成报告标记
+        5. 组合检测：爬取+分析+报告自动串联
+        6. 兜底：识别为GUI自动化操作
         """
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         workflow: Dict[str, Any] = {
@@ -154,6 +207,20 @@ class AutomationWorkflowEngine:
             "parallel_groups": [],  # 支持并行执行组
             "generate_report": False,
         }
+
+        # ── 0. 问候语检测（优先级最高）──
+        greeting_response = self._get_greeting_response(user_request)
+        if greeting_response:
+            workflow["steps"].append({
+                "type": "automate",
+                "action": "notification",
+                "params": {
+                    "title": "小雷版小龙虾",
+                    "message": greeting_response,
+                },
+                "description": "问候语响应",
+            })
+            return {"success": True, "workflow": workflow}
 
         # ── 1. 站点检测 ──
         detected_sites: List[str] = []
@@ -240,7 +307,7 @@ class AutomationWorkflowEngine:
                         params["app"] = app_match.group(1)
                     else:
                         # 从文本中猜测应用名
-                        for app_name in ["微信", "浏览器", "终端", "Safari", "Chrome", "Finder", "VS Code", "Slack", "钉钉", "飞书"]:
+                        for app_name in ["微信", "QQ", "浏览器", "终端", "Safari", "Chrome", "Finder", "VS Code", "Slack", "钉钉", "飞书", "网易云音乐", "音乐", "邮件", "Mail", "日历", "Calendar", "备忘录", "Notes", "计算器", "Calculator", "照片", "Photos", "信息", "短信", "短信", "电话", "Phone", "地图", "Maps", "天气", "Weather", "App Store", "设置", "系统设置", "终端", "Terminal", "iTerm", "PyCharm", "IntelliJ", "Android Studio", "Xcode", "Visual Studio", "Word", "Excel", "PowerPoint", "WPS", "腾讯会议", "Zoom", "Teams", "微信", "WeChat", "支付宝", "淘宝", "京东", "美团", "滴滴", "高德地图", "百度地图", "微博", "抖音", "快手", "B站", "哔哩哔哩", "小红书", "今日头条", "网易新闻", "腾讯新闻", "QQ音乐", "酷狗音乐", "酷我音乐", "爱奇艺", "腾讯视频", "优酷", "芒果TV", "抖音", "TikTok", "豆瓣", "知乎", "小红书"]:
                             if app_name in text:
                                 params["app"] = app_name
                                 break
@@ -614,7 +681,7 @@ class AutomationWorkflowEngine:
                 loop = asyncio.get_running_loop()
                 result = await loop.run_in_executor(
                     None,
-                    lambda: self.automation.execute(action=action, **params),
+                    lambda: self.automation.execute_sync(action=action, **params),
                 )
                 return result
             except Exception as exc:
