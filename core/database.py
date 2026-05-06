@@ -226,6 +226,74 @@ class DynamicContextNode(Base):
     def __repr__(self):
         return f"<DynamicContextNode(node_id='{self.node_id}', tokens={self.token_count}, index={self.array_index})>"
 
+
+class ExecutionLog(Base):
+    """执行日志表 - Hermes自我进化第一步"""
+    __tablename__ = "execution_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    log_id: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True, comment="日志唯一ID")
+    task_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True, comment="任务ID")
+    timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False, comment="执行时间")
+    tool_name: Mapped[str] = mapped_column(String(100), nullable=False, comment="工具名称")
+    params: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True, comment="调用参数")
+    result: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment="执行结果")
+    status: Mapped[str] = mapped_column(String(20), nullable=False, comment="状态: success/failed/partical/user_corrected")
+    duration_ms: Mapped[float] = mapped_column(Float, default=0.0, comment="耗时(毫秒)")
+    user_feedback: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment="用户反馈")
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment="错误信息")
+    session_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True, comment="会话ID")
+    agent_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, comment="Agent类型")
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment="备注")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, comment="创建时间")
+
+    def __repr__(self):
+        return f"<ExecutionLog(log_id='{self.log_id}', tool='{self.tool_name}', status='{self.status}')>"
+
+
+class ReviewResult(Base):
+    """复盘结果表 - Hermes自我进化第二步"""
+    __tablename__ = "review_results"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    review_id: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True, comment="复盘唯一ID")
+    task_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True, comment="任务ID")
+    timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False, comment="复盘时间")
+    task_description: Mapped[str] = mapped_column(Text, nullable=False, comment="任务描述")
+    what_went_well: Mapped[str] = mapped_column(Text, nullable=False, comment="哪里做得好")
+    pitfalls: Mapped[str] = mapped_column(Text, nullable=False, comment="哪里踩坑")
+    improvement: Mapped[str] = mapped_column(Text, nullable=False, comment="下次怎么更快")
+    skill_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True, comment="技能名称")
+    applicable_scenarios: Mapped[Optional[list]] = mapped_column(JSON, nullable=True, comment="适用场景列表")
+    is_worth_saving: Mapped[bool] = mapped_column(Boolean, default=False, comment="是否值得沉淀")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, comment="创建时间")
+
+    def __repr__(self):
+        return f"<ReviewResult(review_id='{self.review_id}', task='{self.task_id}', save={self.is_worth_saving})>"
+
+
+class Skill(Base):
+    """技能表 - Hermes自我进化第三步"""
+    __tablename__ = "skills"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(200), unique=True, nullable=False, index=True, comment="技能名称")
+    version: Mapped[str] = mapped_column(String(20), default="1.0", nullable=False, comment="版本号")
+    applicable_scenarios: Mapped[list] = mapped_column(JSON, nullable=False, comment="适用场景列表")
+    steps: Mapped[list] = mapped_column(JSON, nullable=False, comment="操作步骤列表")
+    params: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True, comment="参数说明")
+    pitfalls: Mapped[list] = mapped_column(JSON, nullable=False, comment="坑点列表")
+    dependencies: Mapped[list] = mapped_column(JSON, nullable=False, comment="依赖工具列表")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, comment="创建时间")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now, comment="更新时间")
+    last_review_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, comment="上次复盘ID")
+    usage_count: Mapped[int] = mapped_column(Integer, default=0, comment="使用次数")
+    success_rate: Mapped[float] = mapped_column(Float, default=1.0, comment="成功率")
+
+    def __repr__(self):
+        return f"<Skill(name='{self.name}', version='{self.version}', usage={self.usage_count})>"
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 #  引擎 & 会话管理
 # ═══════════════════════════════════════════════════════════════════════════════

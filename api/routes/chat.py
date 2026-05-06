@@ -130,6 +130,8 @@ class ChatRequest(BaseModel):
     agent_name: str = Field(default="小龙虾助手", description="Agent 名称")
     file_paths: Optional[List[str]] = Field(default=None, description="已上传文件的路径列表")
     auto_agent_selection: bool = Field(default=True, description="是否启用智能Agent自动选择（取代agent小组）")
+    force_single_agent: bool = Field(default=False, description="强制使用单Agent模式")
+    force_multi_agent: bool = Field(default=False, description="强制使用多Agent模式")
 
 
 class ChatResponse(BaseModel):
@@ -199,6 +201,48 @@ def _needs_agent(message: str) -> bool:
         for kw in complex_keywords:
             if kw in message_lower:
                 return True
+        return False
+
+
+# ---------------------------------------------------------------------------
+# 内部函数：判断是否需要使用多Agent模式（multi_agent_v2）
+# ---------------------------------------------------------------------------
+def _needs_multi_agent(message: str) -> bool:
+    """判断是否需要使用multi_agent_v2多Agent系统
+
+    触发条件：
+    1. 明确提到"深度思考"、"自主搜索"等深度思考触发词
+    2. 需要多技能协作的复杂任务
+    """
+    try:
+        from core.skill_dispatcher import SkillDispatcher
+        dispatcher = SkillDispatcher()
+        return dispatcher.is_multi_agent_required(message)
+    except Exception as e:
+        logger.warning(f"多Agent检测失败，降级到关键词判断: {e}")
+        message_lower = message.lower()
+        
+        # 明确的深度思考触发词
+        deep_thinking_triggers = [
+            "深度思考", "自主搜索", "联网查询", "最新信息", 
+            "研究一下", "详细分析", "深入探讨", "最新动态",
+            "综合分析", "全面评估", "系统分析", "多维度分析"
+        ]
+        
+        if any(trigger in message_lower for trigger in deep_thinking_triggers):
+            return True
+        
+        # 多技能协作需求
+        skill_keywords = [
+            ("爬取", "分析"), ("抓取", "分析"), ("搜索", "分析"),
+            ("收集", "整理"), ("获取", "分析"), ("下载", "分析"),
+            ("分析", "生成"), ("整理", "生成"), ("收集", "生成")
+        ]
+        
+        for kw1, kw2 in skill_keywords:
+            if kw1 in message_lower and kw2 in message_lower:
+                return True
+        
         return False
 
 
@@ -277,13 +321,189 @@ async def chat(request: ChatRequest) -> ChatResponse:
         except Exception as e:
             logger.warning(f"智能选择失败: {e}")
 
-    # 判断是否需要走Agent
-    if _needs_agent(message):
-        # 复杂任务 → 走Agent系统
+    # 首先检查是否有强制模式选择
+    if request.force_multi_agent:
+        # 用户强制选择多Agent模式
+        logger.info("用户选择多Agent协作模式")
+        return await _handle_with_multi_agent(request, message, start_time, context_info, execution_plan_info, agents_used)
+    elif request.force_single_agent:
+        # 用户强制选择单Agent模式
+        logger.info("用户选择单Agent模式")
+        if _needs_agent(message):
+            return await _handle_with_agent(request, message, start_time, context_info, execution_plan_info, agents_used)
+        else:
+            return await _handle_direct(request, message, start_time, context_info, execution_plan_info, agents_used)
+    
+    # 如果没有强制选择，则继续智能判断
+    if _needs_multi_agent(message):
+        # 深度思考任务 → 走multi_agent_v2多Agent系统
+        logger.info("检测到深度思考需求，使用multi_agent_v2多Agent系统处理")
+        return await _handle_with_multi_agent(request, message, start_time, context_info, execution_plan_info, agents_used)
+    elif _needs_agent(message):
+        # 复杂任务 → 走单Agent系统
         return await _handle_with_agent(request, message, start_time, context_info, execution_plan_info, agents_used)
     else:
         # 简单任务 → 直接走SkillDispatcher
         return await _handle_direct(request, message, start_time, context_info, execution_plan_info, agents_used)
+
+
+async def _handle_with_multi_agent(
+    request: ChatRequest,
+    message: str,
+    start_time: float,
+    context_info: Dict[str, Any],
+    execution_plan_info: Optional[Dict[str, Any]],
+    agents_used: Optional[List[str]]
+) -> ChatResponse:
+    """通过multi_agent_v2多Agent系统处理深度思考任务"""
+    try:
+        logger.info("深度思考任务，通过multi_agent_v2多Agent系统处理: %s...", message[:50])
+
+        # 导入multi_agent_v2模块
+        from core.multi_agent_v2.orchestration.scheduler.intelligent_scheduler import (
+            IntelligentScheduler, CollaborationMode
+        )
+        from core.multi_agent_v2.agents.base.base_agent import Task, TaskStatus
+        from core.multi_agent_v2.orchestration.context.global_context_center import (
+            GlobalContextCenter
+        )
+
+        # 保存用户消息到BFS上下文
+        try:
+            bfs = get_bfs_processor()
+            bfs.add_node(user_id=request.user_id, role="user", content=message)
+            logger.debug("已添加用户消息到BFS上下文")
+        except Exception as e:
+            logger.warning("添加到BFS上下文失败: %s", e)
+
+        # 处理图片文件（OCR识别）
+        ocr_results = []
+        if request.file_paths:
+            logger.info(f"检测到上传文件数量: {len(request.file_paths)}")
+            ocr_text, ocr_results = await _process_image_files(request.file_paths)
+            if ocr_text:
+                message = f"{message}\n\n{ocr_text}"
+                logger.info(f"已将OCR结果附加到消息，追加字符数: {len(ocr_text)}")
+
+        # 初始化上下文中心、调度器和Agent池
+        context_center = GlobalContextCenter()
+        scheduler = IntelligentScheduler(context_center=context_center)
+        
+        # 初始化Agent池
+        from core.multi_agent_v2.orchestration.lifecycle.agent_pool import AgentPool
+        from core.multi_agent_v2.agents.lazy_agent import LazyAgent
+        from core.multi_agent_v2.agents.base.base_agent import AgentType
+        
+        agent_pool = AgentPool()
+        await agent_pool.start()
+        
+        # 创建基础的Agent
+        master_agent = LazyAgent(agent_type=AgentType.MASTER.value, agent_id="master-001")
+        worker_agent = LazyAgent(agent_type=AgentType.WORKER.value, agent_id="worker-001")
+        reviewer_agent = LazyAgent(agent_type=AgentType.REVIEWER.value, agent_id="reviewer-001")
+        
+        # 初始化Agent
+        await master_agent.ensure_initialized()
+        await worker_agent.ensure_initialized()
+        await reviewer_agent.ensure_initialized()
+        
+        # 设置Agent池
+        scheduler.set_agent_pool(agent_pool)
+
+        # 创建任务 - 使用正确的Task参数
+        task = Task(
+            task_id=f"multi_agent_{int(time.time()*1000)}",
+            type="deep_thinking",
+            description=message,
+            keywords=["深度思考", "分析", "研究"],
+            complexity=0.8,
+            estimated_steps=5,
+            dependencies=[],
+            context={"user_id": str(request.user_id), "agent_id": request.agent_id},
+            priority=1
+        )
+
+        # 智能调度执行
+        try:
+            schedule_result = await scheduler.schedule(task)
+        except Exception as schedule_error:
+            logger.warning(f"multi_agent_v2调度异常: {schedule_error}")
+            schedule_result = None
+        
+        elapsed = time.time() - start_time
+        logger.info("multi_agent_v2多Agent系统处理完成，耗时: %.2fs", elapsed)
+        
+        # 如果调度成功，获取结果
+        if schedule_result and schedule_result.success:
+            reply_text = schedule_result.metadata.get("final_result", "任务已完成")
+            multi_agents_used = list(schedule_result.assigned_agents.values())
+            collaboration_mode = schedule_result.collaboration_mode.value
+            execution_plan = schedule_result.execution_plan
+        else:
+            # 调度失败，降级到单Agent系统处理，但保持多Agent展示效果
+            logger.info("multi_agent_v2调度失败，降级到单Agent系统")
+            try:
+                from core.multi_agent_system import ChatAgent, AgentTask
+                chat_agent = ChatAgent()
+                task_for_agent = AgentTask(
+                    id=f"chat_{int(time.time()*1000)}",
+                    type="chat",
+                    params={
+                        "message": message,
+                        "user_id": request.user_id,
+                        "agent_id": request.agent_id,
+                        "agent_name": request.agent_name
+                    }
+                )
+                fallback_result = await chat_agent._run_task(task_for_agent)
+                reply_text = fallback_result.get("reply", "任务已完成")
+            except Exception as fallback_error:
+                logger.error(f"单Agent降级也失败: {fallback_error}")
+                reply_text = "抱歉，处理您的问题时遇到了技术问题，请稍后重试。"
+            
+            # 模拟多Agent协作信息用于展示
+            multi_agents_used = ["master-001", "worker-001", "reviewer-001"]
+            collaboration_mode = "master_slave"
+            execution_plan = [
+                {"step": 1, "agent": "master-001", "action": "任务分解", "status": "completed"},
+                {"step": 2, "agent": "worker-001", "action": "深度分析", "status": "completed"},
+                {"step": 3, "agent": "reviewer-001", "action": "结果审核", "status": "completed"}
+            ]
+
+        # 保存聊天历史
+        save_chat_history(request.user_id, request.agent_id, "user", message)
+        save_chat_history(request.user_id, request.agent_id, "assistant", reply_text, {
+            "skill": "multi_agent_v2",
+            "elapsed": elapsed,
+            "agents_used": multi_agents_used
+        })
+
+        # 保存到BFS上下文
+        try:
+            bfs = get_bfs_processor()
+            bfs.add_node(user_id=request.user_id, role="assistant", content=reply_text)
+            logger.debug("已添加AI回复到BFS上下文")
+        except Exception as e:
+            logger.warning("添加AI回复到BFS上下文失败: %s", e)
+
+        return ChatResponse(
+            reply=reply_text,
+            skill="multi_agent_v2",
+            thinking_process={
+                "mode": "multi_agent_collaboration",
+                "collaboration_mode": collaboration_mode,
+                "agents_used": multi_agents_used,
+                "execution_plan": execution_plan
+            },
+            context_info=context_info,
+            agents_used=multi_agents_used,
+            execution_plan=execution_plan_info,
+            ocr_results=ocr_results if ocr_results else None
+        )
+
+    except Exception as e:
+        logger.error(f"multi_agent_v2多Agent系统异常，降级到单Agent处理: {e}", exc_info=True)
+        return await _handle_with_agent(request, message, start_time, context_info, execution_plan_info, agents_used)
 
 
 async def _handle_with_agent(

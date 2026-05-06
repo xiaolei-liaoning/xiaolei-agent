@@ -231,9 +231,10 @@ class GlobalContextCenter:
         self.trace_id_counter += 1
         return f"trace_{self.trace_id_counter}_{int(time.time())}"
 
-    async def create_task_context(self, request: str, trace_id: Optional[str] = None) -> str:
+    async def create_task_context(self, request: str, trace_id: Optional[str] = None, task_id: Optional[str] = None) -> str:
         """创建任务上下文"""
-        task_id = f"task_{uuid.uuid4().hex[:12]}"
+        if task_id is None:
+            task_id = f"task_{uuid.uuid4().hex[:12]}"
 
         context = TaskContext(
             task_id=task_id,

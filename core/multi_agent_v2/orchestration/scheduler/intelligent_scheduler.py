@@ -267,6 +267,13 @@ class IntelligentScheduler:
             # 4. Agent匹配
             agent_assignments = await self._match_and_assign(task, available_agents, collaboration_mode)
 
+            # 4.5 创建任务上下文（必须在_create_execution_plan之前）
+            await self.context_center.create_task_context(
+                request=f"Task: {task.description}",
+                trace_id=trace_id,
+                task_id=task.task_id
+            )
+
             # 5. 创建执行计划
             execution_plan = await self._create_execution_plan(
                 task, agent_assignments, collaboration_mode
@@ -358,11 +365,26 @@ class IntelligentScheduler:
 
     async def _get_available_agents(self) -> List[BaseAgent]:
         """获取可用Agent"""
-        if not self.agent_pool:
-            return []
+        if self.agent_pool:
+            agents = await self.agent_pool.get_available_agents()
+            if agents:
+                return agents
 
-        agents = await self.agent_pool.get_available_agents()
-        return agents
+        try:
+            from core.multi_agent_v2.agents.lazy_agent import LazyAgent
+            from core.multi_agent_v2.agents.base.base_agent import AgentType
+
+            agents = []
+            for agent_type in [AgentType.MASTER, AgentType.WORKER, AgentType.REVIEWER]:
+                agent = LazyAgent(agent_type=agent_type.value)
+                await agent.ensure_initialized()
+                agents.append(agent)
+                logger.debug(f"创建Agent用于调度: {agent.agent_id} ({agent_type.value})")
+
+            return agents
+        except Exception as e:
+            logger.warning(f"创建Agent失败: {e}")
+            return []
 
     async def _match_and_assign(
         self,
@@ -392,11 +414,22 @@ class IntelligentScheduler:
 
                 if matched_agents:
                     agent, score = matched_agents[0]
+                    agent_type = agent.agent_type.value if hasattr(agent.agent_type, 'value') else str(agent.agent_type)
                     assignments.append({
                         "subtask_id": subtask_id,
                         "agent_id": agent.agent_id,
-                        "agent_type": agent.agent_type.value,
+                        "agent_type": agent_type,
                         "score": score,
+                        "step": step
+                    })
+                elif agents:
+                    agent = agents[step % len(agents)]
+                    agent_type = agent.agent_type.value if hasattr(agent.agent_type, 'value') else str(agent.agent_type)
+                    assignments.append({
+                        "subtask_id": subtask_id,
+                        "agent_id": agent.agent_id,
+                        "agent_type": agent_type,
+                        "score": 1.0,
                         "step": step
                     })
 
@@ -414,6 +447,12 @@ class IntelligentScheduler:
 
             if matched_agents:
                 master, _ = matched_agents[0]
+            elif agents:
+                master = agents[0]
+            else:
+                master = None
+
+            if master:
                 assignments.append({
                     "subtask_id": f"{task.task_id}_master",
                     "agent_id": master.agent_id,
@@ -439,6 +478,12 @@ class IntelligentScheduler:
 
                     if matched_slaves:
                         slave, _ = matched_slaves[0]
+                    elif slave_agents:
+                        slave = slave_agents[i % len(slave_agents)]
+                    else:
+                        slave = None
+
+                    if slave:
                         assignments.append({
                             "subtask_id": subtask_id,
                             "agent_id": slave.agent_id,
@@ -477,10 +522,11 @@ class IntelligentScheduler:
 
             if matched_agents:
                 agent, score = matched_agents[0]
+                agent_type = agent.agent_type.value if hasattr(agent.agent_type, 'value') else str(agent.agent_type)
                 assignments.append({
                     "subtask_id": task.task_id,
                     "agent_id": agent.agent_id,
-                    "agent_type": agent.agent_type.value,
+                    "agent_type": agent_type,
                     "score": score,
                     "role": "winner"
                 })
@@ -491,10 +537,11 @@ class IntelligentScheduler:
 
             if matched_agents:
                 agent, score = matched_agents[0]
+                agent_type = agent.agent_type.value if hasattr(agent.agent_type, 'value') else str(agent.agent_type)
                 assignments.append({
                     "subtask_id": task.task_id,
                     "agent_id": agent.agent_id,
-                    "agent_type": agent.agent_type.value,
+                    "agent_type": agent_type,
                     "score": score
                 })
 

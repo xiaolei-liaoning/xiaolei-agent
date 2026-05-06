@@ -256,6 +256,16 @@ class AgentPool:
         """获取完整统计信息"""
         return self.stats.get_summary()
 
+    async def get_available_agents(self) -> List[Any]:
+        """获取所有可用的Agent"""
+        available = []
+        for agent_type, pool in self.pools.items():
+            available.extend(pool)
+        for agent in self.active_agents.values():
+            if agent not in available:
+                available.append(agent)
+        return available
+
 
 _global_pool: Optional[AgentPool] = None
 
