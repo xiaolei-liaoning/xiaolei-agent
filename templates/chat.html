@@ -49,12 +49,30 @@
             font-size: 13px;
         }
         
+        .thinking-panel.multi-agent {
+            background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+            border-left-color: #f59e0b;
+        }
+        
+        .thinking-panel.single-agent {
+            background: #f8fafc;
+            border-left-color: #8b5cf6;
+        }
+        
         .thinking-title {
             display: flex;
             align-items: center;
             cursor: pointer;
             color: #4f46e5;
             font-weight: 500;
+        }
+        
+        .thinking-title.multi-agent {
+            color: #d97706;
+        }
+        
+        .thinking-title.single-agent {
+            color: #4f46e5;
         }
         
         .thinking-title:hover {
@@ -232,23 +250,10 @@
                         <label class="text-xs text-gray-600 font-medium">执行模式:</label>
                         <select id="execution-mode" onchange="handleExecutionModeChange()" class="px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white">
                             <option value="auto" selected>🤖 智能选择</option>
-                            <option value="thinking">🧠 /思考</option>
-                            <option value="parallel">⚡ 并发</option>
-                            <option value="collaborative">🤝 协作</option>
+                            <option value="single_agent">🧠 单Agent模式</option>
+                            <option value="multi_agent">👥 多Agent协作</option>
                         </select>
                         <span id="mode-description" class="text-xs text-gray-500"></span>
-                    </div>
-                    <!-- 方案输入区域（协作/并发时显示） -->
-                    <div id="plans-container" class="mt-2 hidden">
-                        <div class="flex items-center space-x-2 mb-2">
-                            <span class="text-xs text-gray-600">方案:</span>
-                            <button onclick="addPlan()" class="px-2 py-1 bg-blue-100 hover:bg-blue-200 text-blue-600 rounded text-xs transition">
-                                <i class="fa fa-plus mr-1"></i>添加方案
-                            </button>
-                        </div>
-                        <div id="plans-list" class="space-y-2">
-                            <!-- 动态添加的方案输入框 -->
-                        </div>
                     </div>
                 </div>
 
@@ -566,12 +571,81 @@
             messageCount++;
             document.getElementById('message-count').textContent = messageCount;
         }
+        
+        function addSystemTip(message) {
+            const chatMessages = document.getElementById('chat-messages');
+            const tipDiv = document.createElement('div');
+            tipDiv.className = 'flex message-animation justify-center';
+            tipDiv.innerHTML = `
+                <div class="bg-amber-100 text-amber-800 px-4 py-2 rounded-full text-sm flex items-center border border-amber-300">
+                    <i class="fa fa-info-circle mr-2"></i>
+                    <span>${escapeHtml(message)}</span>
+                </div>
+            `;
+            chatMessages.appendChild(tipDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
 
         function renderThinkingPanel(thinkingProcess) {
             const thinkingId = 'thinking-' + Date.now();
             let stepsHtml = '';
+            let panelClass = 'single-agent';
+            let titleIcon = 'fa-brain';
+            let titleText = '深度思考';
             
-            if (typeof thinkingProcess === 'string') {
+            // 检测是否为多Agent协作模式
+            if (thinkingProcess && thinkingProcess.mode === 'multi_agent_collaboration') {
+                panelClass = 'multi-agent';
+                titleIcon = 'fa-users';
+                titleText = '多Agent协作';
+                
+                // 渲染多Agent协作信息
+                const collaborationMode = thinkingProcess.collaboration_mode || 'unknown';
+                const agentsUsed = thinkingProcess.agents_used || [];
+                const executionPlan = thinkingProcess.execution_plan || [];
+                
+                // 协作模式中文映射
+                const modeNames = {
+                    'pipeline': '流水线模式',
+                    'master_slave': '主从模式',
+                    'review': '评审模式',
+                    'auction': '拍卖模式',
+                    'hybrid': '混合模式'
+                };
+                
+                stepsHtml = `
+                    <div class="mb-3 p-2 bg-amber-50 rounded-lg border border-amber-200">
+                        <div class="flex items-center mb-2">
+                            <i class="fa fa-sitemap mr-2 text-amber-600"></i>
+                            <span class="font-medium text-amber-800">协作模式: ${modeNames[collaborationMode] || collaborationMode}</span>
+                        </div>
+                        ${agentsUsed.length > 0 ? `
+                        <div class="flex flex-wrap gap-2 mb-2">
+                            <span class="text-sm text-amber-700">参与Agent:</span>
+                            ${agentsUsed.map(agent => `
+                                <span class="inline-flex items-center px-2 py-1 bg-amber-100 rounded-full text-xs text-amber-800">
+                                    <i class="fa fa-user mr-1"></i>${agent}
+                                </span>
+                            `).join('')}
+                        </div>
+                        ` : ''}
+                        ${executionPlan.length > 0 ? `
+                        <div class="text-sm text-amber-700">
+                            <span class="font-medium">执行计划:</span>
+                            <ul class="mt-1 space-y-1">
+                                ${executionPlan.slice(0, 3).map((step, idx) => `
+                                    <li class="flex items-start">
+                                        <span class="mr-2 text-amber-500">${idx + 1}.</span>
+                                        <span>${typeof step === 'object' ? (step.description || step.action || JSON.stringify(step)) : step}</span>
+                                    </li>
+                                `).join('')}
+                                ${executionPlan.length > 3 ? `<li class="text-amber-500">... 还有 ${executionPlan.length - 3} 个步骤</li>` : ''}
+                            </ul>
+                        </div>
+                        ` : ''}
+                    </div>
+                `;
+            } else if (typeof thinkingProcess === 'string') {
                 stepsHtml = `
                     <div class="thinking-step active">
                         <span class="thinking-step-text">${escapeHtml(thinkingProcess)}</span>
@@ -587,7 +661,7 @@
                         </div>
                     `;
                 });
-            } else if (thinkingProcess.steps) {
+            } else if (thinkingProcess && thinkingProcess.steps) {
                 thinkingProcess.steps.forEach((step, index) => {
                     const isActive = index === thinkingProcess.steps.length - 1;
                     const isCompleted = index < thinkingProcess.steps.length - 1;
@@ -597,15 +671,21 @@
                         </div>
                     `;
                 });
+            } else if (thinkingProcess && typeof thinkingProcess === 'object') {
+                // 其他对象格式
+                const keys = Object.keys(thinkingProcess);
+                if (keys.length > 0) {
+                    stepsHtml = `<div class="thinking-step active"><span class="thinking-step-text">处理中...</span></div>`;
+                }
             }
             
             return `
-                <div class="thinking-panel">
-                    <div class="thinking-title" onclick="toggleThinkingContent('${thinkingId}')">
+                <div class="thinking-panel ${panelClass}">
+                    <div class="thinking-title ${panelClass}" onclick="toggleThinkingContent('${thinkingId}')">
                         <div class="thinking-icon">
-                            <i class="fa fa-brain"></i>
+                            <i class="fa ${titleIcon}"></i>
                         </div>
-                        <span>深度思考</span>
+                        <span>${titleText}</span>
                         <i class="fa fa-chevron-down thinking-toggle-arrow" id="${thinkingId}-arrow"></i>
                     </div>
                     <div class="thinking-content" id="${thinkingId}">
@@ -638,7 +718,10 @@
             const typingId = 'typing-' + Date.now();
             
             let thinkingHtml = '';
-            if (currentThinkingSteps.length > 0) {
+            // 检查 currentThinkingSteps 是否有内容（兼容数组和对象）
+            if (currentThinkingSteps && 
+                ((Array.isArray(currentThinkingSteps) && currentThinkingSteps.length > 0) || 
+                 (typeof currentThinkingSteps === 'object' && Object.keys(currentThinkingSteps).length > 0))) {
                 thinkingHtml = renderThinkingPanel(currentThinkingSteps);
                 currentThinkingSteps = [];
             }
@@ -729,25 +812,41 @@
                     ws.send(JSON.stringify({
                         message: message,
                         user_id: 1,
-                        character_id: currentCharacter
+                        character_id: currentCharacter,
+                        execution_mode: document.getElementById('execution-mode').value
                     }));
                 } else {
+                    const executionMode = document.getElementById('execution-mode').value;
+                    const requestBody = {
+                        message: message,
+                        user_id: 1,
+                        character_id: currentCharacter
+                    };
+                    
+                    // 根据选择的执行模式添加相应参数
+                    if (executionMode === 'single_agent') {
+                        requestBody.force_single_agent = true;
+                    } else if (executionMode === 'multi_agent') {
+                        requestBody.force_multi_agent = true;
+                    } else {
+                        requestBody.auto_agent_selection = true;
+                    }
+                    
                     fetch('/api/chat', {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json'
                         },
-                        body: JSON.stringify({
-                            message: message,
-                            user_id: 1,
-                            character_id: currentCharacter
-                        })
+                        body: JSON.stringify(requestBody)
                     })
                     .then(response => response.json())
                     .then(data => {
                         hideLoading();
                         if (data.thinking_process) {
                             currentThinkingSteps = data.thinking_process;
+                        }
+                        if (data.skill === 'multi_agent_v2') {
+                            addSystemTip('检测到深度思考任务，已启用多Agent协作系统');
                         }
                         showTypingEffect(data.reply, data.message_id);
                     })
@@ -1111,19 +1210,10 @@
             const mode = document.getElementById('execution-mode').value;
             const descriptions = {
                 'auto': '🤖 智能选择：系统自动判断任务复杂度并选择最优执行方式',
-                'thinking': '🧠 /思考：使用深度思考模式，详细分析问题',
-                'parallel': '⚡ 并发：多个Agent同时执行任务，提高效率',
-                'collaborative': '🤝 协作：多个Agent协作完成复杂任务'
+                'single_agent': '🧠 单Agent模式：使用单个Agent处理所有任务，响应快速',
+                'multi_agent': '👥 多Agent协作：多个Agent协作完成复杂任务，深度分析'
             };
             document.getElementById('mode-description').textContent = descriptions[mode] || '';
-            
-            // 显示/隐藏方案输入区域
-            const plansContainer = document.getElementById('plans-container');
-            if (mode === 'parallel' || mode === 'collaborative') {
-                plansContainer.classList.remove('hidden');
-            } else {
-                plansContainer.classList.add('hidden');
-            }
         }
 
         let planCounter = 0;

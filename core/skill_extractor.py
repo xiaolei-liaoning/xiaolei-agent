@@ -167,8 +167,13 @@ class SkillExtractor:
             except Exception as e:
                 logger.warning("加载技能文件失败: %s, %s", md_file, e)
 
-    def extract_from_review(self, review_result) -> Optional[Skill]:
-        """从复盘结果萃取技能"""
+    def extract_from_review(self, review_result, execution_logs: Optional[str] = None) -> Optional[Skill]:
+        """从复盘结果萃取技能
+
+        Args:
+            review_result: 复盘结果
+            execution_logs: 原始执行日志（可选，用于提取真实步骤）
+        """
         if not review_result.is_worth_saving or not review_result.skill_name:
             logger.info("复盘结果不值得沉淀为技能")
             return None
@@ -177,10 +182,10 @@ class SkillExtractor:
             name=review_result.skill_name,
             version="1.0",
             applicable_scenarios=review_result.applicable_scenarios or [],
-            steps=self._extract_steps_from_review(review_result),
+            steps=self._extract_steps_from_review(review_result, execution_logs),
             params={},
             pitfalls=self._extract_pitfalls_from_review(review_result),
-            dependencies=[],
+            dependencies=self._extract_dependencies_from_logs(execution_logs),
             created_at=datetime.now().isoformat(),
             updated_at=datetime.now().isoformat(),
             last_review_id=review_result.review_id,
@@ -191,13 +196,93 @@ class SkillExtractor:
 
         return skill
 
-    def _extract_steps_from_review(self, review_result) -> List[str]:
-        """从复盘结果提取步骤（简单实现）"""
+    def _extract_steps_from_review(self, review_result, execution_logs: Optional[str] = None) -> List[str]:
+        """从复盘结果提取步骤（增强实现）
+
+        Args:
+            review_result: 复盘结果
+            execution_logs: 原始执行日志（可选）
+        """
+        if execution_logs:
+            steps = self._parse_steps_from_logs(execution_logs)
+            if steps:
+                logger.debug("从执行日志提取到 %d 个步骤", len(steps))
+                return steps
+
+        logger.warning("无法从执行日志提取步骤，使用改进建议")
         return [
             "根据任务描述确定目标",
             review_result.improvement,
             "执行并记录日志",
         ]
+
+    def _parse_steps_from_logs(self, execution_logs: str) -> List[str]:
+        """从执行日志解析真实步骤
+
+        解析格式如：
+        1. ✅ [web_scraper] 参数: {"site": "GitHub"}... 耗时: 1523ms
+        2. ❌ [data_analysis] 参数: {...} 错误: xxx
+        """
+        import re
+        steps = []
+
+        lines = execution_logs.strip().split('\n')
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+
+            tool_match = re.search(r'\[([\w_]+)\]', line)
+            if tool_match:
+                tool_name = tool_match.group(1)
+
+                param_match = re.search(r'参数:\s*(\{[^}]+\})', line)
+                params_str = param_match.group(1) if param_match else "{}"
+
+                try:
+                    params = json.loads(params_str)
+                    param_desc = self._describe_params(tool_name, params)
+                    step = f"调用 {tool_name} {param_desc}"
+                except json.JSONDecodeError:
+                    step = f"调用 {tool_name}"
+
+                if "❌" in line or "失败" in line:
+                    step += " (注意：此步骤曾失败)"
+                elif "用户纠正" in line:
+                    step += " (注意：此步骤被用户纠正)"
+
+                steps.append(step)
+
+        return steps
+
+    def _describe_params(self, tool_name: str, params: Dict[str, Any]) -> str:
+        """将参数转换为人类可读的描述"""
+        if not params:
+            return ""
+
+        descriptions = []
+        for key, value in params.items():
+            if isinstance(value, str) and len(value) > 50:
+                value = value[:50] + "..."
+            descriptions.append(f"{key}={value}")
+
+        return f"参数: {', '.join(descriptions)}"
+
+    def _extract_dependencies_from_logs(self, execution_logs: Optional[str]) -> List[str]:
+        """从执行日志中提取依赖工具"""
+        if not execution_logs:
+            return []
+
+        import re
+        tools = set()
+
+        lines = execution_logs.strip().split('\n')
+        for line in lines:
+            tool_match = re.search(r'\[([\w_]+)\]', line)
+            if tool_match:
+                tools.add(tool_match.group(1))
+
+        return list(tools)
 
     def _extract_pitfalls_from_review(self, review_result) -> List[str]:
         """从复盘结果提取坑点"""
@@ -220,13 +305,20 @@ class SkillExtractor:
         self._skills_cache[skill.name] = skill
         logger.info("技能已保存: %s", md_file)
 
-    def patch_update(self, skill_name: str, new_insight: str, section: str = "pitfalls"):
-        """增量更新技能（只更新指定部分）
+    def patch_update(self, skill_name: str, new_insight: str, section: str = "pitfalls",
+                    version_bump: str = "patch"):
+        """增量更新技能（只更新指定部分）- 语义化版本
 
         Args:
             skill_name: 技能名称
             new_insight: 新增内容
             section: 要更新的部分（pitfalls/steps/scenarios）
+            version_bump: 版本递增类型 (major/minor/patch)
+
+        语义化版本规范:
+        - patch: Bug修复，向后兼容
+        - minor: 新功能添加，向后兼容
+        - major: 不兼容的变更
         """
         skill = self._skills_cache.get(skill_name)
         if not skill:
@@ -234,9 +326,7 @@ class SkillExtractor:
             return False
 
         old_version = skill.version
-        parts = old_version.split(".")
-        parts[-1] = str(int(parts[-1]) + 1)
-        skill.version = ".".join(parts)
+        skill.version = self._bump_version(old_version, version_bump)
 
         if section == "pitfalls":
             if new_insight not in skill.pitfalls:
@@ -249,9 +339,49 @@ class SkillExtractor:
                 skill.applicable_scenarios.append(new_insight)
 
         self.save_skill(skill)
-        logger.info("技能补丁更新成功: %s -> v%s", skill_name, skill.version)
+        logger.info("技能补丁更新成功: %s -> v%s (%s)", skill_name, skill.version, version_bump)
 
         return True
+
+    def _bump_version(self, version: str, bump_type: str = "patch") -> str:
+        """语义化版本递增
+
+        Args:
+            version: 当前版本 (如 "1.2.3")
+            bump_type: major/minor/patch
+
+        Returns:
+            新版本号
+        """
+        try:
+            parts = version.split(".")
+            while len(parts) < 3:
+                parts.append("0")
+
+            major, minor, patch = int(parts[0]), int(parts[1]), int(parts[2])
+
+            if bump_type == "major":
+                major += 1
+                minor = 0
+                patch = 0
+            elif bump_type == "minor":
+                minor += 1
+                patch = 0
+            else:
+                patch += 1
+
+            return f"{major}.{minor}.{patch}"
+        except (ValueError, IndexError):
+            logger.warning("无效版本号格式: %s，使用默认版本 1.0.0", version)
+            return "1.0.0"
+
+    def major_update(self, skill_name: str, new_insight: str, section: str = "pitfalls"):
+        """不兼容变更 - Major版本递增"""
+        return self.patch_update(skill_name, new_insight, section, version_bump="major")
+
+    def minor_update(self, skill_name: str, new_insight: str, section: str = "pitfalls"):
+        """新增功能 - Minor版本递增"""
+        return self.patch_update(skill_name, new_insight, section, version_bump="minor")
 
     def get_skill(self, name: str) -> Optional[Skill]:
         """获取指定技能"""

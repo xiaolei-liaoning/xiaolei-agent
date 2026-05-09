@@ -157,6 +157,25 @@ class AgentPool:
             await self._shutdown_agent(agent)
             logger.debug(f"Shutdown {agent_type} agent (pool full): {agent_id}")
 
+    async def assign_task(self, agent_id: str, task_id: str) -> None:
+        """分配任务给Agent（调度器调用）"""
+        if agent_id in self.active_agents:
+            agent = self.active_agents[agent_id]
+            logger.debug(f"Assigned task {task_id} to agent {agent_id}")
+        else:
+            logger.warning(f"Agent {agent_id} not found in active agents, will register")
+            # 如果Agent不在active_agents中，尝试查找并注册
+            for agent_type, pool in self.pools.items():
+                for agent in pool:
+                    if agent.agent_id == agent_id:
+                        # 从池中移除并添加到active_agents
+                        pool.remove(agent)
+                        self.stats.current_pooled[agent_type] = len(pool)
+                        self.active_agents[agent_id] = agent
+                        self.stats.current_active += 1
+                        logger.debug(f"Registered agent {agent_id} from pool")
+                        return
+
     async def _try_get_from_pool(self, agent_type: str) -> Optional[Any]:
         """尝试从池中获取Agent"""
         pool = self.pools.get(agent_type, [])

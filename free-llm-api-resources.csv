@@ -1,0 +1,96 @@
+Provider,Model,RPM,TPM,RPD,Monthly Quota,Notes
+OpenRouter,Gemma 3 12B Instruct,20,,50,,"20次请求/分钟，50次请求/天，充值$10后可达1000次请求/天"
+OpenRouter,Gemma 3 27B Instruct,20,,50,,"20次请求/分钟，50次请求/天，充值$10后可达1000次请求/天"
+OpenRouter,Gemma 3 4B Instruct,20,,50,,"20次请求/分钟，50次请求/天，充值$10后可达1000次请求/天"
+OpenRouter,Hermes 3 Llama 3.1 405B,20,,50,,"20次请求/分钟，50次请求/天，充值$10后可达1000次请求/天"
+OpenRouter,Llama 3.2 3B Instruct,20,,50,,"20次请求/分钟，50次请求/天，充值$10后可达1000次请求/天"
+OpenRouter,Llama 3.3 70B Instruct,20,,50,,"20次请求/分钟，50次请求/天，充值$10后可达1000次请求/天"
+OpenRouter,Mistral Small 3.1 24B Instruct,20,,50,,"20次请求/分钟，50次请求/天，充值$10后可达1000次请求/天"
+OpenRouter,arcee-ai/trinity-large-preview:free,20,,50,,"20次请求/分钟，50次请求/天，充值$10后可达1000次请求/天"
+OpenRouter,arcee-ai/trinity-mini:free,20,,50,,"20次请求/分钟，50次请求/天，充值$10后可达1000次请求/天"
+OpenRouter,cognitivecomputations/dolphin-mistral-24b-venice-edition:free,20,,50,,"20次请求/分钟，50次请求/天，充值$10后可达1000次请求/天"
+OpenRouter,google/gemma-3n-e2b-it:free,20,,50,,"20次请求/分钟，50次请求/天，充值$10后可达1000次请求/天"
+OpenRouter,google/gemma-3n-e4b-it:free,20,,50,,"20次请求/分钟，50次请求/天，充值$10后可达1000次请求/天"
+OpenRouter,liquid/lfm-2.5-1.2b-instruct:free,20,,50,,"20次请求/分钟，50次请求/天，充值$10后可达1000次请求/天"
+OpenRouter,liquid/lfm-2.5-1.2b-thinking:free,20,,50,,"20次请求/分钟，50次请求/天，充值$10后可达1000次请求/天"
+OpenRouter,nvidia/nemotron-3-nano-30b-a3b:free,20,,50,,"20次请求/分钟，50次请求/天，充值$10后可达1000次请求/天"
+OpenRouter,nvidia/nemotron-nano-12b-v2-vl:free,20,,50,,"20次请求/分钟，50次请求/天，充值$10后可达1000次请求/天"
+OpenRouter,nvidia/nemotron-nano-9b-v2:free,20,,50,,"20次请求/分钟，50次请求/天，充值$10后可达1000次请求/天"
+OpenRouter,openai/gpt-oss-120b:free,20,,50,,"20次请求/分钟，50次请求/天，充值$10后可达1000次请求/天"
+OpenRouter,openai/gpt-oss-20b:free,20,,50,,"20次请求/分钟，50次请求/天，充值$10后可达1000次请求/天"
+OpenRouter,qwen/qwen3-4b:free,20,,50,,"20次请求/分钟，50次请求/天，充值$10后可达1000次请求/天"
+OpenRouter,qwen/qwen3-coder:free,20,,50,,"20次请求/分钟，50次请求/天，充值$10后可达1000次请求/天"
+OpenRouter,qwen/qwen3-next-80b-a3b-instruct:free,20,,50,,"20次请求/分钟，50次请求/天，充值$10后可达1000次请求/天"
+OpenRouter,stepfun/step-3.5-flash:free,20,,50,,"20次请求/分钟，50次请求/天，充值$10后可达1000次请求/天"
+OpenRouter,z-ai/glm-4.5-air:free,20,,50,,"20次请求/分钟，50次请求/天，充值$10后可达1000次请求/天"
+Google AI Studio,Gemini 3 Flash,5,250000,20,,"在英国/瑞士/欧洲经济区/欧盟之外使用时，数据会用于训练"
+Google AI Studio,Gemini 3.1 Flash-Lite,15,250000,500,,"在英国/瑞士/欧洲经济区/欧盟之外使用时，数据会用于训练"
+Google AI Studio,Gemini 2.5 Flash,5,250000,20,,"在英国/瑞士/欧洲经济区/欧盟之外使用时，数据会用于训练"
+Google AI Studio,Gemini 2.5 Flash-Lite,10,250000,20,,"在英国/瑞士/欧洲经济区/欧盟之外使用时，数据会用于训练"
+Google AI Studio,Gemma 3 27B Instruct,30,15000,14400,,"在英国/瑞士/欧洲经济区/欧盟之外使用时，数据会用于训练"
+Google AI Studio,Gemma 3 12B Instruct,30,15000,14400,,"在英国/瑞士/欧洲经济区/欧盟之外使用时，数据会用于训练"
+Google AI Studio,Gemma 3 4B Instruct,30,15000,14400,,"在英国/瑞士/欧洲经济区/欧盟之外使用时，数据会用于训练"
+Google AI Studio,Gemma 3 1B Instruct,30,15000,14400,,"在英国/瑞士/欧洲经济区/欧盟之外使用时，数据会用于训练"
+NVIDIA NIM,Various Open Source Models,40,,,"需要手机号验证，模型通常受上下文窗口限制"
+Mistral (La Plateforme),Open and Proprietary Mistral Models,60,500000,,1000000000,"免费层级需要同意数据训练，需要手机号验证"
+Mistral (Codestral),Codestral,30,,2000,,"目前免费使用，基于月度订阅，需要手机号验证"
+HuggingFace Inference,Various Open Source Models,,,,0.1,"无服务器推理仅限于小于10GB的模型，每月$0.10额度"
+Vercel AI Gateway,Various Supported Providers,,,,5,"路由到各种支持的提供商，$5/月"
+Cerebras,gpt-oss-120b,30,60000,14400,1000000,
+Cerebras,Qwen 3 235B A22B Instruct,30,60000,14400,1000000,
+Cerebras,Llama 3.3 70B,30,64000,14400,1000000,
+Cerebras,Qwen 3 32B,30,64000,14400,1000000,
+Cerebras,Llama 3.1 8B,30,60000,14400,1000000,
+Cerebras,Z.ai GLM-4.6,10,60000,100,1000000,
+Groq,Allam 2 7B,,6000,7000,,
+Groq,Llama 3.1 8B,,6000,14400,,
+Groq,Llama 3.3 70B,,12000,1000,,
+Groq,Llama 4 Maverick 17B 128E Instruct,,6000,1000,,
+Groq,Llama 4 Scout Instruct,,30000,1000,,
+Groq,Whisper Large v3,2000,,7200,,7200音频秒/分钟
+Groq,Whisper Large v3 Turbo,2000,,7200,,7200音频秒/分钟
+Groq,canopylabs/orpheus-arabic-saudi,,,,,
+Groq,canopylabs/orpheus-v1-english,,,,,
+Groq,groq/compound,,70000,250,,
+Groq,groq/compound-mini,,70000,250,,
+Groq,meta-llama/llama-guard-4-12b,,15000,14400,,
+Groq,meta-llama/llama-prompt-guard-2-22m,,,,,
+Groq,meta-llama/llama-prompt-guard-2-86m,,,,,
+Groq,moonshotai/kimi-k2-instruct,,10000,1000,,
+Groq,moonshotai/kimi-k2-instruct-0905,,10000,1000,,
+Groq,openai/gpt-oss-120b,,8000,1000,,
+Groq,openai/gpt-oss-20b,,8000,1000,,
+Groq,openai/gpt-oss-safeguard-20b,,8000,1000,,
+Groq,qwen/qwen3-32b,,6000,1000,,
+Cohere,c4ai-aya-expanse-32b,20,,,1000,"20次请求/分钟，1000次请求/月，模型共享同一月度配额"
+Cohere,c4ai-aya-vision-32b,20,,,1000,"20次请求/分钟，1000次请求/月，模型共享同一月度配额"
+Cohere,command-a-03-2025,20,,,1000,"20次请求/分钟，1000次请求/月，模型共享同一月度配额"
+Cohere,command-a-reasoning-08-2025,20,,,1000,"20次请求/分钟，1000次请求/月，模型共享同一月度配额"
+Cohere,command-a-translate-08-2025,20,,,1000,"20次请求/分钟，1000次请求/月，模型共享同一月度配额"
+Cohere,command-a-vision-07-2025,20,,,1000,"20次请求/分钟，1000次请求/月，模型共享同一月度配额"
+Cohere,command-r-08-2024,20,,,1000,"20次请求/分钟，1000次请求/月，模型共享同一月度配额"
+Cohere,command-r-plus-08-2024,20,,,1000,"20次请求/分钟，1000次请求/月，模型共享同一月度配额"
+Cohere,command-r7b-12-2024,20,,,1000,"20次请求/分钟，1000次请求/月，模型共享同一月度配额"
+Cohere,command-r7b-arabic-02-2025,20,,,1000,"20次请求/分钟，1000次请求/月，模型共享同一月度配额"
+Cohere,tiny-aya-earth,20,,,1000,"20次请求/分钟，1000次请求/月，模型共享同一月度配额"
+Cohere,tiny-aya-fire,20,,,1000,"20次请求/分钟，1000次请求/月，模型共享同一月度配额"
+Cohere,tiny-aya-global,20,,,1000,"20次请求/分钟，1000次请求/月，模型共享同一月度配额"
+Cohere,tiny-aya-water,20,,,1000,"20次请求/分钟，1000次请求/月，模型共享同一月度配额"
+GitHub Models,Various Models,,,,,"输入/输出token限制极其严格，取决于Copilot订阅层级"
+Cloudflare Workers AI,Various Models,,,10000,,"每天10000神经元"
+Google Cloud Vertex AI,Llama 3.2 90B Vision Instruct,30,,,,"预览期间免费，Google Cloud的付款验证非常严格"
+Google Cloud Vertex AI,Llama 3.1 70B Instruct,60,,,,"预览期间免费，Google Cloud的付款验证非常严格"
+Google Cloud Vertex AI,Llama 3.1 8B Instruct,60,,,,"预览期间免费，Google Cloud的付款验证非常严格"
+Fireworks,Trial Provider,,,$1,"额度：$1，各种开源模型"
+Baseten,Trial Provider,,,$30,"额度：$30，任何支持的模型 - 按计算时间付费"
+Nebius,Trial Provider,,,$1,"额度：$1，各种开源模型"
+Novita,Trial Provider,,,$0.5,"额度：$0.5，有效期1年，各种开源模型"
+AI21,Trial Provider,,,$10,"额度：$10，有效期3个月，Jamba系列模型"
+Upstage,Trial Provider,,,$10,"额度：$10，有效期3个月，Solar Pro/Mini"
+NLP Cloud,Trial Provider,,,$15,"额度：$15，要求手机号验证，各种开源模型"
+阿里云（国际）模型工作室,Trial Provider,,,1000000 tokens,"额度：每个模型100万tokens，各种开源和专有Qwen模型"
+Modal,Trial Provider,,,$5/$30,"额度：注册即送$5/月，添加付款方式后$30/月，任何支持的模型 - 按计算时间付费"
+Inference.net,Trial Provider,,,$1/$25,"额度：$1，回复邮件调查可获得$25，各种开源模型"
+Hyperbolic,Trial Provider,,,$1,"额度：$1，各种开源模型"
+SambaNova Cloud,Trial Provider,,,$5,"额度：$5，有效期3个月，各种开源模型"
+Scaleway Generative APIs,Trial Provider,,,1000000 tokens,"额度：1000000免费tokens，各种开源模型"

@@ -1,0 +1,227 @@
+{
+  "test_time": "2026-05-09T11:59:45.293454",
+  "total_tests": 31,
+  "passed": 20,
+  "failed": 11,
+  "success_rate": 64.51612903225806,
+  "total_duration": 1.985703945159912,
+  "results": [
+    {
+      "name": "模块导入: config_manager",
+      "status": "PASS",
+      "message": "",
+      "duration": 1.982,
+      "timestamp": "2026-05-09T11:59:45.289426"
+    },
+    {
+      "name": "模块导入: skill_loader",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T11:59:45.289442"
+    },
+    {
+      "name": "模块导入: intent_recognizer",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T11:59:45.289448"
+    },
+    {
+      "name": "模块导入: automation_workflow",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T11:59:45.289453"
+    },
+    {
+      "name": "模块导入: multi_agent_system",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T11:59:45.289458"
+    },
+    {
+      "name": "模块导入: llm_backend",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T11:59:45.289463"
+    },
+    {
+      "name": "模块导入: task_executor",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T11:59:45.289467"
+    },
+    {
+      "name": "模块导入: tool_result_formatter",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T11:59:45.289471"
+    },
+    {
+      "name": "模块导入: enhanced_logger",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T11:59:45.289476"
+    },
+    {
+      "name": "模块导入: di_container",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T11:59:45.289480"
+    },
+    {
+      "name": "配置管理器初始化",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T11:59:45.289494"
+    },
+    {
+      "name": "配置系统测试",
+      "status": "FAIL",
+      "message": "'ConfigManager' object has no attribute 'load_skill_keywords'",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T11:59:45.289500"
+    },
+    {
+      "name": "技能系统测试",
+      "status": "FAIL",
+      "message": "object of type 'coroutine' has no len()",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T11:59:45.289971"
+    },
+    {
+      "name": "工作流引擎测试",
+      "status": "FAIL",
+      "message": "cannot import name 'AutomationWorkflow' from 'core.automation_workflow' (/Users/leiyuxuan/Desktop/逝去的白月光/小雷版小龙虾agent/core/automation_workflow.py)",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T11:59:45.290151"
+    },
+    {
+      "name": "多智能体调度器",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T11:59:45.290345"
+    },
+    {
+      "name": "工具管理器测试",
+      "status": "FAIL",
+      "message": "'DIContainer' object has no attribute 'get_tool_manager'",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T11:59:45.290360"
+    },
+    {
+      "name": "API路由: api.routes.chat",
+      "status": "FAIL",
+      "message": "Router.__init__() got an unexpected keyword argument 'on_startup'",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T11:59:45.290912"
+    },
+    {
+      "name": "API路由: api.routes.skills",
+      "status": "FAIL",
+      "message": "Router.__init__() got an unexpected keyword argument 'on_startup'",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T11:59:45.291104"
+    },
+    {
+      "name": "API路由: api.routes.system",
+      "status": "FAIL",
+      "message": "Router.__init__() got an unexpected keyword argument 'on_startup'",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T11:59:45.291265"
+    },
+    {
+      "name": "API路由: api.routes.plans",
+      "status": "FAIL",
+      "message": "Router.__init__() got an unexpected keyword argument 'on_startup'",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T11:59:45.291420"
+    },
+    {
+      "name": "API路由: api.routes.self_check",
+      "status": "FAIL",
+      "message": "Router.__init__() got an unexpected keyword argument 'on_startup'",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T11:59:45.291568"
+    },
+    {
+      "name": "CLI模块: cli.base",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.001,
+      "timestamp": "2026-05-09T11:59:45.292779"
+    },
+    {
+      "name": "CLI模块: cli.smart",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T11:59:45.292795"
+    },
+    {
+      "name": "CLI模块: cli.automate",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T11:59:45.292801"
+    },
+    {
+      "name": "CLI模块: cli.scrape",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T11:59:45.292805"
+    },
+    {
+      "name": "CLI模块: cli.analyze",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T11:59:45.292809"
+    },
+    {
+      "name": "CLI模块: cli.colors",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T11:59:45.292812"
+    },
+    {
+      "name": "安全管理器初始化",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T11:59:45.293015"
+    },
+    {
+      "name": "性能工具测试",
+      "status": "FAIL",
+      "message": "cannot import name 'PerformanceMonitor' from 'core.performance_utils' (/Users/leiyuxuan/Desktop/逝去的白月光/小雷版小龙虾agent/core/performance_utils.py)",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T11:59:45.293033"
+    },
+    {
+      "name": "内存系统测试",
+      "status": "FAIL",
+      "message": "cannot import name 'ShortTermMemory' from 'core.short_term_memory' (/Users/leiyuxuan/Desktop/逝去的白月光/小雷版小龙虾agent/core/short_term_memory.py)",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T11:59:45.293247"
+    },
+    {
+      "name": "搜索引擎工厂初始化",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T11:59:45.293404"
+    }
+  ]
+}

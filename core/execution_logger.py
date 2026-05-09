@@ -54,21 +54,27 @@ class ExecutionLogEntry:
 
 
 class ExecutionLogger:
-    """执行日志记录器（MySQL版）
+    """执行日志记录器（MySQL版 + 批量写入优化）
 
     功能：
     - 记录每次工具调用的详细信息到MySQL
     - 支持按任务ID、会话ID检索
     - 提供复盘触发判断
+    - 批量写入优化（减少IO次数）
     """
 
-    def __init__(self, db_session=None):
+    def __init__(self, db_session=None, batch_size: int = 10, flush_interval: float = 5.0):
         self.db_session = db_session
         self.current_session_id = str(uuid.uuid4())[:8]
         self.current_task_id: Optional[str] = None
         self._task_logs: Dict[str, List[ExecutionLogEntry]] = {}
+        self._log_queue: List[ExecutionLogEntry] = []
+        self._batch_size = batch_size
+        self._flush_interval = flush_interval
+        self._last_flush_time = datetime.now()
+        self._pending_count = 0
 
-        logger.info("ExecutionLogger 初始化完成（MySQL版）")
+        logger.info("ExecutionLogger 初始化完成（批量写入优化: batch_size=%d, flush_interval=%.1fs）", batch_size, flush_interval)
 
     def _get_db_session(self):
         """获取数据库会话"""
@@ -104,8 +110,13 @@ class ExecutionLogger:
         error_message: Optional[str] = None,
         agent_type: Optional[str] = None,
         notes: Optional[str] = None,
+        immediate: bool = False,
     ) -> str:
-        """记录一次工具调用"""
+        """记录一次工具调用
+
+        Args:
+            immediate: 是否立即写入（影响批量写入策略）
+        """
         if self.current_task_id is None:
             self.start_task()
 
@@ -128,7 +139,14 @@ class ExecutionLogger:
         )
 
         self._task_logs[self.current_task_id].append(log_entry)
-        self._save_log_to_db(log_entry)
+
+        if immediate:
+            self._save_log_to_db(log_entry)
+        else:
+            self._log_queue.append(log_entry)
+            self._pending_count += 1
+            if self._should_flush():
+                self._flush_batch()
 
         logger.debug(
             "执行日志记录: tool=%s, status=%s, task=%s",
@@ -136,6 +154,69 @@ class ExecutionLogger:
         )
 
         return log_id
+
+    def _should_flush(self) -> bool:
+        """判断是否应该刷新队列"""
+        if len(self._log_queue) >= self._batch_size:
+            return True
+        elapsed = (datetime.now() - self._last_flush_time).total_seconds()
+        if elapsed >= self._flush_interval and self._log_queue:
+            return True
+        return False
+
+    def _flush_batch(self):
+        """批量写入日志到数据库"""
+        if not self._log_queue:
+            return
+
+        queue_to_write = self._log_queue[:]
+        self._log_queue.clear()
+        self._pending_count = 0
+        self._last_flush_time = datetime.now()
+
+        try:
+            from core.database import get_db_session, ExecutionLog
+
+            try:
+                with get_db_session() as session:
+                    for log_entry in queue_to_write:
+                        db_log = ExecutionLog(
+                            log_id=log_entry.log_id,
+                            task_id=log_entry.task_id,
+                            timestamp=datetime.fromisoformat(log_entry.timestamp),
+                            tool_name=log_entry.tool_name,
+                            params=log_entry.params,
+                            result=log_entry.result,
+                            status=log_entry.status,
+                            duration_ms=log_entry.duration_ms,
+                            user_feedback=log_entry.user_feedback,
+                            error_message=log_entry.error_message,
+                            session_id=log_entry.session_id,
+                            agent_type=log_entry.agent_type,
+                            notes=log_entry.notes,
+                        )
+                        session.add(db_log)
+                    session.commit()
+                    logger.debug("批量写入 %d 条日志到数据库", len(queue_to_write))
+            except RuntimeError as db_error:
+                if "数据库未初始化" in str(db_error):
+                    logger.debug("数据库未初始化，跳过日志持久化")
+                else:
+                    raise
+
+        except Exception as e:
+            logger.warning("批量写入日志失败: %s, 退回队列", e)
+            self._log_queue.extend(queue_to_write)
+            self._pending_count = len(self._log_queue)
+
+    def flush(self):
+        """手动刷新队列（确保所有日志写入）"""
+        self._flush_batch()
+
+    def close(self):
+        """关闭日志记录器（刷新队列）"""
+        self.flush()
+        logger.info("ExecutionLogger 已关闭")
 
     def _save_log_to_db(self, log_entry: ExecutionLogEntry):
         """保存日志到MySQL"""
@@ -265,12 +346,14 @@ class ExecutionLogger:
         return stats
 
     def should_trigger_review(self, task_id: Optional[str] = None) -> bool:
-        """判断是否应该触发复盘
+        """判断是否应该触发复盘 - 增强版
 
         触发条件（满足任一）：
         - 工具调用 >= 5次
         - 用户纠正过
         - 有失败后恢复成功
+        - 连续失败 >= 3次
+        - 失败率 > 50%
         """
         logs = self._task_logs.get(task_id, []) if task_id else self.get_session_logs()
 
@@ -281,11 +364,29 @@ class ExecutionLogger:
             return True
 
         has_recovery = False
+        consecutive_failures = 0
+        max_consecutive_failures = 0
+        failed_count = 0
+
         for log in logs:
             if log.status == ExecutionStatus.FAILED.value:
+                failed_count += 1
+                consecutive_failures += 1
+                max_consecutive_failures = max(max_consecutive_failures, consecutive_failures)
                 has_recovery = True
-            elif has_recovery and log.status == ExecutionStatus.SUCCESS.value:
+            else:
+                consecutive_failures = 0
+
+            if has_recovery and log.status == ExecutionStatus.SUCCESS.value:
                 return True
+
+        if max_consecutive_failures >= 3:
+            logger.info("触发复盘: 连续失败 %d 次", max_consecutive_failures)
+            return True
+
+        if len(logs) >= 3 and failed_count > len(logs) / 2:
+            logger.info("触发复盘: 失败率 %.0f%% (%d/%d)", failed_count/len(logs)*100, failed_count, len(logs))
+            return True
 
         return False
 

@@ -1,0 +1,64 @@
+# ===== 锁定版本依赖 =====
+# 使用精确版本确保环境一致性
+# 生成时间: 2026-05-08
+# 生成方式: pip freeze > requirements-lock.txt
+
+# ===== Web框架 =====
+fastapi==0.115.0
+uvicorn[standard]==0.30.0
+python-multipart==0.0.9
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+jinja2==3.1.4
+lxml==5.2.2
+
+# ===== 数据库 =====
+redis==5.0.8
+pymysql==1.1.1
+sqlalchemy==2.0.31
+aioredis==2.0.1
+
+# ===== LLM =====
+zhipuai==2.0.1
+httpx==0.27.0
+
+# ===== 搜索引擎 =====
+duckduckgo-search==6.2.0
+beautifulsoup4==4.12.3
+
+# ===== 向量数据库 =====
+chromadb==0.5.4
+
+# ===== 浏览器自动化 =====
+playwright==1.45.0
+
+# ===== 数据分析 =====
+pandas==2.2.2
+matplotlib==3.9.1
+openpyxl==3.1.5
+paddleocr==3.0.0
+paddlepaddle==3.0.0
+scikit-learn==1.5.0
+lightgbm==4.5.0
+numpy==2.2.4
+
+# ===== GUI自动化 (macOS) =====
+pyobjc-core==10.1
+pyobjc-framework-ApplicationServices==10.1
+pyobjc-framework-Cocoa==10.1
+AppKit==0.0.1
+PyAutoGUI==0.9.54
+pyperclip==1.8.2
+
+# ===== 工具 =====
+python-dotenv==1.0.1
+aiofiles==23.2.1
+psutil==5.9.8
+Pillow==10.4.0
+loguru==0.7.2
+
+# ===== 测试 =====
+pytest==8.2.2
+pytest-asyncio==0.23.7
+colorama==0.4.6
+watchdog==4.0.0

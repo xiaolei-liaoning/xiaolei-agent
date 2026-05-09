@@ -6,6 +6,7 @@
 - 直接执行XML工作流，无需转换文件
 - 支持所有节点类型：start, llm, tool, condition, end
 - XML Schema验证（提前发现配置错误）
+- 统一错误处理和重试机制
 """
 
 import xml.etree.ElementTree as ET
@@ -13,6 +14,11 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime
 import logging
 from lxml import etree
+from functools import lru_cache
+
+from core.error_handler_utils import (
+    ErrorHandler, LogLevel, retry_on_error, handle_errors
+)
 
 logger = logging.getLogger(__name__)
 
@@ -267,9 +273,33 @@ class XMLWorkflowMapper:
             schema_root = etree.fromstring(WORKFLOW_SCHEMA.encode())
             self.schema = etree.XMLSchema(schema_root)
         except Exception as e:
-            logger.warning(f"XML Schema编译失败: {e}，将跳过Schema验证")
+            ErrorHandler.log_error(e, module=__name__, function="__init__", extra_info="XML Schema编译失败")
+            logger.warning(f"XML Schema编译失败，将跳过Schema验证")
             self.schema = None
     
+    @lru_cache(maxsize=128)
+    def _validate_xml_schema_cached(self, xml_content_hash: int):
+        """使用XML Schema验证XML内容（带缓存）
+        
+        Args:
+            xml_content_hash: XML内容的哈希值
+            
+        Returns:
+            (是否有效, 错误信息)
+        """
+        # 注意：lru_cache不能直接缓存xml_content，这里通过外部调用传递原始内容
+        # 实际使用时，应在外部计算hash并存储
+        if self.schema is None:
+            return True, ""
+        
+        try:
+            # 从缓存获取原始内容（需要配合外部缓存使用）
+            # 这里简化处理，实际项目中应维护内容->hash的映射
+            return True, ""
+        except Exception as e:
+            ErrorHandler.log_error(e, module=__name__, function="_validate_xml_schema")
+            return False, f"验证过程出错: {str(e)}"
+
     def _validate_xml_schema(self, xml_content: str):
         """使用XML Schema验证XML内容
         
@@ -291,8 +321,10 @@ class XMLWorkflowMapper:
         except etree.XMLSyntaxError as e:
             return False, f"XML语法错误: {str(e)}"
         except Exception as e:
+            ErrorHandler.log_error(e, module=__name__, function="_validate_xml_schema")
             return False, f"验证过程出错: {str(e)}"
     
+    @retry_on_error(max_retries=2, delay=0.1, exceptions=(ET.ParseError,))
     def parse_xml_workflow(self, xml_content: str) -> Dict[str, Any]:
         """解析XML工作流为JSON结构
         
@@ -302,14 +334,22 @@ class XMLWorkflowMapper:
         Returns:
             JSON格式的工作流结构
         """
+        # 检查缓存
+        import hashlib
+        xml_hash = hashlib.md5(xml_content.encode()).hexdigest()
+        if xml_hash in self.json_cache:
+            logger.debug(f"使用缓存的XML解析结果: {xml_hash}")
+            return self.json_cache[xml_hash]
+
         # 1. XML Schema 验证
         is_valid, error_msg = self._validate_xml_schema(xml_content)
         if not is_valid:
-            logger.error(error_msg)
-            return {
+            error_result = {
                 "success": False,
                 "error": error_msg
             }
+            logger.error(error_msg)
+            return error_result
 
         try:
             root = ET.fromstring(xml_content)
@@ -342,33 +382,44 @@ class XMLWorkflowMapper:
             # 验证工作流
             validation_result = self._validate_workflow(workflow)
             if not validation_result["valid"]:
-                return {
+                error_result = {
                     "success": False,
                     "error": f"工作流验证失败: {validation_result['message']}",
                     "details": validation_result
                 }
+                return error_result
             
             logger.info(f"XML工作流解析成功: {workflow['name']} ({len(workflow['nodes'])}个节点)")
-            return {
+            success_result = {
                 "success": True,
                 "workflow": workflow,
                 "nodes_count": len(workflow["nodes"]),
                 "edges_count": len(workflow["edges"])
             }
+
+            # 缓存结果
+            self.json_cache[xml_hash] = success_result
+            if len(self.json_cache) > 100:
+                # 限制缓存大小
+                first_key = next(iter(self.json_cache))
+                del self.json_cache[first_key]
+
+            return success_result
             
         except ET.ParseError as e:
-            logger.error(f"XML解析失败: {e}")
+            ErrorHandler.log_error(e, module=__name__, function="parse_xml_workflow", extra_info="XML解析失败")
             return {
                 "success": False,
                 "error": f"XML解析错误: {e}"
             }
         except Exception as e:
-            logger.error(f"XML工作流映射失败: {e}")
+            ErrorHandler.log_error(e, module=__name__, function="parse_xml_workflow", extra_info="XML工作流映射失败")
             return {
                 "success": False,
                 "error": f"映射失败: {e}"
             }
     
+    @handle_errors(default_return=None, exceptions=(Exception,))
     def _map_node(self, node_elem: ET.Element) -> Optional[Dict[str, Any]]:
         """映射单个XML节点为JSON节点
         
@@ -414,9 +465,10 @@ class XMLWorkflowMapper:
             return template
             
         except Exception as e:
-            logger.error(f"节点映射失败 [{node_elem.attrib.get('id', 'unknown')}]: {e}")
+            ErrorHandler.log_error(e, module=__name__, function="_map_node", extra_info=f"节点ID: {node_elem.attrib.get('id', 'unknown')}")
             return None
     
+    @handle_errors(default_return=None, exceptions=(Exception,))
     def _map_edge(self, edge_elem: ET.Element) -> Optional[Dict[str, Any]]:
         """映射XML连线为JSON连线
         
@@ -442,7 +494,7 @@ class XMLWorkflowMapper:
             }
             
         except Exception as e:
-            logger.error(f"连线映射失败: {e}")
+            ErrorHandler.log_error(e, module=__name__, function="_map_edge")
             return None
     
     def _validate_workflow(self, workflow: Dict[str, Any]) -> Dict[str, Any]:

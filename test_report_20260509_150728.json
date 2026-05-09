@@ -1,0 +1,262 @@
+{
+  "test_time": "2026-05-09T15:07:28.150070",
+  "total_tests": 36,
+  "passed": 34,
+  "failed": 2,
+  "success_rate": 94.44444444444444,
+  "total_duration": 2.6891870498657227,
+  "results": [
+    {
+      "name": "模块导入: config_manager",
+      "status": "PASS",
+      "message": "",
+      "duration": 2.681,
+      "timestamp": "2026-05-09T15:07:28.142158"
+    },
+    {
+      "name": "模块导入: skill_loader",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T15:07:28.142198"
+    },
+    {
+      "name": "模块导入: intent_recognizer",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T15:07:28.142215"
+    },
+    {
+      "name": "模块导入: automation_workflow",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T15:07:28.142226"
+    },
+    {
+      "name": "模块导入: multi_agent_system",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T15:07:28.142236"
+    },
+    {
+      "name": "模块导入: llm_backend",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T15:07:28.142245"
+    },
+    {
+      "name": "模块导入: task_executor",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T15:07:28.142281"
+    },
+    {
+      "name": "模块导入: tool_result_formatter",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T15:07:28.142294"
+    },
+    {
+      "name": "模块导入: enhanced_logger",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T15:07:28.142300"
+    },
+    {
+      "name": "模块导入: di_container",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T15:07:28.142306"
+    },
+    {
+      "name": "配置管理器初始化",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T15:07:28.142324"
+    },
+    {
+      "name": "获取应用配置",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T15:07:28.142511"
+    },
+    {
+      "name": "技能加载器初始化",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T15:07:28.142719"
+    },
+    {
+      "name": "技能调度器初始化",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.004,
+      "timestamp": "2026-05-09T15:07:28.146850"
+    },
+    {
+      "name": "工作流引擎初始化",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T15:07:28.146877"
+    },
+    {
+      "name": "工作流引擎单例获取",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T15:07:28.146884"
+    },
+    {
+      "name": "多智能体调度器",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T15:07:28.146894"
+    },
+    {
+      "name": "依赖注入容器初始化",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T15:07:28.146908"
+    },
+    {
+      "name": "API模块: api.monitor",
+      "status": "FAIL",
+      "message": "Router.__init__() got an unexpected keyword argument 'on_startup'",
+      "duration": 0.001,
+      "timestamp": "2026-05-09T15:07:28.147420"
+    },
+    {
+      "name": "API模块: api.schedule",
+      "status": "FAIL",
+      "message": "Router.__init__() got an unexpected keyword argument 'on_startup'",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T15:07:28.147596"
+    },
+    {
+      "name": "CLI模块: cli.base",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.002,
+      "timestamp": "2026-05-09T15:07:28.149744"
+    },
+    {
+      "name": "CLI模块: cli.smart",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T15:07:28.149763"
+    },
+    {
+      "name": "CLI模块: cli.automate",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T15:07:28.149767"
+    },
+    {
+      "name": "CLI模块: cli.scrape",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T15:07:28.149771"
+    },
+    {
+      "name": "CLI模块: cli.analyze",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T15:07:28.149775"
+    },
+    {
+      "name": "CLI模块: cli.colors",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T15:07:28.149778"
+    },
+    {
+      "name": "安全管理器初始化",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T15:07:28.149870"
+    },
+    {
+      "name": "性能工具导入",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T15:07:28.149884"
+    },
+    {
+      "name": "短期内存管理器初始化",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T15:07:28.149992"
+    },
+    {
+      "name": "向量内存存储初始化",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T15:07:28.150000"
+    },
+    {
+      "name": "搜索引擎工厂初始化",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T15:07:28.150010"
+    },
+    {
+      "name": "模块导入: intent_monitor",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T15:07:28.150021"
+    },
+    {
+      "name": "模块导入: message_bus",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T15:07:28.150026"
+    },
+    {
+      "name": "模块导入: monitoring",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T15:07:28.150031"
+    },
+    {
+      "name": "模块导入: task_queue",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T15:07:28.150035"
+    },
+    {
+      "name": "模块导入: warmup",
+      "status": "PASS",
+      "message": "",
+      "duration": 0.0,
+      "timestamp": "2026-05-09T15:07:28.150039"
+    }
+  ]
+}

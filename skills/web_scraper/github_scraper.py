@@ -1,398 +1,470 @@
-"""GitHub Trending 爬虫 - Playwright有头浏览器"""
+"""
+GitHub爬虫 - 支持Trending趋势和代码搜索
 
+数据源:
+    - Trending: https://github.com/trending
+    - Search API: https://api.github.com/search/repositories
+    - Search URL: https://github.com/search?q=
+解析方式: httpx (HTML解析) + Playwright降级
+"""
+import asyncio
 import logging
-from typing import Dict, Any, List
+import random
+from typing import Dict, List, Optional, Any
+from urllib.parse import quote
 from pathlib import Path
 from datetime import datetime
-from .base_scraper import BaseScraper
+
+import httpx
+
+from core.error_handler_utils import retry_on_error, handle_errors, ErrorHandler
 
 logger = logging.getLogger(__name__)
 
 OUTPUT_DIR = Path(__file__).parent / "output"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
+_HEADERS_POOL = [
+    {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Connection': 'keep-alive',
+    },
+    {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'zh-CN,zh;q=0.9',
+        'Connection': 'keep-alive',
+    },
+]
 
-class GitHubTrendingScraper(BaseScraper):
-    """GitHub Trending 爬虫 - 支持翻页"""
-    
-    def __init__(self):
-        super().__init__("github_trending")
-        self.base_url = "https://github.com/trending"
-    
-    async def scrape(self, **kwargs) -> Dict[str, Any]:
-        """爬取 GitHub Trending（有头浏览器+翻页）
-        
-        Args:
-            language: 编程语言过滤
-            since: 时间范围 (daily/weekly/monthly)
-            pages: 爬取页数
-            generate_report: 是否生成MD报告
-            download_images: 是否下载图片
-            download_videos: 是否下载视频
-            download_audio: 是否下载音频
-            extract_tables: 是否提取表格
-            
-        Returns:
-            包含 trending 仓库列表的字典
+_TIMEOUT = 30.0
+
+
+def _get_headers(**extra: str) -> dict:
+    """获取随机请求头"""
+    headers = random.choice(_HEADERS_POOL).copy()
+    headers.update(extra)
+    return headers
+
+
+def _format_stars(stars: int) -> str:
+    """格式化star数量"""
+    if stars >= 1_000_000:
+        return f'{stars / 1_000_000:.1f}M'
+    if stars >= 1_000:
+        return f'{stars / 1_000:.1f}k'
+    return str(stars)
+
+
+class GitHubTrendingScraper:
+    """
+    GitHub爬虫
+
+    支持功能:
+        - get_hot_list: 获取GitHub Trending趋势
+        - search: 搜索GitHub仓库/用户
+    """
+
+    def get_hot_list(self, top_n: int = 10) -> List[Dict[str, str]]:
         """
-        language = kwargs.get("language", "")
-        since = kwargs.get("since", "daily")
-        pages = int(kwargs.get("pages", 1))
-        generate_report = kwargs.get("generate_report", True)
-        download_images = kwargs.get("download_images", False)
-        download_videos = kwargs.get("download_videos", False)
-        download_audio = kwargs.get("download_audio", False)
-        extract_tables = kwargs.get("extract_tables", False)
-        
+        获取GitHub Trending趋势
+
+        Args:
+            top_n: 返回条数
+
+        Returns:
+            [{"title": str, "author": str, "stars": str, "url": str, "description": str, "language": str}, ...]
+        """
         try:
-            # 使用BaseScraper的浏览器池
-            browser, context, page = await self.get_browser("github")
-            
-            url = self.base_url
-            if language:
-                url += f"/{language}"
-            url += f"?since={since}"
-            
-            all_repos = []
-            downloaded_images = []
-            downloaded_videos = []
-            downloaded_audio = []
-            extracted_tables = []
-            
-            # 重试机制
-            max_retries = 3
-            for attempt in range(max_retries):
-                try:
-                    for page_num in range(1, pages + 1):
-                        if page_num > 1:
-                            url = f"{self.base_url}/{language}?since={since}&page={page_num}" if language else f"{self.base_url}?since={since}&page={page_num}"
-                        
-                        logger.info(f"正在爬取 GitHub Trending 第 {page_num} 页... (尝试 {attempt+1}/{max_retries})")
-                        
-                        # 尝试访问页面
-                        await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-                        
-                        # 等待页面加载
-                        await page.wait_for_timeout(3000)
-                        
-                        # 获取页面标题用于调试
-                        page_title = await page.title()
-                        logger.info(f"页面标题: {page_title}")
-                        
-                        # 检查页面内容
-                        page_content = await page.content()
-                        logger.info(f"页面内容长度: {len(page_content)} 字符")
-                        
-                        # 滚动页面到底部，加载更多内容
-                        await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                        await page.wait_for_timeout(2000)  # 等待加载
-                        
-                        # 检查是否有trending内容
-                        has_trending = await page.query_selector('article.Box-row')
-                        logger.info(f"找到Box-row元素: {has_trending is not None}")
-                        
-                        # 下载图片
-                        if download_images:
-                            save_dir = OUTPUT_DIR / f"github_images_{since}_{language}"
-                            images = await self.download_images(page, 'img', str(save_dir), max_images=5)
-                            downloaded_images.extend(images)
-                        
-                        # 下载视频
-                        if download_videos:
-                            save_dir = OUTPUT_DIR / f"github_videos_{since}_{language}"
-                            videos = await self.download_videos(page, 'video', str(save_dir), max_videos=3)
-                            downloaded_videos.extend(videos)
-                        
-                        # 下载音频
-                        if download_audio:
-                            save_dir = OUTPUT_DIR / f"github_audio_{since}_{language}"
-                            audio = await self.download_audio(page, 'audio', str(save_dir), max_audio=3)
-                            downloaded_audio.extend(audio)
-                        
-                        # 提取表格
-                        if extract_tables:
-                            tables = await self.extract_tables(page)
-                            extracted_tables.extend(tables)
-                        
-                        # 解析当前页 - 使用更稳定的选择器
-                        repos = await page.evaluate("""
-                            () => {
-                                const results = [];
-                                
-                                // GitHub Trending页面的主要容器
-                                const articles = document.querySelectorAll('article.Box-row');
-                                
-                                console.log('找到文章数量:', articles.length);
-                                
-                                articles.forEach((article, index) => {
-                                    try {
-                                        // 获取仓库名称和链接
-                                        let name = '';
-                                        let url = '';
-                                        
-                                        // 方式1: h2.h3 > a (GitHub Trending标准结构)
-                                        const titleLink = article.querySelector('h2.h3 a');
-                                        if (titleLink) {
-                                            name = titleLink.textContent.trim();
-                                            url = titleLink.getAttribute('href');
-                                            if (url && !url.startsWith('http')) {
-                                                url = 'https://github.com' + url;
-                                            }
-                                        }
-                                        
-                                        // 如果方式1失败，尝试其他方式
-                                        if (!name) {
-                                            const altTitle = article.querySelector('h2 a, .repo-listing-h1 a');
-                                            if (altTitle) {
-                                                name = altTitle.textContent.trim();
-                                                url = altTitle.getAttribute('href');
-                                                if (url && !url.startsWith('http')) {
-                                                    url = 'https://github.com' + url;
-                                                }
-                                            }
-                                        }
-                                        
-                                        // 获取描述
-                                        let description = '';
-                                        const descElem = article.querySelector('p.col-9, p.text-gray');
-                                        if (descElem) {
-                                            description = descElem.textContent.trim();
-                                        }
-                                        
-                                        // 获取语言
-                                        let language = 'Unknown';
-                                        const langElem = article.querySelector('span[itemprop="programmingLanguage"], [itemprop="programmingLanguage"]');
-                                        if (langElem) {
-                                            language = langElem.textContent.trim();
-                                        }
-                                        
-                                        // 获取stars
-                                        let stars = '0';
-                                        const starsLink = article.querySelector('a[href*="/stargazers"]');
-                                        if (starsLink) {
-                                            stars = starsLink.textContent.trim().replace(/\\s+/g, ' ').trim();
-                                        }
-                                        
-                                        // 获取forks
-                                        let forks = '0';
-                                        const forksLink = article.querySelector('a[href*="/forks"]');
-                                        if (forksLink) {
-                                            forks = forksLink.textContent.trim().replace(/\\s+/g, ' ').trim();
-                                        }
-                                        
-                                        // 只添加有名称的仓库
-                                        if (name && name.length > 0) {
-                                            // 清理名称中的换行符和多余空格
-                                            name = name.replace(/\\s+/g, ' ').trim();
-                                            
-                                            results.push({
-                                                name,
-                                                url,
-                                                description,
-                                                language,
-                                                stars,
-                                                forks
-                                            });
-                                            
-                                            console.log(`仓库 ${index + 1}:`, name);
-                                        }
-                                    } catch (e) {
-                                        console.error('解析仓库失败:', e);
-                                    }
-                                });
-                                
-                                console.log('成功解析的仓库数量:', results.length);
-                                return results;
-                            }
-                        """)
-                        
-                        all_repos.extend(repos)
-                        logger.info(f"第 {page_num} 页爬取完成: {len(repos)} 个仓库")
-                        
-                        # 检查是否有下一页
-                        has_next = await page.query_selector("a.next_page")
-                        if not has_next or page_num >= pages:
+            return self._fetch_trending_via_httpx(top_n)
+        except Exception as e:
+            ErrorHandler.log_error(e, module=__name__, function="_fetch_trending_via_httpx", extra_info="httpx方式失败")
+            logger.warning("GitHub Trending httpx获取失败，尝试Playwright方式...")
+            try:
+                return self._fetch_trending_via_playwright(top_n)
+            except Exception as e2:
+                ErrorHandler.log_error(e2, module=__name__, function="_fetch_trending_via_playwright", extra_info="Playwright方式也失败")
+                return []
+
+    def search(self, keyword: str, top_n: int = 10) -> List[Dict[str, str]]:
+        """
+        搜索GitHub仓库
+
+        支持搜索格式:
+            - 普通关键词: "python"
+            - 作者+项目: "author:username project"
+            - 特定语言: "python language:python"
+
+        Args:
+            keyword: 搜索关键词
+            top_n: 返回条数
+
+        Returns:
+            [{"title": str, "author": str, "stars": str, "url": str, "description": str, "language": str}, ...]
+        """
+        try:
+            return self._search_via_api(keyword, top_n)
+        except Exception as e:
+            ErrorHandler.log_error(e, module=__name__, function="_search_via_api", extra_info="API方式失败")
+            logger.warning("GitHub搜索API失败，尝试Playwright方式...")
+            try:
+                return self._search_via_playwright(keyword, top_n)
+            except Exception as e2:
+                ErrorHandler.log_error(e2, module=__name__, function="_search_via_playwright", extra_info="Playwright方式也失败")
+                return []
+
+    def _fetch_trending_via_httpx(self, top_n: int) -> List[Dict[str, str]]:
+        """通过GitHub Trending页面获取趋势（HTML解析）"""
+        from bs4 import BeautifulSoup
+
+        url = 'https://github.com/trending'
+        headers = _get_headers(Referer='https://github.com/')
+
+        with httpx.Client(timeout=_TIMEOUT, follow_redirects=True) as client:
+            resp = client.get(url, headers=headers)
+            resp.raise_for_status()
+            html = resp.text
+
+        soup = BeautifulSoup(html, 'html.parser')
+        articles = soup.find_all('article', class_='Box-row')
+
+        results = []
+        for article in articles[:top_n]:
+            try:
+                h2 = article.find('h2')
+                if not h2:
+                    continue
+                a = h2.find('a')
+                if not a:
+                    continue
+
+                href = a.get('href', '')
+                full_name = a.get_text(strip=True)
+
+                desc_el = article.find('p', class_=lambda x: x and 'col-9' in x)
+                description = desc_el.get_text(strip=True) if desc_el else ''
+
+                # 查找语言和stars信息
+                language = ''
+                stars = ''
+                
+                # 找到包含meta信息的div
+                meta_div = article.find('div', class_=lambda x: x and 'flex-wrap' in x)
+                if meta_div:
+                    # 获取所有子元素的文本
+                    meta_texts = []
+                    for child in meta_div.children:
+                        if child.name == 'span' or child.name == 'a':
+                            text = child.get_text(strip=True)
+                            if text:
+                                meta_texts.append(text)
+                    
+                    # 解析语言和stars
+                    for text in meta_texts:
+                        # 语言通常不包含数字，stars通常包含数字或k/M后缀
+                        if any(c.isdigit() for c in text) or text.endswith('k') or text.endswith('M'):
+                            if not stars:
+                                stars = text
+                        else:
+                            if not language and text.isalpha():
+                                language = text
+
+                # 如果还是没找到stars，尝试查找a标签
+                if not stars:
+                    for link in article.find_all('a'):
+                        link_text = link.get_text(strip=True)
+                        if link_text and (any(c.isdigit() for c in link_text) or link_text.endswith('k') or link_text.endswith('M')):
+                            stars = link_text
                             break
-                        
-                        await page.wait_for_timeout(3000)  # 防封
+
+                parts = href.split('/')
+                author = parts[1] if len(parts) > 1 else ''
+                repo = parts[2].replace('.git', '') if len(parts) > 2 else ''
+
+                results.append({
+                    'title': f'{author}/{repo}',
+                    'author': author,
+                    'repo': repo,
+                    'stars': stars,
+                    'url': f'https://github.com{href}',
+                    'description': description,
+                    'language': language,
+                    'heat': stars,
+                    'label': language,
+                })
+            except Exception as e:
+                logger.debug(f"GitHub Trending解析异常: {e}")
+                continue
+
+        return results
+
+    def _fetch_trending_via_playwright(self, top_n: int) -> List[Dict[str, str]]:
+        """Playwright获取GitHub Trending"""
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_closed():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+        return loop.run_until_complete(self._async_fetch_trending_playwright(top_n))
+
+    async def _async_fetch_trending_playwright(self, top_n: int) -> List[Dict[str, str]]:
+        """Playwright异步获取GitHub Trending"""
+        from playwright.async_api import async_playwright
+
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(
+                headless=True,
+                args=['--no-sandbox', '--disable-blink-features=AutomationControlled'],
+            )
+            context = await browser.new_context(
+                user_agent=_get_headers()['User-Agent'],
+                locale='zh-CN',
+            )
+            page = await context.new_page()
+            await page.goto('https://github.com/trending', timeout=_TIMEOUT * 1000, wait_until='domcontentloaded')
+            await page.wait_for_selector('.Box-row', timeout=5000)
+
+            items = await page.query_selector_all('.Box-row')
+            results = []
+
+            for item in items[:top_n]:
+                try:
+                    title_el = await item.query_selector('h2 a')
+                    desc_el = await item.query_selector('p.col-9')
                     
-                    # 成功爬取，退出重试循环
-                    break
+                    href = (await title_el.get_attribute('href')) if title_el else ''
+                    title = (await title_el.inner_text()).strip() if title_el else ''
+                    desc = (await desc_el.inner_text()).strip() if desc_el else ''
+
+                    # 获取meta信息
+                    meta_div = await item.query_selector('div.d-flex')
+                    language = ''
+                    stars = ''
                     
-                except Exception as e:
-                    logger.warning(f"爬取失败（尝试 {attempt+1}/{max_retries}）: {e}")
-                    if attempt < max_retries - 1:
-                        # 重试前等待
-                        await page.wait_for_timeout(5000)
-                        # 重新创建页面
-                        await page.close()
-                        page = await context.new_page()
-                    else:
-                        # 达到最大重试次数
-                        raise
+                    if meta_div:
+                        # 获取所有span和a标签
+                        spans = await meta_div.query_selector_all('span, a')
+                        for span in spans:
+                            text = (await span.inner_text()).strip()
+                            if text:
+                                if any(c.isdigit() for c in text) or text.endswith('k') or text.endswith('M'):
+                                    if not stars:
+                                        stars = text
+                                else:
+                                    if not language and text.isalpha():
+                                        language = text
+
+                    if title and href:
+                        parts = href.split('/')
+                        author = parts[1] if len(parts) > 1 else ''
+                        repo = parts[2].replace('.git', '') if len(parts) > 2 else ''
+
+                        results.append({
+                            'title': f'{author}/{repo}',
+                            'author': author,
+                            'repo': repo,
+                            'stars': stars,
+                            'url': f'https://github.com{href}',
+                            'description': desc,
+                            'language': language,
+                            'heat': stars,
+                            'label': language,
+                        })
+                except Exception:
+                    continue
+
+            await browser.close()
+            return results
+
+    def _search_via_api(self, keyword: str, top_n: int) -> List[Dict[str, str]]:
+        """通过GitHub API搜索仓库"""
+        url = 'https://api.github.com/search/repositories'
+        
+        params = {
+            'q': keyword,
+            'per_page': top_n,
+            'sort': 'stars',
+            'order': 'desc',
+        }
+        headers = _get_headers(Accept='application/vnd.github.v3+json')
+
+        with httpx.Client(timeout=_TIMEOUT, follow_redirects=True) as client:
+            resp = client.get(url, params=params, headers=headers)
             
-            # 不要关闭浏览器，留给池管理
-            
-            # 保存CSV
+            if resp.status_code == 403:
+                logger.warning("GitHub API限流，降级到Playwright")
+                raise Exception("API rate limited")
+                
+            resp.raise_for_status()
+            data = resp.json()
+
+        items = data.get('items', [])
+        results = []
+
+        for item in items[:top_n]:
+            try:
+                results.append({
+                    'title': item.get('full_name', ''),
+                    'author': item.get('owner', {}).get('login', ''),
+                    'repo': item.get('name', ''),
+                    'stars': _format_stars(item.get('stargazers_count', 0)),
+                    'url': item.get('html_url', ''),
+                    'description': item.get('description', '') or '',
+                    'language': item.get('language', '') or '',
+                    'heat': str(item.get('stargazers_count', 0)),
+                    'label': item.get('language', '') or '',
+                    'forks': item.get('forks_count', 0),
+                    'updated_at': item.get('updated_at', ''),
+                })
+            except Exception as e:
+                logger.debug(f"GitHub搜索条目解析异常: {e}")
+                continue
+
+        return results
+
+    def _search_via_playwright(self, keyword: str, top_n: int) -> List[Dict[str, str]]:
+        """Playwright搜索GitHub"""
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_closed():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+        return loop.run_until_complete(self._async_search_playwright(keyword, top_n))
+
+    async def _async_search_playwright(self, keyword: str, top_n: int) -> List[Dict[str, str]]:
+        """Playwright异步搜索GitHub"""
+        from playwright.async_api import async_playwright
+
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(
+                headless=True,
+                args=['--no-sandbox', '--disable-blink-features=AutomationControlled'],
+            )
+            context = await browser.new_context(
+                user_agent=_get_headers()['User-Agent'],
+                locale='zh-CN',
+            )
+            page = await context.new_page()
+
+            search_url = f'https://github.com/search?q={quote(keyword)}&type=repositories'
+            await page.goto(search_url, timeout=_TIMEOUT * 1000, wait_until='domcontentloaded')
+            await page.wait_for_selector('.repo-list-item', timeout=5000)
+
+            items = await page.query_selector_all('.repo-list-item')
+            results = []
+
+            for item in items[:top_n]:
+                try:
+                    title_el = await item.query_selector('h3 a')
+                    desc_el = await item.query_selector('p.col-9')
+                    
+                    href = (await title_el.get_attribute('href')) if title_el else ''
+                    title = (await title_el.inner_text()).strip() if title_el else ''
+                    desc = (await desc_el.inner_text()).strip() if desc_el else ''
+
+                    # 获取meta信息
+                    language = ''
+                    stars = ''
+                    meta_div = await item.query_selector('div.d-flex')
+                    if meta_div:
+                        spans = await meta_div.query_selector_all('span, a')
+                        for span in spans:
+                            text = (await span.inner_text()).strip()
+                            if text:
+                                if any(c.isdigit() for c in text) or text.endswith('k') or text.endswith('M'):
+                                    if not stars:
+                                        stars = text.replace('stars', '').strip()
+                                else:
+                                    if not language and text.isalpha():
+                                        language = text
+
+                    if title and href:
+                        parts = href.split('/')
+                        author = parts[1] if len(parts) > 1 else ''
+                        repo = parts[2].replace('.git', '') if len(parts) > 2 else ''
+
+                        results.append({
+                            'title': f'{author}/{repo}',
+                            'author': author,
+                            'repo': repo,
+                            'stars': stars,
+                            'url': f'https://github.com{href}',
+                            'description': desc,
+                            'language': language,
+                            'heat': stars,
+                            'label': language,
+                        })
+                except Exception:
+                    continue
+
+            await browser.close()
+            return results
+
+    async def scrape(self, **kwargs) -> Dict[str, Any]:
+        """爬取GitHub数据"""
+        action = kwargs.get("action", "trending")
+        top_n = kwargs.get("top_n", 10)
+        keyword = kwargs.get("keyword", "")
+
+        try:
+            if action in ["trending", "hot", "热榜", "趋势"]:
+                data = self.get_hot_list(top_n=top_n)
+            elif action in ["搜索", "search"]:
+                data = self.search(keyword, top_n=top_n)
+            else:
+                data = self.get_hot_list(top_n=top_n)
+
             csv_path = None
-            if all_repos:
-                csv_path = self._save_to_csv(all_repos, since, language)
-            
-            # 生成MD报告
-            md_path = None
-            if generate_report and all_repos:
-                md_path = self._generate_md_report(all_repos, since, language)
-            
+            if data:
+                csv_path = self._save_to_csv(data, action)
+
             result = {
                 "success": True,
-                "count": len(all_repos),
-                "data": all_repos,
+                "count": len(data),
+                "data": data,
                 "site": "GitHub",
-                "action": f"trending_{since}",
+                "action": action,
                 "csv_path": str(csv_path) if csv_path else None,
-                "md_path": str(md_path) if md_path else None,
             }
-            
-            # 添加下载结果
-            if downloaded_images:
-                result["images"] = downloaded_images
-            if downloaded_videos:
-                result["videos"] = downloaded_videos
-            if downloaded_audio:
-                result["audio"] = downloaded_audio
-            if extracted_tables:
-                result["tables"] = extracted_tables
-            
-            logger.info(f"GitHub Trending 爬取完成: {len(all_repos)} 个仓库")
+
             return result
-                
         except Exception as e:
-            logger.error(f"GitHub Trending 爬取失败: {e}")
+            logger.error(f"GitHub爬虫执行失败: {e}")
             return {
                 "success": False,
                 "error": str(e),
                 "site": "GitHub",
+                "count": 0
             }
-    
-    def _save_to_csv(self, repos: List[Dict], since: str, language: str) -> Path:
+
+    def _save_to_csv(self, data: List[Dict], action: str) -> Path:
         """保存为CSV"""
         import csv
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        lang_suffix = f"_{language}" if language else ""
-        filename = f"github_trending_{since}{lang_suffix}_{timestamp}.csv"
+        filename = f"github_{action}_{timestamp}.csv"
         filepath = OUTPUT_DIR / filename
         
-        with open(filepath, "w", encoding="utf-8-sig", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=["排名", "仓库名", "描述", "语言", "Stars", "Forks", "链接"])
-            writer.writeheader()
+        if data:
+            fieldnames = list(data[0].keys())
             
-            for idx, repo in enumerate(repos, 1):
-                writer.writerow({
-                    "排名": idx,
-                    "仓库名": repo["name"],
-                    "描述": repo["description"],
-                    "语言": repo["language"],
-                    "Stars": repo["stars"],
-                    "Forks": repo["forks"],
-                    "链接": repo["url"],
-                })
+            with open(filepath, "w", encoding="utf-8-sig", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                for item in data:
+                    writer.writerow(item)
+            
+            logger.info(f"CSV已保存: {filepath}")
         
-        logger.info(f"CSV已保存: {filepath}")
         return filepath
-    
-    def _generate_md_report(self, repos: List[Dict], since: str, language: str) -> Path:
-        """生成MD报告并保存到桌面"""
-        from pathlib import Path
-        import platform
-        
-        desktop = Path.home() / "Desktop"
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        lang_suffix = f"_{language}" if language else ""
-        filename = f"GitHub_Trending_{since}{lang_suffix}_{timestamp}.md"
-        filepath = desktop / filename
-        
-        lines = [
-            f"# GitHub Trending - {since.title()}\n",
-            f"**爬取时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n",
-            f"**语言过滤**: {language if language else '全部'}\n",
-            f"**总数**: {len(repos)} 个仓库\n",
-        ]
-        
-        lines.append("\n---\n")
-        
-        for idx, repo in enumerate(repos, 1):
-            repo_name = repo['name'].strip().replace('\n', ' ').replace('  ', ' ')
-            lines.append(f"## {idx}. [{repo_name}]({repo['url']})\n")
-            lines.append(f"- **描述**: {repo['description']}\n")
-            lines.append(f"- **语言**: {repo['language']}\n")
-            lines.append(f"- **Stars**: {repo['stars']}\n")
-            lines.append(f"- **Forks**: {repo['forks']}\n")
-            lines.append("")
-        
-        with open(filepath, "w", encoding="utf-8") as f:
-            f.write("\n".join(lines))
-        
-        # macOS自动打开
-        if platform.system() == "Darwin":
-            import subprocess
-            subprocess.run(["open", str(filepath)])
-        
-        logger.info(f"MD报告已保存到桌面: {filepath}")
-        return filepath
-    
-    def get_hot_list(self, top_n: int = 10) -> List[Dict]:
-        """
-        兼容旧接口：获取GitHub Trending列表
-        
-        Args:
-            top_n: 返回条数
-            
-        Returns:
-            [{"title": str, "heat": str, "url": str}, ...]
-        """
-        import asyncio
-        import concurrent.futures
-        
-        try:
-            # 检查是否已有运行的事件循环
-            try:
-                loop = asyncio.get_running_loop()
-                # 如果有运行的事件循环，在新线程中执行
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(asyncio.run, self.scrape(language="", since="daily", pages=1, generate_report=False))
-                    result = future.result(timeout=30)
-            except RuntimeError:
-                # 如果没有运行的事件循环，直接运行
-                result = asyncio.run(self.scrape(language="", since="daily", pages=1, generate_report=False))
-            
-            if result.get('success'):
-                data = result.get('data', [])
-                # 转换为旧接口格式
-                return [
-                    {
-                        'title': repo.get('name', 'Unknown').replace('\n', ' ').strip(),
-                        'heat': f"{repo.get('stars', '0')} stars",
-                        'url': repo.get('url', ''),
-                    }
-                    for repo in data[:top_n]
-                ]
-            return []
-        except Exception as e:
-            logger.error(f"GitHub Trending获取失败: {e}")
-            return []
-    
-    def search(self, keyword: str, top_n: int = 10) -> List[Dict]:
-        """
-        兼容旧接口：搜索GitHub仓库
-        
-        Args:
-            keyword: 搜索关键词
-            top_n: 返回条数
-            
-        Returns:
-            [{"title": str, "heat": str, "url": str}, ...]
-        """
-        # GitHub Trending不支持搜索，返回空列表
-        logger.warning("GitHub Trending不支持搜索功能")
-        return []

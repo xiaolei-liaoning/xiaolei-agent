@@ -1,0 +1,321 @@
+# 技能关键词配置文件
+# 格式:
+# skills:
+#   <技能名称>:
+#     priority: 优先级 (1-10, 越高越优先)
+#     keywords: 关键词列表
+#     description: 技能描述
+
+skills:
+  # 基础技能
+  weather:
+    priority: 5
+    description: "天气查询"
+    keywords:
+      - 天气
+      - 气温
+      - 温度
+      - 下雨
+      - 下雪
+      - 刮风
+      - weather
+      - 天气预报
+      - 天气怎么样
+      - 天气如何
+      - 今天天气
+      - 明天天气
+      - 多少度
+      - 几度
+      - 热不热
+      - 冷不冷
+      - 会不会下雨
+      - 要带伞吗
+      - 适合出门吗
+      - how is the weather
+      - temperature
+      - forecast
+
+  # 爬虫技能
+  web_scraper:
+    priority: 5
+    description: "网页爬取"
+    keywords:
+      - 爬取
+      - 抓取
+      - 热搜
+      - 热榜
+      - 微博热搜
+      - 百度热搜
+      - b站
+      - bilibili
+      - 抖音
+      - douyin
+      - 爬虫
+      - scrape
+      - crawl
+      - 知乎
+      - 今日头条
+      - 头条
+      - toutiao
+      - zhihu
+      - github
+      - git
+      - trending
+      - 趋势
+      - 仓库
+      - 热点
+      - 微博热点
+      - 热点新闻
+      - 爬一下
+      - 抓一下
+      - 排行榜
+      - b站排行
+      - 抖音热榜
+      - 微博榜单
+
+  # 数据分析技能
+  data_analysis:
+    priority: 4
+    description: "数据分析"
+    keywords:
+      - 数据分析
+      - 统计图表
+      - 可视化
+      - 趋势分析
+      - 词云图
+      - 饼图
+      - 柱状图
+      - 折线图
+      - analyze data
+      - chart
+      - 数据统计
+      - 数据可视化
+      - 报表
+      - report
+      - 分析报告
+      - 数据报告
+
+  # 文件操作技能
+  file_operations:
+    priority: 4
+    description: "文件操作"
+    keywords:
+      - 打开文件
+      - 保存文件
+      - 读取文件
+      - 删除文件
+      - 创建文件
+      - 文件重命名
+      - 文件移动
+      - 文件复制
+      - 写文件
+      - read file
+      - write file
+      - save file
+      - delete file
+      - create file
+
+  # 浏览器技能
+  browser:
+    priority: 4
+    description: "浏览器操作"
+    keywords:
+      - 打开浏览器
+      - 打开网页
+      - 访问网站
+      - 搜索
+      - 网页搜索
+      - open browser
+      - open website
+      - visit website
+      - web search
+
+  # 系统命令技能
+  system:
+    priority: 3
+    description: "系统命令"
+    keywords:
+      - 执行命令
+      - 运行命令
+      - terminal
+      - shell
+      - cmd
+      - command
+      - 命令行
+
+  # 计算器技能
+  calculator:
+    priority: 5
+    description: "计算器"
+    keywords:
+      - 计算
+      - 计算器
+      - 加
+      - 减
+      - 乘
+      - 除
+      - 等于
+      - 多少
+      - 求和
+      - 乘积
+      - 平方根
+      - 平方
+      - cube
+      - calculate
+      - plus
+      - minus
+      - multiply
+      - divide
+
+  # 翻译技能
+  translator:
+    priority: 4
+    description: "翻译"
+    keywords:
+      - 翻译
+      - 英文
+      - 中文
+      - 日语
+      - 韩语
+      - 英语翻译
+      - 中文翻译
+      - translate
+      - English
+      - Japanese
+      - Korean
+
+  # 邮件技能
+  email:
+    priority: 4
+    description: "邮件发送"
+    keywords:
+      - 发送邮件
+      - 邮件
+      - email
+      - send email
+      - 写信
+      - 发送信件
+
+  # 日程技能
+  calendar:
+    priority: 4
+    description: "日程管理"
+    keywords:
+      - 日程
+      - 日历
+      - 提醒
+      - 闹钟
+      - 会议
+      - 预约
+      - 安排
+      - calendar
+      - schedule
+      - reminder
+      - alarm
+
+  # 多步任务技能
+  multi_step:
+    priority: 6
+    description: "多步任务"
+    keywords:
+      - 先
+      - 然后
+      - 接着
+      - 再
+      - 之后
+      - 首先
+      - 第二步
+      - 最后
+      - 依次
+      - 步骤
+      - 流程
+      - 任务流程
+      - 分步
+      - 连续
+      - 顺序
+
+  # 总结技能
+  summarize:
+    priority: 4
+    description: "总结"
+    keywords:
+      - 总结
+      - 概括
+      - 摘要
+      - 报告
+      - 总结一下
+      - 概括一下
+      - summarize
+      - summary
+      - abstract
+
+  # 智能问答技能
+  qa:
+    priority: 3
+    description: "智能问答"
+    keywords:
+      - 什么是
+      - 为什么
+      - 怎么样
+      - 如何
+      - 哪个
+      - 哪个好
+      - 比较
+      - 区别
+      - 差异
+      - 原理
+      - 解释
+      - 说明
+      - 定义
+      - 介绍
+
+  # 代码技能
+  code:
+    priority: 5
+    description: "代码相关"
+    keywords:
+      - 代码
+      - 编程
+      - python
+      - java
+      - javascript
+      - 写代码
+      - 代码解释
+      - 代码审查
+      - 代码优化
+      - 调试
+      - bug
+      - error
+      - coding
+      - programming
+      - debug
+
+  # 搜索技能
+  search_engine:
+    priority: 4
+    description: "搜索引擎"
+    keywords:
+      - 搜索
+      - 查找
+      - 搜索一下
+      - 查一下
+      - find
+      - search
+      - lookup
+
+  # MCP连接器技能
+  mcp_connector:
+    priority: 5
+    description: "MCP服务连接器"
+    keywords:
+      - MCP
+      - mcp
+      - 连接MCP
+      - MCP服务
+      - MCP服务器
+      - the-agency
+      - 项目健康状态
+      - agent状态
+      - 协作请求
+      - 待处理协作
+      - 新闻广播

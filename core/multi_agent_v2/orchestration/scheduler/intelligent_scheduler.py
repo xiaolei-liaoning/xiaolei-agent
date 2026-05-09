@@ -4,10 +4,17 @@
 职责：
 1. 任务理解 - 解析任务类型、复杂度、依赖
 2. 模式选择 - 确定协作模式（流水线/主从/评审/拍卖）
-3. Agent匹配 - 根据能力匹配最合适的Agent
+3. Agent匹配 - 根据能力匹配最合适的Agent（含资源评估）
 4. 流程编排 - 定义任务执行顺序和依赖关系
 5. 动态调整 - 根据执行情况实时调整
 6. 结果聚合 - 汇总各Agent结果
+
+整合了 enhanced_agent_router 的资源评估功能：
+- 任务复杂度评估
+- 资源需求评估（CPU、内存、网络、存储、API配额）
+- 增强型多维路由评分
+- 动态权重调整
+- 负载均衡
 """
 
 import asyncio
@@ -18,7 +25,9 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Tuple
 import uuid
+import re
 
+from core.shared.enums import TaskComplexity, ResourceType
 from core.multi_agent_v2.agents.base.base_agent import (
     BaseAgent, AgentType, Task, ActionResult, Capability
 )
@@ -71,32 +80,131 @@ class SchedulingMetrics:
         return self.successful_tasks / self.total_tasks if self.total_tasks > 0 else 0.0
 
 
+@dataclass
+class EnhancedAgentMetrics:
+    """增强版Agent性能指标（整合自enhanced_agent_router）"""
+    agent_type: str
+    priority: float = 1.0              # 优先级权重 (0-1)
+    health_score: float = 1.0          # 健康度 (0-1)
+    avg_execution_time: float = 0.0    # 平均执行时间（秒）
+    success_rate: float = 1.0          # 成功率 (0-1)
+    total_tasks: int = 0               # 总任务数
+    failed_tasks: int = 0              # 失败任务数
+    last_active: float = 0.0           # 最后活跃时间戳
+    
+    # 资源相关指标
+    avg_cpu_usage: float = 0.0         # 平均CPU使用率
+    avg_memory_usage: float = 0.0       # 平均内存使用率
+    avg_network_usage: float = 0.0       # 平均网络使用率
+    concurrent_capacity: int = 1         # 并发处理能力
+    
+    # 复杂度相关指标
+    simple_task_success_rate: float = 1.0   # 简单任务成功率
+    moderate_task_success_rate: float = 1.0  # 中等任务成功率
+    complex_task_success_rate: float = 1.0   # 复杂任务成功率
+
+
+@dataclass
+class ResourceAvailability:
+    """资源可用性"""
+    resource_type: ResourceType
+    available: float  # 可用量
+    total: float  # 总量
+    utilization_rate: float  # 利用率
+    last_updated: float = field(default_factory=time.time)
+
+
 class CapabilityMatcher:
-    """能力匹配器 - 智能匹配Agent与任务"""
+    """能力匹配器 - 智能匹配Agent与任务
+    
+    整合了 enhanced_agent_router 的资源评估功能：
+    - 任务复杂度评估
+    - 资源需求评估
+    - 增强型多维路由评分
+    """
 
     def __init__(self, context_center: GlobalContextCenter):
         self.context_center = context_center
+        
+        # 路由权重配置
+        self.routing_weights = {
+            "priority": 0.25,
+            "health": 0.20,
+            "time": 0.15,
+            "success": 0.20,
+            "complexity_match": 0.10,
+            "resource_efficiency": 0.10
+        }
+        
+        # 资源可用性缓存
+        self.resource_availability: Dict[ResourceType, ResourceAvailability] = {}
+
+    def update_resource_availability(self, resource_type: ResourceType, 
+                                  available: float, total: float):
+        """更新资源可用性"""
+        utilization_rate = 1.0 - (available / total) if total > 0 else 0.0
+        
+        self.resource_availability[resource_type] = ResourceAvailability(
+            resource_type=resource_type,
+            available=available,
+            total=total,
+            utilization_rate=utilization_rate
+        )
+
+    def assess_task_complexity(self, task: Task) -> TaskComplexity:
+        """评估任务复杂度（整合自enhanced_agent_router）"""
+        task_type = task.type or ""
+        task_description = task.description or ""
+        
+        # 任务复杂度规则库
+        complexity_rules = {
+            "trivial": ["ping", "check", "status"],
+            "simple": ["search", "query", "lookup"],
+            "moderate": ["summarize", "analyze", "process"],
+            "complex": ["crawl", "extract", "generate", "optimize"],
+            "critical": ["emergency", "urgent", "priority"]
+        }
+        
+        # 匹配任务类型
+        for complexity_name, keywords in complexity_rules.items():
+            for keyword in keywords:
+                if keyword in task_type.lower() or keyword in task_description.lower():
+                    return TaskComplexity(complexity_name)
+        
+        # 根据任务特征调整
+        if task.estimated_steps and task.estimated_steps > 5:
+            return TaskComplexity.COMPLEX
+        elif task.estimated_steps and task.estimated_steps > 2:
+            return TaskComplexity.MODERATE
+        
+        # 默认为中等复杂度
+        return TaskComplexity.MODERATE
 
     async def match(self, task: Task, available_agents: List[BaseAgent]) -> List[Tuple[BaseAgent, float]]:
         """匹配最适合执行任务的Agent列表
 
-        匹配算法考虑：
+        匹配算法考虑（整合了资源评估）：
         1. 能力相关性（关键词匹配）
         2. 专业等级（任务难度 vs Agent能力）
         3. 当前负载（避免过载）
         4. 历史表现（成功率、执行时间）
         5. 协作偏好（是否适合团队协作）
         6. 可用性（是否在线、健康）
+        7. 资源效率（CPU、内存、网络使用率）
+        8. 复杂度匹配（任务复杂度 vs Agent专长）
         """
         scored_agents = []
+        
+        # 评估任务复杂度
+        task_complexity = self.assess_task_complexity(task)
 
         for agent in available_agents:
             # 检查Agent是否可用
             if not self._is_agent_available(agent):
                 continue
 
-            # 计算匹配分数
-            score = self._calculate_match_score(task, agent)
+            # 计算增强版匹配分数
+            score = self._calculate_enhanced_match_score(task, agent, task_complexity)
             scored_agents.append((agent, score))
 
         # 按分数排序
@@ -201,6 +309,91 @@ class CapabilityMatcher:
             return 0.6
         else:
             return 0.5
+
+    def _calculate_enhanced_match_score(self, task: Task, agent: BaseAgent, 
+                                       task_complexity: TaskComplexity) -> float:
+        """计算增强版匹配分数（整合自enhanced_agent_router）
+        
+        综合考虑：
+        - 优先级权重
+        - 健康度
+        - 执行时间
+        - 成功率
+        - 复杂度匹配
+        - 资源效率
+        """
+        metrics = agent.get_metrics()
+        
+        # 1. 基础评分（原有维度）
+        max_acceptable_time = 60.0
+        if metrics.avg_execution_time > 0:
+            time_score = max(0, 1.0 - (metrics.avg_execution_time / max_acceptable_time))
+        else:
+            time_score = 1.0
+        
+        base_score = (
+            metrics.priority * self.routing_weights["priority"] +
+            agent.health_score * self.routing_weights["health"] +
+            time_score * self.routing_weights["time"] +
+            metrics.success_rate * self.routing_weights["success"]
+        )
+        
+        # 2. 复杂度匹配评分
+        complexity_match_score = self._calculate_complexity_match(agent, task_complexity)
+        
+        # 3. 资源效率评分
+        resource_efficiency_score = self._calculate_resource_efficiency(agent)
+        
+        # 4. 综合评分
+        total_score = (
+            base_score +
+            complexity_match_score * self.routing_weights["complexity_match"] +
+            resource_efficiency_score * self.routing_weights["resource_efficiency"]
+        )
+        
+        return round(total_score, 4)
+
+    def _calculate_complexity_match(self, agent: BaseAgent, task_complexity: TaskComplexity) -> float:
+        """计算复杂度匹配分数"""
+        metrics = agent.get_metrics()
+        
+        # 根据任务复杂度选择对应的历史成功率
+        if task_complexity in [TaskComplexity.TRIVIAL, TaskComplexity.SIMPLE]:
+            return metrics.simple_task_success_rate if hasattr(metrics, 'simple_task_success_rate') else metrics.success_rate
+        elif task_complexity == TaskComplexity.MODERATE:
+            return metrics.moderate_task_success_rate if hasattr(metrics, 'moderate_task_success_rate') else metrics.success_rate
+        elif task_complexity in [TaskComplexity.COMPLEX, TaskComplexity.VERY_COMPLEX, TaskComplexity.CRITICAL]:
+            return metrics.complex_task_success_rate if hasattr(metrics, 'complex_task_success_rate') else metrics.success_rate
+        
+        return metrics.success_rate
+
+    def _calculate_resource_efficiency(self, agent: BaseAgent) -> float:
+        """计算资源效率分数"""
+        metrics = agent.get_metrics()
+        
+        # 综合考虑CPU、内存、网络使用率
+        # 使用率越低，效率越高
+        avg_usage = 0.0
+        count = 0
+        
+        if hasattr(metrics, 'avg_cpu_usage') and metrics.avg_cpu_usage is not None:
+            avg_usage += metrics.avg_cpu_usage
+            count += 1
+        if hasattr(metrics, 'avg_memory_usage') and metrics.avg_memory_usage is not None:
+            avg_usage += metrics.avg_memory_usage
+            count += 1
+        if hasattr(metrics, 'avg_network_usage') and metrics.avg_network_usage is not None:
+            avg_usage += metrics.avg_network_usage
+            count += 1
+        
+        if count > 0:
+            avg_usage /= count
+            # 效率分数：使用率越低，分数越高
+            efficiency = max(0, 1.0 - avg_usage)
+            return efficiency
+        
+        # 默认返回较高效率分数
+        return 0.85
 
 
 class IntelligentScheduler:
@@ -309,6 +502,9 @@ class IntelligentScheduler:
 
             logger.info(f"任务调度成功: {task.task_id}, 模式: {collaboration_mode.value}, 预估时间: {estimated_time}s")
 
+            # 执行调度好的任务
+            await self.execute_scheduled_task(task, execution_plan)
+
             return result
 
         except Exception as e:
@@ -325,6 +521,66 @@ class IntelligentScheduler:
                 estimated_time=0.0,
                 error=str(e)
             )
+
+    async def execute_scheduled_task(self, task: Task, execution_plan: List[Dict[str, Any]]) -> None:
+        """执行调度好的任务"""
+        logger.info(f"开始执行任务: {task.task_id}")
+        
+        all_results = []
+        
+        for step in execution_plan:
+            subtask_id = step["subtask_id"]
+            agent_id = step["agent_id"]
+            agent_type = step.get("agent_type", "worker")
+            
+            # 从agent_pool获取agent
+            if self.agent_pool:
+                agent = None
+                
+                # 先从active_agents查找
+                if agent_id in self.agent_pool.active_agents:
+                    agent = self.agent_pool.active_agents[agent_id]
+                else:
+                    # 从pool中查找
+                    for pool_type, agents in self.agent_pool.pools.items():
+                        for ag in agents:
+                            if ag.agent_id == agent_id:
+                                agent = ag
+                                break
+                        if agent:
+                            break
+                
+                if agent and hasattr(agent, 'execute'):
+                    # 创建子任务
+                    subtask = Task(
+                        task_id=subtask_id,
+                        type=task.type,
+                        description=f"子任务: {step.get('description', '')}",
+                        context=task.context,
+                        priority=task.priority
+                    )
+                    
+                    # 执行子任务
+                    try:
+                        result = await agent.execute(subtask)
+                        all_results.append({
+                            "subtask_id": subtask_id,
+                            "agent_id": agent_id,
+                            "success": result.success,
+                            "output": result.output,
+                            "execution_time": result.execution_time
+                        })
+                        logger.info(f"子任务执行完成: {subtask_id}, 结果: {result.success}")
+                    except Exception as e:
+                        logger.error(f"子任务执行失败: {subtask_id}, 错误: {e}")
+                        all_results.append({
+                            "subtask_id": subtask_id,
+                            "agent_id": agent_id,
+                            "success": False,
+                            "error": str(e)
+                        })
+        
+        logger.info(f"任务执行完成: {task.task_id}, 子任务数: {len(all_results)}")
 
     async def _analyze_task(self, task: Task) -> Dict[str, Any]:
         """分析任务"""

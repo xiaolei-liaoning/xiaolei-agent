@@ -41,6 +41,7 @@ SITE_KEYWORDS: Dict[str, List[str]] = {
     "知乎": ["知乎", "zhihu"],
     "今日头条": ["今日头条", "头条"],
     "豆瓣": ["豆瓣", "douban"],
+    "GitHub": ["github", "GitHub", "GITHUB", "gitHub", "github.com"],
 }
 
 ANALYZE_KEYWORDS: List[str] = [

@@ -1,0 +1,88 @@
+================================================================================
+Core模块使用情况报告
+================================================================================
+
+✅ 实际使用的模块 (52个):
+--------------------------------------------------------------------------------
+1. multi_agent_system -> 被 16 个文件引用
+2. database -> 被 15 个文件引用
+3. llm_backend -> 被 14 个文件引用
+4. handlers -> 被 12 个文件引用
+5. skill_dispatcher -> 被 11 个文件引用
+6. rag_search_engine -> 被 9 个文件引用
+7. bfs_processor -> 被 8 个文件引用
+8. vector_memory -> 被 8 个文件引用
+9. reasoning_engine -> 被 6 个文件引用
+10. search_engine -> 被 6 个文件引用
+11. agent_coordinator -> 被 5 个文件引用
+12. intelligent_agent_selector -> 被 5 个文件引用
+13. automation_workflow -> 被 4 个文件引用
+14. cache_manager -> 被 4 个文件引用
+15. message_bus -> 被 4 个文件引用
+16. monitoring -> 被 4 个文件引用
+17. self_check -> 被 4 个文件引用
+18. self_check_middleware -> 被 4 个文件引用
+19. concurrent_processor -> 被 3 个文件引用
+20. keyword_extractor -> 被 3 个文件引用
+21. task_decomposer -> 被 3 个文件引用
+22. task_processor -> 被 3 个文件引用
+23. alert_manager -> 被 2 个文件引用
+24. app_interface -> 被 2 个文件引用
+25. intent_recognizer -> 被 2 个文件引用
+26. performance_utils -> 被 2 个文件引用
+27. redis_pool -> 被 2 个文件引用
+28. short_term_memory -> 被 2 个文件引用
+29. task_execution_interface -> 被 2 个文件引用
+30. task_parser -> 被 2 个文件引用
+31. task_planner -> 被 2 个文件引用
+32. task_queue -> 被 2 个文件引用
+33. task_scheduler -> 被 2 个文件引用
+34. tool_result_formatter -> 被 2 个文件引用
+35. workflow_engine -> 被 2 个文件引用
+36. config_manager -> 被 1 个文件引用
+37. di_container -> 被 1 个文件引用
+38. error_handler -> 被 1 个文件引用
+39. errors -> 被 1 个文件引用
+40. frontend_agent_system -> 被 1 个文件引用
+41. group_collaboration -> 被 1 个文件引用
+42. intent_monitor -> 被 1 个文件引用
+43. memory_optimizer -> 被 1 个文件引用
+44. result_summarizer -> 被 1 个文件引用
+45. sandbox_executor -> 被 1 个文件引用
+46. scheduled_tasks -> 被 1 个文件引用
+47. screen_locator -> 被 1 个文件引用
+48. search_engine_factory -> 被 1 个文件引用
+49. service_registry -> 被 1 个文件引用
+50. task_executor -> 被 1 个文件引用
+51. warmup -> 被 1 个文件引用
+52. xml_workflow_mapper -> 被 1 个文件引用
+
+❌ 未被使用的模块 (27个):
+--------------------------------------------------------------------------------
+1. __init__
+2. boundary_manager
+3. cluster_manager
+4. complexity_analyzer
+5. conversation_compressor
+6. coze_backend
+7. dynamic_short_term_memory
+8. dynamic_task_splitter
+9. enhanced_agent_router
+10. enhanced_hybrid_search
+11. enhanced_logger
+12. exception_handler
+13. hybrid_search_engine
+14. multi_ai_decomposer
+15. natural_language_processor
+16. optimized_hybrid_search
+17. persistence
+18. response_manager
+19. result_analyzer
+20. scheduled_cleanup
+21. scoring_standards
+22. security
+23. service_interfaces
+24. short_term_memory_fixed
+25. task_interfaces
+26. task_splitter
+27. vector_store_backup

@@ -1,0 +1,32 @@
+# ===== 最小依赖集 =====
+# 仅包含核心功能必需的依赖
+
+# Web框架
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+
+# 数据库
+redis>=5.0.0
+sqlalchemy>=2.0.0
+
+# LLM
+zhipuai>=2.0.0
+httpx>=0.27.0
+
+# 搜索引擎
+beautifulsoup4>=4.12.0
+
+# GUI自动化 (macOS)
+pyobjc-core>=10.1
+pyobjc-framework-ApplicationServices>=10.1
+pyobjc-framework-Cocoa>=10.1
+PyAutoGUI>=0.9.54
+
+# 工具
+python-dotenv>=1.0.0
+psutil>=5.9.0
+Pillow>=10.0.0
+loguru>=0.7.0
+
+# 测试
+pytest>=8.0.0

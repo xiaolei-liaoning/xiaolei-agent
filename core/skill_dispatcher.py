@@ -1,14 +1,17 @@
 """技能分发器（工业级）
 
 基于关键词权重 + 优先级的意图识别与路由引擎：
-- SKILL_CONFIGS：完整的关键词 + 优先级配置
+- 支持从YAML配置文件加载关键词
+- 支持多目录技能加载
 - match_skill()：关键词权重匹配，返回最佳技能名
 - is_multi_step()：检测多步任务指示词
 - extract_params()：正则提取各技能参数
 - register_tool()：动态注册新技能
 """
 import re
+import os
 import logging
+import yaml
 from typing import Dict, Any, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -272,9 +275,51 @@ _INTENT_SKILL_MAP = {
 class SkillDispatcher:
     """基于关键词权重 + 优先级的意图识别和技能路由"""
 
-    def __init__(self):
+    def __init__(self, config_path: str = None):
+        self._config_path = config_path or "./config/skill_keywords.yaml"
         self.skill_configs: List[tuple] = list(SKILL_CONFIGS)
         self._dynamic_registry: Dict[str, Dict[str, Any]] = {}
+        self._load_config_from_file()
+
+    def _load_config_from_file(self):
+        """从YAML配置文件加载关键词"""
+        if not os.path.exists(self._config_path):
+            logger.debug(f"配置文件不存在，使用默认配置: {self._config_path}")
+            return
+
+        try:
+            with open(self._config_path, "r", encoding="utf-8") as f:
+                config = yaml.safe_load(f)
+
+            if "skills" in config:
+                self._parse_config(config["skills"])
+                logger.info(f"从配置文件加载技能配置: {self._config_path}")
+        except Exception as e:
+            logger.warning(f"加载配置文件失败: {e}")
+
+    def _parse_config(self, skills_config: Dict[str, Dict]):
+        """解析配置文件中的技能配置"""
+        for skill_name, skill_data in skills_config.items():
+            priority = skill_data.get("priority", 5)
+            keywords = skill_data.get("keywords", [])
+            self._update_skill_config(skill_name, keywords, priority)
+
+    def _update_skill_config(self, name: str, keywords: List[str], priority: int):
+        """更新技能配置"""
+        for i, config in enumerate(self.skill_configs):
+            if config[0] == name:
+                self.skill_configs[i] = (name, keywords, priority)
+                logger.debug(f"更新技能配置: {name}")
+                return
+
+        self.skill_configs.append((name, keywords, priority))
+        logger.debug(f"添加技能配置: {name}")
+
+    def reload_config(self):
+        """重新加载配置文件"""
+        self.skill_configs = list(SKILL_CONFIGS)
+        self._load_config_from_file()
+        logger.info("技能配置已重新加载")
 
     # ── 动态注册 ─────────────────────────────────────────────────────────────
     def register_tool(self, name: str, keywords: List[str] = None,
@@ -287,6 +332,43 @@ class SkillDispatcher:
         }
         logger.info("动态注册技能: %s (priority=%d)", name, priority)
 
+    def _match_extracted_skill(self, message: str, message_lower: str) -> Optional[str]:
+        """优先检索萃取的技能（KEPA-P闭环优化）
+
+        从 skill_extractor 检查是否有匹配的萃取技能，
+        如果有则优先使用萃取的技能而非通用技能。
+
+        Returns:
+            萃取的技能名称，如果没有匹配则返回 None
+        """
+        try:
+            from core.skill_extractor import get_skill_extractor
+
+            extractor = get_skill_extractor()
+            all_skills = extractor.get_all_skills()
+
+            if not all_skills:
+                return None
+
+            for skill in all_skills:
+                skill_name_lower = skill.name.lower()
+
+                if skill_name_lower in message_lower:
+                    logger.info("匹配到萃取技能: %s (适用场景: %s)",
+                               skill.name, skill.applicable_scenarios[:2])
+                    return skill.name
+
+                for scenario in skill.applicable_scenarios:
+                    if scenario.lower() in message_lower:
+                        logger.info("通过场景匹配到萃取技能: %s (场景: %s)",
+                                   skill.name, scenario)
+                        return skill.name
+
+        except Exception as e:
+            logger.debug("检索萃取技能失败: %s", e)
+
+        return None
+
     # ── 意图匹配 ─────────────────────────────────────────────────────────────
     def match_skill(self, message: str) -> str:
         """基于关键词权重匹配，返回最佳技能名 - 优化版
@@ -295,9 +377,10 @@ class SkillDispatcher:
 
         优化：
         1. @skill名格式最高优先级
-        2. 多步任务检测优先（防止关键词权重覆盖）
-        3. 否定处理
-        4. 意图映射表快速路径
+        2. 萃取的技能优先检索（从skill_extractor检查）
+        3. 多步任务检测优先（防止关键词权重覆盖）
+        4. 否定处理
+        5. 意图映射表快速路径
         """
         message_lower = message.lower()
 
@@ -311,7 +394,13 @@ class SkillDispatcher:
                 logger.debug("技能匹配: '%s' -> %s (at格式)", message[:40], skill_name)
                 return skill_name
 
-        # 优化2：多步任务检测（优先于意图映射表，防止关键词权重覆盖）
+        # 优化2：优先检索萃取的技能（KEPA-P闭环优化）
+        extracted_skill = self._match_extracted_skill(message, message_lower)
+        if extracted_skill:
+            logger.debug("匹配到萃取技能: %s", extracted_skill)
+            return extracted_skill
+
+        # 优化3：多步任务检测（优先于意图映射表，防止关键词权重覆盖）
         if self.is_multi_step(message):
             logger.debug("检测到多步任务指示词，优先选择multi_step技能")
             return "multi_step"

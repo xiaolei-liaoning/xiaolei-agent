@@ -126,49 +126,88 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 
 class CliColors:
-    """终端颜色常量"""
-    HEADER = '\033[95m'
-    BLUE = '\033[94m'
-    GREEN = '\033[92m'
-    YELLOW = '\033[93m'
-    RED = '\033[91m'
-    ENDC = '\033[0m'
-    BOLD = '\033[1m'
+    """终端颜色常量 - Claude Code风格"""
+    DIM = '\033[2m'
+    ITALIC = '\033[3m'
     UNDERLINE = '\033[4m'
+    BOLD = '\033[1m'
+    ENDC = '\033[0m'
+    BLACK = '\033[30m'
+    RED = '\033[31m'
+    GREEN = '\033[32m'
+    YELLOW = '\033[33m'
+    BLUE = '\033[34m'
+    MAGENTA = '\033[35m'
+    CYAN = '\033[36m'
+    WHITE = '\033[37m'
+    GRAY = '\033[90m'
+    BRIGHT_BLUE = '\033[38;5;75m'
+    BRIGHT_CYAN = '\033[38;5;45m'
+    BRIGHT_MAGENTA = '\033[38;5;213m'
 
 
-def print_color(text: str, color: str) -> None:
+def print_color(text: str, color: str = "") -> None:
     """带颜色打印"""
-    print(f"{color}{text}{CliColors.ENDC}")
+    if color:
+        print(f"{color}{text}{CliColors.ENDC}")
+    else:
+        print(text)
 
 
 def print_success(message: str) -> None:
     """打印成功消息"""
-    print_color(f"✅ {message}", CliColors.GREEN)
+    print_color(f"  Success: {message}", CliColors.GREEN)
 
 
 def print_error(message: str) -> None:
     """打印错误消息"""
-    print_color(f"❌ {message}", CliColors.RED)
+    print_color(f"  Error: {message}", CliColors.RED)
 
 
 def print_warning(message: str) -> None:
     """打印警告消息"""
-    print_color(f"⚠️  {message}", CliColors.YELLOW)
+    print_color(f"  Warning: {message}", CliColors.YELLOW)
 
 
 def print_info(message: str) -> None:
     """打印信息消息"""
-    print_color(f"ℹ️  {message}", CliColors.BLUE)
+    print_color(f"  {message}", CliColors.CYAN)
 
 
 def print_header(title: str) -> None:
-    """打印标题"""
+    """打印标题 - Claude Code风格"""
     print()
-    print_color("=" * 60, CliColors.BOLD)
-    print_color(f"  {title}", CliColors.BOLD)
-    print_color("=" * 60, CliColors.BOLD)
+    print_color(f"  {title}", CliColors.BRIGHT_BLUE + CliColors.BOLD)
+    print_color(f"  {'─' * 50}", CliColors.GRAY)
     print()
+
+
+def print_section(title: str) -> None:
+    """打印小节标题"""
+    print()
+    print_color(f"  {title}", CliColors.CYAN + CliColors.BOLD)
+
+
+def print_section_end() -> None:
+    """打印小节结束"""
+    print()
+
+
+def print_chat_bubble(text: str, is_user: bool = False, timestamp: str = "") -> None:
+    """打印聊天气泡 - Claude Code风格"""
+    if not text or not text.strip():
+        text = "(empty)"
+
+    lines = text.split('\n')
+
+    if is_user:
+        print_color(f"\n  [You] {timestamp if timestamp else ''}", CliColors.GREEN + CliColors.BOLD)
+        for line in lines:
+            print_color(f"  {line}", CliColors.WHITE)
+    else:
+        print_color(f"\n  [Agent] {timestamp if timestamp else ''}", CliColors.BRIGHT_BLUE + CliColors.BOLD)
+        for line in lines:
+            print_color(f"  {line}", CliColors.CYAN)
 
 
 # ============================================================================
@@ -176,55 +215,53 @@ def print_header(title: str) -> None:
 # ============================================================================
 
 async def _display_workflow_result(result: Dict[str, Any]) -> None:
-    """显示工作流执行结果"""
+    """显示工作流执行结果 - Claude Code风格"""
     if not result.get("success"):
-        print_error(result.get("error", "执行失败"))
+        print_error(result.get("error", "Execution failed"))
         return
-    
-    # 检查是否是问候语响应
+
     greeting_message = result.get("greeting_message")
     if greeting_message:
-        print("\n" + "="*60)
-        print_color(greeting_message, CliColors.BLUE)
-        print("="*60 + "\n")
+        print()
+        print_color(greeting_message, CliColors.CYAN)
+        print()
         return
-    
-    print_success(f"工作流执行完成")
-    print(f"  工作流名称: {result.get('workflow_name', '未命名')}")
-    print(f"  总耗时: {result.get('total_time', 0):.2f}s")
-    print(f"  成功/失败: {result.get('success_count', 0)}/{result.get('failed_count', 0)}")
-    
+
+    print_success("Workflow completed")
+    print(f"  Name: {result.get('workflow_name', 'unnamed')}")
+    print(f"  Duration: {result.get('total_time', 0):.2f}s")
+    print(f"  Status: {result.get('success_count', 0)}/{result.get('failed_count', 0)}")
+
     if result.get("report_path"):
-        print(f"  报告文件: {result['report_path']}")
-    
-    # 显示步骤详情
+        print(f"  Report: {result['report_path']}")
+
     results = result.get("results", [])
     if results:
-        print("\n步骤详情:")
+        print()
+        print_color("Steps:", CliColors.BOLD)
         for step_result in results:
             step_num = step_result.get("step", "?")
             step_type = step_result.get("type", "")
             duration = step_result.get("duration", 0)
             success = step_result.get("success", False)
-            
-            status = "✅" if success else "❌"
-            print(f"  {status} 步骤{step_num} [{step_type}] ({duration:.3f}s)")
-            
+
+            status = "OK" if success else "FAIL"
+            status_color = CliColors.GREEN if success else CliColors.RED
+            print_color(f"  [{status}] Step {step_num} [{step_type}] ({duration:.3f}s)", status_color)
+
             if not success and step_result.get("error"):
-                print(f"      错误: {step_result['error']}")
-            
-            # 显示数据预览
+                print_color(f"      Error: {step_result['error']}", CliColors.RED)
+
             if step_result.get("data_preview"):
                 preview = step_result["data_preview"]
                 if len(preview) > 100:
                     preview = preview[:100] + "..."
-                print(f"      预览: {preview}")
-            
-            # 显示文件路径
+                print(f"      Preview: {preview}")
+
             if step_result.get("csv_path"):
                 print(f"      CSV: {step_result['csv_path']}")
             if step_result.get("chart_path"):
-                print(f"      图表: {step_result['chart_path']}")
+                print(f"      Chart: {step_result['chart_path']}")
 
 
 # ============================================================================
@@ -394,6 +431,12 @@ async def _handle_automate_single(args):
     print_header(f"GUI自动化 - {args.action}")
     
     action = args.action
+    
+    # ========== 特殊处理: 列出运行中的应用 ==========
+    if action == "list_apps":
+        await _handle_list_apps()
+        return
+    
     params = {}
     
     # ========== 应用操作 ==========
@@ -999,23 +1042,88 @@ async def handle_status(args):
         ("自动化模块", "skills.advanced_automation.handler", "automation_hub"),
     ]
     
-    print("核心组件状态:")
+    print_section("核心组件状态")
     for name, module, obj in components:
         try:
             mod = __import__(module, fromlist=[obj])
             getattr(mod, obj)
-            print(f"  ✅ {name}")
+            print_success(name)
         except Exception as e:
-            print(f"  ❌ {name} - {e}")
+            print_error(f"{name} - {e}")
+    print_section_end()
     
     # 检查输出目录
     output_dir = Path("skills") / "output"
     if output_dir.exists():
         csv_count = len(list(output_dir.glob("*.csv")))
-        print(f"\n输出目录: {output_dir}")
-        print(f"  CSV文件数: {csv_count}")
+        png_count = len(list(output_dir.glob("*.png")))
+        print_section("数据统计")
+        print_info(f"输出目录: {output_dir}")
+        print_info(f"  CSV文件数: {csv_count}")
+        print_info(f"  图片文件数: {png_count}")
+        print_section_end()
     else:
-        print_warning("\n输出目录不存在")
+        print_warning("输出目录不存在")
+
+
+# ============================================================================
+# 交互式聊天命令
+# ============================================================================
+
+async def handle_chat(args):
+    """处理交互式聊天命令"""
+    import time
+    
+    mode = getattr(args, 'mode', 'simple')
+    
+    # 清屏并显示欢迎界面
+    print("\033c", end="")
+    print_color("╔══════════════════════════════════════════════════════════════════╗", CliColors.CYAN + CliColors.BOLD)
+    print_color("║                     🦐 小雷版小龙虾 AI 助手                      ║", CliColors.CYAN + CliColors.BOLD)
+    print_color("╠══════════════════════════════════════════════════════════════════╣", CliColors.CYAN)
+    print_color("║  模式: %-50s ║" % ('简单工作流' if mode == 'simple' else '多Agent深度思考'), CliColors.BLUE)
+    print_color("║  提示: 输入 quit/exit/bye 退出，输入 help 查看命令               ║", CliColors.BLUE)
+    print_color("╚══════════════════════════════════════════════════════════════════╝", CliColors.CYAN + CliColors.BOLD)
+    print()
+    
+    print_chat_bubble("你好！我是小雷版小龙虾，一个具备自我进化能力的AI助手。\n\n我可以帮你：\n• 爬取网页数据\n• 生成图表分析\n• 发送微信消息\n• 执行自动化任务\n\n有什么我可以帮助你的吗？", is_user=False, timestamp=time.strftime("%H:%M"))
+    
+    while True:
+        try:
+            user_input = input(f"\n{CliColors.GREEN}{CliColors.BOLD}你: {CliColors.ENDC}")
+            
+            if user_input.lower() in ['quit', 'exit', 'bye', '结束']:
+                print_color("\n👋 再见！期待下次为你服务！", CliColors.BLUE)
+                break
+                
+            if user_input.lower() == 'help':
+                print_chat_bubble("可用命令：\n• quit/exit/bye - 退出聊天\n• help - 显示帮助\n\n聊天模式：\n• simple - 简单工作流模式\n• deep - 多Agent深度思考模式", is_user=False, timestamp=time.strftime("%H:%M"))
+                continue
+                
+            if not user_input.strip():
+                continue
+                
+            # 显示用户消息气泡
+            print()
+            print_chat_bubble(user_input, is_user=True, timestamp=time.strftime("%H:%M"))
+            
+            # 创建临时args对象用于调用工作流处理
+            class TempArgs:
+                request = user_input
+                type = mode
+            
+            if mode == 'simple':
+                await _handle_multi_agent_simple_chat(TempArgs())
+            else:
+                await _handle_multi_agent_deep_chat(TempArgs())
+                
+        except KeyboardInterrupt:
+            print_color("\n\n👋 再见！", CliColors.BLUE)
+            break
+        except Exception as e:
+            error_msg = f"处理失败: {str(e)[:50]}..." if len(str(e)) > 50 else f"处理失败: {e}"
+            print_chat_bubble(error_msg, is_user=False, timestamp=time.strftime("%H:%M"))
+            logger.error("聊天处理异常", exc_info=True)
 
 
 # ============================================================================
@@ -1050,6 +1158,227 @@ async def _handle_multi_agent_simple(args):
         await _display_workflow_result(result)
     except Exception as e:
         print_error(f"简单工作流执行失败: {e}")
+        logger.error("简单工作流异常", exc_info=True)
+
+
+async def _handle_multi_agent_simple_chat(args):
+    """聊天模式专用 - 简单工作流模式"""
+    import time
+    
+    if not args.request:
+        print_chat_bubble("请提供任务描述", is_user=False, timestamp=time.strftime("%H:%M"))
+        return
+
+    message = args.request
+
+    try:
+        wrapper = WorkflowEngineWrapper()
+        result = await wrapper.create_and_execute(message)
+        
+        # 构建结果消息
+        result_msg = ""
+        if result.get("workflow_name"):
+            result_msg += f"✅ 工作流执行完成\n"
+            result_msg += f"名称: {result.get('workflow_name')}\n"
+            result_msg += f"耗时: {result.get('total_time', 0):.2f}s\n"
+            result_msg += f"结果: {result.get('success_count', 0)}/{result.get('failed_count', 0)}\n\n"
+        
+        results = result.get("results", [])
+        if results:
+            result_msg += "步骤详情:\n"
+            for step_result in results:
+                status = "✅" if step_result.get("success") else "❌"
+                step_num = step_result.get("step", "?")
+                step_type = step_result.get("type", "")
+                result_msg += f"{status} 步骤{step_num} [{step_type}]\n"
+                
+                if step_result.get("data_preview"):
+                    preview = step_result["data_preview"]
+                    if len(preview) > 50:
+                        preview = preview[:50] + "..."
+                    result_msg += f"  预览: {preview}\n"
+                
+                if step_result.get("csv_path"):
+                    result_msg += f"  文件: {step_result['csv_path']}\n"
+                
+                if step_result.get("chart_path"):
+                    result_msg += f"  图表: {step_result['chart_path']}\n"
+        
+        # 如果结果为空，提供友好回复
+        if not result_msg.strip():
+            result_msg = "已收到您的消息！\n\n如果您需要帮助，可以尝试：\n• 爬取网页数据\n• 生成图表分析\n• 发送微信消息\n• 执行自动化任务\n\n请告诉我您想做什么？"
+        
+        print_chat_bubble(result_msg, is_user=False, timestamp=time.strftime("%H:%M"))
+        
+    except Exception as e:
+        error_msg = f"处理失败: {str(e)[:50]}..." if len(str(e)) > 50 else f"处理失败: {e}"
+        print_chat_bubble(error_msg, is_user=False, timestamp=time.strftime("%H:%M"))
+        logger.error("简单工作流异常", exc_info=True)
+
+
+async def _display_workflow_result(result):
+    """显示工作流执行结果"""
+    if result.get("workflow_name"):
+        print_success(f"✅ 工作流执行完成\n")
+        print_info(f"名称: {result.get('workflow_name')}")
+        print_info(f"耗时: {result.get('total_time', 0):.2f}s")
+        print_info(f"结果: {result.get('success_count', 0)}/{result.get('failed_count', 0)}\n")
+    
+    results = result.get("results", [])
+    if results:
+        print_info("步骤详情:")
+        for step_result in results:
+            status = "✅" if step_result.get("success") else "❌"
+            step_num = step_result.get("step", "?")
+            step_type = step_result.get("type", "")
+            print_info(f"{status} 步骤{step_num} [{step_type}]")
+            
+            if step_result.get("data_preview"):
+                preview = step_result["data_preview"]
+                if len(preview) > 50:
+                    preview = preview[:50] + "..."
+                print_info(f"  预览: {preview}")
+            
+            if step_result.get("csv_path"):
+                print_info(f"  文件: {step_result['csv_path']}")
+            
+            if step_result.get("chart_path"):
+                print_info(f"  图表: {step_result['chart_path']}")
+
+async def _handle_run_workflow(args):
+    """处理运行工作流命令"""
+    print_header("运行工作流")
+
+    if not args.workflow:
+        print_error("请提供工作流名称")
+        return
+
+    workflow = args.workflow
+    print_info(f"工作流: {workflow}")
+    print()
+
+    try:
+        wrapper = WorkflowEngineWrapper()
+        result = await wrapper.get_engine().execute_workflow(workflow)
+    
+        await _display_workflow_result(result)
+    except Exception as e:
+        print_error(f"工作流执行失败: {e}")
+        logger.error("工作流执行异常", exc_info=True)
+
+
+async def _handle_list_apps():
+    """处理列出运行中的应用命令"""
+    print_header("运行中的应用列表")
+    
+    try:
+        # 使用AppleScript获取前台应用列表
+        script = '''
+        tell application "System Events"
+            set appList to name of every application process whose background only is false
+            return appList
+        end tell
+        '''
+        
+        result = subprocess.run(
+            ['osascript', '-e', script],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        
+        if result.returncode == 0:
+            apps = [app.strip() for app in result.stdout.strip().split(', ') if app.strip()]
+            
+            if apps:
+                print_success(f"找到 {len(apps)} 个运行的应用:")
+                print()
+                for i, app in enumerate(apps, 1):
+                    print(f"  {i}. {app}")
+                print()
+            else:
+                print_warning("未找到运行的应用")
+        else:
+            print_error(f"获取应用列表失败: {result.stderr}")
+            
+    except subprocess.TimeoutExpired:
+        print_error("获取应用列表超时")
+    except Exception as e:
+        print_error(f"获取应用列表异常: {e}")
+
+
+async def _handle_automate_macro(args):
+    """处理自动化宏命令"""
+    print_header("自动化宏")
+
+    if not args.macro:
+        print_error("请提供宏名称")
+        return
+
+    macro = args.macro
+    print_info(f"宏: {macro}")
+    print()
+
+    try:
+        wrapper = WorkflowEngineWrapper()
+        result = await wrapper.get_engine().execute_macro(macro)
+        await _display_workflow_result(result)
+    except Exception as e:
+        print_error(f"宏执行失败: {e}")
+        logger.error("宏执行异常", exc_info=True)
+
+
+async def _handle_automate_macro_chat(args):
+    """聊天模式专用 - 自动化宏命令"""
+    import time
+    
+    if not args.macro:
+        print_chat_bubble("请提供宏名称", is_user=False, timestamp=time.strftime("%H:%M"))
+        return
+
+    macro = args.macro
+
+    try:
+        wrapper = WorkflowEngineWrapper()
+        result = await wrapper.get_engine().execute_macro(macro)
+        
+        # 构建结果消息
+        result_msg = ""
+        if result.get("workflow_name"):
+            result_msg += f"✅ 工作流执行完成\n"
+            result_msg += f"名称: {result.get('workflow_name')}\n"
+            result_msg += f"耗时: {result.get('total_time', 0):.2f}s\n"
+            result_msg += f"结果: {result.get('success_count', 0)}/{result.get('failed_count', 0)}\n\n"
+        
+        results = result.get("results", [])
+        if results:
+            result_msg += "步骤详情:\n"
+            for step_result in results:
+                status = "✅" if step_result.get("success") else "❌"
+                step_num = step_result.get("step", "?")
+                step_type = step_result.get("type", "")
+                result_msg += f"{status} 步骤{step_num} [{step_type}]\n"
+                
+                if step_result.get("data_preview"):
+                    preview = step_result["data_preview"]
+                    if len(preview) > 50:
+                        preview = preview[:50] + "..."
+                    result_msg += f"  预览: {preview}\n"
+                
+                if step_result.get("csv_path"):
+                    result_msg += f"  文件: {step_result['csv_path']}\n"
+                
+                if step_result.get("chart_path"):
+                    result_msg += f"  图表: {step_result['chart_path']}\n"
+        
+        # 如果结果为空，提供友好回复
+        if not result_msg.strip():
+            result_msg = "已收到您的消息！\n\n如果您需要帮助，可以尝试：\n• 爬取网页数据\n• 生成图表分析\n• 发送微信消息\n• 执行自动化任务\n\n请告诉我您想做什么？"
+        
+        print_chat_bubble(result_msg, is_user=False, timestamp=time.strftime("%H:%M"))
+    except Exception as e:
+        error_msg = f"执行失败: {str(e)[:80]}..." if len(str(e)) > 80 else f"执行失败: {e}"
+        print_chat_bubble(error_msg, is_user=False, timestamp=time.strftime("%H:%M"))
         logger.error("简单工作流异常", exc_info=True)
 
 
@@ -1277,6 +1606,88 @@ async def _handle_multi_agent_deep(args):
         logger.error("多Agent协作异常", exc_info=True)
 
 
+async def _handle_multi_agent_deep_chat(args):
+    """聊天模式专用 - 多Agent深度思考模式"""
+    import time
+    
+    if not args.request:
+        print_chat_bubble("请提供任务描述", is_user=False, timestamp=time.strftime("%H:%M"))
+        return
+
+    message = args.request
+    start_time = time.time()
+    
+    try:
+        from core.multi_agent_v2.orchestration.scheduler.intelligent_scheduler import (
+            IntelligentScheduler, CollaborationMode
+        )
+        from core.multi_agent_v2.agents.base.base_agent import Task
+        from core.multi_agent_v2.orchestration.context.global_context_center import (
+            GlobalContextCenter
+        )
+        from core.multi_agent_v2.orchestration.lifecycle.agent_pool import AgentPool
+        from core.multi_agent_v2.agents.lazy_agent import LazyAgent
+        from core.multi_agent_v2.agents.base.base_agent import AgentType
+
+        context_center = GlobalContextCenter()
+        scheduler = IntelligentScheduler(context_center=context_center)
+
+        agent_pool = AgentPool()
+        await agent_pool.start()
+
+        scheduler.set_agent_pool(agent_pool)
+
+        task_id_str = f"cli_multi_agent_{int(time.time() * 1000)}"
+        
+        task = Task(
+            task_id=task_id_str,
+            type="analysis",
+            description=message,
+            context={},
+            priority=1
+        )
+
+        schedule_result = await scheduler.schedule(task)
+        elapsed = time.time() - start_time
+
+        if schedule_result and schedule_result.success:
+            final_result = schedule_result.metadata.get("final_result", "")
+            
+            result_msg = f"✅ 多Agent协作完成! (耗时: {elapsed:.2f}s)\n\n"
+            result_msg += f"协作模式: {schedule_result.collaboration_mode.value}\n"
+            result_msg += f"分配Agent数: {len(schedule_result.assigned_agents)}\n\n"
+            
+            if schedule_result.assigned_agents:
+                result_msg += "Agent分配:\n"
+                for subtask, agent in schedule_result.assigned_agents.items():
+                    result_msg += f"  • {subtask} → {agent[:8]}...\n"
+            
+            if schedule_result.metadata:
+                result_msg += "\n调度信息:\n"
+                if "trace_id" in schedule_result.metadata:
+                    result_msg += f"  追踪ID: {schedule_result.metadata['trace_id']}\n"
+                if "scheduling_time" in schedule_result.metadata:
+                    result_msg += f"  调度耗时: {schedule_result.metadata['scheduling_time']:.2f}s\n"
+            
+            if final_result:
+                if len(final_result) > 200:
+                    final_result = final_result[:200] + "..."
+                result_msg += f"\n最终结果:\n{final_result}"
+            
+            print_chat_bubble(result_msg, is_user=False, timestamp=time.strftime("%H:%M"))
+        else:
+            print_chat_bubble("⚠️ 多Agent调度失败，已切换到简单模式处理", is_user=False, timestamp=time.strftime("%H:%M"))
+            await _handle_multi_agent_simple_chat(args)
+
+        await agent_pool.stop()
+
+    except ImportError as e:
+        print_chat_bubble(f"模块导入失败: {str(e)[:50]}...", is_user=False, timestamp=time.strftime("%H:%M"))
+    except Exception as e:
+        print_chat_bubble(f"执行失败: {str(e)[:50]}...", is_user=False, timestamp=time.strftime("%H:%M"))
+        logger.error("多Agent协作异常", exc_info=True)
+
+
 # ============================================================================
 # 命令行接口
 # ============================================================================
@@ -1324,6 +1735,19 @@ def main():
     )
     
     subparsers = parser.add_subparsers(dest="command", help="命令")
+    
+    # ==================== chat 命令 ====================
+    chat_parser = subparsers.add_parser(
+        "chat",
+        help="交互式聊天",
+        description="启动交互式聊天模式，与AI助手对话"
+    )
+    chat_parser.add_argument(
+        "--mode", 
+        choices=["simple", "deep"], 
+        default="simple",
+        help="聊天模式：simple（简单工作流）或 deep（多Agent深度思考）"
+    )
     
     # ==================== smart 命令 ====================
     smart_parser = subparsers.add_parser(
@@ -1660,6 +2084,9 @@ async def _execute_command(args):
     
     elif args.command == "status":
         await handle_status(args)
+
+    elif args.command == "chat":
+        await handle_chat(args)
 
     elif args.command == "multi_agent":
         await handle_multi_agent(args)
