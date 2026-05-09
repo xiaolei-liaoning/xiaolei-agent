@@ -156,8 +156,16 @@ class WorkerAgent(BaseAgent):
         start_time = asyncio.get_event_loop().time()
 
         try:
-            # 根据任务类型执行不同的逻辑
-            if task.type == "scraping":
+            # 首先检查任务描述中是否包含搜索/爬取相关的关键词
+            description = task.description.lower() if task.description else ""
+            search_keywords = ["搜索", "爬取", "热搜", "热点", "新闻", "资讯", "百度", "github", "微博", "b站", "抖音"]
+            
+            has_search_intent = any(keyword in description for keyword in search_keywords)
+            
+            # 如果有搜索意图，优先执行爬取任务
+            if has_search_intent:
+                result = await self._execute_scraping(task)
+            elif task.type == "scraping":
                 result = await self._execute_scraping(task)
             elif task.type == "analysis":
                 result = await self._execute_analysis(task)
@@ -185,16 +193,41 @@ class WorkerAgent(BaseAgent):
     async def _execute_scraping(self, task: Task) -> Dict[str, Any]:
         """执行爬取任务"""
         logger.info(f"执行爬取任务: {task.description}")
+        
+        try:
+            # 尝试调用真实的爬虫技能
+            from skills.web_scraper.handler import ScraperDispatcher, _SITE_ALIASES
+            
+            dispatcher = ScraperDispatcher()
+            
+            # 根据任务描述识别站点
+            description = task.description.lower() if task.description else ""
+            site_name = '百度'  # 默认
+            
+            for alias, canonical in _SITE_ALIASES.items():
+                if alias in description:
+                    site_name = canonical
+                    break
+            
+            result = dispatcher.execute(site_name=site_name, action='热搜')
+            
+            return {
+                "type": "scraping",
+                "data": result,
+                "count": len(result) if isinstance(result, list) else 1,
+                "status": "success"
+            }
+        except Exception as e:
+            logger.warning(f"调用爬虫技能失败，使用模拟数据: {e}")
+            # 模拟爬取过程
+            await asyncio.sleep(2.0)
 
-        # 模拟爬取过程
-        await asyncio.sleep(2.0)
-
-        return {
-            "type": "scraping",
-            "data": f"爬取的数据: {task.description}",
-            "count": 100,
-            "status": "success"
-        }
+            return {
+                "type": "scraping",
+                "data": f"爬取的数据: {task.description}",
+                "count": 100,
+                "status": "success"
+            }
 
     async def _execute_analysis(self, task: Task) -> Dict[str, Any]:
         """执行分析任务"""

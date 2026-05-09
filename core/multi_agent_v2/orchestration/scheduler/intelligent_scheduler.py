@@ -557,13 +557,18 @@ class IntelligentScheduler:
                             break
                 
                 if agent and hasattr(agent, 'execute'):
-                    # 创建子任务
+                    # 创建子任务 - 使用原始任务描述以便正确识别搜索意图
+                    subtask_description = step.get('description', '')
+                    if not subtask_description:
+                        subtask_description = task.description
+                    
                     subtask = Task(
                         task_id=subtask_id,
                         type=task.type,
-                        description=f"子任务: {step.get('description', '')}",
+                        description=subtask_description,
                         context=task.context,
-                        priority=task.priority
+                        priority=task.priority,
+                        keywords=task.keywords
                     )
                     
                     # 执行子任务
