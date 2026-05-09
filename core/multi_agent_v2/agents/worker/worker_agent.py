@@ -156,23 +156,33 @@ class WorkerAgent(BaseAgent):
         start_time = asyncio.get_event_loop().time()
 
         try:
-            # 首先检查任务描述中是否包含搜索/爬取相关的关键词
+            # 首先检查任务描述中是否包含系统操作相关的关键词
             description = task.description.lower() if task.description else ""
-            search_keywords = ["搜索", "爬取", "热搜", "热点", "新闻", "资讯", "百度", "github", "微博", "b站", "抖音"]
+            system_keywords = ["打开", "启动", "运行", "启动程序", "执行程序"]
+            app_keywords = ["qq", "微信", "浏览器", "finder", "terminal", "计算器", "日历", "邮件"]
             
-            has_search_intent = any(keyword in description for keyword in search_keywords)
+            has_system_intent = any(keyword in description for keyword in system_keywords)
+            has_app_intent = any(keyword in description for keyword in app_keywords)
             
-            # 如果有搜索意图，优先执行爬取任务
-            if has_search_intent:
-                result = await self._execute_scraping(task)
-            elif task.type == "scraping":
-                result = await self._execute_scraping(task)
-            elif task.type == "analysis":
-                result = await self._execute_analysis(task)
-            elif task.type == "processing":
-                result = await self._execute_processing(task)
+            # 如果有系统操作意图，执行系统命令
+            if has_system_intent or has_app_intent:
+                result = await self._execute_system_command(task)
             else:
-                result = await self._execute_general(task)
+                # 检查是否有搜索/爬取相关的关键词
+                search_keywords = ["搜索", "爬取", "热搜", "热点", "新闻", "资讯", "百度", "github", "微博", "b站", "抖音"]
+                has_search_intent = any(keyword in description for keyword in search_keywords)
+                
+                # 如果有搜索意图，优先执行爬取任务
+                if has_search_intent:
+                    result = await self._execute_scraping(task)
+                elif task.type == "scraping":
+                    result = await self._execute_scraping(task)
+                elif task.type == "analysis":
+                    result = await self._execute_analysis(task)
+                elif task.type == "processing":
+                    result = await self._execute_processing(task)
+                else:
+                    result = await self._execute_general(task)
 
             execution_time = asyncio.get_event_loop().time() - start_time
 
@@ -190,6 +200,68 @@ class WorkerAgent(BaseAgent):
                 execution_time=execution_time
             )
 
+    async def _execute_system_command(self, task: Task) -> Dict[str, Any]:
+        """执行系统命令，如打开应用程序"""
+        logger.info(f"执行系统命令: {task.description}")
+        
+        import subprocess
+        import platform
+        
+        description = task.description.lower() if task.description else ""
+        os_type = platform.system()
+        
+        # 应用程序名称映射
+        app_mapping = {
+            "qq": {"mac": "QQ", "win": "QQ.exe", "linux": "qq"},
+            "微信": {"mac": "WeChat", "win": "WeChat.exe", "linux": "wechat"},
+            "浏览器": {"mac": "Safari", "win": "msedge.exe", "linux": "firefox"},
+            "finder": {"mac": "Finder", "win": "explorer.exe", "linux": "nautilus"},
+            "terminal": {"mac": "Terminal", "win": "cmd.exe", "linux": "gnome-terminal"},
+            "计算器": {"mac": "Calculator", "win": "calc.exe", "linux": "gnome-calculator"},
+            "日历": {"mac": "Calendar", "win": "calendar.exe", "linux": "gnome-calendar"},
+            "邮件": {"mac": "Mail", "win": "outlook.exe", "linux": "thunderbird"},
+        }
+        
+        # 识别要打开的应用程序
+        app_name = None
+        for keyword, apps in app_mapping.items():
+            if keyword in description:
+                app_name = apps.get(os_type.lower(), apps.get("mac"))
+                break
+        
+        if not app_name:
+            return {
+                "type": "system",
+                "action": "unknown",
+                "message": f"无法识别要打开的应用程序: {task.description}",
+                "status": "failed"
+            }
+        
+        try:
+            if os_type == "Darwin":  # macOS
+                subprocess.run(["open", "-a", app_name], check=True)
+            elif os_type == "Windows":  # Windows
+                subprocess.run(["start", "", app_name], check=True, shell=True)
+            else:  # Linux
+                subprocess.run([app_name], check=True)
+            
+            return {
+                "type": "system",
+                "action": "open_app",
+                "app": app_name,
+                "message": f"已成功启动 {app_name}",
+                "status": "success"
+            }
+        except Exception as e:
+            logger.warning(f"启动应用程序失败: {e}")
+            return {
+                "type": "system",
+                "action": "open_app",
+                "app": app_name,
+                "message": f"启动 {app_name} 失败: {str(e)}",
+                "status": "failed"
+            }
+    
     async def _execute_scraping(self, task: Task) -> Dict[str, Any]:
         """执行爬取任务"""
         logger.info(f"执行爬取任务: {task.description}")
