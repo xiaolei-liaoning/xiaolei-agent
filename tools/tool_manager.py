@@ -376,6 +376,30 @@ def register_all_skills():
                    keywords=["计算", "计算器", "数学", "加减乘除", "calculate", "math"],
                    priority=3)
 
+    # 21. MCP连接器技能
+    _safe_register(tm, "mcp_connector", "skills.mcp_connector.handler", "MCPConnectorHandler",
+                   description="MCP服务连接器 - 连接并调用外部MCP服务器",
+                   keywords=["mcp", "connector", "协议", "插件", "连接服务", "the-agency"],
+                   priority=3)
+
+    # 22. 文本分析技能
+    _safe_register(tm, "text_analyzer", "skills.text_analyzer.handler", "handler",
+                   description="文本分析工具 - 统计字符数、词数、句子数，提取关键词",
+                   keywords=["分析", "文本", "情感分析", "关键词提取", "词频统计", "text analysis"],
+                   priority=3)
+
+    # 23. 工作流引擎技能
+    _safe_register(tm, "workflow_engine", "skills.workflow_engine", "get_workflow_manager",
+                   description="工作流引擎管理器 - 可视化工作流搭建和执行",
+                   keywords=["工作流", "流程", "自动化", "任务管理", "workflow", "flow"],
+                   priority=2)
+
+    # 24. XMI转换器技能
+    _safe_register(tm, "xmi_converter", "skills.xmi_converter", "convert_xmi_to_workflow",
+                   description="XMI格式转换器 - 将UML/XMI文件转换为可执行工作流",
+                   keywords=["xmi", "转换", "格式", "uml", "工作流导入", "xml"],
+                   priority=3)
+
     logger.info("内置技能注册完成，共 %d 个工具", len(tm._tools))
 
 
