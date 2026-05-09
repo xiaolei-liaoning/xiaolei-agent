@@ -163,7 +163,7 @@ class AgentPool:
             agent = self.active_agents[agent_id]
             logger.debug(f"Assigned task {task_id} to agent {agent_id}")
         else:
-            logger.warning(f"Agent {agent_id} not found in active agents, will register")
+            logger.debug(f"Agent {agent_id} not found in active agents, will register from pool")
             # 如果Agent不在active_agents中，尝试查找并注册
             for agent_type, pool in self.pools.items():
                 for agent in pool:
