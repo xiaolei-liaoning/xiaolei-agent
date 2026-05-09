@@ -1435,6 +1435,8 @@ async def _handle_multi_agent_deep(args):
 
         agent_pool = AgentPool()
         await agent_pool.start()
+        
+        scheduler.set_agent_pool(agent_pool)
 
         if exec_logger:
             exec_logger.log(
@@ -1533,6 +1535,12 @@ async def _handle_multi_agent_deep(args):
                     else:
                         final_result_short = final_result
                     print(f"    {final_result_short}")
+                
+                # 显示文件路径
+                file_path = schedule_result.metadata.get("file_path", "")
+                if file_path:
+                    print()
+                    print(f"  📄 结果文件: {file_path}")
 
                 if exec_logger:
                     exec_logger.log(
@@ -1634,6 +1642,8 @@ async def _handle_multi_agent_deep_chat(args):
 
         agent_pool = AgentPool()
         await agent_pool.start()
+        
+        scheduler.set_agent_pool(agent_pool)
 
         scheduler.set_agent_pool(agent_pool)
 

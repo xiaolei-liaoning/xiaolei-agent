@@ -503,7 +503,12 @@ class IntelligentScheduler:
             logger.info(f"任务调度成功: {task.task_id}, 模式: {collaboration_mode.value}, 预估时间: {estimated_time}s")
 
             # 执行调度好的任务
-            await self.execute_scheduled_task(task, execution_plan)
+            execution_result = await self.execute_scheduled_task(task, execution_plan)
+            
+            # 将执行结果添加到metadata
+            result.metadata["final_result"] = execution_result.get("final_output", "")
+            result.metadata["results"] = execution_result.get("results", [])
+            result.metadata["file_path"] = execution_result.get("file_path", "")
 
             return result
 
@@ -522,11 +527,12 @@ class IntelligentScheduler:
                 error=str(e)
             )
 
-    async def execute_scheduled_task(self, task: Task, execution_plan: List[Dict[str, Any]]) -> None:
+    async def execute_scheduled_task(self, task: Task, execution_plan: List[Dict[str, Any]]) -> dict:
         """执行调度好的任务"""
         logger.info(f"开始执行任务: {task.task_id}")
         
         all_results = []
+        final_output = ""
         
         for step in execution_plan:
             subtask_id = step["subtask_id"]
@@ -570,6 +576,9 @@ class IntelligentScheduler:
                             "output": result.output,
                             "execution_time": result.execution_time
                         })
+                        # 累积输出
+                        if result.output:
+                            final_output += str(result.output) + "\n\n"
                         logger.info(f"子任务执行完成: {subtask_id}, 结果: {result.success}")
                     except Exception as e:
                         logger.error(f"子任务执行失败: {subtask_id}, 错误: {e}")
@@ -580,7 +589,36 @@ class IntelligentScheduler:
                             "error": str(e)
                         })
         
+        # 保存结果到文件
+        file_path = None
+        if final_output.strip():
+            import os
+            from pathlib import Path
+            
+            output_dir = Path("skills") / "output"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            
+            file_name = f"multi_agent_result_{task.task_id}.txt"
+            file_path = str(output_dir / file_name)
+            
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(f"任务ID: {task.task_id}\n")
+                f.write(f"任务描述: {task.description}\n")
+                f.write(f"执行时间: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write("="*50 + "\n")
+                f.write("执行结果:\n")
+                f.write("="*50 + "\n")
+                f.write(final_output)
+            
+            logger.info(f"任务结果已保存到: {file_path}")
+        
         logger.info(f"任务执行完成: {task.task_id}, 子任务数: {len(all_results)}")
+        
+        return {
+            "results": all_results,
+            "final_output": final_output.strip(),
+            "file_path": file_path
+        }
 
     async def _analyze_task(self, task: Task) -> Dict[str, Any]:
         """分析任务"""
@@ -636,6 +674,15 @@ class IntelligentScheduler:
                 await agent.ensure_initialized()
                 agents.append(agent)
                 logger.debug(f"创建Agent用于调度: {agent.agent_id} ({agent_type.value})")
+            
+            # 如果有agent_pool，将创建的Agent添加到池中
+            if self.agent_pool:
+                for agent in agents:
+                    agent_type_str = agent.agent_type.value if hasattr(agent.agent_type, 'value') else str(agent.agent_type)
+                    await self.agent_pool.acquire(agent_type_str)
+                    self.agent_pool.active_agents[agent.agent_id] = agent
+                    self.agent_pool.stats.current_active += 1
+                    logger.debug(f"Agent已添加到active_agents: {agent.agent_id}")
 
             return agents
         except Exception as e:
