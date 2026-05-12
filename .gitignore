@@ -95,3 +95,6 @@ todo.md
 
 # Misc
 docs/*.html
+
+# Large log files
+logs/*.log
