@@ -47,6 +47,18 @@ pytest-*
 .coverage
 htmlcov/
 
+# Test report files (临时测试报告)
+test_report*.json
+test_report*.txt
+*_test_report*.txt
+*_test_report*.json
+COMPLETE_TEST_REPORT.md
+TEST_SUMMARY.md
+TEST_COVERAGE_ANALYSIS.md
+generate_test_report.py
+performance_test_*.json
+workflow_editor_test_report*.txt
+
 # Temporary files
 tmp/
 temp/
