@@ -109,11 +109,95 @@ class MasterAgent(BaseAgent):
             )
 
     async def _decompose_task(self, task: Task) -> List[Task]:
-        """分解任务为子任务"""
-        # 简单的任务分解逻辑
+        """分解任务为子任务（使用LLM进行智能分解）"""
+        # 先尝试使用LLM进行智能分解
+        try:
+            llm_subtasks = await self._decompose_with_llm(task)
+            if llm_subtasks:
+                for subtask in llm_subtasks:
+                    self.subtasks[subtask.task_id] = subtask
+                return llm_subtasks
+        except Exception as e:
+            logger.warning(f"LLM任务分解失败，使用默认规则: {e}")
+
+        # 降级到规则匹配
+        return self._decompose_with_rules(task)
+
+    async def _decompose_with_llm(self, task: Task) -> List[Task]:
+        """使用LLM进行智能任务分解"""
+        from core.llm_backend import get_llm_router
+        from core.multi_agent_v2.agents.prompts.agent_prompts import get_prompt_manager
+        
+        llm_router = get_llm_router()
+        prompt_manager = get_prompt_manager()
+        
+        if not llm_router.is_available():
+            return []
+
+        prompt = prompt_manager.get_prompt("master")
+        if not prompt:
+            return []
+
+        # 构建任务分解提示词
+        task_prompt = prompt.task_prompt.format(
+            task_description=task.description,
+            task_keywords=", ".join(task.keywords),
+            task_complexity=task.complexity
+        )
+
+        messages = [
+            {"role": "system", "content": prompt.system_prompt},
+            {"role": "user", "content": task_prompt}
+        ]
+
+        response = await llm_router.chat(messages, temperature=0.6, max_tokens=2000)
+        
+        # 解析LLM响应
+        return self._parse_llm_subtasks(response, task)
+
+    def _parse_llm_subtasks(self, response: str, parent_task: Task) -> List[Task]:
+        """解析LLM响应中的子任务"""
+        subtasks = []
+        lines = response.split('\n')
+        
+        sub_task_index = 1
+        current_subtask = None
+        
+        for line in lines:
+            line = line.strip()
+            
+            # 匹配子任务标题
+            if line.startswith(('1.', '2.', '3.', '4.', '5.', '子任务', '步骤')):
+                if current_subtask:
+                    subtasks.append(current_subtask)
+                
+                # 提取子任务描述
+                desc = line
+                if ':' in line:
+                    desc = line.split(':', 1)[1].strip()
+                
+                current_subtask = Task(
+                    task_id=f"{parent_task.task_id}_sub_{sub_task_index}",
+                    type="execution",
+                    description=desc,
+                    keywords=[],
+                    complexity=parent_task.complexity / 3,
+                    estimated_steps=2
+                )
+                sub_task_index += 1
+            elif current_subtask and line:
+                # 添加额外描述
+                current_subtask.description += " " + line
+        
+        if current_subtask:
+            subtasks.append(current_subtask)
+        
+        return subtasks[:5]  # 最多5个子任务
+
+    def _decompose_with_rules(self, task: Task) -> List[Task]:
+        """使用规则匹配进行任务分解（降级方案）"""
         subtasks = []
 
-        # 根据任务类型生成不同的子任务
         if "爬取" in task.description or "抓取" in task.description:
             subtasks = [
                 Task(
@@ -169,7 +253,6 @@ class MasterAgent(BaseAgent):
                 )
             ]
         else:
-            # 通用分解
             subtasks = [
                 Task(
                     task_id=f"{task.task_id}_sub_1",
@@ -180,10 +263,6 @@ class MasterAgent(BaseAgent):
                     estimated_steps=task.estimated_steps
                 )
             ]
-
-        # 存储子任务
-        for subtask in subtasks:
-            self.subtasks[subtask.task_id] = subtask
 
         return subtasks
 

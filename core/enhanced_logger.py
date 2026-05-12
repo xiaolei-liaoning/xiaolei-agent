@@ -3,6 +3,7 @@
 """
 
 import logging
+import os
 import sys
 from datetime import datetime
 from typing import Optional
@@ -96,7 +97,8 @@ def setup_enhanced_logging(
     log_file: Optional[str] = None,
     enable_performance_tracking: bool = True,
     enable_module_filter: bool = False,
-    allowed_modules: Optional[list] = None
+    allowed_modules: Optional[list] = None,
+    enable_console: bool = True
 ):
     """
     设置增强型日志系统
@@ -107,6 +109,7 @@ def setup_enhanced_logging(
         enable_performance_tracking: 启用性能追踪
         enable_module_filter: 启用模块过滤
         allowed_modules: 允许的模块列表
+        enable_console: 是否启用控制台输出
     """
     
     # 创建根logger
@@ -117,28 +120,29 @@ def setup_enhanced_logging(
     root_logger.handlers.clear()
     
     # === 控制台Handler（彩色输出）===
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(level)
-    
-    # 彩色格式
-    colored_format = ColoredFormatter(
-        fmt='%(asctime)s | %(levelname)s | %(name)s:%(lineno)d | %(message)s',
-        datefmt='%H:%M:%S',
-        use_color=True
-    )
-    console_handler.setFormatter(colored_format)
-    
-    # 添加性能过滤器
-    if enable_performance_tracking:
-        perf_filter = PerformanceFilter(slow_threshold=1.0)
-        console_handler.addFilter(perf_filter)
-    
-    # 添加模块过滤器
-    if enable_module_filter and allowed_modules:
-        module_filter = ModuleFilter(allowed_modules)
-        console_handler.addFilter(module_filter)
-    
-    root_logger.addHandler(console_handler)
+    if enable_console:
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setLevel(level)
+        
+        # 彩色格式
+        colored_format = ColoredFormatter(
+            fmt='%(asctime)s | %(levelname)s | %(name)s:%(lineno)d | %(message)s',
+            datefmt='%H:%M:%S',
+            use_color=True
+        )
+        console_handler.setFormatter(colored_format)
+        
+        # 添加性能过滤器
+        if enable_performance_tracking:
+            perf_filter = PerformanceFilter(slow_threshold=1.0)
+            console_handler.addFilter(perf_filter)
+        
+        # 添加模块过滤器
+        if enable_module_filter and allowed_modules:
+            module_filter = ModuleFilter(allowed_modules)
+            console_handler.addFilter(module_filter)
+        
+        root_logger.addHandler(console_handler)
     
     # === 文件Handler（普通格式）===
     if log_file:
@@ -230,9 +234,14 @@ def log_performance(func):
 
 # 自动初始化
 if __name__ != "__main__":
+    # 检查环境变量决定是否启用控制台输出
+    enable_console = os.environ.get("AGENT_ENABLE_CONSOLE_LOG", "true").lower() != "false"
+    log_file = os.environ.get("AGENT_LOG_FILE", "logs/app.log")
+    
     # 默认配置
     setup_enhanced_logging(
         level=logging.INFO,
-        log_file="logs/app.log",
-        enable_performance_tracking=True
+        log_file=log_file,
+        enable_performance_tracking=True,
+        enable_console=enable_console
     )

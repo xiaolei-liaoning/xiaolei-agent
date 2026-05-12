@@ -1,0 +1,150 @@
+{
+  "positive": [
+    {
+      "task": "写文章",
+      "action": "使用writer工具",
+      "result": "成功生成文章",
+      "success": true,
+      "feedback": "",
+      "timestamp": 43787.098341,
+      "confidence": 0.0
+    },
+    {
+      "task": "爬取微博热搜",
+      "action": "使用web_scraper工具",
+      "result": "成功获取10条热搜",
+      "success": true,
+      "feedback": "",
+      "timestamp": 43787.097629541,
+      "confidence": 0.0
+    },
+    {
+      "task": "写文章",
+      "action": "使用writer工具",
+      "result": "成功生成文章",
+      "success": true,
+      "feedback": "",
+      "timestamp": 43711.616382833,
+      "confidence": 0.0
+    },
+    {
+      "task": "爬取微博热搜",
+      "action": "使用web_scraper工具",
+      "result": "成功获取10条热搜",
+      "success": true,
+      "feedback": "",
+      "timestamp": 43711.615778791,
+      "confidence": 0.0
+    },
+    {
+      "task": "写文章",
+      "action": "使用writer工具",
+      "result": "成功生成文章",
+      "success": true,
+      "feedback": "",
+      "timestamp": 43648.8604865,
+      "confidence": 0.0
+    },
+    {
+      "task": "爬取微博热搜",
+      "action": "使用web_scraper工具",
+      "result": "成功获取10条热搜",
+      "success": true,
+      "feedback": "",
+      "timestamp": 43648.860131291,
+      "confidence": 0.0
+    },
+    {
+      "task": "写文章",
+      "action": "使用writer工具",
+      "result": "成功生成文章",
+      "success": true,
+      "feedback": "",
+      "timestamp": 43638.917176208,
+      "confidence": 0.0
+    },
+    {
+      "task": "爬取微博热搜",
+      "action": "使用web_scraper工具",
+      "result": "成功获取10条热搜",
+      "success": true,
+      "feedback": "",
+      "timestamp": 43638.916911,
+      "confidence": 0.0
+    }
+  ],
+  "negative": [
+    {
+      "task": "分析数据",
+      "action": "使用analyzer工具",
+      "result": "失败",
+      "success": false,
+      "feedback": "",
+      "timestamp": 43787.098785333,
+      "confidence": 0.0
+    },
+    {
+      "task": "分析数据",
+      "action": "使用analyzer工具",
+      "result": "分析失败",
+      "success": false,
+      "feedback": "",
+      "timestamp": 43787.098541125,
+      "confidence": 0.0
+    },
+    {
+      "task": "分析数据",
+      "action": "使用analyzer工具",
+      "result": "失败",
+      "success": false,
+      "feedback": "",
+      "timestamp": 43711.616667,
+      "confidence": 0.0
+    },
+    {
+      "task": "分析数据",
+      "action": "使用analyzer工具",
+      "result": "分析失败",
+      "success": false,
+      "feedback": "",
+      "timestamp": 43711.616528458,
+      "confidence": 0.0
+    },
+    {
+      "task": "分析数据",
+      "action": "使用analyzer工具",
+      "result": "失败",
+      "success": false,
+      "feedback": "",
+      "timestamp": 43648.861403916,
+      "confidence": 0.0
+    },
+    {
+      "task": "分析数据",
+      "action": "使用analyzer工具",
+      "result": "分析失败",
+      "success": false,
+      "feedback": "",
+      "timestamp": 43648.860899875,
+      "confidence": 0.0
+    },
+    {
+      "task": "分析数据",
+      "action": "使用analyzer工具",
+      "result": "失败",
+      "success": false,
+      "feedback": "",
+      "timestamp": 43638.917444125,
+      "confidence": 0.0
+    },
+    {
+      "task": "分析数据",
+      "action": "使用analyzer工具",
+      "result": "分析失败",
+      "success": false,
+      "feedback": "",
+      "timestamp": 43638.917315666,
+      "confidence": 0.0
+    }
+  ]
+}

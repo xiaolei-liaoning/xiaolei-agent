@@ -525,3 +525,85 @@ async def delete_character(character_id: str) -> Dict[str, Any]:
     except Exception as e:
         logger.error("删除角色失败: %s", e)
         return {"success": False, "detail": str(e)}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# API 端点：用户反馈
+# ═══════════════════════════════════════════════════════════════════════════
+
+class FeedbackRequest(BaseModel):
+    """用户反馈请求模型。"""
+    task: str = Field(..., description="原始任务描述")
+    skill_used: str = Field(..., description="使用的技能名称")
+    success: bool = Field(..., description="是否成功")
+    comment: Optional[str] = Field(default="", description="用户评论")
+    rating: Optional[int] = Field(default=None, ge=1, le=5, description="评分（1-5星）")
+
+
+@router.post("/api/feedback", summary="提交用户反馈")
+async def submit_feedback(request: FeedbackRequest) -> Dict[str, Any]:
+    """提交用户反馈，用于持续学习。
+
+    Args:
+        request: 反馈请求体
+    """
+    try:
+        from core.task_processor import task_processor
+        from core.continuous_learning import get_learner
+        
+        await task_processor.record_feedback(request.task, request.skill_used, request.success)
+        
+        learner = get_learner()
+        await learner.learn_from_execution(request.task, request.skill_used, request.comment or "", request.success)
+        
+        logger.info(f"用户反馈已记录: task='{request.task[:30]}' skill='{request.skill_used}' success={request.success}")
+        
+        return {
+            "success": True,
+            "message": "反馈已收到，感谢您的意见！",
+            "data": {
+                "task": request.task,
+                "skill_used": request.skill_used,
+                "success": request.success,
+                "comment": request.comment,
+                "rating": request.rating
+            }
+        }
+    except Exception as e:
+        logger.error("提交反馈失败: %s", e)
+        return {"success": False, "detail": str(e)}
+
+
+@router.get("/api/feedback/stats", summary="获取反馈统计")
+async def get_feedback_stats() -> Dict[str, Any]:
+    """获取用户反馈统计信息。"""
+    try:
+        from core.task_processor import task_processor
+        
+        summary = task_processor.get_feedback_summary()
+        
+        return {
+            "success": True,
+            "data": summary
+        }
+    except Exception as e:
+        logger.error("获取反馈统计失败: %s", e)
+        return {"success": False, "detail": str(e)}
+
+
+@router.get("/api/learning/stats", summary="获取学习统计")
+async def get_learning_stats() -> Dict[str, Any]:
+    """获取持续学习系统的统计信息。"""
+    try:
+        from core.continuous_learning import get_learner
+        
+        learner = get_learner()
+        stats = learner.learning_engine.get_learning_stats()
+        
+        return {
+            "success": True,
+            "data": stats
+        }
+    except Exception as e:
+        logger.error("获取学习统计失败: %s", e)
+        return {"success": False, "detail": str(e)}

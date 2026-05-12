@@ -49,9 +49,34 @@ class SecurityManager:
                 # 检查字符串长度
                 if len(input_data) > 10000:
                     return False
-                # 检查是否包含恶意字符
-                if re.search(r'[<>"\'&]', input_data):
-                    return False
+                # 检查XSS攻击模式
+                xss_patterns = [
+                    r'<script[^>]*>.*?</script>',
+                    r'on\w+\s*=\s*["\']?[^"\'>]+["\']?',
+                    r'javascript:',
+                    r'vbscript:',
+                ]
+                for pattern in xss_patterns:
+                    if re.search(pattern, input_data, re.IGNORECASE):
+                        return False
+                # 检查命令注入模式
+                command_injection_patterns = [
+                    r';\s*(rm|del|mkdir|rmdir|cp|mv|chmod|chown)',
+                    r'\$\(.*\)',
+                    r'`.*`',
+                    r'&.*&',
+                    r'\|.*\|',
+                    r'>>.*',
+                    r'>.*',
+                    r'<.*',
+                    r'__import__\(',
+                    r'system\(',
+                    r'exec\(',
+                    r'eval\(',
+                ]
+                for pattern in command_injection_patterns:
+                    if re.search(pattern, input_data):
+                        return False
                 return True
             
             elif input_type == "email":

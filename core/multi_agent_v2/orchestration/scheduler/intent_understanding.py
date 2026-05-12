@@ -390,40 +390,30 @@ class IntentUnderstandingSystem:
         return parsed_intent
 
     async def _classify_intent(self, text: str) -> IntentConfidence:
-        """分类意图 - 规则优先,LLM兜底
+        """分类意图 - LLM优先,规则兜底
         
         执行顺序:
-        1. 先使用规则分类(快速、稳定)
-        2. 如果规则置信度 < 阈值,再使用LLM(精准但慢)
-        3. LLM失败则回退到规则结果
+        1. 优先使用LLM分类(更精准,理解上下文)
+        2. LLM失败或禁用时,使用规则分类(快速、稳定)
         """
-        # 1. 规则分类(快速路径)
-        rule_result = self.rule_classifier.classify(text)
-        
-        # 2. 如果规则置信度高,直接返回
-        if rule_result.confidence >= self.config.confidence_threshold:
-            logger.debug(f"规则分类成功: {rule_result.primary_intent.value} (置信度: {rule_result.confidence:.2f})")
-            return rule_result
-        
-        # 3. 规则置信度低,尝试LLM增强
+        # 1. 优先使用LLM分类
         if self.config.use_llm and self.llm_facade:
             try:
-                logger.info(f"规则置信度较低({rule_result.confidence:.2f}),尝试LLM分类...")
+                logger.info(f"使用LLM进行意图分类...")
                 llm_result = await self.llm_classifier.classify(text)
                 
-                # LLM结果置信度更高才采用
-                if llm_result.confidence > rule_result.confidence:
-                    logger.info(f"LLM分类更优: {llm_result.primary_intent.value} (置信度: {llm_result.confidence:.2f})")
+                if llm_result.confidence >= 0.6:
+                    logger.info(f"LLM分类成功: {llm_result.primary_intent.value} (置信度: {llm_result.confidence:.2f})")
                     return llm_result
                 else:
-                    logger.debug(f"LLM未提升置信度,使用规则结果")
-                    return rule_result
+                    logger.info(f"LLM置信度较低({llm_result.confidence:.2f}),尝试规则分类...")
                     
             except Exception as e:
                 logger.warning(f"LLM分类失败: {e},回退到规则结果")
-                return rule_result
         
-        # 4. 无LLM或配置禁用,返回规则结果
+        # 2. 回退到规则分类
+        rule_result = self.rule_classifier.classify(text)
+        logger.debug(f"规则分类结果: {rule_result.primary_intent.value} (置信度: {rule_result.confidence:.2f})")
         return rule_result
 
     def _extract_primary_goal(self, text: str) -> str:

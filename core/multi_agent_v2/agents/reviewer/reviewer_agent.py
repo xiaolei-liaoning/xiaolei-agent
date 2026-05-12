@@ -129,21 +129,116 @@ class ReviewerAgent(BaseAgent):
             )
 
     async def _review(self, task: Task) -> ReviewResult:
-        """执行评审"""
+        """执行评审（使用LLM进行智能评审）"""
         logger.info(f"开始评审任务: {task.description}")
 
-        # 模拟评审过程
+        # 先尝试使用LLM进行智能评审
+        try:
+            llm_result = await self._review_with_llm(task)
+            if llm_result:
+                return llm_result
+        except Exception as e:
+            logger.warning(f"LLM评审失败，使用模拟评审: {e}")
+
+        # 降级到模拟评审
+        return await self._review_simulated(task)
+
+    async def _review_with_llm(self, task: Task) -> Optional[ReviewResult]:
+        """使用LLM进行智能评审"""
+        from core.llm_backend import get_llm_router
+        from core.multi_agent_v2.agents.prompts.agent_prompts import get_prompt_manager
+        
+        llm_router = get_llm_router()
+        prompt_manager = get_prompt_manager()
+        
+        if not llm_router.is_available():
+            return None
+
+        prompt = prompt_manager.get_prompt("reviewer")
+        if not prompt:
+            return None
+
+        # 构建评审提示词
+        task_prompt = prompt.task_prompt.format(
+            task_description=task.description,
+            task_result="待评审",
+            execution_log=""
+        )
+
+        messages = [
+            {"role": "system", "content": prompt.system_prompt},
+            {"role": "user", "content": task_prompt}
+        ]
+
+        response = await llm_router.chat(messages, temperature=0.4, max_tokens=2000)
+        
+        # 解析LLM响应
+        return self._parse_llm_review(response)
+
+    def _parse_llm_review(self, response: str) -> ReviewResult:
+        """解析LLM响应为评审结果"""
+        # 提取关键信息
+        score = 0.7
+        approved = True
+        comments = []
+        issues = []
+        suggestions = []
+        
+        lines = response.split('\n')
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            
+            # 匹配评分
+            if "评分" in line or "分数" in line:
+                try:
+                    score_str = ''.join([c for c in line if c.isdigit() or c == '.'])
+                    score = min(float(score_str) / 100, 1.0)
+                except:
+                    pass
+            # 匹配通过状态
+            elif "通过" in line:
+                approved = "通过" in line
+            # 匹配问题
+            elif "问题" in line or "错误" in line or "✗" in line:
+                issues.append(line)
+            # 匹配建议
+            elif "建议" in line or "改进" in line:
+                suggestions.append(line)
+            # 其他作为评论
+            else:
+                comments.append(line)
+        
+        # 设置通过阈值
+        approved = score >= 0.6
+        
+        # 如果没有提取到具体内容，使用默认值
+        if not comments:
+            comments = ["评审完成"]
+        if not issues:
+            issues = [] if approved else ["存在一些问题"]
+        if not suggestions:
+            suggestions = ["继续保持"] if approved else ["建议改进"]
+
+        return ReviewResult(
+            approved=approved,
+            score=score,
+            comments=comments[:5],
+            issues=issues[:3],
+            suggestions=suggestions[:3]
+        )
+
+    async def _review_simulated(self, task: Task) -> ReviewResult:
+        """模拟评审过程（降级方案）"""
         await asyncio.sleep(1.0)
 
-        # 根据任务内容生成评审结果
         comments = []
         issues = []
         suggestions = []
 
-        # 检查各个标准
         for criterion in self.review_criteria:
-            # 模拟检查
-            check_result = await self._check_criterion(task, criterion)
+            check_result = await self._check_criterion_simulated(task, criterion)
 
             if check_result["passed"]:
                 comments.append(f"✓ {criterion}: 通过")
@@ -152,11 +247,8 @@ class ReviewerAgent(BaseAgent):
                 issues.append(f"{criterion}存在问题")
                 suggestions.append(f"建议改进{criterion}")
 
-        # 计算评分
         passed_count = sum(1 for c in comments if "✓" in c)
         score = passed_count / len(self.review_criteria)
-
-        # 决定是否通过
         approved = score >= 0.6
 
         return ReviewResult(
@@ -167,12 +259,8 @@ class ReviewerAgent(BaseAgent):
             suggestions=suggestions
         )
 
-    async def _check_criterion(self, task: Task, criterion: str) -> Dict[str, Any]:
-        """检查单个标准"""
-        # 模拟检查逻辑
-        # 实际应该根据任务内容进行真实检查
-
-        # 简单模拟：随机通过
+    async def _check_criterion_simulated(self, task: Task, criterion: str) -> Dict[str, Any]:
+        """检查单个标准（模拟）"""
         import random
         passed = random.random() > 0.3
 

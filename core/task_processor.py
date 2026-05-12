@@ -4,15 +4,20 @@
 - 规则匹配（快速）
 - 复杂度判断（可选）
 - AI 分解（兜底）
+- 用户反馈学习机制
 
 使用方式：
     from core.task_processor import task_processor
     result = await task_processor.process("爬取微博热搜并分析")
+    
+    # 记录用户反馈
+    await task_processor.record_feedback("爬取微博热搜并分析", "web_scraper", success=True)
 """
 
 import asyncio
 import json
 import logging
+import time
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 from enum import Enum
@@ -470,6 +475,108 @@ class TaskProcessor:
                 subtasks=[SubTask("task_1", "chat", {"message": task}, [])],
                 success=False,
             )
+    
+    # ========================================================
+    # 用户反馈学习机制
+    # ========================================================
+    
+    def __init__(self):
+        self.router = get_llm_router()
+        self._feedback_history: List[Dict[str, Any]] = []
+        self._skill_success_rates: Dict[str, Dict[str, int]] = {}
+        logger.info("TaskProcessor 初始化完成")
+    
+    async def record_feedback(self, task: str, skill_used: str, success: bool):
+        """记录用户反馈
+        
+        Args:
+            task: 原始任务描述
+            skill_used: 使用的技能名称
+            success: 是否成功
+        """
+        feedback = {
+            "task": task,
+            "skill": skill_used,
+            "success": success,
+            "timestamp": time.time()
+        }
+        self._feedback_history.append(feedback)
+        
+        # 更新技能成功率统计
+        if skill_used not in self._skill_success_rates:
+            self._skill_success_rates[skill_used] = {"success": 0, "total": 0}
+        self._skill_success_rates[skill_used]["total"] += 1
+        if success:
+            self._skill_success_rates[skill_used]["success"] += 1
+        
+        logger.info(f"记录反馈: task='{task[:30]}' skill='{skill_used}' success={success}")
+        
+        # 定期分析反馈（每收集10条反馈分析一次）
+        if len(self._feedback_history) % 10 == 0:
+            await self._analyze_feedback()
+    
+    async def _analyze_feedback(self):
+        """分析反馈，优化技能选择策略"""
+        logger.info("开始分析用户反馈...")
+        
+        for skill, stats in self._skill_success_rates.items():
+            rate = stats["success"] / stats["total"]
+            if stats["total"] >= 5:  # 至少有5条反馈才调整
+                if rate < 0.5:  # 成功率低于50%
+                    logger.warning(f"技能 {skill} 成功率较低 ({rate:.1%})，建议优化或降级")
+                elif rate > 0.9:  # 成功率高于90%
+                    logger.info(f"技能 {skill} 表现优秀 ({rate:.1%})")
+        
+        # 生成反馈报告
+        report = self._generate_feedback_report()
+        logger.info(f"反馈报告:\n{report}")
+    
+    def _generate_feedback_report(self) -> str:
+        """生成反馈分析报告"""
+        lines = []
+        lines.append("=" * 50)
+        lines.append("用户反馈分析报告")
+        lines.append("=" * 50)
+        lines.append(f"总反馈数: {len(self._feedback_history)}")
+        lines.append(f"涉及技能数: {len(self._skill_success_rates)}")
+        lines.append("-" * 50)
+        
+        for skill, stats in sorted(self._skill_success_rates.items(), 
+                                  key=lambda x: x[1]["total"], reverse=True):
+            rate = stats["success"] / stats["total"]
+            status = "✅" if rate >= 0.8 else "⚠️" if rate >= 0.5 else "❌"
+            lines.append(f"{status} {skill}: {stats['success']}/{stats['total']} ({rate:.1%})")
+        
+        return "\n".join(lines)
+    
+    def get_skill_success_rate(self, skill_name: str) -> Optional[float]:
+        """获取技能的成功率
+        
+        Returns:
+            成功率（0-1），如果没有数据返回None
+        """
+        stats = self._skill_success_rates.get(skill_name)
+        if stats and stats["total"] > 0:
+            return stats["success"] / stats["total"]
+        return None
+    
+    def get_feedback_summary(self) -> Dict[str, Any]:
+        """获取反馈汇总信息"""
+        summary = {
+            "total_feedbacks": len(self._feedback_history),
+            "skills_evaluated": len(self._skill_success_rates),
+            "skill_success_rates": {}
+        }
+        
+        for skill, stats in self._skill_success_rates.items():
+            if stats["total"] > 0:
+                summary["skill_success_rates"][skill] = {
+                    "success": stats["success"],
+                    "total": stats["total"],
+                    "rate": stats["success"] / stats["total"]
+                }
+        
+        return summary
 
 
 # 全局实例

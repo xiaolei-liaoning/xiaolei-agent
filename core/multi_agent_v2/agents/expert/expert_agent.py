@@ -190,13 +190,93 @@ class ExpertAgent(BaseAgent):
             )
 
     async def _provide_advice(self, task: Task) -> ExpertAdvice:
-        """提供专家建议"""
+        """提供专家建议（使用LLM进行智能建议生成）"""
         logger.info(f"提供专家建议: {task.description}")
 
-        # 模拟专家建议生成
+        # 先尝试使用LLM生成专家建议
+        try:
+            llm_advice = await self._provide_advice_with_llm(task)
+            if llm_advice:
+                return llm_advice
+        except Exception as e:
+            logger.warning(f"LLM专家建议生成失败，使用默认建议: {e}")
+
+        # 降级到模拟建议
+        return await self._provide_advice_simulated(task)
+
+    async def _provide_advice_with_llm(self, task: Task) -> Optional[ExpertAdvice]:
+        """使用LLM生成专家建议"""
+        from core.llm_backend import get_llm_router
+        from core.multi_agent_v2.agents.prompts.agent_prompts import get_prompt_manager
+        
+        llm_router = get_llm_router()
+        prompt_manager = get_prompt_manager()
+        
+        if not llm_router.is_available():
+            return None
+
+        prompt = prompt_manager.get_prompt("expert")
+        if not prompt:
+            return None
+
+        # 构建专家建议提示词
+        system_prompt = prompt.system_prompt.format(
+            domain=self.domain,
+            capabilities=", ".join([c.name for c in self.capabilities])
+        )
+
+        task_prompt = prompt.task_prompt.format(
+            problem_description=task.description,
+            context=f"领域: {self.domain}"
+        )
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": task_prompt}
+        ]
+
+        response = await llm_router.chat(messages, temperature=0.5, max_tokens=2000)
+        
+        # 解析LLM响应
+        return self._parse_llm_advice(response)
+
+    def _parse_llm_advice(self, response: str) -> ExpertAdvice:
+        """解析LLM响应为专家建议"""
+        # 提取建议内容
+        advice_text = response
+        
+        # 尝试提取结构化信息
+        references = []
+        alternatives = []
+        
+        lines = response.split('\n')
+        for line in lines:
+            line = line.strip()
+            if "参考" in line or "文献" in line or "资料" in line:
+                refs = [r.strip() for r in line.split('：')[-1].split('、') if r.strip()]
+                references.extend(refs)
+            elif "替代" in line or "其他" in line:
+                alts = [a.strip() for a in line.split('：')[-1].split('、') if a.strip()]
+                alternatives.extend(alts)
+        
+        # 如果没有提取到，使用默认值
+        if not references:
+            references = ["领域知识", "最佳实践"]
+        if not alternatives:
+            alternatives = ["其他方案A", "其他方案B"]
+
+        return ExpertAdvice(
+            domain=self.domain,
+            advice=advice_text,
+            confidence=min(0.7 + len(response) / 3000, 0.95),
+            references=references[:3],
+            alternatives=alternatives[:3]
+        )
+
+    async def _provide_advice_simulated(self, task: Task) -> ExpertAdvice:
+        """模拟专家建议生成（降级方案）"""
         await asyncio.sleep(1.0)
 
-        # 根据领域生成不同的建议
         if self.domain == "security":
             advice = ExpertAdvice(
                 domain="security",

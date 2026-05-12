@@ -13,6 +13,7 @@ class CliColors:
     YELLOW = '\033[33m'
     BLUE = '\033[34m'
     MAGENTA = '\033[35m'
+    PURPLE = '\033[35m'  # 紫色别名
     CYAN = '\033[36m'
     WHITE = '\033[37m'
     GRAY = '\033[90m'
@@ -21,12 +22,12 @@ class CliColors:
     BRIGHT_MAGENTA = '\033[38;5;213m'
 
 
-def print_color(text: str, color: str = "") -> None:
+def print_color(text: str, color: str = "", end: str = '\n') -> None:
     """带颜色打印"""
     if color:
-        print(f"{color}{text}{CliColors.ENDC}")
+        print(f"{color}{text}{CliColors.ENDC}", end=end)
     else:
-        print(text)
+        print(text, end=end)
 
 
 def print_success(message: str) -> None:

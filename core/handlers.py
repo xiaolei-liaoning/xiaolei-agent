@@ -250,6 +250,155 @@ async def handle_automation_workflow(message: str, user_id: int) -> Dict[str, An
 
 
 # ---------------------------------------------------------------------------
+# 代码生成降级机制
+# ---------------------------------------------------------------------------
+async def _try_code_generation(message: str, skill_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    """当工具执行失败时，尝试让LLM生成代码解决问题
+    
+    Args:
+        message: 用户原始消息
+        skill_name: 失败的skill名称
+        params: 提取的参数
+        
+    Returns:
+        包含 success/reply 的字典
+    """
+    try:
+        from core.llm_backend import get_llm_router
+        from tools.tool_manager import ToolManager
+        
+        router = get_llm_router()
+        if not router.is_available():
+            logger.warning("LLM不可用，跳过代码生成")
+            return {"success": False}
+        
+        # 构建Prompt：让LLM分析问题并生成解决方案代码
+        prompt = f"""你是一个智能编程助手。用户想要执行一个任务，但没有现成的工具支持。
+
+【用户需求】
+{message}
+
+【尝试使用的工具】
+工具名: {skill_name}
+参数: {params}
+
+【问题】
+该工具执行失败或不存在。请分析用户需求，判断是否可以通过编写Python/Shell脚本来解决。
+
+如果可以，请：
+1. 简要说明解决思路（1-2句话）
+2. 生成可执行的Python代码（优先）或Shell命令
+3. 代码必须安全、简洁，不要使用危险操作
+
+如果无法通过代码解决，请直接回复："无法通过代码解决"
+
+【输出格式】
+```
+# 你的代码
+```
+
+或者
+
+```
+# 你的shell命令
+```
+
+请开始分析："""
+        
+        # 调用LLM生成代码
+        response = await router.simple_chat(
+            user_message=prompt,
+            system_prompt="你是一个专业的代码生成助手，擅长根据需求生成安全可执行的脚本。",
+            temperature=0.3
+        )
+        
+        if not response or "无法通过代码解决" in response:
+            logger.info("LLM判断无法通过代码解决")
+            return {"success": False}
+        
+        # 提取代码块
+        import re
+        code_match = re.search(r'```(?:python|bash|sh)?\s*\n(.*?)\n```', response, re.DOTALL)
+        if not code_match:
+            logger.warning("未找到代码块")
+            return {"success": False}
+        
+        code = code_match.group(1).strip()
+        if not code:
+            return {"success": False}
+        
+        # 判断代码类型
+        is_python = 'python' in code_match.group(0).lower() or '.py' in message.lower()
+        is_shell = 'bash' in code_match.group(0).lower() or 'sh' in code_match.group(0).lower()
+        
+        # 在沙盒中执行代码（使用较宽松的安全配置）
+        from core.sandbox_executor import get_sandbox_executor, ResourceLimits as SandboxResourceLimits
+        
+        sandbox = get_sandbox_executor()
+        
+        # 为代码生成场景定制资源限制，允许必要的模块
+        custom_limits = SandboxResourceLimits(
+            timeout=30,
+            max_memory_mb=256,
+            # 允许os和pathlib用于文件操作，但保持其他危险模块禁用
+            forbidden_modules=[
+                "subprocess", "socket", "requests",
+                "urllib", "http", "ftplib", "smtplib", "poplib",
+                "imaplib", "telnetlib", "xmlrpc", "pickle", "shelve",
+                "marshal", "dbm", "gdbm", "sqlite3"
+            ]
+        )
+        
+        if is_python:
+            logger.info(f"执行生成的Python代码: {code[:100]}...")
+            result = await sandbox.execute_python(
+                code=code,
+                limits=custom_limits
+            )
+        elif is_shell:
+            logger.info(f"执行生成的Shell命令: {code[:100]}...")
+            result = await sandbox.execute_shell(
+                command=code,
+                limits=custom_limits
+            )
+        else:
+            # 默认尝试Python
+            logger.info(f"执行生成的代码(Python): {code[:100]}...")
+            result = await sandbox.execute_python(
+                code=code,
+                limits=custom_limits
+            )
+        
+        # 转换结果为统一格式
+        from core.sandbox_executor import ExecutionStatus
+        success = result.status == ExecutionStatus.COMPLETED
+        result_dict = {
+            "success": success,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "error": result.error_message if not success else None
+        }
+        
+        if result_dict.get("success"):
+            # 构建友好回复
+            reply = f"✅ **已通过代码生成解决问题**\n\n"
+            reply += f"**解决思路**: {response.split('```')[0].strip()[:200]}\n\n"
+            reply += f"**执行结果**:\n{result_dict.get('stdout', '执行成功')}\n"
+            
+            if result_dict.get('stderr'):
+                reply += f"\n⚠️ 警告信息: {result_dict['stderr'][:200]}"
+            
+            return {"success": True, "reply": reply, "code_generated": True}
+        else:
+            logger.warning(f"生成的代码执行失败: {result_dict.get('error')}")
+            return {"success": False}
+            
+    except Exception as e:
+        logger.error(f"代码生成过程异常: {e}")
+        return {"success": False}
+
+
+# ---------------------------------------------------------------------------
 # 内部处理器：多步任务（非流式）
 # ---------------------------------------------------------------------------
 async def handle_multi_step(message: str, user_id: int) -> Dict[str, Any]:
