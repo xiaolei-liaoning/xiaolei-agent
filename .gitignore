@@ -110,3 +110,4 @@ docs/*.html
 
 # Large log files
 logs/*.log
+*.env
