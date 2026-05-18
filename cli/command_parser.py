@@ -55,6 +55,7 @@ class CommandType(Enum):
     PLUGIN = "plugin"
     SMART = "smart"
     RESET = "reset"
+    TEST = "test"
     UNKNOWN = "unknown"
 
 
@@ -97,6 +98,7 @@ class CommandParser:
         "/art": CommandType.ART,
         "/agent": CommandType.AGENT,
         "/review": CommandType.REVIEW,
+        "/test": CommandType.TEST,
         "/config": CommandType.CONFIG,
         "/plugin": CommandType.PLUGIN,
         "/smart": CommandType.SMART,
@@ -119,7 +121,7 @@ class CommandParser:
         "/history": "查看历史记录",
         "/debug": "切换调试模式",
         "/think": "切换思考模式显示",
-        "/mcp": "MCP工具调用，如: /mcp list, /mcp connect, /mcp call <tool>",
+        "/mcp": "MCP工具调用，如: /mcp list, /mcp connect, /mcp register, /mcp call <tool>",
         "/game": "小游戏，如: /game guess, /game rps, /game dice",
         "/fun": "趣味工具，如: /fun joke, /fun fact, /fun fortune",
         "/art": "ASCII艺术，如: /art cat, /art dog, /art rocket",
@@ -127,7 +129,7 @@ class CommandParser:
         "/review": "代码审查，如: /review code main.py, /review security cmd",
         "/config": "配置管理，如: /config show, /config set key value",
         "/plugin": "插件工具，如: /plugin list, /plugin create name",
-        "/smart": "智能多Agent协作，如: /smart \"爬取微博热搜并分析\", /smart demo, /smart status",
+        "/smart": "智能多Agent协作，如: /smart \"任务\", /smart demo, /smart status, /smart <模式> <任务> (模式: pipeline/master/review/auction/hybrid)",
         "/reset": "重置会话，如: /reset (清空历史) 或 /reset all (清空历史和记忆)",
     }
     

@@ -1,0 +1,55 @@
+# Agent 配置
+# 在这里定义 Agent，无需写 Python 代码
+# 每个 agent 由 role_prompt (角色描述) + tools (可用工具) 组成
+# 系统启动时自动注册这些 Agent
+
+agents:
+  # ── 通用 Agent ──
+  general:
+    role_prompt: "你是一个通用助手，擅长处理各种日常问题"
+    tools: ["chat", "calculator-mcp", "fun-mcp"]
+    priority: 1
+
+  # ── 数据 Agent ──
+  data_analyst:
+    role_prompt: "你是一个数据分析专家，擅长数据处理、统计分析和可视化"
+    tools: ["data_analysis", "text_analyzer", "text-processing-mcp"]
+    priority: 3
+
+  # ── 网络 Agent ──
+  web_scraper:
+    role_prompt: "你是一个网络数据采集专家，擅长从各平台抓取公开数据"
+    tools: ["weibo_scraper", "zhihu_scraper", "bilibili_scraper",
+            "douyin_scraper", "github_scraper", "baidu_scraper",
+            "toutiao_scraper", "search_scraper", "file-ops-mcp"]
+    priority: 4
+
+  # ── 天气 Agent ──
+  weather_expert:
+    role_prompt: "你是一个天气查询助手，可以查询各城市的天气和预报"
+    tools: ["weather-mcp"]
+    priority: 2
+
+  # ── 系统 Agent ──
+  system_toolbox:
+    role_prompt: "你是一个系统工具助手，可以执行系统命令、管理文件"
+    tools: ["system_toolbox", "file-ops-mcp"]
+    priority: 2
+
+  # ── 翻译 Agent ──
+  translator:
+    role_prompt: "你是一个翻译专家，精通多语言互译"
+    tools: ["translator"]
+    priority: 2
+
+  # ── 深度思考 Agent ──
+  deep_thinker:
+    role_prompt: "你是一个深度分析专家，擅长复杂问题的多维度分析和推理"
+    tools: ["deep_thinking", "text_analyzer", "rag_search"]
+    priority: 5
+
+  # ── 创意 Agent ──
+  creative:
+    role_prompt: "你是一个创意助手，擅长生成有趣内容、故事和艺术"
+    tools: ["fun-mcp", "art", "game"]
+    priority: 2

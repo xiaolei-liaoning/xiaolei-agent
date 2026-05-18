@@ -4,12 +4,31 @@
 import asyncio
 import json
 import time
+import logging
 from typing import List, Dict, Any, Optional, Callable
 from dataclasses import dataclass
 from enum import Enum
-from cli.colors import CliColors, print_color
-from cli.logging_system import log_info, log_success, log_error, log_warning, log_debug
-from cli.ui_components import Table, Card, ProgressBar
+
+logger = logging.getLogger(__name__)
+
+def log_info(msg):
+    logger.info(msg)
+    print(f"ℹ️ {msg}")
+
+def log_success(msg):
+    logger.info(msg)
+    print(f"✅ {msg}")
+
+def log_error(msg):
+    logger.error(msg)
+    print(f"❌ {msg}")
+
+def log_warning(msg):
+    logger.warning(msg)
+    print(f"⚠️ {msg}")
+
+def log_debug(msg):
+    logger.debug(msg)
 
 class AgentRole(Enum):
     STRATEGIST = "策略师"
@@ -366,7 +385,7 @@ class CollaborationEngine:
         try:
             decomposition = json.loads(decomposition_result)
             subtasks = decomposition.get("subtasks", [])
-        except:
+        except json.JSONDecodeError:
             subtasks = ["执行任务"]
         
         # 2. 创建任务对象
@@ -384,12 +403,10 @@ class CollaborationEngine:
         
         # 3. 执行子任务
         results = []
-        progress_bar = ProgressBar(total=len(subtasks), width=50)
         
         for i, subtask in enumerate(main_task.subtasks):
             subtask.status = TaskStatus.IN_PROGRESS
             
-            # 执行子任务
             executor = self.get_agent_by_role(AgentRole.EXECUTOR)
             if executor:
                 result = await self.send_message(
@@ -404,17 +421,14 @@ class CollaborationEngine:
                         results.append(result_data)
                         log_success(f"✅ 子任务完成: {subtask.name}")
                     else:
-                        # 反思重试逻辑
                         subtask.status = TaskStatus.FAILED
                         subtask.error = result_data.get("error", "未知错误")
                         subtask.retry_count += 1
                         
-                        # 调用反思器
                         reflection = await self.reflector.reflect(subtask)
                         
                         if reflection.get("should_retry", False):
                             log_info(f"🔄 正在重试子任务: {subtask.name} (第 {subtask.retry_count} 次)")
-                            # 重试执行
                             result = await self.send_message(
                                 strategist.name, executor.name, subtask.name, "task"
                             )
@@ -423,4 +437,34 @@ class CollaborationEngine:
                                 subtask.status = TaskStatus.COMPLETED
                                 subtask.result = result_data
                                 results.append(result_data)
-                                log_success(f"✅
+                                log_success(f"✅ 重试成功: {subtask.name}")
+                except Exception as e:
+                    log_error(f"子任务执行异常: {e}")
+        
+        # 4. 评审结果
+        reviewer = self.get_agent_by_role(AgentRole.REVIEWER)
+        if reviewer:
+            review_result = await self.send_message(
+                strategist.name, reviewer.name, json.dumps(results), "review"
+            )
+            try:
+                review = json.loads(review_result)
+                if review.get("passed", False):
+                    main_task.status = TaskStatus.COMPLETED
+                    main_task.result = {"results": results, "review": review}
+                    self.completed_tasks.append(main_task)
+                    log_success(f"🎉 任务完成: {task_description}")
+                else:
+                    main_task.status = TaskStatus.FAILED
+                    main_task.error = f"评审未通过: {review.get('comments')}"
+                    self.failed_tasks.append(main_task)
+                    log_error(f"❌ 任务失败: {task_description}")
+            except Exception as e:
+                log_warning(f"评审结果解析失败: {e}")
+        
+        return {
+            "task_id": main_task.id,
+            "status": main_task.status.value,
+            "results": results,
+            "subtasks_count": len(subtasks)
+        }

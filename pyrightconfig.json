@@ -1,0 +1,17 @@
+{
+  "include": ["core", "cli", "skills", "tools", "api", "tests"],
+  "exclude": ["**/__pycache__", "**/.venv", "**/node_modules"],
+  "venvPath": ".",
+  "venv": ".venv",
+  "pythonVersion": "3.11",
+  "typeCheckingMode": "basic",
+  "reportMissingImports": false,
+  "reportMissingTypeStubs": false,
+  "pythonAnalysis": {
+    "ignore": [
+      "core/**", 
+      "cli/**",
+      "skills/**"
+    ]
+  }
+}

@@ -12,7 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from core.self_check_middleware import SelfCheckMiddleware, get_self_check_middleware
-from core.llm_backend import get_llm_router
+from core.engine.llm_backend import get_llm_router
 
 
 # ============================================================

@@ -36,8 +36,8 @@ class WorkflowEngineWrapper:
     def get_engine(self):
         """懒加载工作流引擎"""
         if self._engine is None:
-            from core.automation_workflow import get_workflow_engine
-            self._engine = get_workflow_engine()
+            from core.workflow.automation_workflow import AutomationWorkflowEngine
+            self._engine = AutomationWorkflowEngine()
         return self._engine
 
     async def create_and_execute(self, user_request: str, chat_history: List[Dict] = None, context: Dict = None) -> Dict[str, Any]:
@@ -49,14 +49,13 @@ class WorkflowEngineWrapper:
         
         # 如果有聊天历史，记录历史长度
         if chat_history and len(chat_history) > 0:
-            think_log(f"聊天历史长度: {len(chat_history)} 条")
+            think_log(f"包含 {len(chat_history)} 条对话历史")
         
-        # 如果有上下文，记录上下文信息
         if context:
             think_log(f"上下文信息: {context}")
             log_info(f"上下文信息: {context}")
         
-        result = engine.create_smart_workflow(user_request)
+        result = await engine.create_smart_workflow(user_request)
 
         if not result.get("success"):
             log_error(f"创建工作流失败: {result.get('error', '未知错误')}")
@@ -122,6 +121,21 @@ class WorkflowEngineWrapper:
         
         progress_bar.update(total_steps)
         print()
+        
+        # 检查是否有步骤需要用户输入（如clarification）
+        if result.get("results"):
+            for step_result in result["results"]:
+                if step_result.get("requires_user_input"):
+                    # 返回特殊标记，表示需要用户交互
+                    return {
+                        "success": True,
+                        "requires_user_input": True,
+                        "type": "clarification",  # 添加type字段供CLI识别
+                        "clarification_text": step_result.get("clarification_text", ""),
+                        "original_request": step_result.get("original_request", ""),
+                        "questions": step_result.get("questions", []),
+                        "clarification_questions": step_result.get("questions", []),  # 兼容字段名
+                    }
         
         # 完成所有步骤的思考
         for step_num in range(1, total_steps + 1):

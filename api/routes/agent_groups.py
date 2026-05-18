@@ -375,13 +375,16 @@ async def get_available_agents():
     tool_agents = get_tool_agents()
     
     return {
-        "character_agents": character_agents,
-        "tool_agents": tool_agents,
-        "total_count": len(character_agents) + len(tool_agents)
+        "success": True,
+        "data": {
+            "character_agents": character_agents,
+            "tool_agents": tool_agents,
+            "total_count": len(character_agents) + len(tool_agents)
+        }
     }
 
 
-@router.post("", response_model=AgentGroup)
+@router.post("")
 async def create_agent_group(group: AgentGroupCreate):
     """创建新的Agent小组"""
     group_id = str(uuid.uuid4())
@@ -407,24 +410,33 @@ async def create_agent_group(group: AgentGroupCreate):
     _agent_groups[group_id] = agent_group
     logger.info(f"创建Agent小组成功: {group.name} ({group_id})")
     
-    return agent_group
+    return {
+        "success": True,
+        "data": agent_group
+    }
 
 
-@router.get("", response_model=List[AgentGroup])
+@router.get("")
 async def get_all_agent_groups():
     """获取所有Agent小组"""
-    return list(_agent_groups.values())
+    return {
+        "success": True,
+        "data": list(_agent_groups.values())
+    }
 
 
-@router.get("/{group_id}", response_model=AgentGroup)
+@router.get("/{group_id}")
 async def get_agent_group(group_id: str):
     """获取指定的Agent小组"""
     if group_id not in _agent_groups:
         raise HTTPException(status_code=404, detail="Agent小组不存在")
-    return _agent_groups[group_id]
+    return {
+        "success": True,
+        "data": _agent_groups[group_id]
+    }
 
 
-@router.put("/{group_id}", response_model=AgentGroup)
+@router.put("/{group_id}")
 async def update_agent_group(group_id: str, group_update: AgentGroupUpdate):
     """更新Agent小组"""
     if group_id not in _agent_groups:
@@ -439,7 +451,10 @@ async def update_agent_group(group_id: str, group_update: AgentGroupUpdate):
     group.updated_at = datetime.now()
     logger.info(f"更新Agent小组成功: {group.name}")
     
-    return group
+    return {
+        "success": True,
+        "data": group
+    }
 
 
 @router.delete("/{group_id}")
@@ -452,7 +467,10 @@ async def delete_agent_group(group_id: str):
     del _agent_groups[group_id]
     logger.info(f"删除Agent小组成功: {group_name}")
     
-    return {"success": True, "message": f"Agent小组 {group_name} 已删除"}
+    return {
+        "success": True,
+        "message": f"Agent小组 {group_name} 已删除"
+    }
 
 
 @router.post("/{group_id}/activate")
@@ -466,7 +484,13 @@ async def activate_agent_group(group_id: str):
     group.updated_at = datetime.now()
     
     logger.info(f"激活Agent小组: {group.name}")
-    return {"success": True, "group_id": group_id, "status": "active"}
+    return {
+        "success": True,
+        "data": {
+            "group_id": group_id,
+            "status": "active"
+        }
+    }
 
 
 @router.post("/{group_id}/deactivate")
@@ -480,7 +504,13 @@ async def deactivate_agent_group(group_id: str):
     group.updated_at = datetime.now()
     
     logger.info(f"停用Agent小组: {group.name}")
-    return {"success": True, "group_id": group_id, "status": "inactive"}
+    return {
+        "success": True,
+        "data": {
+            "group_id": group_id,
+            "status": "inactive"
+        }
+    }
 
 
 @router.get("/{group_id}/stats")
@@ -492,15 +522,18 @@ async def get_agent_group_stats(group_id: str):
     group = _agent_groups[group_id]
     
     return {
-        "group_id": group_id,
-        "name": group.name,
-        "agent_count": len(group.agents),
-        "enabled_agent_count": len([a for a in group.agents if a.enabled]),
-        "task_count": group.task_count,
-        "success_rate": group.success_rate,
-        "status": group.status,
-        "created_at": group.created_at,
-        "updated_at": group.updated_at
+        "success": True,
+        "data": {
+            "group_id": group_id,
+            "name": group.name,
+            "agent_count": len(group.agents),
+            "enabled_agent_count": len([a for a in group.agents if a.enabled]),
+            "task_count": group.task_count,
+            "success_rate": group.success_rate,
+            "status": group.status,
+            "created_at": group.created_at,
+            "updated_at": group.updated_at
+        }
     }
 
 
@@ -528,11 +561,15 @@ async def get_current_group():
     if _current_group_id and _current_group_id in _agent_groups:
         return {
             "success": True,
-            "group": _agent_groups[_current_group_id]
+            "data": {
+                "group": _agent_groups[_current_group_id]
+            }
         }
     return {
         "success": False,
-        "group": None
+        "data": {
+            "group": None
+        }
     }
 
 
@@ -549,8 +586,10 @@ async def select_current_group(group_id: str):
     
     return {
         "success": True,
-        "group_id": group_id,
-        "group": _agent_groups[group_id]
+        "data": {
+            "group_id": group_id,
+            "group": _agent_groups[group_id]
+        }
     }
 
 
@@ -596,7 +635,10 @@ async def execute_with_current_group(request: GroupExecuteRequest):
             group.success_rate = result.get('success_count', 0) / result.get('total_count', 1)
         group.updated_at = datetime.now()
         
-        return result
+        return {
+            "success": True,
+            "data": result
+        }
     except Exception as e:
         logger.error(f"小组执行任务失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -642,7 +684,10 @@ async def execute_with_group(group_id: str, request: GroupExecuteRequest):
             group.success_rate = result.get('success_count', 0) / result.get('total_count', 1)
         group.updated_at = datetime.now()
         
-        return result
+        return {
+            "success": True,
+            "data": result
+        }
     except Exception as e:
         logger.error(f"小组执行任务失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -817,32 +862,34 @@ class SessionStatusResponse(BaseModel):
 async def analyze_and_recommend_agents(request: CollaborationRequest):
     """分析任务并推荐Agent小组"""
     try:
-        from core.group_collaboration import get_group_coordinator
+        from core.agents.group_collaboration import get_group_coordinator
         coordinator = get_group_coordinator()
         
         recommendation = coordinator.recommend_agent_groups(request.task)
         
         return {
             "success": True,
-            "task_analysis": {
-                "required_capabilities": [cap.value for cap in recommendation.required_capabilities],
-                "task_type": "complex" if len(recommendation.required_capabilities) > 1 else "simple"
-            },
-            "recommended_groups": [
-                {
-                    "group_id": g.group_id,
-                    "name": g.name,
-                    "description": g.description,
-                    "capabilities": [c.value for c in g.capabilities],
-                    "success_rate": g.success_rate
-                }
-                for g in recommendation.recommended_groups
-            ],
-            "requires_new_agent": recommendation.requires_new_agent,
-            "suggested_agent": {
-                "name": recommendation.suggested_agent_name,
-                "description": recommendation.suggested_agent_description
-            } if recommendation.requires_new_agent else None
+            "data": {
+                "task_analysis": {
+                    "required_capabilities": [cap.value for cap in recommendation.required_capabilities],
+                    "task_type": "complex" if len(recommendation.required_capabilities) > 1 else "simple"
+                },
+                "recommended_groups": [
+                    {
+                        "group_id": g.group_id,
+                        "name": g.name,
+                        "description": g.description,
+                        "capabilities": [c.value for c in g.capabilities],
+                        "success_rate": g.success_rate
+                    }
+                    for g in recommendation.recommended_groups
+                ],
+                "requires_new_agent": recommendation.requires_new_agent,
+                "suggested_agent": {
+                    "name": recommendation.suggested_agent_name,
+                    "description": recommendation.suggested_agent_description
+                } if recommendation.requires_new_agent else None
+            }
         }
     except Exception as e:
         logger.error(f"任务分析失败: {e}")
@@ -853,7 +900,7 @@ async def analyze_and_recommend_agents(request: CollaborationRequest):
 async def start_collaboration_session(request: CollaborationRequest):
     """启动多Agent小组协作会话"""
     try:
-        from core.group_collaboration import get_group_coordinator, CollaborationStrategy
+        from core.agents.group_collaboration import get_group_coordinator, CollaborationStrategy
         
         coordinator = get_group_coordinator()
         
@@ -869,19 +916,21 @@ async def start_collaboration_session(request: CollaborationRequest):
         
         return {
             "success": True,
-            "session_id": session.session_id,
-            "total_subtasks": len(session.subtasks),
-            "participant_groups": session.participant_groups,
-            "subtasks": [
-                {
-                    "subtask_id": st.subtask_id,
-                    "description": st.description,
-                    "required_capability": st.required_capability.value,
-                    "assigned_group": st.assigned_group,
-                    "priority": st.priority
-                }
-                for st in session.subtasks
-            ]
+            "data": {
+                "session_id": session.get("session_id", ""),
+                "total_subtasks": len(session.get("subtasks", [])),
+                "participant_groups": session.get("participant_groups", []),
+                "subtasks": [
+                    {
+                        "subtask_id": st.get("subtask_id", ""),
+                        "description": st.get("description", ""),
+                        "required_capability": st.get("required_capability", {}).get("value", "") if isinstance(st.get("required_capability"), dict) else str(st.get("required_capability", "")),
+                        "assigned_group": st.get("assigned_group", ""),
+                        "priority": st.get("priority", 0)
+                    }
+                    for st in session.get("subtasks", [])
+                ]
+            }
         }
     except Exception as e:
         logger.error(f"启动协作会话失败: {e}")
@@ -892,7 +941,7 @@ async def start_collaboration_session(request: CollaborationRequest):
 async def execute_collaboration(session_id: str):
     """执行协作任务"""
     try:
-        from core.group_collaboration import get_group_coordinator
+        from core.agents.group_collaboration import get_group_coordinator
         from agent_group_executor import agent_group_executor
         
         coordinator = get_group_coordinator()
@@ -924,7 +973,10 @@ async def execute_collaboration(session_id: str):
         
         result = await coordinator.execute_collaboration(session, executor)
         
-        return result
+        return {
+            "success": True,
+            "data": result
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -936,7 +988,7 @@ async def execute_collaboration(session_id: str):
 async def get_collaboration_status(session_id: str):
     """获取协作会话状态"""
     try:
-        from core.group_collaboration import get_group_coordinator
+        from core.agents.group_collaboration import get_group_coordinator
         
         coordinator = get_group_coordinator()
         session = coordinator.get_session_status(session_id)
@@ -944,24 +996,26 @@ async def get_collaboration_status(session_id: str):
         if not session:
             raise HTTPException(status_code=404, detail="会话不存在")
         
-        completed = len([st for st in session.subtasks if st.status == "completed"])
+        completed = len([st for st in session.get("subtasks", []) if st.get("status") == "completed"])
         
         return {
             "success": True,
-            "session_id": session.session_id,
-            "status": session.status,
-            "phase": session.phase.value,
-            "total_subtasks": len(session.subtasks),
-            "completed_subtasks": completed,
-            "subtasks": [
-                {
-                    "subtask_id": st.subtask_id,
-                    "description": st.description,
-                    "status": st.status,
-                    "assigned_group": st.assigned_group
-                }
-                for st in session.subtasks
-            ]
+            "data": {
+                "session_id": session.get("session_id", ""),
+                "status": session.get("status", ""),
+                "phase": session.get("phase", {}).get("value", "") if isinstance(session.get("phase"), dict) else str(session.get("phase", "")),
+                "total_subtasks": len(session.get("subtasks", [])),
+                "completed_subtasks": completed,
+                "subtasks": [
+                    {
+                        "subtask_id": st.get("subtask_id", ""),
+                        "description": st.get("description", ""),
+                        "status": st.get("status", ""),
+                        "assigned_group": st.get("assigned_group", "")
+                    }
+                    for st in session.get("subtasks", [])
+                ]
+            }
         }
     except HTTPException:
         raise
@@ -991,7 +1045,7 @@ class AgentRequestApproval(BaseModel):
 async def analyze_missing_agent(request: NewAgentRequest):
     """分析缺失的Agent需求"""
     try:
-        from core.group_collaboration import get_group_coordinator
+        from core.agents.group_collaboration import get_group_coordinator
         
         coordinator = get_group_coordinator()
         recommendation = coordinator.recommend_agent_groups(request.task_example)
@@ -999,21 +1053,25 @@ async def analyze_missing_agent(request: NewAgentRequest):
         if not recommendation.requires_new_agent:
             return {
                 "success": True,
-                "requires_new_agent": False,
-                "message": "已有合适的Agent可以处理此任务",
-                "recommended_groups": [
-                    {"group_id": g.group_id, "name": g.name}
-                    for g in recommendation.recommended_groups
-                ]
+                "data": {
+                    "requires_new_agent": False,
+                    "message": "已有合适的Agent可以处理此任务",
+                    "recommended_groups": [
+                        {"group_id": g.group_id, "name": g.name}
+                        for g in recommendation.recommended_groups
+                    ]
+                }
             }
         
         return {
             "success": True,
-            "requires_new_agent": True,
-            "required_capabilities": [cap.value for cap in recommendation.required_capabilities],
-            "suggested_agent": {
-                "name": recommendation.suggested_agent_name,
-                "description": recommendation.suggested_agent_description
+            "data": {
+                "requires_new_agent": True,
+                "required_capabilities": [cap.value for cap in recommendation.required_capabilities],
+                "suggested_agent": {
+                    "name": recommendation.suggested_agent_name,
+                    "description": recommendation.suggested_agent_description
+                }
             }
         }
     except Exception as e:
@@ -1025,7 +1083,7 @@ async def analyze_missing_agent(request: NewAgentRequest):
 async def create_temporary_agent(request: NewAgentRequest):
     """创建临时Agent"""
     try:
-        from core.group_collaboration import get_group_coordinator, get_temp_agent_creator, AgentCapability
+        from core.agents.group_collaboration import get_group_coordinator, get_temp_agent_creator, AgentCapability
         
         coordinator = get_group_coordinator()
         creator = get_temp_agent_creator()
@@ -1046,9 +1104,11 @@ async def create_temporary_agent(request: NewAgentRequest):
         
         return {
             "success": True,
-            "temporary_agent": config,
-            "message": "临时Agent已创建，管理员将收到添加请求",
-            "requires_supervision": config["requires_supervision"]
+            "data": {
+                "temporary_agent": config,
+                "message": "临时Agent已创建，管理员将收到添加请求",
+                "requires_supervision": config["requires_supervision"]
+            }
         }
     except HTTPException:
         raise
@@ -1061,14 +1121,16 @@ async def create_temporary_agent(request: NewAgentRequest):
 async def get_pending_agent_requests():
     """获取待审批的Agent添加请求"""
     try:
-        from core.group_collaboration import get_temp_agent_creator
+        from core.agents.group_collaboration import get_temp_agent_creator
         
         creator = get_temp_agent_creator()
         pending = creator.get_pending_requests()
         
         return {
             "success": True,
-            "pending_requests": pending
+            "data": {
+                "pending_requests": pending
+            }
         }
     except Exception as e:
         logger.error(f"获取待处理请求失败: {e}")
@@ -1079,7 +1141,7 @@ async def get_pending_agent_requests():
 async def approve_agent_request(approval: AgentRequestApproval):
     """审批Agent添加请求"""
     try:
-        from core.group_collaboration import get_temp_agent_creator
+        from core.agents.group_collaboration import get_temp_agent_creator
         
         creator = get_temp_agent_creator()
         
@@ -1088,14 +1150,18 @@ async def approve_agent_request(approval: AgentRequestApproval):
             if success:
                 return {
                     "success": True,
-                    "message": "Agent添加请求已批准" + ("并已转为永久Agent" if approval.make_permanent else "")
+                    "data": {
+                        "message": "Agent添加请求已批准" + ("并已转为永久Agent" if approval.make_permanent else "")
+                    }
                 }
             else:
                 raise HTTPException(status_code=404, detail="请求不存在")
         else:
             return {
                 "success": True,
-                "message": "Agent添加请求已拒绝"
+                "data": {
+                    "message": "Agent添加请求已拒绝"
+                }
             }
     except HTTPException:
         raise
@@ -1111,7 +1177,7 @@ async def approve_agent_request(approval: AgentRequestApproval):
 def _register_group_profiles():
     """为示例小组注册能力画像"""
     try:
-        from core.group_collaboration import get_group_coordinator, AgentGroupProfile, AgentCapability
+        from core.agents.group_collaboration import get_group_coordinator, AgentGroupProfile, AgentCapability
         
         coordinator = get_group_coordinator()
         

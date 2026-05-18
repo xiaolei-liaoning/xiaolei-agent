@@ -1,0 +1,75 @@
+flowchart TB
+    subgraph Client["客户端层 (Client Layer)"]
+        Web["Web UI<br/>(Browser)"]
+        CLI["CLI Tool<br/>(Terminal)"]
+        Mobile["Mobile App<br/>(Optional)"]
+        ThirdParty["Third-party<br/>Clients"]
+    end
+
+    subgraph APIGateway["API网关层 (API Gateway Layer)"]
+        Main["main.py<br/>(Port 8001)<br/><br/>• RESTful API<br/>• 认证授权<br/>• 请求日志<br/>• CORS处理"]
+    end
+
+    subgraph Application["应用服务层 (Application Layer)"]
+        subgraph Agents["Agent System"]
+            MasterAgent["MasterAgent<br/>(任务调度中心)"]
+            WorkerAgent["WorkerAgent<br/>(任务执行)"]
+            ExpertAgent["ExpertAgent<br/>(领域专家)"]
+            ReviewerAgent["ReviewerAgent<br/>(结果审查)"]
+        end
+
+        Dispatcher["SkillDispatcher<br/>(技能分发器)"]
+        Processor["TaskProcessor<br/>(任务处理器)"]
+        Planner["TaskPlanner<br/>(任务规划器)"]
+        Coordinator["AgentCoordinator<br/>(Agent协调器)"]
+        Workflow["WorkflowEngine<br/>(工作流引擎)"]
+    end
+
+    subgraph Domain["领域服务层 (Domain Layer)"]
+        LLM["LLMBackend<br/>(LLM后端)"]
+        Reasoning["ReasoningEngine<br/>(推理引擎)"]
+        RAG["RAGSearchEngine<br/>(RAG搜索引擎)"]
+        MCP["MCPClient<br/>(MCP客户端)"]
+        BFS["BFSProcessor<br/>(BFS上下文记忆)"]
+        Sandbox["SandboxExecutor<br/>(沙盒执行器)"]
+    end
+
+    subgraph Infrastructure["基础设施层 (Infrastructure Layer)"]
+        DB["Database<br/>(MySQL/SQLite)"]
+        Redis["Redis<br/>(缓存/队列)"]
+        Vector["VectorStore<br/>(向量存储)"]
+        Config["ConfigManager<br/>(配置管理)"]
+        DI["DIContainer<br/>(依赖注入容器)"]
+        Error["ErrorHandler<br/>(错误处理)"]
+    end
+
+    subgraph External["外部服务层 (External Services)"]
+        Zhipu["ZhipuAI API<br/>(GLM-4)"]
+        DeepSeek["DeepSeek API<br/>(DeepSeek模型)"]
+        DuckDuckGo["DuckDuckGo<br/>(搜索引擎)"]
+        MCPServers["MCP Servers<br/>(第三方MCP)"]
+    end
+
+    Client --> APIGateway
+    Web --> Main
+    CLI --> Main
+    Mobile --> Main
+    ThirdParty --> Main
+
+    Main --> Application
+    Main --> Dispatcher
+    Main --> Processor
+
+    Application --> Domain
+    MasterAgent --> WorkerAgent
+    MasterAgent --> ExpertAgent
+    MasterAgent --> ReviewerAgent
+    WorkerAgent --> Dispatcher
+
+    Domain --> Infrastructure
+    LLM --> Zhipu
+    LLM --> DeepSeek
+    RAG --> DuckDuckGo
+    MCP --> MCPServers
+
+    Infrastructure --> External

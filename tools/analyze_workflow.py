@@ -24,7 +24,7 @@ def load_workflow():
 
 def get_workflow_engine():
     """获取工作流引擎"""
-    from core.automation_workflow import get_workflow_engine
+    from core.workflow.automation_workflow import get_workflow_engine
     return get_workflow_engine()
 
 def analyze_workflow(workflow):

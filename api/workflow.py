@@ -146,7 +146,7 @@ class AIGenerateRequest(BaseModel):
 async def ai_generate_workflow(req: AIGenerateRequest):
     """AI自动生成工作流（根据描述生成XML）"""
     try:
-        from core.llm_backend import get_llm_router
+        from core.engine.llm_backend import get_llm_router
         
         client = get_llm_router()
         

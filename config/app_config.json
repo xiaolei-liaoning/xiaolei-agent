@@ -1,0 +1,64 @@
+{
+  "app_name": "小雷版小龙虾 AI Agent",
+  "version": "3.4.0",
+  "debug": true,
+  "llm": {
+    "provider": "zhipuai",
+    "default_model": "glm-4-free",
+    "max_tokens": 4096,
+    "temperature": 0.7,
+    "timeout": 60,
+    "max_retries": 3,
+    "rate_limit_rpm": 120,
+    "backoff_base": 1.0,
+    "supported_models": [
+      "glm-4-flash",
+      "glm-4-plus",
+      "glm-4-air",
+      "glm-4-free",
+      "glm-3-turbo",
+      "free-glm-4",
+      "free-qwen",
+      "free-llama"
+    ]
+  },
+  "database": {
+    "url": "sqlite:///./data/persistence.db",
+    "pool_size": 5,
+    "max_overflow": 10,
+    "pool_timeout": 30,
+    "echo": false
+  },
+  "redis": {
+    "url": "redis://localhost:6379/0",
+    "max_connections": 10,
+    "socket_timeout": 5,
+    "socket_connect_timeout": 5
+  },
+  "agent": {
+    "max_workers": 5,
+    "task_timeout": 300,
+    "max_concurrent_tasks": 10,
+    "heartbeat_interval": 30,
+    "enable_circuit_breaker": true,
+    "circuit_breaker_threshold": 5,
+    "circuit_breaker_timeout": 60
+  },
+  "api": {
+    "host": "0.0.0.0",
+    "port": 8001,
+    "debug": false,
+    "cors_origins": ["*"],
+    "api_prefix": "/api",
+    "docs_url": "/docs",
+    "redoc_url": "/redoc"
+  },
+  "logging": {
+    "level": "INFO",
+    "format": "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    "date_format": "%Y-%m-%d %H:%M:%S",
+    "file_path": null,
+    "max_file_size": 10485760,
+    "backup_count": 5
+  }
+}

@@ -81,3 +81,9 @@ __all__ = [
     "handle_analyze_chart",
     "handle_analyze_report",
 ]
+
+
+# ── 自动发现命令目录 ──────────────────────────────────────────────────────
+from cli.command_registry import CommandRegistry
+from pathlib import Path
+CommandRegistry.register_dir(str(Path(__file__).parent / "commands"))

@@ -1,3 +1,2 @@
-from .handler import handler
-
-__all__ = ['handler']
+"""john_carmack Skill - SKILL.md驱动"""
+__all__ = []

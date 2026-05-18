@@ -92,17 +92,15 @@ class AutoReviewer:
     def _try_init_llm(self):
         """尝试初始化LLM客户端"""
         try:
-            from core.multi_agent_v2.infrastructure.llm.llm_facade import LLMFacade
-            from core.multi_agent_v2.infrastructure.llm.llm_facade import LLMRequest
+            from core.engine.llm_backend import get_llm_router
 
-            self.llm_facade = LLMFacade()
-            self.llm_request_class = LLMRequest
-            
-            # 检查是否有可用模型
-            if not self.llm_facade.models:
+            self.llm_facade = get_llm_router()
+            self.llm_request_class = None
+
+            if not self.llm_facade.is_available():
                 logger.warning("没有可用的LLM模型，将使用智能Mock复盘")
                 self.llm_facade = None
-            
+
             logger.info("LLM客户端初始化成功")
         except Exception as e:
             logger.warning("LLM客户端初始化失败，将使用智能Mock复盘: %s", e)
@@ -210,14 +208,12 @@ class AutoReviewer:
 请用自然、详细的语言描述，不要使用JSON格式。"""
 
         try:
-            request = self.llm_request_class(
-                prompt=prompt,
-                model=None,  # 让系统自动选择可用模型
+            response = await self.llm_facade.chat(
+                [{"role": "user", "content": prompt}],
+                temperature=0.3,
                 max_tokens=1000,
-                temperature=0.3
             )
-            response = await self.llm_facade.generate(request)
-            response_text = response.content if hasattr(response, 'content') else str(response)
+            response_text = response if isinstance(response, str) else str(response)
 
             return self._parse_llm_response(task_id, task_description, response_text)
 

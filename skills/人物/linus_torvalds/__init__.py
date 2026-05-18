@@ -1,3 +1,2 @@
-from .handler import handler
-
-__all__ = ['handler']
+"""linus_torvalds Skill - SKILL.md驱动"""
+__all__ = []

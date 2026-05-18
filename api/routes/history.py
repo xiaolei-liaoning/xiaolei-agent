@@ -46,7 +46,7 @@ async def _semantic_search(user_id: int, query: str, limit: int = 20) -> list:
             model = SentenceTransformer('all-MiniLM-L6-v2')
             
             # 获取用户所有消息内容
-            from core.database import get_session, ChatHistory
+            from core.infrastructure.database import get_session, ChatHistory
             session = get_session()
             try:
                 records = session.query(ChatHistory).filter_by(user_id=user_id).all()
@@ -244,7 +244,7 @@ async def get_chat_history(
     offset = max(offset, 0)
     
     try:
-        from core.database import get_session, ChatHistory
+        from core.infrastructure.database import get_session, ChatHistory
         from sqlalchemy import and_, desc, or_
         session = get_session()
         try:
@@ -274,7 +274,7 @@ async def get_chat_history(
                     start_dt = dt.strptime(start_date, "%Y-%m-%d")
                     query = query.filter(ChatHistory.created_at >= start_dt)
                 except ValueError:
-                    pass
+                    logger.warning("日期过滤：start_date格式无效 %s", start_date)
             
             if end_date:
                 try:
@@ -282,7 +282,7 @@ async def get_chat_history(
                     end_dt = dt.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
                     query = query.filter(ChatHistory.created_at < end_dt)
                 except ValueError:
-                    pass
+                    logger.warning("日期过滤：end_date格式无效 %s", end_date)
             
             # 语义搜索（优先）
             semantic_results = []
@@ -431,7 +431,7 @@ async def get_session_history(
         return {"messages": []}
     
     try:
-        from core.database import get_session, ChatHistory
+        from core.infrastructure.database import get_session, ChatHistory
         from sqlalchemy import desc
         session = get_session()
         try:
@@ -497,7 +497,7 @@ async def toggle_like(
         return {"success": False, "detail": "数据库未初始化"}
     
     try:
-        from core.database import get_session, ChatHistory
+        from core.infrastructure.database import get_session, ChatHistory
         session = get_session()
         try:
             record = session.query(ChatHistory).filter_by(
@@ -559,7 +559,7 @@ async def set_message_weight(
     weight = max(0.1, min(100.0, weight))
     
     try:
-        from core.database import get_session, ChatHistory
+        from core.infrastructure.database import get_session, ChatHistory
         session = get_session()
         try:
             record = session.query(ChatHistory).filter_by(
@@ -617,7 +617,7 @@ async def get_intelligent_context(
         return {"context": [], "total_tokens": 0}
     
     try:
-        from core.database import get_session, ChatHistory
+        from core.infrastructure.database import get_session, ChatHistory
         from sqlalchemy import desc, or_
         session = get_session()
         try:
@@ -725,7 +725,7 @@ async def cleanup_expired_messages(
         return {"success": False, "detail": "数据库未初始化"}
     
     try:
-        from core.database import get_session, ChatHistory
+        from core.infrastructure.database import get_session, ChatHistory
         from datetime import datetime as dt, timedelta
         session = get_session()
         try:
@@ -777,7 +777,7 @@ async def get_chat_history_detail(
         return {"detail": None}
     
     try:
-        from core.database import get_session, ChatHistory
+        from core.infrastructure.database import get_session, ChatHistory
         session = get_session()
         try:
             record = session.query(ChatHistory).filter_by(
@@ -823,7 +823,7 @@ async def delete_chat_history_item(
         return {"success": False, "detail": "数据库未初始化"}
     
     try:
-        from core.database import get_session, ChatHistory
+        from core.infrastructure.database import get_session, ChatHistory
         session = get_session()
         try:
             record = session.query(ChatHistory).filter_by(
@@ -865,7 +865,7 @@ async def clear_chat_history(
         return {"success": False, "detail": "数据库未初始化"}
     
     try:
-        from core.database import get_session, ChatHistory
+        from core.infrastructure.database import get_session, ChatHistory
         session = get_session()
         try:
             query = session.query(ChatHistory).filter_by(user_id=user_id)
@@ -904,7 +904,7 @@ async def get_chat_history_stats(
         return {"stats": {}}
     
     try:
-        from core.database import get_session, ChatHistory
+        from core.infrastructure.database import get_session, ChatHistory
         from sqlalchemy import func
         session = get_session()
         try:
@@ -1012,7 +1012,7 @@ async def get_task_logs(
     offset = max(offset, 0)
     
     try:
-        from core.database import get_session, TaskLog
+        from core.infrastructure.database import get_session, TaskLog
         session = get_session()
         try:
             query = session.query(TaskLog)
@@ -1067,7 +1067,7 @@ async def get_task_stats(user_id: Optional[int] = None) -> Dict[str, Any]:
         return {"total": 0, "success": 0, "failed": 0, "by_type": {}}
     
     try:
-        from core.database import get_session, TaskLog, func
+        from core.infrastructure.database import get_session, TaskLog, func
         session = get_session()
         try:
             query = session.query(TaskLog)

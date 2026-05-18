@@ -30,7 +30,7 @@ def main():
         else:
             print("⚠️  服务异常，请先启动服务")
             return
-    except:
+    except Exception:
         print("❌ 服务未启动，正在启动...")
         import subprocess
         import os

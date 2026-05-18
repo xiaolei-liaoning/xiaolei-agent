@@ -70,7 +70,7 @@ class BackendChecker:
                         print(f"  响应: success={data['success']}")
                     if 'data' in data and isinstance(data['data'], list):
                         print(f"  数据量: {len(data['data'])} 项")
-                except:
+                except Exception:
                     pass
             
             return result
@@ -200,7 +200,7 @@ def main():
             print(f"  结果: ✅ 端点存在")
         else:
             checker.warning('文件上传', '单文件上传端点', '端点可能不存在')
-    except:
+    except Exception:
         checker.warning('文件上传', '单文件上传端点', '无法检查端点')
     
     try:
@@ -222,7 +222,7 @@ def main():
             print(f"  结果: ✅ 端点存在")
         else:
             checker.warning('文件上传', '批量文件上传端点', '端点可能不存在')
-    except:
+    except Exception:
         checker.warning('文件上传', '批量文件上传端点', '无法检查端点')
     
     # ==================== 3. 技能管理功能 ====================
@@ -265,7 +265,7 @@ def main():
             checker.check("系统监控", "系统指标", "/api/metrics")
         else:
             checker.warning("系统监控", "系统指标", "端点返回非 200 状态码")
-    except:
+    except Exception:
         checker.warning("系统监控", "系统指标", "端点可能不存在")
     
     # ==================== 6. 用户认证功能 ====================
@@ -291,7 +291,7 @@ def main():
             print(f"  结果: ✅ 端点存在")
         else:
             checker.warning('用户认证', '登录端点', f'端点返回 {response.status_code}')
-    except:
+    except Exception:
         checker.warning('用户认证', '登录端点', '无法检查端点')
     
     # ==================== 7. 历史记录功能 ====================
@@ -304,7 +304,7 @@ def main():
             checker.check("历史记录", "聊天记录查询", "/api/history")
         else:
             checker.warning("历史记录", "聊天记录查询", f"端点返回 {response.status_code}")
-    except:
+    except Exception:
         checker.warning("历史记录", "聊天记录查询", "端点可能不存在或未启动")
     
     # ==================== 8. Agent 小组功能 ====================
@@ -316,7 +316,7 @@ def main():
             checker.check("Agent小组", "获取Agent小组列表", "/api/agent-groups")
         else:
             checker.warning("Agent小组", "获取Agent小组列表", f"端点返回 {response.status_code}")
-    except:
+    except Exception:
         checker.warning("Agent小组", "获取Agent小组列表", "端点可能不存在")
     
     # ==================== 9. 定时任务功能 ====================
@@ -328,7 +328,7 @@ def main():
             checker.check("定时任务", "获取定时任务列表", "/api/schedule/list")
         else:
             checker.warning("定时任务", "获取定时任务列表", f"端点返回 {response.status_code}")
-    except:
+    except Exception:
         checker.warning("定时任务", "获取定时任务列表", "端点可能不存在")
     
     # ==================== 10. 自我校验功能 ====================
@@ -340,7 +340,7 @@ def main():
             checker.check("自我校验", "自我校验统计信息", "/api/v1/self-check/stats")
         else:
             checker.warning("自我校验", "自我校验统计信息", f"端点返回 {response.status_code}")
-    except:
+    except Exception:
         checker.warning("自我校验", "自我校验统计信息", "端点可能不存在")
     
     # ==================== 11. 静态资源 ====================

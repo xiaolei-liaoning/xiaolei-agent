@@ -1,132 +1,86 @@
-# 🦞 小雷版小龙虾Agent系统
+# 📚 小雷版小龙虾AI Agent - 文档中心
 
-> 一个功能强大的多智能体系统，支持并行处理大量不同类型任务
-
-[![Python](https://img.shields.io/badge/Python-3.7+-blue.svg)](https://www.python.org/)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/Tests-45/45-brightgreen.svg)](tests/)
+**版本**: v3.3.1  
+**最后更新**: 2025-05-13
 
 ---
 
-## ✨ 核心特性
+## 🎯 快速导航
 
-- 🤖 **多智能体架构**: 检查、爬虫、漏洞、总结等独立Agent并行工作
-- 🔍 **RAG搜索引擎**: 向量搜索 + 知识摘要 + 智能缓存
-- 💭 **深度思考**: 两层大脑架构，实现思考-搜索-验证-回答闭环
-- 🎭 **人物SKILL**: 知心闺蜜、李白、Linus等6个角色对话
-- 📊 **数据分析**: Pandas处理 + Matplotlib可视化
-- 🌐 **第三方集成**: 微信、钉钉、GitHub等应用对接
-- 💾 **数据备份**: 自动备份 + 版本管理 + 恢复机制
+### 📘 核心文档
 
----
+| 文档 | 说明 | 用途 |
+|------|------|------|
+| **[小雷版小龙虾Agent系统完整技术文档.md](./小雷版小龙虾Agent系统完整技术文档.md)** | 🌟 **必读** - 完整项目概览 | 了解整个系统架构、功能特性、开发指南 |
+| [DEVELOPER_GUIDE.md](./DEVELOPER_GUIDE.md) | 开发者指南 | 开发规范和最佳实践 |
+| [OPTIMIZATION_COMPLETE.md](./OPTIMIZATION_COMPLETE.md) | 优化历史与完成报告 | 了解系统演进与优化成果 |
 
-## 🚀 快速开始
+### 🔧 开发与优化
 
-### 1️⃣ 一键配置环境
+| 文档 | 说明 |
+|------|------|
+| [OPTIMIZATION_COMPLETE.md](./OPTIMIZATION_COMPLETE.md) | 最终优化报告 |
+| [DEVELOPER_GUIDE.md](./DEVELOPER_GUIDE.md) | 开发环境与规范指南 |
 
-```bash
-# 克隆项目
-git clone <repository-url>
-cd 小雷版小龙虾agent
+### 📊 测试与验证
 
-# 运行配置脚本（自动安装依赖、配置环境）
-./setup_dev.sh
-```
+| 文档 | 说明 |
+|------|------|
+| [../tests/FINAL_VERIFICATION_REPORT.md](../tests/FINAL_VERIFICATION_REPORT.md) | 最终验证测试报告 |
 
-### 2️⃣ 配置API密钥
+### 🔗 其他资源
 
-编辑 `.env` 文件：
-```bash
-ZHIPU_API_KEY=your_api_key_here
-COZE_API_TOKEN=your_coze_token_here
-```
-
-### 3️⃣ 启动服务
-
-```bash
-# 标准模式
-./start.sh
-
-# 开发模式（热重载）
-./start.sh --dev
-```
-
-访问：
-- 🌐 http://localhost:8001
-- 📊 http://localhost:8001/monitor
-- 📖 http://localhost:8001/docs
+- **[根目录README.md](../README.md)** - 项目主README,包含快速开始和功能介绍
+- **[多Agent协同详解.md](../多Agent协同详解.md)** - 多Agent协作机制详解
+- **[MCP功能详解.md](../MCP功能详解.md)** - MCP服务器功能说明
 
 ---
 
-## 📖 文档
+## 📖 推荐阅读路径
 
-- [📘 完整技术文档](小雷版小龙虾Agent系统完整技术文档.md)
-- [👨‍💻 开发者指南](docs/DEVELOPER_GUIDE.md)
-- [🔧 优化历史](docs/OPTIMIZATION_COMPLETE.md)
-- [📊 测试报告](tests/FINAL_VERIFICATION_REPORT.md)
+### 新用户入门
+1. 📌 **[小雷版小龙虾Agent系统完整技术文档.md](./小雷版小龙虾Agent系统完整技术文档.md)** - 全面了解系统
+2. [根目录README.md](../README.md) - 快速开始和使用示例
+3. [DEVELOPER_GUIDE.md](./DEVELOPER_GUIDE.md) - 开发环境搭建
 
----
+### 开发者进阶
+1. [小雷版小龙虾Agent系统完整技术文档.md](./小雷版小龙虾Agent系统完整技术文档.md) - 深入理解架构
+2. [DEVELOPER_GUIDE.md](./DEVELOPER_GUIDE.md) - 开发规范与最佳实践
+3. [OPTIMIZATION_COMPLETE.md](./OPTIMIZATION_COMPLETE.md) - 了解系统优化历程
 
-## 🛠️ 开发工具
-
-### 代码格式化
-```bash
-black .          # 格式化代码
-isort .          # 排序import
-```
-
-### 运行测试
-```bash
-pytest tests/ -v                    # 所有测试
-pytest tests/test_xxx.py -v         # 单个测试
-pytest --cov=core --cov-report=html # 覆盖率报告
-```
-
-### Git预提交检查
-```bash
-pre-commit install                  # 安装钩子
-pre-commit run --all-files          # 手动检查
-```
+### 问题排查
+1. [DEVELOPER_GUIDE.md](./DEVELOPER_GUIDE.md) - 常见开发问题
+2. 查看 [logs/](../logs/) 目录下的运行日志
+3. 查阅 [tests/](../tests/) 目录下的测试报告以确认功能状态
 
 ---
 
-## 📊 测试结果
+## 📁 文档分类
 
-✅ **测试覆盖率**: 100% (45/45)  
-✅ **PlanningAgent**: 15/15通过  
-✅ **RAG搜索**: 10/10通过  
-✅ **向量备份**: 20/20通过  
+### 核心架构与指南
+- 小雷版小龙虾Agent系统完整技术文档.md
+- DEVELOPER_GUIDE.md
 
-详见 [测试报告](tests/FINAL_VERIFICATION_REPORT.md)
+### 优化与报告
+- OPTIMIZATION_COMPLETE.md
 
----
+### 测试与验证
+- ../tests/FINAL_VERIFICATION_REPORT.md
 
-## 🏗️ 系统架构
-
-```
-客户端 → API层 → 调度中心 → Agent执行层 → 核心支撑层 → 基础设施
-```
-
-详细架构图见 [技术文档第9章](小雷版小龙虾Agent系统完整技术文档.md#9-系统架构)
+### 外部资源与详解
+- ../README.md
+- ../多Agent协同详解.md
+- ../MCP功能详解.md
 
 ---
 
-## 🤝 贡献指南
+## 💡 提示
 
-欢迎贡献！请阅读 [开发者指南](docs/DEVELOPER_GUIDE.md)
-
-1. Fork本项目
-2. 创建特性分支 (`git checkout -b feature/amazing-feature`)
-3. 提交更改 (`git commit -m 'feat: add amazing feature'`)
-4. 推送到分支 (`git push origin feature/amazing-feature`)
-5. 开启Pull Request
+- 🌟 **小雷版小龙虾Agent系统完整技术文档.md** 是最全面的文档,建议首先阅读
+- 所有核心文档都位于 `docs/` 目录下
+- 如需查看更详细的测试报告,请参考 `tests/FINAL_VERIFICATION_REPORT.md`
+- 遇到问题时,优先查阅 [DEVELOPER_GUIDE.md](./DEVELOPER_GUIDE.md) 或根目录的 README
 
 ---
 
-## 📝 License
-
-MIT License - 详见 [LICENSE](LICENSE) 文件
-
----
-
-**Made with ❤️ by 小雷版小龙虾团队**
+**维护说明**: 本文档旨在引导用户找到综合文档和其他重要文档，保持与实际项目状态同步

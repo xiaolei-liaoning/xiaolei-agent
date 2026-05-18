@@ -1,6 +1,2 @@
-"""
-诗仙李白 Skill
-"""
-from .handler import handler
-
-__all__ = ['handler']
+"""libai Skill - SKILL.md驱动"""
+__all__ = []

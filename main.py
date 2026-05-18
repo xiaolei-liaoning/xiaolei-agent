@@ -117,31 +117,30 @@ def init_system() -> None:
     global _dispatcher, _processor, _planner, _db_initialized, _startup_time
     _startup_time = time.time()
 
-    # 1. 注册所有技能
+    # 1. 注册内置工具（仅 code_sandbox）
     try:
         from tools.tool_manager import register_all_skills
         register_all_skills()
-        logger.info("技能注册完成")
+        logger.info("ToolManager 内置工具注册完成")
     except Exception as e:
-        logger.error("技能注册失败: %s", e, exc_info=True)
+        logger.error("ToolManager 内置工具注册失败: %s", e, exc_info=True)
 
-    # 2. 初始化 SkillDispatcher
+    # 2. 初始化 SkillDispatcher + 加载功能级插件
     try:
-        from core.skill_dispatcher import SkillDispatcher
+        from core.engine.skill_dispatcher import SkillDispatcher
         _dispatcher = SkillDispatcher()
-        try:
-            from skills.third_party.handler import register_third_party_skills
-            register_third_party_skills(_dispatcher)
-            logger.info("第三方应用技能注册完成")
-        except Exception as e:
-            logger.warning("第三方应用技能注册失败: %s", e)
-        logger.info("SkillDispatcher 初始化完成")
+
+        # 通过 PluginLoader 统一加载功能级资源
+        from core.plugin_loader import load_plugins
+        import asyncio
+        _plugin_results = asyncio.get_event_loop().run_until_complete(load_plugins())
+        logger.info(f"Plugin 加载完成: {_plugin_results}")
     except Exception as e:
-        logger.error("SkillDispatcher 初始化失败: %s", e, exc_info=True)
+        logger.error("Plugin加载失败: %s", e, exc_info=True)
 
     # 3. 初始化 ConcurrentTaskProcessor
     try:
-        from core.concurrent_processor import ConcurrentTaskProcessor
+        from core.tasks.concurrent_processor import ConcurrentTaskProcessor
         _processor = ConcurrentTaskProcessor()
         logger.info("ConcurrentTaskProcessor 初始化完成")
     except Exception as e:
@@ -149,7 +148,7 @@ def init_system() -> None:
 
     # 3.5 初始化 TaskPlanner
     try:
-        from core.task_planner import TaskPlanner
+        from core.tasks.task_planner import TaskPlanner
         _planner = TaskPlanner()
         logger.info("TaskPlanner 初始化完成")
     except Exception as e:
@@ -157,14 +156,10 @@ def init_system() -> None:
 
     # 4-17. 其他组件初始化（简化显示）
     components = [
-        ("TaskProcessor", "core.task_processor", "task_processor"),
+        ("TaskProcessor", "core.tasks.task_processor", "task_processor"),
         ("深度思考引擎", "core.reasoning_engine", "get_reasoning_engine"),
-        ("自主搜索引擎", "core.search_engine", "get_self_search_engine"),
-        ("消息总线", "core.message_bus", "message_bus"),
-        ("边界管理器", "core.boundary_manager", "boundary_manager"),
-        ("异常处理器", "core.exception_handler", "exception_handler"),
-        ("响应管理器", "core.response_manager", "response_manager"),
-        ("Agent协调器", "core.agent_coordinator", "agent_coordinator"),
+        ("自主搜索引擎", "core.search.rag_search_engine", "RAGSearchEngine"),
+        ("Agent协调器", "core.agent_coordinator", "get_agent_coordinator"),
         ("持久化管理器", "core.persistence", "persistence_manager"),
         ("监控管理器", "core.monitoring", "monitoring_manager"),
         ("内存优化器", "core.memory_optimizer", "memory_optimizer"),
@@ -185,24 +180,27 @@ def init_system() -> None:
 
     # 任务调度器（异步启动）
     try:
-        from core.task_scheduler import task_scheduler
+        from core.tasks.task_scheduler import task_scheduler
         import asyncio
         asyncio.create_task(task_scheduler.start())
         logger.info("任务调度器初始化完成")
     except Exception as e:
         logger.error("任务调度器初始化失败: %s", e, exc_info=True)
 
-    # 定时任务
+    # 配置驱动：从 config/ 加载 MCP 服务器和 Agent
     try:
-        from core.scheduled_tasks import init_scheduled_tasks
-        init_scheduled_tasks()
-        logger.info("定时任务初始化完成")
+        from core.config_loader import auto_connect_mcp_servers, register_agents_from_config
+        asyncio.create_task(auto_connect_mcp_servers())
+        logger.info("配置驱动MCP服务器自启任务已提交")
+        agents = register_agents_from_config()
+        if agents:
+            logger.info(f"配置驱动Agent注册完成: {len(agents)} 个")
     except Exception as e:
-        logger.error("定时任务初始化失败: %s", e, exc_info=True)
+        logger.warning("配置驱动加载失败: %s", e)
 
-    # 18. 初始化数据库
+    # 初始化数据库
     try:
-        from core.database import init_db
+        from core.infrastructure.database import init_db
         init_db()
         _db_initialized = True
         logger.info("MySQL 数据库初始化完成")
@@ -220,7 +218,7 @@ def init_system() -> None:
     
     # 19.5. 注入任务执行接口引用
     try:
-        from core.task_execution_interface import set_task_handlers
+        from core.tasks.task_execution_interface import set_task_handlers
         from core.multi_agent_system import TextAnalyzerAgent
         from core.handlers import handle_multi_step, handle_single_step
         set_task_handlers(TextAnalyzerAgent, handle_multi_step, handle_single_step)
@@ -236,10 +234,22 @@ def init_system() -> None:
     except Exception as e:
         logger.error("System 路由全局引用设置失败: %s", e, exc_info=True)
 
+    # 环境检查
+    env_status = {}
+    try:
+        from core.check_env import check_env
+        env_status = check_env()
+        if not env_status.get("llm_ok"):
+            logger.warning("⚠️  LLM 未配置 — 聊天/代码生成/反思将不可用")
+            logger.warning("   请在 .env 中设置 ZHIPU_API_KEY 或 LLM_API_KEY")
+    except Exception:
+        pass
+
     uptime = time.time() - _startup_time
     logger.info("=" * 60)
     logger.info("  小雷版小龙虾 AI Agent v3.3.1 启动成功！")
-    logger.info("  初始化耗时: %.2fs | DB: %s", uptime, "OK" if _db_initialized else "OFF")
+    logger.info("  初始化耗时: %.2fs | DB: %s | LLM: %s", uptime, "OK" if _db_initialized else "OFF",
+                "OK" if env_status.get("llm_ok") else "未配置")
     logger.info("=" * 60)
 
 
@@ -248,10 +258,18 @@ async def startup_event() -> None:
     """FastAPI 启动事件。"""
     init_system()
     
+    # ✅ 新增：启动 WebSocket 心跳检测
+    try:
+        from api.routes.chat import manager
+        await manager.start_heartbeat_check()
+        logger.info("✅ WebSocket 心跳检测已启动")
+    except Exception as e:
+        logger.warning("WebSocket 心跳检测启动失败: %s", e)
+    
     # ✅ 新增：从数据库加载短期记忆（按用户ID）
     try:
         from core.handlers import short_term_memory
-        from core.database import get_session, BFSContextNode
+        from core.infrastructure.database import get_session, BFSContextNode
         
         session = get_session()
         # 获取所有有记忆的用户ID
@@ -259,7 +277,7 @@ async def startup_event() -> None:
         session.close()
         
         for (user_id,) in user_ids:
-            logger.info("🔄 正在为用户 %s 加载短期记忆...", user_id)
+            logger.info("🔄 正在为用户 %d 加载短期记忆...", user_id)
             short_term_memory.load_from_db(user_id)
         
         logger.info("✅ 短期记忆加载完成，共恢复 %d 个用户的记忆", len(user_ids))
@@ -280,6 +298,133 @@ async def startup_event() -> None:
         logger.info("Agent调度器已启动")
     except Exception as e:
         logger.error("Agent调度器启动失败: %s", e, exc_info=True)
+
+    # 启动文件系统 watcher（动态自动加载）
+    try:
+        from core.watcher import FileWatcher
+        from core.engine.skill_dispatcher import get_skill_dispatcher
+        from core.skill_base import GuidanceSkill, ToolRegistry, get_skill_registry
+        from core.plugin_loader import get_plugin_loader
+        from core.mcp.awesome_mcp_manager import awesome_mcp_manager
+        from core.config_loader import load_mcp_servers_config, load_agents_config
+
+        _watcher = FileWatcher(loop=asyncio.get_event_loop())
+
+        # MCP server 文件增删 → 连接/断开
+        def _match_mcp_server(file_stem: str, config_name: str) -> bool:
+            """判断 MCP 文件是否匹配某服务器配置
+
+            MCP 文件命名约定: {base}_mcp_server.py
+            MCP 配置命名约定: {base}-mcp
+            """
+            if file_stem == config_name:
+                return True
+            if file_stem.endswith("_mcp_server"):
+                base = file_stem.removesuffix("_mcp_server")
+                if config_name == f"{base}-mcp" or config_name == base:
+                    return True
+            return False
+
+        async def _on_mcp(name, action, filepath):
+            if action == "add":
+                servers = load_mcp_servers_config()
+                matched = False
+                for srv in servers:
+                    if _match_mcp_server(name, srv["name"]):
+                        await awesome_mcp_manager.quick_connect(srv["name"])
+                        logger.info("MCP 文件添加: %s → 连接服务器: %s", filepath, srv["name"])
+                        matched = True
+                        break
+                if not matched:
+                    logger.info("MCP 文件添加: %s → 未匹配到 mcp_servers.yml 中的配置", filepath)
+            elif action == "remove":
+                await awesome_mcp_manager.disconnect_server(name)
+                logger.info("MCP 文件删除: %s → 断开服务器: %s", filepath, name)
+
+        # config/mcp_servers.yml 变更 → 重载
+        async def _on_cfg_mcp():
+            from core.config_loader import auto_connect_mcp_servers
+            await auto_connect_mcp_servers()
+
+        # config/agents.yml 变更 → 重载
+        async def _on_cfg_agents():
+            from core.config_loader import register_agents_from_config
+            register_agents_from_config()
+
+        # skills/人物/SKILL.md 增删 → 注册/注销
+        async def _on_persona(persona, action, md_path):
+            if action == "add":
+                # 从 SKILL.md 提取关键词（比纯用角色名更准确）
+                from core.plugin_loader import extract_keywords_from_skill_md
+                keywords = extract_keywords_from_skill_md(md_path) or [persona]
+                skill = GuidanceSkill(
+                    name=persona, description=f"人物: {persona}",
+                    skill_md_path=md_path, keywords=keywords,
+                )
+                skill.load_content()
+                # register_tool 内部已调用 ToolRegistry.register，不再重复注册
+                get_skill_dispatcher().register_tool(name=persona, keywords=keywords)
+                get_skill_registry().register(skill)
+                invalidate_skills_cache()
+                logger.info("动态加载人物: %s", persona)
+            elif action == "remove":
+                get_skill_dispatcher().unregister_tool(persona)
+                ToolRegistry.unregister(persona)
+                get_skill_registry().unregister(persona)
+                invalidate_skills_cache()
+                logger.info("动态卸载人物: %s", persona)
+
+        # api/routes/*.py 增删 → 挂载/卸载路由
+        async def _on_route(mod_name, action):
+            if action == "add":
+                mount_route(mod_name)
+            elif action == "remove":
+                unmount_route(mod_name)
+
+        # plugin/*/plugin.json 增删 → 增量加载/卸载
+        async def _on_plugin(plugin_name, action):
+            pl = get_plugin_loader()
+            if action == "add":
+                pl.discover_sub_plugins()
+            elif action == "remove":
+                pass  # 子插件卸载暂不实现
+
+        _watcher \
+            .on_mcp_change(_on_mcp) \
+            .on_config_mcp_change(_on_cfg_mcp) \
+            .on_config_agents_change(_on_cfg_agents) \
+            .on_persona_change(_on_persona) \
+            .on_api_route_change(_on_route) \
+            .on_plugin_change(_on_plugin)
+
+        if _watcher.start():
+            logger.info("✅ 文件变更监听已启动（动态加载 API/MCP/Skill）")
+            # 挂到 app 上避免被 GC
+            app.state._file_watcher = _watcher
+    except ImportError as e:
+        logger.warning("⚠️ watchdog 未安装，动态自动加载不可用: %s", e)
+    except Exception as e:
+        logger.warning("⚠️ 文件变更监听启动失败: %s", e)
+
+
+@app.on_event("shutdown")
+async def shutdown_event() -> None:
+    """FastAPI 关闭事件。"""
+    try:
+        from api.routes.chat import manager
+        await manager.stop_heartbeat_check()
+        logger.info("✅ WebSocket 心跳检测已停止")
+    except Exception as e:
+        logger.warning("WebSocket 心跳检测停止失败: %s", e)
+
+    # 停止文件变更监听
+    try:
+        watcher = getattr(app.state, "_file_watcher", None)
+        if watcher:
+            watcher.stop()
+            logger.info("✅ 文件变更监听已停止")
+    except Exception as e:
+        logger.warning("文件变更监听停止失败: %s", e)
 
 
 # ---------------------------------------------------------------------------
@@ -356,6 +501,56 @@ except Exception as e:
     logger.warning(f"计划管理API路由注册失败: {e}")
 
 # ---------------------------------------------------------------------------
+# 动态路由挂载 — 供 watcher 在运行时增删路由
+# ---------------------------------------------------------------------------
+_router_index: dict = {}  # {模块名: APIRouter}
+
+
+def mount_route(module_name: str) -> bool:
+    """动态挂载一个 API 路由模块（从 api/routes/ 发现）"""
+    if module_name in _router_index:
+        logger.debug("路由 %s 已挂载，跳过", module_name)
+        return True
+    try:
+        mod = __import__(f"api.routes.{module_name}", fromlist=["router"])
+        if hasattr(mod, "router"):
+            router = mod.router
+            app.include_router(router)
+            _router_index[module_name] = router
+            logger.info("动态挂载路由: /api/%s", module_name)
+            return True
+        else:
+            logger.warning("路由模块 %s 没有 router 对象", module_name)
+            return False
+    except Exception as e:
+        logger.warning("动态挂载路由失败 %s: %s", module_name, e)
+        return False
+
+
+def unmount_route(module_name: str) -> bool:
+    """动态卸载一个 API 路由模块"""
+    router = _router_index.pop(module_name, None)
+    if router is None:
+        return False
+    try:
+        # 通过路由的路径前缀来匹配移除
+        # router.prefix 是路由前缀（如 "/api/chat"）
+        prefix = getattr(router, "prefix", f"/api/{module_name}")
+        original_count = len(app.routes)
+        app.routes[:] = [
+            r for r in app.routes
+            if not (str(r.path) == prefix or str(r.path).startswith(prefix + "/"))
+        ]
+        removed_count = original_count - len(app.routes)
+        if removed_count > 0:
+            logger.info("动态卸载路由: /api/%s (移除 %d 条路由)", module_name, removed_count)
+        return removed_count > 0
+    except Exception as e:
+        logger.warning("动态卸载路由失败 %s: %s", module_name, e)
+        return False
+
+
+# ---------------------------------------------------------------------------
 # Web 界面路由
 # ---------------------------------------------------------------------------
 @app.get("/", response_class=HTMLResponse, summary="系统首页")
@@ -399,58 +594,61 @@ async def coze_page():
 # ==================== 技能列表 API ====================
 
 def get_all_skills() -> List[Dict[str, Any]]:
-    """获取所有技能信息"""
+    """获取所有技能信息（支持递归扫描，包括人物技能）"""
     skills_dir = Path(__file__).parent / "skills"
     skills = []
     
     if not skills_dir.exists():
         return skills
     
-    for item in skills_dir.iterdir():
-        if item.is_dir() and not item.name.startswith('_') and not item.name.startswith('.'):
-            skill_md = item / "SKILL.md"
-            if skill_md.exists():
-                try:
-                    content = skill_md.read_text(encoding='utf-8')
-                    
-                    # 提取技能信息
-                    skill_name = item.name
-                    description = ""
-                    keywords = []
-                    
-                    lines = content.split('\n')
+    # 递归扫描所有 SKILL.md 文件
+    for skill_md in skills_dir.rglob("SKILL.md"):
+        # 跳过隐藏目录和以 _ 开头的目录
+        parent_dir = skill_md.parent
+        if any(part.startswith('.') or part.startswith('_') for part in parent_dir.parts):
+            continue
+        
+        try:
+            content = skill_md.read_text(encoding='utf-8')
+            
+            # 提取技能名称（使用最后一级目录名）
+            skill_name = parent_dir.name
+            description = ""
+            keywords = []
+            
+            lines = content.split('\n')
+            in_description = False
+            in_keywords = False
+            
+            for line in lines:
+                if '功能描述' in line:
+                    in_description = True
+                    in_keywords = False
+                    continue
+                elif '触发关键词' in line:
+                    in_keywords = True
+                    in_description = False
+                    continue
+                elif line.startswith('##'):
                     in_description = False
                     in_keywords = False
-                    
-                    for line in lines:
-                        if '功能描述' in line:
-                            in_description = True
-                            in_keywords = False
-                            continue
-                        elif '触发关键词' in line:
-                            in_keywords = True
-                            in_description = False
-                            continue
-                        elif line.startswith('##'):
-                            in_description = False
-                            in_keywords = False
-                            continue
-                        
-                        if in_description and line.strip():
-                            description += line.strip() + ' '
-                        elif in_keywords and line.strip():
-                            keywords.append(line.strip())
-                    
-                    skills.append({
-                        'name': skill_name,
-                        'display_name': skill_name.replace('_', ' ').title(),
-                        'description': description.strip(),
-                        'keywords': keywords,
-                        'tag': f"@{skill_name}"
-                    })
-                    
-                except Exception as e:
-                    logger.error("读取技能失败: %s, 错误: %s", skill_md, e)
+                    continue
+                
+                if in_description and line.strip():
+                    description += line.strip() + ' '
+                elif in_keywords and line.strip():
+                    keywords.append(line.strip())
+            
+            skills.append({
+                'name': skill_name,
+                'display_name': skill_name.replace('_', ' ').title(),
+                'description': description.strip(),
+                'keywords': keywords,
+                'tag': f"@{skill_name}"
+            })
+            
+        except Exception as e:
+            logger.error("读取技能失败: %s, 错误: %s", skill_md, e)
     
     return skills
 
@@ -467,6 +665,13 @@ def get_cached_skills() -> list:
         _skills_cache_loaded = True
         logger.info("加载了 %d 个技能", len(_skills_cache))
     return _skills_cache
+
+def invalidate_skills_cache():
+    """使技能缓存失效，watcher 动态加载/卸载技能后调用"""
+    global _skills_cache, _skills_cache_loaded
+    _skills_cache = None
+    _skills_cache_loaded = False
+    logger.info("技能缓存已失效")
 
 
 @app.get("/api/skills")

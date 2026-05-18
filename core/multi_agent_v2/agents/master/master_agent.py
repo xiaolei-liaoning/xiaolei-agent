@@ -71,6 +71,9 @@ class MasterAgent(BaseAgent):
         # 子任务管理
         self.subtasks: Dict[str, Task] = {}
         self.subtask_results: Dict[str, ActionResult] = {}
+        
+        # 反思学习记录
+        self.learning_history: List[Dict[str, Any]] = []
 
         logger.info(f"MasterAgent初始化完成: {self.agent_id}")
 
@@ -98,6 +101,10 @@ class MasterAgent(BaseAgent):
 
             # 6. 反思
             reflection = await self.reflect(final_result)
+            
+            # ★ 激活KEPA循环：保存学习结果并优化未来策略
+            if reflection:
+                self._apply_reflection_learning(reflection, task)
 
             return final_result
 
@@ -109,23 +116,43 @@ class MasterAgent(BaseAgent):
             )
 
     async def _decompose_task(self, task: Task) -> List[Task]:
-        """分解任务为子任务（使用LLM进行智能分解）"""
-        # 先尝试使用LLM进行智能分解
-        try:
-            llm_subtasks = await self._decompose_with_llm(task)
-            if llm_subtasks:
-                for subtask in llm_subtasks:
-                    self.subtasks[subtask.task_id] = subtask
-                return llm_subtasks
-        except Exception as e:
-            logger.warning(f"LLM任务分解失败，使用默认规则: {e}")
+        """分解任务：LLM驱动，断线重连3次，全失败反问"""
+        # 自动重连：最多3次
+        last_error = None
+        for attempt in range(3):
+            try:
+                llm_subtasks = await self._decompose_with_llm(task)
+                if llm_subtasks:
+                    for subtask in llm_subtasks:
+                        self.subtasks[subtask.task_id] = subtask
+                    return llm_subtasks
+            except Exception as e:
+                last_error = str(e)
+                logger.warning(f"LLM分解失败(第{attempt+1}次): {e}")
+                if attempt < 2:
+                    await asyncio.sleep(1)
+                    continue
 
-        # 降级到规则匹配
+        # 3次全失败 → 反问用户
+        answer = await self.ask_user(
+            f"LLM断线重连3次仍失败({str(last_error)[:60]})，是否使用规则匹配降级处理？",
+            context=f"任务: {task.description[:80]}",
+        )
+        if answer == "retry":
+            try:
+                llm = await self._decompose_with_llm(task)
+                if llm:
+                    return llm
+            except Exception:
+                pass
+        elif answer == "cancel":
+            raise
+
         return self._decompose_with_rules(task)
 
     async def _decompose_with_llm(self, task: Task) -> List[Task]:
         """使用LLM进行智能任务分解"""
-        from core.llm_backend import get_llm_router
+        from core.engine.llm_backend import get_llm_router
         from core.multi_agent_v2.agents.prompts.agent_prompts import get_prompt_manager
         
         llm_router = get_llm_router()
@@ -268,15 +295,95 @@ class MasterAgent(BaseAgent):
 
     async def _assign_subtasks(self, subtasks: List[Task]) -> None:
         """分配子任务给其他Agent"""
-        # 这里应该通过上下文中心分配任务
-        # 暂时只是记录
         logger.info(f"分配{len(subtasks)}个子任务")
+        
+        # 通过SharedBus发布任务给WorkerAgent
+        try:
+            from core.multi_agent_v2.infrastructure.shared_bus import get_shared_bus, Message, MessageType
+            
+            bus = get_shared_bus()
+            
+            for subtask in subtasks:
+                # 发布任务到共享总线
+                msg = Message(
+                    type=MessageType.TASK_ASSIGNED,
+                    sender=self.agent_id,
+                    topic=f"task:{subtask.task_id}",
+                    payload={
+                        "task_id": subtask.task_id,
+                        "parent_task_id": subtask.task_id.split("_sub_")[0] if "_sub_" in subtask.task_id else "",
+                        "type": subtask.type,
+                        "description": subtask.description,
+                        "keywords": subtask.keywords,
+                        "complexity": subtask.complexity,
+                        "estimated_steps": subtask.estimated_steps,
+                    }
+                )
+                await bus.publish(f"agent:worker", msg)
+                logger.info(f"子任务 {subtask.task_id} 已发布到共享总线")
+                
+        except Exception as e:
+            logger.error(f"子任务分配失败: {e}")
 
     async def _wait_for_subtasks(self, subtasks: List[Task]) -> None:
         """等待所有子任务完成"""
-        # 这里应该等待子任务完成
-        # 暂时只是模拟等待
-        await asyncio.sleep(0.5)
+        logger.info(f"等待{len(subtasks)}个子任务完成")
+        
+        # 等待所有子任务完成，超时时间为每个子任务30秒
+        timeout = len(subtasks) * 30
+        start_time = asyncio.get_event_loop().time()
+        
+        # 订阅任务完成消息
+        try:
+            from core.multi_agent_v2.infrastructure.shared_bus import get_shared_bus, Message, MessageType
+            
+            bus = get_shared_bus()
+            parent_task_id = subtasks[0].task_id.split("_sub_")[0] if subtasks and "_sub_" in subtasks[0].task_id else "unknown"
+            
+            # 创建事件循环等待
+            while True:
+                # 检查是否所有子任务都已完成
+                completed = sum(1 for subtask in subtasks if subtask.task_id in self.subtask_results)
+                
+                if completed == len(subtasks):
+                    logger.info(f"所有{len(subtasks)}个子任务已完成")
+                    return
+                
+                # 检查超时
+                elapsed = asyncio.get_event_loop().time() - start_time
+                if elapsed > timeout:
+                    logger.warning(f"等待子任务超时({timeout}s)，已完成{completed}/{len(subtasks)}")
+                    return
+                
+                # 尝试从总线接收结果
+                try:
+                    msg = await bus.receive_direct(self.agent_id, timeout=2.0)
+                    if msg and msg.type == MessageType.TASK_COMPLETED:
+                        subtask_id = msg.payload.get("task_id")
+                        if subtask_id:
+                            logger.info(f"收到子任务完成消息: {subtask_id}")
+                except Exception:
+                    pass
+                
+                # 等待一段时间后重试
+                await asyncio.sleep(0.5)
+                
+        except Exception as e:
+            logger.error(f"等待子任务过程中出错: {e}")
+            # 降级到轮询模式
+            while True:
+                completed = sum(1 for subtask in subtasks if subtask.task_id in self.subtask_results)
+                
+                if completed == len(subtasks):
+                    logger.info(f"所有{len(subtasks)}个子任务已完成")
+                    return
+                
+                elapsed = asyncio.get_event_loop().time() - start_time
+                if elapsed > timeout:
+                    logger.warning(f"等待子任务超时({timeout}s)，已完成{completed}/{len(subtasks)}")
+                    return
+                
+                await asyncio.sleep(1)
 
     async def _aggregate_results(self, subtasks: List[Task]) -> ActionResult:
         """聚合子任务结果"""
@@ -317,4 +424,47 @@ class MasterAgent(BaseAgent):
             "total_subtasks": len(self.subtasks),
             "completed_subtasks": len(self.subtask_results),
             "pending_subtasks": len(self.subtasks) - len(self.subtask_results)
+        }
+    
+    def _apply_reflection_learning(self, reflection, task: Task) -> None:
+        """应用反思学习，优化未来执行"""
+        from datetime import datetime
+        
+        # 保存学习记录
+        learning_record = {
+            "task_id": task.task_id,
+            "task_type": task.type,
+            "timestamp": datetime.now().isoformat(),
+            "success": reflection.success if hasattr(reflection, 'success') else True,
+            "lessons_learned": reflection.lessons_learned if hasattr(reflection, 'lessons_learned') else [],
+            "improvements": reflection.improvements if hasattr(reflection, 'improvements') else [],
+            "metrics": reflection.performance_metrics if hasattr(reflection, 'performance_metrics') else {}
+        }
+        
+        self.learning_history.append(learning_record)
+        
+        # 最多保存最近100条学习记录
+        if len(self.learning_history) > 100:
+            self.learning_history = self.learning_history[-100:]
+        
+        logger.info(f"[KEPA] MasterAgent 学习记录已保存: {len(reflection.lessons_learned) if hasattr(reflection, 'lessons_learned') else 0} 条经验")
+    
+    def get_learning_insights(self) -> Dict[str, Any]:
+        """获取学习洞察"""
+        if not self.learning_history:
+            return {"total_tasks": 0, "insights": []}
+        
+        successful_tasks = sum(1 for h in self.learning_history if h.get("success", False))
+        
+        # 聚合经验教训
+        all_lessons = []
+        for h in self.learning_history:
+            all_lessons.extend(h.get("lessons_learned", []))
+        
+        return {
+            "total_tasks": len(self.learning_history),
+            "successful_tasks": successful_tasks,
+            "success_rate": successful_tasks / len(self.learning_history) if self.learning_history else 0,
+            "total_lessons": len(all_lessons),
+            "recent_lessons": all_lessons[-10:] if all_lessons else []
         }

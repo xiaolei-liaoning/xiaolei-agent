@@ -1,321 +1,685 @@
 # 技能关键词配置文件
-# 格式:
-# skills:
-#   <技能名称>:
-#     priority: 优先级 (1-10, 越高越优先)
+# 用于 skill_dispatcher.py 的意图识别和技能路由
+
+# 技能配置
+# 格式：
+#   技能名:
+#     priority: 优先级 (数字越大优先级越高)
 #     keywords: 关键词列表
-#     description: 技能描述
-
 skills:
-  # 基础技能
-  weather:
-    priority: 5
-    description: "天气查询"
+  # 闲聊（优先级最低）
+  chat:
+    priority: 1
     keywords:
-      - 天气
-      - 气温
-      - 温度
-      - 下雨
-      - 下雪
-      - 刮风
-      - weather
-      - 天气预报
-      - 天气怎么样
-      - 天气如何
-      - 今天天气
-      - 明天天气
-      - 多少度
-      - 几度
-      - 热不热
-      - 冷不冷
-      - 会不会下雨
-      - 要带伞吗
-      - 适合出门吗
-      - how is the weather
-      - temperature
-      - forecast
+      - "你好"
+      - "嗨"
+      - "hello"
+      - "hi"
+      - "谢谢"
+      - "再见"
+      - "你是谁"
+      - "无聊"
+      - "好无聊"
+      - "聊天"
+      - "闲聊"
 
-  # 爬虫技能
-  web_scraper:
-    priority: 5
-    description: "网页爬取"
+  # 系统工具箱
+  system_toolbox:
+    priority: 3
     keywords:
-      - 爬取
-      - 抓取
-      - 热搜
-      - 热榜
-      - 微博热搜
-      - 百度热搜
-      - b站
-      - bilibili
-      - 抖音
-      - douyin
-      - 爬虫
-      - scrape
-      - crawl
-      - 知乎
-      - 今日头条
-      - 头条
-      - toutiao
-      - zhihu
-      - github
-      - git
-      - trending
-      - 趋势
-      - 仓库
-      - 热点
-      - 微博热点
-      - 热点新闻
-      - 爬一下
-      - 抓一下
-      - 排行榜
-      - b站排行
-      - 抖音热榜
-      - 微博榜单
+      - "系统时间"
+      - "当前时间"
+      - "现在几点"
+      - "日期"
+      - "今天几号"
+      - "星期几"
+      - "内存使用"
+      - "磁盘空间"
+      - "cpu使用率"
+      - "系统信息"
+      - "hostname"
+      - "进程列表"
+      - "网络连接"
+      - "网速测试"
+      - "ip地址"
+      - "文件列表"
+      - "文件夹内容"
+      - "目录结构"
+      - "屏幕分辨率"
+      - "鼠标位置"
 
-  # 数据分析技能
+  # GUI自动化
+  gui_automation:
+    priority: 4
+    keywords:
+      - "打开"
+      - "点击"
+      - "发送"
+      - "关闭"
+      - "退出"
+      - "最小化"
+      - "最大化"
+      - "自动化"
+      - "打开app"
+      - "启动"
+      - "运行"
+      - "launch"
+      - "open"
+      - "click"
+      - "send"
+      - "automate"
+      - "微信"
+      - "wechat"
+      - "weixin"
+      - "qq"
+      - "QQ"
+      - "钉钉"
+      - "dingtalk"
+      - "飞书"
+      - "feishu"
+      - "企业微信"
+      - "slack"
+      - "telegram"
+      - "邮件"
+      - "mail"
+      - "email"
+      - "outlook"
+      - "foxmail"
+      - "日历"
+      - "calendar"
+      - "提醒"
+      - "reminder"
+      - "备忘录"
+      - "notes"
+      - "文档"
+      - "word"
+      - "excel"
+      - "ppt"
+      - "powerpoint"
+      - "wps"
+      - "pdf"
+      - "阅读器"
+      - "reader"
+      - "浏览器"
+      - "browser"
+      - "chrome"
+      - "safari"
+      - "firefox"
+      - "edge"
+      - "chromium"
+      - "opera"
+      - " Brave"
+      - "网址"
+      - "网页"
+      - "website"
+      - "音乐"
+      - "music"
+      - "spotify"
+      - "网易云"
+      - "qq音乐"
+      - "酷狗"
+      - "视频"
+      - "video"
+      - "播放器"
+      - "player"
+      - "vlc"
+      - "potplayer"
+      - "照片"
+      - "photo"
+      - "图片"
+      - "image"
+      - "相册"
+      - "gallery"
+      - "终端"
+      - "terminal"
+      - "命令行"
+      - "cmd"
+      - "powershell"
+      - "代码"
+      - "code"
+      - "vscode"
+      - "visual studio"
+      - "pycharm"
+      - "idea"
+      - "git"
+      - "github"
+      - "sublime"
+      - "atom"
+      - "截图"
+      - "截屏"
+      - "screenshot"
+      - "录屏"
+      - "screen recording"
+      - "ocr"
+      - "识别文字"
+      - "文字识别"
+      - "text recognition"
+      - "缩放"
+      - "放大"
+      - "缩小"
+      - "zoom"
+      - "scale"
+      - "页面缩放"
+      - "实际大小"
+      - "适合页面"
+      - "适合页宽"
+      - "50%"
+      - "75%"
+      - "100%"
+      - "125%"
+      - "150%"
+      - "200%"
+      - "300%"
+      - "400%"
+      - "音量"
+      - "volume"
+      - "声音"
+      - "静音"
+      - "mute"
+      - "亮度"
+      - "brightness"
+      - "屏幕亮度"
+      - "display"
+      - "通知"
+      - "notification"
+      - "消息中心"
+      - "notification center"
+      - "窗口"
+      - "window"
+      - "全屏"
+      - "fullscreen"
+      - "关闭应用"
+      - "退出应用"
+      - "quit"
+      - "force quit"
+      - "强制退出"
+      - "文件夹"
+      - "folder"
+      - "finder"
+      - "资源管理器"
+      - "explorer"
+      - "文件"
+      - "file"
+      - "目录"
+      - "directory"
+      - "下载"
+      - "download"
+      - "计算器"
+      - "calculator"
+      - "时钟"
+      - "clock"
+      - "闹钟"
+      - "alarm"
+      - "地图"
+      - "map"
+      - "导航"
+      - "navigation"
+      - "定位"
+      - "location"
+      - "设置"
+      - "settings"
+      - "偏好设置"
+      - "preferences"
+      - "系统设置"
+      - "商店"
+      - "store"
+      - "app store"
+      - "应用商店"
+      - "截个图"
+      - "截个屏"
+      - "屏幕截图"
+
+  # 数据分析
   data_analysis:
     priority: 4
-    description: "数据分析"
     keywords:
-      - 数据分析
-      - 统计图表
-      - 可视化
-      - 趋势分析
-      - 词云图
-      - 饼图
-      - 柱状图
-      - 折线图
-      - analyze data
-      - chart
-      - 数据统计
-      - 数据可视化
-      - 报表
-      - report
-      - 分析报告
-      - 数据报告
+      - "数据分析"
+      - "统计图表"
+      - "可视化"
+      - "趋势分析"
+      - "词云图"
+      - "饼图"
+      - "柱状图"
+      - "折线图"
+      - "analyze data"
+      - "chart"
+      - "数据统计"
+      - "预测模型"
+      - "机器学习"
+      - "时间序列"
+      - "forecast"
+      - "predict"
+      - "做个分析"
+      - "分析一下"
+      - "做个图表"
+      - "画个图"
+      - "统计数据"
+      - "数据处理"
+      - "数据挖掘"
+      - "报表"
+      - "生成图表"
+      - "分析"
+      - "帮我分析"
+      - "分析数据"
+      - "数据分析一下"
 
-  # 文件操作技能
-  file_operations:
-    priority: 4
-    description: "文件操作"
-    keywords:
-      - 打开文件
-      - 保存文件
-      - 读取文件
-      - 删除文件
-      - 创建文件
-      - 文件重命名
-      - 文件移动
-      - 文件复制
-      - 写文件
-      - read file
-      - write file
-      - save file
-      - delete file
-      - create file
-
-  # 浏览器技能
-  browser:
-    priority: 4
-    description: "浏览器操作"
-    keywords:
-      - 打开浏览器
-      - 打开网页
-      - 访问网站
-      - 搜索
-      - 网页搜索
-      - open browser
-      - open website
-      - visit website
-      - web search
-
-  # 系统命令技能
-  system:
-    priority: 3
-    description: "系统命令"
-    keywords:
-      - 执行命令
-      - 运行命令
-      - terminal
-      - shell
-      - cmd
-      - command
-      - 命令行
-
-  # 计算器技能
-  calculator:
+  # 天气查询
+  weather:
     priority: 5
-    description: "计算器"
     keywords:
-      - 计算
-      - 计算器
-      - 加
-      - 减
-      - 乘
-      - 除
-      - 等于
-      - 多少
-      - 求和
-      - 乘积
-      - 平方根
-      - 平方
-      - cube
-      - calculate
-      - plus
-      - minus
-      - multiply
-      - divide
+      - "天气"
+      - "气温"
+      - "温度"
+      - "下雨"
+      - "下雪"
+      - "刮风"
+      - "weather"
+      - "天气预报"
+      - "天气怎么样"
+      - "天气如何"
+      - "今天天气"
+      - "明天天气"
+      - "多少度"
+      - "几度"
+      - "热不热"
+      - "冷不冷"
+      - "会不会下雨"
+      - "要带伞吗"
+      - "适合出门吗"
+      - "how is the weather"
+      - "temperature"
+      - "forecast"
 
-  # 翻译技能
+  # 网页抓取
+  web_scraper:
+    priority: 5
+    keywords:
+      - "爬取"
+      - "抓取"
+      - "热搜"
+      - "热榜"
+      - "微博热搜"
+      - "百度热搜"
+      - "b站"
+      - "bilibili"
+      - "抖音"
+      - "douyin"
+      - "爬虫"
+      - "scrape"
+      - "crawl"
+      - "知乎"
+      - "今日头条"
+      - "头条"
+      - "toutiao"
+      - "zhihu"
+      - "github"
+      - "git"
+      - "trending"
+      - "趋势"
+      - "仓库"
+      - "热点"
+      - "微博热点"
+      - "热点新闻"
+      - "爬一下"
+      - "抓一下"
+      - "排行榜"
+      - "b站排行"
+      - "抖音热榜"
+      - "微博榜单"
+
+  # 翻译
   translator:
-    priority: 4
-    description: "翻译"
+    priority: 6
     keywords:
-      - 翻译
-      - 英文
-      - 中文
-      - 日语
-      - 韩语
-      - 英语翻译
-      - 中文翻译
-      - translate
-      - English
-      - Japanese
-      - Korean
+      - "翻译"
+      - "translate"
+      - "中英"
+      - "英文"
+      - "日文"
+      - "韩文"
+      - "互译"
+      - "批量翻译"
+      - "batch"
+      - "翻译历史"
+      - "history"
+      - "翻译记录"
+      - "翻译成"
+      - "翻译一下"
+      - "翻译这段"
+      - "翻一下"
+      - "翻译这段话"
 
-  # 邮件技能
-  email:
-    priority: 4
-    description: "邮件发送"
-    keywords:
-      - 发送邮件
-      - 邮件
-      - email
-      - send email
-      - 写信
-      - 发送信件
-
-  # 日程技能
-  calendar:
-    priority: 4
-    description: "日程管理"
-    keywords:
-      - 日程
-      - 日历
-      - 提醒
-      - 闹钟
-      - 会议
-      - 预约
-      - 安排
-      - calendar
-      - schedule
-      - reminder
-      - alarm
-
-  # 多步任务技能
+  # 多步任务
   multi_step:
     priority: 6
-    description: "多步任务"
     keywords:
-      - 先
-      - 然后
-      - 接着
-      - 再
-      - 之后
-      - 首先
-      - 第二步
-      - 最后
-      - 依次
-      - 步骤
-      - 流程
-      - 任务流程
-      - 分步
-      - 连续
-      - 顺序
+      - "先"
+      - "然后"
+      - "接着"
+      - "再"
+      - "最后"
+      - "之后"
+      - "并且"
+      - "同时"
+      - "完成以下"
+      - "执行以下"
+      - "多步"
+      - "第一步"
+      - "第二步"
+      - "接下来"
+      - "之后帮我"
 
-  # 总结技能
-  summarize:
-    priority: 4
-    description: "总结"
+  # 文本分析
+  text_analyzer:
+    priority: 7
     keywords:
-      - 总结
-      - 概括
-      - 摘要
-      - 报告
-      - 总结一下
-      - 概括一下
-      - summarize
-      - summary
-      - abstract
+      - "分析文本"
+      - "文本分析"
+      - "拆解文本"
+      - "提取概要"
+      - "生成标题"
+      - "长文本"
+      - "文本总结"
+      - "analyze text"
+      - "text analysis"
+      - "summarize"
 
-  # 智能问答技能
-  qa:
-    priority: 3
-    description: "智能问答"
+  # 高级自动化
+  advanced_automation:
+    priority: 7
     keywords:
-      - 什么是
-      - 为什么
-      - 怎么样
-      - 如何
-      - 哪个
-      - 哪个好
-      - 比较
-      - 区别
-      - 差异
-      - 原理
-      - 解释
-      - 说明
-      - 定义
-      - 介绍
+      - "工作流"
+      - "自动执行"
+      - "全链路"
+      - "自动化流程"
+      - "爬取并分析"
+      - "抓取并分析"
+      - "生成报告"
 
-  # 代码技能
-  code:
-    priority: 5
-    description: "代码相关"
+  # 深度思考
+  deep_thinking:
+    priority: 8
     keywords:
-      - 代码
-      - 编程
-      - python
-      - java
-      - javascript
-      - 写代码
-      - 代码解释
-      - 代码审查
-      - 代码优化
-      - 调试
-      - bug
-      - error
-      - coding
-      - programming
-      - debug
+      - "深度思考"
+      - "自主搜索"
+      - "联网查询"
+      - "最新信息"
+      - "研究一下"
+      - "详细分析"
+      - "深入探讨"
+      - "最新动态"
+      - "最新消息"
+      - "现在怎么样"
+      - "最近趋势"
+      - "2026年"
+      - "2025年"
 
-  # 搜索技能
-  search_engine:
-    priority: 4
-    description: "搜索引擎"
+  # 沙盒工具箱（文件编辑 + 命令执行 + macOS 工具）
+  sandbox_tools:
+    priority: 8
     keywords:
-      - 搜索
-      - 查找
-      - 搜索一下
-      - 查一下
-      - find
-      - search
-      - lookup
+      - "编辑文件"
+      - "修改文件"
+      - "读取文件"
+      - "查看文件"
+      - "创建文件"
+      - "删除文件"
+      - "重命名"
+      - "复制文件"
+      - "移动文件"
+      - "搜索代码"
+      - "查找文件"
+      - "grep"
+      - "sed"
+      - "awk"
+      - "执行命令"
+      - "运行命令"
+      - "终端命令"
+      - "shell"
+      - "bash"
+      - "系统命令"
+      - "文件操作"
+      - "目录"
+      - "文件夹"
+      - "chmod"
+      - "ps"
+      - "进程"
+      - "磁盘"
+      - "df"
+      - "du"
+      - "scp"
+      - "ssh"
+      - "rsync"
+      - "macos"
+      - "applescript"
+      - "剪贴板"
+      - "系统通知"
+      - "finder"
+      - "截屏"
+      - "screencapture"
+      - "pbcopy"
+      - "pbpaste"
 
-  # MCP连接器技能
-  mcp_connector:
-    priority: 5
-    description: "MCP服务连接器"
+  # RAG搜索（优先级最高）
+  rag_search:
+    priority: 9
     keywords:
-      - MCP
-      - mcp
-      - 连接MCP
-      - MCP服务
-      - MCP服务器
-      - the-agency
-      - 项目健康状态
-      - agent状态
-      - 协作请求
-      - 待处理协作
-      - 新闻广播
+      - "是什么"
+      - "什么是"
+      - "如何"
+      - "为什么"
+      - "search"
+      - "lookup"
+      - "learn"
+      - "了解一下"
+      - "概念"
+      - "原理"
+      - "解释"
+      - "定义"
+      - "含义"
+
+# 多步任务指示词
+multi_step_indicators:
+  - "先"
+  - "然后"
+  - "接着"
+  - "再"
+  - "最后"
+  - "之后"
+  - "并且"
+  - "同时"
+  - "再帮我"
+  - "还有"
+  - "还要"
+  - "查完"
+  - "做完"
+  - "接下来"
+
+# 语言映射
+lang_map:
+  "英文": "en"
+  "英语": "en"
+  "english": "en"
+  "中文": "zh"
+  "汉语": "zh"
+  "chinese": "zh"
+  "日文": "ja"
+  "日语": "ja"
+  "japanese": "ja"
+  "韩文": "ko"
+  "韩语": "ko"
+  "korean": "ko"
+  "法文": "fr"
+  "法语": "fr"
+  "french": "fr"
+  "德文": "de"
+  "德语": "de"
+  "german": "de"
+  "西班牙文": "es"
+  "西班牙语": "es"
+
+# 意图映射表（快速路由）
+intent_skill_map:
+  math_calculation:
+    keywords: ["加", "减", "乘", "除", "等于", "计算", "+", "-", "*", "/", "×", "÷"]
+    skill: "calculator"
+    min_hits: 1
+  greeting:
+    keywords: ["你好", "嗨", "hello", "hi", "在吗"]
+    skill: "chat"
+  weather_query:
+    keywords: ["天气", "气温", "温度", "下雨", "下雪", "刮风", "预报", "天气怎么样", "天气如何", "多少度", "几度", "会不会下雨", "热不热", "冷不冷"]
+    skill: "weather"
+    min_hits: 1
+  web_scraping:
+    keywords: ["热搜", "热榜", "爬取", "抓取", "微博", "抖音", "知乎", "b站", "github", "热点", "排行榜", "爬虫"]
+    skill: "web_scraper"
+    min_hits: 1
+  system_info:
+    keywords: ["系统时间", "内存", "磁盘", "cpu", "进程", "网络", "现在几点", "今天几号"]
+    skill: "system_toolbox"
+  translation:
+    keywords: ["翻译", "translate", "中英互译", "翻译成", "翻一下", "翻译这段"]
+    skill: "translator"
+    min_hits: 1
+  gui_control:
+    keywords: ["打开", "点击", "截图", "截屏", "音量", "亮度", "微信", "浏览器", "关闭", "截个图", "截个屏", "飞书", "钉钉", "邮件", "日历"]
+    skill: "gui_automation"
+    min_hits: 1
+  data_analysis:
+    keywords: ["数据分析", "分析一下", "分析数据", "统计", "可视化", "图表", "做个分析", "做个图表", "画个图", "柱状图", "饼图", "折线图", "词云"]
+    skill: "data_analysis"
+    min_hits: 1
+  knowledge_search:
+    keywords: ["是什么", "如何", "为什么", "了解一下", "概念", "原理", "解释", "定义"]
+    skill: "rag_search"
+    min_hits: 1
+  deep_analysis:
+    keywords: ["深度思考", "自主搜索", "最新信息", "分析一下", "研究一下", "最新动态"]
+    skill: "deep_thinking"
+  multi_step_task:
+    keywords: ["先", "然后", "接着", "再", "最后", "下一步", "接下来", "第一步", "第二步"]
+    skill: "multi_step"
+    min_hits: 2
+  text_analysis:
+    keywords: ["分析文本", "拆解", "提取概要", "生成标题", "文本分析", "长文本", "主要观点", "段落"]
+    skill: "text_analyzer"
+
+# ★ B级优化：补全缺失的 MCP 服务器映射
+# 以下为 skill_keywords.yaml 中未定义但 mcp/ 目录下存在的 MCP 服务器
+
+# 搜索引擎 MCP
+search_engine:
+  priority: 5
+  keywords:
+    - "搜索"
+    - "查询"
+    - "百度"
+    - "google"
+    - "bing"
+    - "搜索一下"
+    - "帮我搜"
+    - "搜一下"
+    - "查一下"
+    - "search engine"
+
+# OpenClaw MCP（自动化网页抓取）
+openclaw:
+  priority: 5
+  keywords:
+    - "openclaw"
+    - "claw"
+    - "网页自动化"
+    - "自动化抓取"
+
+# Awesome MCP 服务器发现
+awesome_mcp:
+  priority: 3
+  keywords:
+    - "awesome"
+    - "mcp发现"
+    - "发现工具"
+    - "可用工具"
+    - "mcp列表"
+
+# 艺术生成 MCP
+art_generation:
+  priority: 4
+  keywords:
+    - "画图"
+    - "生成图片"
+    - "艺术"
+    - "绘图"
+    - "create image"
+    - "draw"
+    - "art"
+    - "图片生成"
+    - "生成画作"
+    - "AI绘图"
+
+# 游戏 MCP
+game:
+  priority: 2
+  keywords:
+    - "游戏"
+    - "game"
+    - "娱乐"
+    - "玩"
+    - "game"
+
+# 文本处理 MCP
+text_processing:
+  priority: 6
+  keywords:
+    - "文本处理"
+    - "文本转换"
+    - "格式转换"
+    - "处理文本"
+    - "text processing"
+    - "format"
+    - "转换"
+
+# 文件操作 MCP
+file_operations:
+  priority: 7
+  keywords:
+    - "文件操作"
+    - "文件管理"
+    - "文件"
+    - "读取"
+    - "写入"
+    - "保存"
+    - "删除文件"
+    - "复制"
+    - "移动"
+    - "file operation"
+    - "manage files"
+
+# 计算器 MCP
+calculator:
+  priority: 8
+  keywords:
+    - "计算"
+    - "calculator"
+    - "加"
+    - "减"
+    - "乘"
+    - "除"
+    - "等于"
+    - "数学"
+    - "算一下"
+    - "帮我算"
+    - "计算结果"
+
+# 娱乐 MCP
+fun:
+  priority: 1
+  keywords:
+    - "娱乐"
+    - "fun"
+    - "笑话"
+    - "笑话"
+    - "趣味"
+    - "开心"
+    - "解闷"
+

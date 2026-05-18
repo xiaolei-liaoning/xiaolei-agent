@@ -101,6 +101,7 @@ async def health_check() -> Dict[str, Any]:
         tm = ToolManager.get_instance()
         tools_count = len(tm._tools)
     except Exception:
+        logger.debug("获取工具管理器实例失败，tools_count=0")
         pass
 
     return {
@@ -123,7 +124,7 @@ async def list_characters() -> Dict[str, Any]:
         return _default_characters()
 
     try:
-        from core.database import get_session, Character
+        from core.infrastructure.database import get_session, Character
         session = get_session()
         try:
             characters = session.query(Character).all()
@@ -192,7 +193,7 @@ async def system_metrics() -> Dict[str, Any]:
 
     # Redis 状态
     try:
-        from core.redis_pool import RedisPoolManager
+        from core.infrastructure.redis_pool import RedisPoolManager
         rpm = RedisPoolManager.get_instance()
         metrics["redis"] = rpm.health_check_all()
     except Exception:
@@ -212,6 +213,15 @@ async def auth_login(request: LoginRequest) -> Dict[str, Any]:
     验证用户名密码，成功后返回 JWT token 和用户基本信息。
     数据库不可用时使用内置管理员账号 (admin/admin123) 兜底。
     """
+    # 输入安全校验
+    try:
+        from core.security.security import SecurityManager
+        sm = SecurityManager()
+        if not sm.validate_input(request.username, "string") or not sm.validate_input(request.password, "string"):
+            return {"success": False, "detail": "输入包含非法字符"}
+    except Exception:
+        logger.warning("安全校验模块异常，跳过输入验证")
+
     if not _db_initialized:
         logger.warning("数据库未初始化，使用内置管理员验证")
         if request.username == "admin" and request.password == "admin123":
@@ -233,7 +243,7 @@ async def auth_login(request: LoginRequest) -> Dict[str, Any]:
         return {"success": False, "detail": "数据库未初始化，仅支持 admin/admin123 登录"}
 
     try:
-        from core.database import get_session, User
+        from core.infrastructure.database import get_session, User
         from passlib.context import CryptContext
         pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
         
@@ -283,7 +293,7 @@ async def auth_register(request: RegisterRequest) -> Dict[str, Any]:
         return {"success": False, "detail": "数据库未初始化，无法注册"}
 
     try:
-        from core.database import get_session, User
+        from core.infrastructure.database import get_session, User
         from passlib.context import CryptContext
         pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
         
@@ -325,7 +335,7 @@ async def list_users() -> Dict[str, Any]:
     if not _db_initialized:
         return {"users": []}
     try:
-        from core.database import get_session, User
+        from core.infrastructure.database import get_session, User
         session = get_session()
         try:
             users = session.query(User).all()
@@ -353,7 +363,7 @@ async def update_profile(request: UpdateProfileRequest) -> Dict[str, Any]:
     if not _db_initialized:
         return {"success": False, "detail": "数据库未初始化"}
     try:
-        from core.database import get_session, User
+        from core.infrastructure.database import get_session, User
         session = get_session()
         try:
             user = session.query(User).filter_by(id=request.user_id).first()
@@ -379,15 +389,15 @@ async def change_password(request: ChangePasswordRequest) -> Dict[str, Any]:
     if not _db_initialized:
         return {"success": False, "detail": "数据库未初始化"}
     try:
-        from core.database import get_session, User, verify_password, hash_password
+        from core.infrastructure.database import get_session, User, verify_password, hash_password
         session = get_session()
         try:
             user = session.query(User).filter_by(id=request.user_id).first()
             if not user:
                 return {"success": False, "detail": "用户不存在"}
-            if not verify_password(request.old_password, user.password_hash):
+            if not verify_password(request.old_password, user.password):
                 return {"success": False, "detail": "旧密码错误"}
-            user.password_hash = hash_password(request.new_password)
+            user.password = hash_password(request.new_password)
             session.commit()
             logger.info("用户 %s (id=%d) 修改密码成功", user.username, user.id)
             return {"success": True}
@@ -415,7 +425,7 @@ async def create_character(request: CharacterCreateRequest) -> Dict[str, Any]:
     if not _db_initialized:
         return {"success": False, "detail": "数据库未初始化"}
     try:
-        from core.database import get_session, Character
+        from core.infrastructure.database import get_session, Character
         session = get_session()
         try:
             existing = session.query(Character).filter_by(
@@ -466,7 +476,7 @@ async def update_character(character_id: str, request: CharacterCreateRequest) -
     if not _db_initialized:
         return {"success": False, "detail": "数据库未初始化"}
     try:
-        from core.database import get_session, Character
+        from core.infrastructure.database import get_session, Character
         session = get_session()
         try:
             character = session.query(Character).filter_by(
@@ -505,7 +515,7 @@ async def delete_character(character_id: str) -> Dict[str, Any]:
     if not _db_initialized:
         return {"success": False, "detail": "数据库未初始化"}
     try:
-        from core.database import get_session, Character
+        from core.infrastructure.database import get_session, Character
         session = get_session()
         try:
             character = session.query(Character).filter_by(
@@ -548,7 +558,7 @@ async def submit_feedback(request: FeedbackRequest) -> Dict[str, Any]:
         request: 反馈请求体
     """
     try:
-        from core.task_processor import task_processor
+        from core.tasks.task_processor import task_processor
         from core.continuous_learning import get_learner
         
         await task_processor.record_feedback(request.task, request.skill_used, request.success)
@@ -578,7 +588,7 @@ async def submit_feedback(request: FeedbackRequest) -> Dict[str, Any]:
 async def get_feedback_stats() -> Dict[str, Any]:
     """获取用户反馈统计信息。"""
     try:
-        from core.task_processor import task_processor
+        from core.tasks.task_processor import task_processor
         
         summary = task_processor.get_feedback_summary()
         
@@ -606,4 +616,49 @@ async def get_learning_stats() -> Dict[str, Any]:
         }
     except Exception as e:
         logger.error("获取学习统计失败: %s", e)
+        return {"success": False, "detail": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# 反问机制 API — Agent降级时询问用户
+# ---------------------------------------------------------------------------
+
+
+@router.get("/api/questions/pending", summary="获取待反问问题")
+async def get_pending_questions() -> Dict[str, Any]:
+    """获取所有待用户回答的Agent反问问题"""
+    try:
+        from core.agents.agent_communication import get_question_registry
+        questions = get_question_registry().get_pending()
+        return {
+            "success": True,
+            "data": [
+                {
+                    "question_id": q.question_id,
+                    "agent_id": q.agent_id,
+                    "agent_name": q.agent_name,
+                    "question": q.question,
+                    "context": q.context,
+                    "options": q.options,
+                    "created_at": q.created_at,
+                }
+                for q in questions
+            ]
+        }
+    except Exception as e:
+        return {"success": False, "detail": str(e)}
+
+
+class AnswerQuestionRequest(BaseModel):
+    answer: str = Field(..., description="回答值: proceed / retry / cancel")
+
+
+@router.post("/api/questions/{question_id}/answer", summary="回答反问问题")
+async def answer_question(question_id: str, req: AnswerQuestionRequest) -> Dict[str, Any]:
+    """回答Agent的降级反问"""
+    try:
+        from core.agents.agent_communication import get_question_registry
+        ok = get_question_registry().answer(question_id, req.answer)
+        return {"success": ok, "detail": "已回答" if ok else "问题已超时或不存在"}
+    except Exception as e:
         return {"success": False, "detail": str(e)}

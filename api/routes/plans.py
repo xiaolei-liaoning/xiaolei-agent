@@ -68,7 +68,7 @@ async def get_plans(
     offset = max(offset, 0)
     
     try:
-        from core.database import get_session, Plan
+        from core.infrastructure.database import get_session, Plan
         from sqlalchemy import desc
         
         session = get_session()
@@ -127,7 +127,7 @@ async def create_plan(request: CreatePlanRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail="数据库未初始化")
     
     try:
-        from core.database import get_session, Plan
+        from core.infrastructure.database import get_session, Plan
         
         session = get_session()
         try:
@@ -191,7 +191,7 @@ async def get_plan_stats(user_id: int = 1) -> Dict[str, Any]:
         }
     
     try:
-        from core.database import get_session, Plan
+        from core.infrastructure.database import get_session, Plan
         
         session = get_session()
         try:
@@ -238,7 +238,7 @@ async def get_plan_detail(plan_id: int) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail="数据库未初始化")
     
     try:
-        from core.database import get_session, Plan
+        from core.infrastructure.database import get_session, Plan
         
         session = get_session()
         try:
@@ -284,7 +284,7 @@ async def update_plan(plan_id: int, request: UpdatePlanRequest) -> Dict[str, Any
         raise HTTPException(status_code=500, detail="数据库未初始化")
     
     try:
-        from core.database import get_session, Plan
+        from core.infrastructure.database import get_session, Plan
         
         session = get_session()
         try:
@@ -352,7 +352,7 @@ async def delete_plan(plan_id: int) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail="数据库未初始化")
     
     try:
-        from core.database import get_session, Plan
+        from core.infrastructure.database import get_session, Plan
         
         session = get_session()
         try:

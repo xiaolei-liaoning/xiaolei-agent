@@ -15,7 +15,7 @@ import time
 import logging
 
 from core.self_check_middleware import SelfCheckMiddleware, get_self_check_middleware
-from core.llm_backend import get_llm_router
+from core.engine.llm_backend import get_llm_router
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +80,7 @@ class SelfCheckResponse(BaseModel):
 class BatchCheckRequest(BaseModel):
     """批量校验请求模型。"""
     
-    queries: List[str] = Field(..., description="问题列表", min_items=1, max_items=50)
+    queries: List[str] = Field(..., description="问题列表", min_length=1, max_length=50)
     pass_score: int = Field(80, description="合格分数线", ge=0, le=100)
     max_retry: int = Field(3, description="最大重试次数", ge=1, le=10)
 

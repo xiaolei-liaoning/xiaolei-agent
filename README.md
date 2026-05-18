@@ -1,5 +1,7 @@
 # 🦐 小雷版小龙虾 AI Agent
 
+**版本**: 3.3.1
+
 一个功能强大的 AI 智能助手系统，支持多技能、多 Agent 协作和工作流编排，提供类似 Claude Code 的交互体验。
 
 ---
@@ -31,18 +33,58 @@
 
 ### 🎯 CLI 命令系统（类似 Claude Code）
 
+#### 基础命令
+
 | 命令 | 功能 | 示例 |
 |------|------|------|
 | `/help` | 显示帮助 | `/help` |
 | `/run` | 执行智能工作流 | `/run "爬取微博热搜并分析"` |
-| `/chat` | 进入聊天模式 | `/chat` |
+| `/chat` | 进入聊天模式 | `/chat` 或 `/chat simple "你好"` |
 | `/think` | 切换思考模式 | `/think` |
-| `/mcp` | MCP服务器管理 | `/mcp agency` |
-| `/agent` | Agent管理 | `/agent call Writer "写文章"` |
-| `/analyze` | 数据分析 | `/analyze wordcloud` |
+| `/status` | 系统状态 | `/status` |
+| `/clear` | 清屏 | `/clear` |
+| `/history` | 历史记录 | `/history` |
+| `/debug` | 调试模式 | `/debug` |
+| `/reset` | 重置 | `/reset` 或 `/reset all` |
+| `/quit` | 退出 | `/quit` 或 `/exit` |
+
+#### 工具命令
+
+| 命令 | 功能 | 示例 |
+|------|------|------|
+| `/mcp` | MCP服务器管理 | `/mcp agency`, `/mcp fun` |
+| `/agent` | Agent管理 | `/agent list`, `/agent call Writer "写文章"` |
+| `/analyze` | 数据分析 | `/analyze wordcloud --file data.csv` |
 | `/scrape` | 数据爬取 | `/scrape weibo` |
-| `/game` | 小游戏 | `/game guess` |
-| `/fun` | 趣味工具 | `/fun joke` |
+| `/game` | 小游戏 | `/game guess`, `/game rps`, `/game dice` |
+| `/fun` | 趣味工具 | `/fun joke`, `/fun fact`, `/fun fortune` |
+| `/art` | ASCII艺术 | `/art cat`, `/art dog`, `/art rocket` |
+| `/review` | 代码审查 | `/review code main.py`, `/review security 'rm -rf /'` |
+| `/config` | 配置管理 | `/config show`, `/config set key value` |
+| `/plugin` | 插件工具 | `/plugin list`, `/plugin create my-plugin` |
+| `/smart` | 智能多Agent | `/smart "任务描述"`, `/smart demo` |
+| `/wechat` | 微信消息 | `/wechat send --friend 张三 --message 你好` |
+| `/automate` | GUI自动化 | `/automate open_app --app Safari` |
+
+#### MCP 服务器命令
+
+| 命令 | 功能 | 示例 |
+|------|------|------|
+| `/mcp list` | 列出已连接的服务器 | `/mcp list` |
+| `/mcp connect <server>` | 连接指定服务器 | `/mcp connect the-agency` |
+| `/mcp disconnect <server>` | 断开服务器 | `/mcp disconnect fun` |
+| `/mcp select <server>` | 设置当前服务器 | `/mcp select weather` |
+| `/mcp agency` | 连接the-agency服务器 | `/mcp agency` |
+| `/mcp fun` | 连接趣味MCP服务器 | `/mcp fun` |
+| `/mcp weather` | 连接天气MCP服务器 | `/mcp weather` |
+| `/mcp calculator` | 连接计算器MCP服务器 | `/mcp calculator` |
+| `/mcp file-ops` | 连接文件操作MCP服务器 | `/mcp file-ops` |
+| `/mcp text-processing` | 连接文本处理MCP服务器 | `/mcp text-processing` |
+| `/mcp tools [server]` | 查看可用工具 | `/mcp tools` |
+| `/mcp call <server> <tool>` | 调用指定服务器的工具 | `/mcp call weather get_weather` |
+| `/mcp quick <tool> [args]` | 快速调用当前服务器的工具 | `/mcp quick joke` |
+| `/mcp status` | 查看连接状态 | `/mcp status` |
+| `/mcp history` | 查看调用历史 | `/mcp history` |
 
 ### 🔄 智能工作流引擎
 - 可视化工作流搭建
@@ -94,31 +136,128 @@ python web_server.py
 
 ```
 xiaolei-agent/
-├── api/          # REST API 路由
-│   └── routes/   # API 端点定义
-├── cli/          # CLI 命令行工具
-│   ├── base.py           # 基础工具
-│   ├── colors.py         # 颜色输出
-│   ├── command_parser.py # 命令解析器
-│   ├── thinking_engine.py # 思考引擎
-│   └── logging_system.py  # 日志系统
-├── core/         # 核心模块
-│   ├── multi_agent_v2/   # 多Agent架构v2
-│   ├── agent_communication.py    # Agent通信中心
-│   ├── intelligent_planner.py    # 智能任务规划器
-│   ├── character_memory.py       # 人物记忆系统
-│   └── llm_backend.py            # LLM后端
-├── skills/       # 技能模块
-│   ├── web_scraper/       # 网页爬虫
-│   ├── data_analysis/     # 数据分析
-│   ├── translator/        # 翻译
-│   ├── deep_thinking/     # 深度思考
-│   ├── 人物/              # 人物角色
-│   └── mcp_connector/     # MCP连接器
-├── mcp/          # MCP服务器
-├── docs/         # 文档
-├── tests/        # 测试文件
-└── cli.py        # CLI入口
+├── api/                          # REST API 路由
+│   ├── routes/
+│   │   ├── chat.py              # 聊天API
+│   │   ├── history.py           # 历史记录API
+│   │   ├── system.py            # 系统API
+│   │   ├── skills.py            # 技能管理API
+│   │   ├── agent_groups.py      # Agent小组API
+│   │   ├── self_check.py        # 自我校验API
+│   │   └── plans.py             # 计划管理API
+│   ├── workflow.py              # 工作流API
+│   ├── schedule.py              # 定时任务API
+│   └── monitor.py               # 监控API
+│
+├── cli/                          # CLI 命令行工具
+│   ├── base.py                   # 基础命令
+│   ├── colors.py                 # 颜色输出
+│   ├── command_parser.py         # 命令解析器
+│   ├── thinking_engine.py        # 思考引擎
+│   ├── logging_system.py         # 日志系统
+│   ├── pagination.py             # 分页显示
+│   ├── games.py                 # 游戏模块
+│   ├── fun_tools.py             # 趣味工具
+│   ├── ascii_art.py             # ASCII艺术
+│   ├── agent_tools.py           # Agent工具
+│   ├── review_tools.py          # 审查工具
+│   ├── config_tools.py          # 配置工具
+│   ├── plugin_tools.py          # 插件工具
+│   ├── smart_agent.py           # 智能Agent
+│   ├── analyze.py               # 分析工具
+│   ├── scrape.py                # 爬虫工具
+│   └── automate.py              # 自动化工具
+│
+├── core/                         # 核心模块
+│   ├── engine/                  # 引擎层
+│   │   ├── llm_backend.py       # LLM后端
+│   │   ├── reasoning_engine.py   # 推理引擎
+│   │   └── skill_dispatcher.py  # 技能分发器
+│   │
+│   ├── multi_agent_v2/          # 多Agent系统 v2
+│   │   ├── agents/              # Agent实现
+│   │   │   ├── base/            # 基础Agent
+│   │   │   ├── master/          # MasterAgent
+│   │   │   ├── worker/          # WorkerAgent
+│   │   │   ├── expert/          # ExpertAgent
+│   │   │   └── reviewer/        # ReviewerAgent
+│   │   │
+│   │   ├── infrastructure/      # 基础设施
+│   │   │   ├── llm/            # LLM接口
+│   │   │   ├── memory/         # 记忆系统
+│   │   │   ├── observability/  # 可观测性
+│   │   │   └── persistence/    # 持久化
+│   │   │
+│   │   └── orchestration/      # 编排层
+│   │       ├── collaboration/   # 协作策略
+│   │       ├── context/        # 上下文管理
+│   │       ├── lifecycle/      # 生命周期
+│   │       └── scheduler/       # 调度器
+│   │
+│   ├── infrastructure/          # 通用基础设施
+│   │   ├── database.py         # 数据库
+│   │   ├── cache_manager.py    # 缓存管理
+│   │   ├── config_manager.py   # 配置管理
+│   │   └── di_container.py     # DI容器
+│   │
+│   ├── agents/                  # Agent通信与协作
+│   │   ├── agent_communication.py
+│   │   ├── smart_multi_agent.py
+│   │   └── group_collaboration.py
+│   │
+│   ├── workflow/                # 工作流引擎
+│   │   ├── xml_workflow_mapper.py
+│   │   ├── bfs_processor.py
+│   │   └── automation_workflow.py
+│   │
+│   ├── mcp/                     # MCP客户端
+│   │   └── mcp_client.py
+│   │
+│   ├── memory/                  # 记忆系统
+│   │   ├── short_term_memory.py
+│   │   ├── character_memory.py
+│   │   └── vector_memory.py
+│   │
+│   ├── security/                # 安全模块
+│   │   ├── security.py
+│   │   └── error_handler.py
+│   │
+│   ├── monitoring/              # 监控模块
+│   │   └── monitoring.py
+│   │
+│   ├── handlers.py              # 请求处理器
+│   ├── agent_coordinator.py     # Agent协调器
+│   ├── execution_logger.py      # 执行日志
+│   └── multi_agent_system.py   # 多Agent系统
+│
+├── skills/                       # 技能模块
+│   ├── weather/                 # 天气技能
+│   ├── fun/                     # 趣味技能
+│   ├── marketplace/             # 技能市场
+│   ├── openclaw/                # OpenClaw集成
+│   ├── workflow_engine.py       # 工作流引擎
+│   └── xmi_converter.py         # XMI转换器
+│
+├── mcp/                          # MCP服务器
+│   ├── fun_mcp_server.py
+│   └── weather_mcp_server.py
+│
+├── docs/                         # 文档
+│   ├── ARCHITECTURE.md         # 架构文档
+│   ├── DEVELOPER_GUIDE.md      # 开发者指南
+│   └── DOCUMENTATION_AUDIT_REPORT.md  # 文档审计报告
+│
+├── tests/                        # 测试文件
+│
+├── static/                       # 静态文件
+│
+├── templates/                    # HTML模板
+│
+├── main.py                       # 主入口 (Port 8001)
+├── cli.py                        # CLI入口
+├── web_server.py                # Web服务器
+├── pyproject.toml               # 项目配置
+└── requirements.txt             # 依赖
 ```
 
 ---

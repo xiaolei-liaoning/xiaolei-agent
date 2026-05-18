@@ -1,0 +1,94 @@
+# 小雷版小龙虾Agent系统配置
+# 配置外置化 - 所有魔法数字和设置移至此处
+# 支持热重载
+
+app:
+  name: "小雷版小龙虾AI Agent"
+  version: "3.3.1"
+  debug: false
+  port: 8001
+  host: "0.0.0.0"
+
+agent:
+  # Agent系统配置
+  default_agent_type: "worker"
+  enable_agent_pool: true
+  max_pool_size: 100
+  idle_timeout_seconds: 300
+  
+  # Agent行为设置
+  default_timeout: 60
+  max_retries: 3
+  retry_delay_seconds: 1
+
+memory:
+  # 记忆系统配置
+  enable_short_term: true
+  enable_vector_memory: false
+  short_term_max_items: 1000
+  vector_dimension: 1536
+  persist_to_disk: true
+  db_path: "./data/memory.db"
+
+llm:
+  # LLM配置
+  default_model: "gpt-4"
+  temperature: 0.7
+  max_tokens: 2000
+  top_p: 0.9
+  frequency_penalty: 0.0
+  presence_penalty: 0.0
+  timeout_seconds: 30
+  
+  # 路由配置
+  enable_llm_router: true
+  fallback_models:
+    - "gpt-3.5-turbo"
+    - "claude-3"
+
+api:
+  # API配置
+  cors_enabled: true
+  allowed_origins:
+    - "http://localhost"
+    - "http://127.0.0.1"
+  
+  rate_limit:
+    enabled: true
+    requests_per_minute: 100
+
+logging:
+  # 日志配置
+  level: "INFO"
+  format: "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+  date_format: "%Y-%m-%d %H:%M:%S"
+  log_to_file: false
+  log_file_path: "./logs/app.log"
+
+database:
+  # 数据库配置
+  type: "sqlite"
+  path: "./data/agent.db"
+  pool_size: 5
+  max_overflow: 10
+
+monitoring:
+  # 监控配置
+  enabled: true
+  metrics_interval_seconds: 60
+  alert_on_error: true
+  alert_threshold: 5
+
+cache:
+  # 缓存配置
+  enabled: true
+  backend: "memory"
+  ttl_seconds: 300
+  max_size: 1000
+
+workflow:
+  # 工作流配置
+  default_max_steps: 100
+  enable_parallel_execution: true
+  max_concurrent_tasks: 10
+  timeout_seconds: 300

@@ -1,0 +1,1057 @@
+{
+  "version": "1.0",
+  "description": "已知 MCP 服务器精选库 — 人工校验过的 command/args/env",
+  "servers": {
+    "brave-search": {
+      "package": "@anthropic-ai/mcp-server-brave-search",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@anthropic-ai/mcp-server-brave-search"],
+      "env": {"BRAVE_API_KEY": null},
+      "category": "搜索",
+      "description": "Brave 搜索引擎 MCP",
+      "official": true
+    },
+    "fetch": {
+      "package": "@anthropic-ai/mcp-server-fetch",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@anthropic-ai/mcp-server-fetch"],
+      "env": {},
+      "category": "搜索",
+      "description": "HTTP 请求抓取 MCP",
+      "official": true
+    },
+    "playwright": {
+      "package": "@anthropic-ai/mcp-server-playwright",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@anthropic-ai/mcp-server-playwright"],
+      "env": {},
+      "category": "浏览器自动化",
+      "description": "Playwright 浏览器自动化 MCP",
+      "official": true
+    },
+    "github": {
+      "package": "@modelcontextprotocol/server-github",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {"GITHUB_TOKEN": null},
+      "category": "版本控制",
+      "description": "GitHub API MCP",
+      "official": true
+    },
+    "gitlab": {
+      "package": "@modelcontextprotocol/server-gitlab",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-gitlab"],
+      "env": {"GITLAB_TOKEN": null, "GITLAB_URL": null},
+      "category": "版本控制",
+      "description": "GitLab API MCP",
+      "official": true
+    },
+    "slack": {
+      "package": "@modelcontextprotocol/server-slack",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-slack"],
+      "env": {"SLACK_BOT_TOKEN": null, "SLACK_TEAM_ID": null},
+      "category": "通信",
+      "description": "Slack MCP",
+      "official": true
+    },
+    "sequential-thinking": {
+      "package": "@modelcontextprotocol/server-sequential-thinking",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
+      "env": {},
+      "category": "思考工具",
+      "description": "顺序思考 MCP",
+      "official": true
+    },
+    "filesystem": {
+      "package": "@modelcontextprotocol/server-filesystem",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem"],
+      "env": {},
+      "category": "文件系统",
+      "description": "文件系统访问 MCP（需传路径参数）",
+      "official": true
+    },
+    "mcp-installer": {
+      "package": "@anthropic-ai/mcp-server-mcp-installer",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@anthropic-ai/mcp-server-mcp-installer"],
+      "env": {},
+      "category": "开发工具",
+      "description": "MCP 服务器安装器",
+      "official": true
+    },
+    "memory": {
+      "package": "@modelcontextprotocol/server-memory",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"],
+      "env": {},
+      "category": "知识 & 记忆",
+      "description": "基于文件的记忆系统 MCP",
+      "official": true
+    },
+    "postgres": {
+      "package": "@modelcontextprotocol/server-postgres",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-postgres"],
+      "env": {"DATABASE_URL": null},
+      "category": "数据库",
+      "description": "PostgreSQL 数据库 MCP",
+      "official": true
+    },
+    "sqlite": {
+      "package": "@modelcontextprotocol/server-sqlite",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-sqlite"],
+      "env": {},
+      "category": "数据库",
+      "description": "SQLite 数据库 MCP",
+      "official": true
+    },
+    "sentry": {
+      "package": "@modelcontextprotocol/server-sentry",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-sentry"],
+      "env": {"SENTRY_TOKEN": null},
+      "category": "监控",
+      "description": "Sentry 错误追踪 MCP",
+      "official": true
+    },
+    "e2b": {
+      "package": "e2b-mcp-server",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "e2b-mcp-server"],
+      "env": {"E2B_API_KEY": null},
+      "category": "沙盒",
+      "description": "E2B 沙盒环境 MCP"
+    },
+    "tavily": {
+      "package": "tavily-mcp",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "tavily-mcp"],
+      "env": {"TAVILY_API_KEY": null},
+      "category": "搜索",
+      "description": "Tavily 搜索引擎 MCP"
+    },
+    "exa": {
+      "package": "exa-mcp-server",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "exa-mcp-server"],
+      "env": {"EXA_API_KEY": null},
+      "category": "搜索",
+      "description": "Exa 搜索引擎 MCP"
+    },
+    "cloudflare": {
+      "package": "cloudflare-mcp-server",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "cloudflare-mcp-server"],
+      "env": {"CLOUDFLARE_API_TOKEN": null},
+      "category": "云平台",
+      "description": "Cloudflare API MCP"
+    },
+    "supabase": {
+      "package": "supabase-mcp-server",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "supabase-mcp-server"],
+      "env": {"SUPABASE_URL": null, "SUPABASE_SERVICE_KEY": null},
+      "category": "数据库",
+      "description": "Supabase MCP"
+    },
+    "redis": {
+      "package": "@modelcontextprotocol/server-redis",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-redis"],
+      "env": {"REDIS_URL": null},
+      "category": "数据库",
+      "description": "Redis MCP"
+    },
+    "puppeteer": {
+      "package": "@modelcontextprotocol/server-puppeteer",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-puppeteer"],
+      "env": {},
+      "category": "浏览器自动化",
+      "description": "Puppeteer 浏览器自动化 MCP",
+      "official": true
+    },
+    "google-maps": {
+      "package": "@anthropic-ai/mcp-server-google-maps",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@anthropic-ai/mcp-server-google-maps"],
+      "env": {"GOOGLE_MAPS_API_KEY": null},
+      "category": "位置服务",
+      "description": "Google Maps MCP",
+      "official": true
+    },
+    "discord": {
+      "package": "@modelcontextprotocol/server-discord",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-discord"],
+      "env": {"DISCORD_TOKEN": null},
+      "category": "通信",
+      "description": "Discord MCP",
+      "official": true
+    },
+    "linear": {
+      "package": "@modelcontextprotocol/server-linear",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-linear"],
+      "env": {"LINEAR_API_KEY": null},
+      "category": "项目管理",
+      "description": "Linear MCP",
+      "official": true
+    },
+    "notion": {
+      "package": "@modelcontextprotocol/server-notion",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-notion"],
+      "env": {"NOTION_TOKEN": null},
+      "category": "生产力",
+      "description": "Notion MCP",
+      "official": true
+    },
+    "jira": {
+      "package": "@modelcontextprotocol/server-jira",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-jira"],
+      "env": {"JIRA_TOKEN": null, "JIRA_URL": null, "JIRA_EMAIL": null},
+      "category": "项目管理",
+      "description": "Jira MCP",
+      "official": true
+    },
+    "figma": {
+      "package": "@modelcontextprotocol/server-figma",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-figma"],
+      "env": {"FIGMA_ACCESS_TOKEN": null},
+      "category": "设计",
+      "description": "Figma MCP"
+    },
+    "spotify": {
+      "package": "@modelcontextprotocol/server-spotify",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-spotify"],
+      "env": {"SPOTIFY_CLIENT_ID": null, "SPOTIFY_CLIENT_SECRET": null},
+      "category": "多媒体",
+      "description": "Spotify MCP"
+    },
+    "docker": {
+      "package": "@modelcontextprotocol/server-docker",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-docker"],
+      "env": {},
+      "category": "开发工具",
+      "description": "Docker MCP",
+      "official": true
+    },
+    "kubernetes": {
+      "package": "@modelcontextprotocol/server-kubernetes",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-kubernetes"],
+      "env": {"KUBECONFIG": null},
+      "category": "云平台",
+      "description": "Kubernetes MCP",
+      "official": true
+    },
+    "airtable": {
+      "package": "@modelcontextprotocol/server-airtable",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-airtable"],
+      "env": {"AIRTABLE_API_KEY": null},
+      "category": "数据库",
+      "description": "Airtable MCP"
+    },
+    "shopify": {
+      "package": "@modelcontextprotocol/server-shopify",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-shopify"],
+      "env": {"SHOPIFY_STORE_URL": null, "SHOPIFY_ACCESS_TOKEN": null},
+      "category": "电商",
+      "description": "Shopify MCP"
+    },
+    "google-calendar": {
+      "package": "@modelcontextprotocol/server-google-calendar",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-google-calendar"],
+      "env": {"GOOGLE_CALENDAR_CREDENTIALS": null},
+      "category": "生产力",
+      "description": "Google Calendar MCP"
+    },
+    "gmail": {
+      "package": "@modelcontextprotocol/server-gmail",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-gmail"],
+      "env": {"GMAIL_CREDENTIALS": null},
+      "category": "通信",
+      "description": "Gmail MCP"
+    },
+    "stripe": {
+      "package": "@modelcontextprotocol/server-stripe",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-stripe"],
+      "env": {"STRIPE_API_KEY": null},
+      "category": "金融",
+      "description": "Stripe MCP"
+    },
+    "openai": {
+      "package": "@modelcontextprotocol/server-openai",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-openai"],
+      "env": {"OPENAI_API_KEY": null},
+      "category": "AI",
+      "description": "OpenAI API MCP"
+    },
+    "replicate": {
+      "package": "@modelcontextprotocol/server-replicate",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-replicate"],
+      "env": {"REPLICATE_API_KEY": null},
+      "category": "AI",
+      "description": "Replicate MCP"
+    },
+    "s3": {
+      "package": "@modelcontextprotocol/server-s3",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-s3"],
+      "env": {"AWS_ACCESS_KEY_ID": null, "AWS_SECRET_ACCESS_KEY": null, "AWS_REGION": null},
+      "category": "云平台",
+      "description": "AWS S3 MCP"
+    },
+    "everart": {
+      "package": "@modelcontextprotocol/server-everart",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-everart"],
+      "env": {"EVERART_API_KEY": null},
+      "category": "AI",
+      "description": "AI 图像生成 MCP"
+    },
+    "chroma": {
+      "package": "chroma-mcp",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "chroma-mcp"],
+      "env": {"CHROMA_URL": null},
+      "category": "数据库",
+      "description": "Chroma 向量数据库 MCP"
+    },
+    "qdrant": {
+      "package": "qdrant-mcp-server",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "qdrant-mcp-server"],
+      "env": {"QDRANT_URL": null, "QDRANT_API_KEY": null},
+      "category": "数据库",
+      "description": "Qdrant 向量数据库 MCP"
+    },
+    "pinecone": {
+      "package": "@pinecone-database/pinecone-mcp-server",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@pinecone-database/pinecone-mcp-server"],
+      "env": {"PINECONE_API_KEY": null},
+      "category": "数据库",
+      "description": "Pinecone 向量数据库 MCP"
+    },
+    "weaviate": {
+      "package": "weaviate-mcp-server",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "weaviate-mcp-server"],
+      "env": {"WEAVIATE_URL": null, "WEAVIATE_API_KEY": null},
+      "category": "数据库",
+      "description": "Weaviate 向量数据库 MCP"
+    },
+    "neo4j": {
+      "package": "@modelcontextprotocol/server-neo4j",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-neo4j"],
+      "env": {"NEO4J_URI": null, "NEO4J_USERNAME": null, "NEO4J_PASSWORD": null},
+      "category": "数据库",
+      "description": "Neo4j 图数据库 MCP"
+    },
+    "elasticsearch": {
+      "package": "@modelcontextprotocol/server-elasticsearch",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-elasticsearch"],
+      "env": {"ELASTICSEARCH_URL": null, "ELASTICSEARCH_API_KEY": null},
+      "category": "数据库",
+      "description": "Elasticsearch MCP"
+    },
+    "mongodb": {
+      "package": "@modelcontextprotocol/server-mongodb",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-mongodb"],
+      "env": {"MONGODB_URL": null},
+      "category": "数据库",
+      "description": "MongoDB MCP"
+    },
+    "mysql": {
+      "package": "@anthropic-ai/mcp-server-mysql",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@anthropic-ai/mcp-server-mysql"],
+      "env": {"MYSQL_URL": null},
+      "category": "数据库",
+      "description": "MySQL MCP",
+      "official": true
+    },
+    "bigquery": {
+      "package": "@anthropic-ai/mcp-server-bigquery",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@anthropic-ai/mcp-server-bigquery"],
+      "env": {"GOOGLE_APPLICATION_CREDENTIALS": null},
+      "category": "数据库",
+      "description": "BigQuery MCP",
+      "official": true
+    },
+    "snowflake": {
+      "package": "@modelcontextprotocol/server-snowflake",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-snowflake"],
+      "env": {"SNOWFLAKE_ACCOUNT": null, "SNOWFLAKE_USER": null, "SNOWFLAKE_PASSWORD": null},
+      "category": "数据库",
+      "description": "Snowflake MCP"
+    },
+    "clickhouse": {
+      "package": "@clickhouse/mcp-server",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@clickhouse/mcp-server"],
+      "env": {"CLICKHOUSE_URL": null, "CLICKHOUSE_PASSWORD": null},
+      "category": "数据库",
+      "description": "ClickHouse MCP"
+    },
+    "splunk": {
+      "package": "@modelcontextprotocol/server-splunk",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-splunk"],
+      "env": {"SPLUNK_URL": null, "SPLUNK_TOKEN": null},
+      "category": "监控",
+      "description": "Splunk MCP"
+    },
+    "datadog": {
+      "package": "@modelcontextprotocol/server-datadog",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-datadog"],
+      "env": {"DATADOG_API_KEY": null, "DATADOG_APP_KEY": null},
+      "category": "监控",
+      "description": "Datadog MCP"
+    },
+    "grafana": {
+      "package": "@modelcontextprotocol/server-grafana",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-grafana"],
+      "env": {"GRAFANA_URL": null, "GRAFANA_API_KEY": null},
+      "category": "监控",
+      "description": "Grafana MCP"
+    },
+    "pagerduty": {
+      "package": "@modelcontextprotocol/server-pagerduty",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-pagerduty"],
+      "env": {"PAGERDUTY_API_KEY": null},
+      "category": "监控",
+      "description": "PagerDuty MCP"
+    },
+    "zendesk": {
+      "package": "@modelcontextprotocol/server-zendesk",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-zendesk"],
+      "env": {"ZENDESK_SUBDOMAIN": null, "ZENDESK_API_TOKEN": null, "ZENDESK_EMAIL": null},
+      "category": "支持",
+      "description": "Zendesk MCP"
+    },
+    "jumpserver": {
+      "package": "@modelcontextprotocol/server-jumpserver",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-jumpserver"],
+      "env": {"JUMPSERVER_URL": null, "JUMPSERVER_TOKEN": null},
+      "category": "安全",
+      "description": "JumpServer 堡垒机 MCP"
+    },
+    "todoist": {
+      "package": "@modelcontextprotocol/server-todoist",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-todoist"],
+      "env": {"TODOIST_API_TOKEN": null},
+      "category": "生产力",
+      "description": "Todoist MCP"
+    },
+    "obsidian": {
+      "package": "@modelcontextprotocol/server-obsidian",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-obsidian"],
+      "env": {"OBSIDIAN_VAULT_PATH": null},
+      "category": "知识 & 记忆",
+      "description": "Obsidian MCP"
+    },
+    "youtube": {
+      "package": "@modelcontextprotocol/server-youtube",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-youtube"],
+      "env": {"YOUTUBE_API_KEY": null},
+      "category": "多媒体",
+      "description": "YouTube MCP"
+    },
+    "twitter": {
+      "package": "@modelcontextprotocol/server-twitter",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-twitter"],
+      "env": {"TWITTER_API_KEY": null, "TWITTER_API_SECRET": null, "TWITTER_ACCESS_TOKEN": null},
+      "category": "社交媒体",
+      "description": "Twitter/X MCP"
+    },
+    "reddit": {
+      "package": "@modelcontextprotocol/server-reddit",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-reddit"],
+      "env": {"REDDIT_CLIENT_ID": null, "REDDIT_CLIENT_SECRET": null},
+      "category": "社交媒体",
+      "description": "Reddit MCP"
+    },
+    "linkedin": {
+      "package": "@modelcontextprotocol/server-linkedin",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-linkedin"],
+      "env": {"LINKEDIN_ACCESS_TOKEN": null},
+      "category": "社交媒体",
+      "description": "LinkedIn MCP"
+    },
+    "hackernews": {
+      "package": "@modelcontextprotocol/server-hackernews",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-hackernews"],
+      "env": {},
+      "category": "社交媒体",
+      "description": "Hacker News MCP"
+    },
+    "producthunt": {
+      "package": "@modelcontextprotocol/server-producthunt",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-producthunt"],
+      "env": {"PRODUCTHUNT_TOKEN": null},
+      "category": "社交媒体",
+      "description": "Product Hunt MCP"
+    },
+    "webflow": {
+      "package": "@modelcontextprotocol/server-webflow",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-webflow"],
+      "env": {"WEBFLOW_API_TOKEN": null},
+      "category": "开发工具",
+      "description": "Webflow MCP"
+    },
+    "vercel": {
+      "package": "@modelcontextprotocol/server-vercel",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-vercel"],
+      "env": {"VERCEL_TOKEN": null},
+      "category": "云平台",
+      "description": "Vercel MCP"
+    },
+    "netlify": {
+      "package": "@modelcontextprotocol/server-netlify",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-netlify"],
+      "env": {"NETLIFY_ACCESS_TOKEN": null},
+      "category": "云平台",
+      "description": "Netlify MCP"
+    },
+    "cloudinary": {
+      "package": "@modelcontextprotocol/server-cloudinary",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-cloudinary"],
+      "env": {"CLOUDINARY_URL": null},
+      "category": "多媒体",
+      "description": "Cloudinary 媒体管理 MCP"
+    },
+    "semantic-scholar": {
+      "package": "@modelcontextprotocol/server-semantic-scholar",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-semantic-scholar"],
+      "env": {"SEMANTIC_SCHOLAR_API_KEY": null},
+      "category": "研究",
+      "description": "Semantic Scholar MCP"
+    },
+    "arxiv": {
+      "package": "@modelcontextprotocol/server-arxiv",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-arxiv"],
+      "env": {},
+      "category": "研究",
+      "description": "arXiv 论文搜索 MCP"
+    },
+    "pubmed": {
+      "package": "@modelcontextprotocol/server-pubmed",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-pubmed"],
+      "env": {},
+      "category": "研究",
+      "description": "PubMed 医学文献 MCP"
+    },
+    "perplexity": {
+      "package": "@modelcontextprotocol/server-perplexity",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-perplexity"],
+      "env": {"PERPLEXITY_API_KEY": null},
+      "category": "搜索",
+      "description": "Perplexity AI 搜索 MCP"
+    },
+    "deepseek": {
+      "package": "@modelcontextprotocol/server-deepseek",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-deepseek"],
+      "env": {"DEEPSEEK_API_KEY": null},
+      "category": "AI",
+      "description": "DeepSeek API MCP"
+    },
+    "claude-code": {
+      "package": "@anthropic-ai/claude-code-mcp",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@anthropic-ai/claude-code-mcp"],
+      "env": {},
+      "category": "开发工具",
+      "description": "Claude Code MCP 桥接",
+      "official": true
+    },
+    "screenshotone": {
+      "package": "@modelcontextprotocol/server-screenshotone",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-screenshotone"],
+      "env": {"SCREENSHOTONE_API_KEY": null},
+      "category": "开发工具",
+      "description": "网页截图 MCP"
+    },
+    "xxai": {
+      "package": "@modelcontextprotocol/server-xxai",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-xxai"],
+      "env": {"XXAI_API_KEY": null},
+      "category": "AI",
+      "description": "xxAI API MCP"
+    },
+    "bluesky": {
+      "package": "@modelcontextprotocol/server-bluesky",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-bluesky"],
+      "env": {"BLUESKY_IDENTIFIER": null, "BLUESKY_PASSWORD": null},
+      "category": "社交媒体",
+      "description": "Bluesky MCP"
+    },
+    "telegram": {
+      "package": "@modelcontextprotocol/server-telegram",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-telegram"],
+      "env": {"TELEGRAM_BOT_TOKEN": null},
+      "category": "通信",
+      "description": "Telegram MCP"
+    },
+    "whatsapp": {
+      "package": "@modelcontextprotocol/server-whatsapp",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-whatsapp"],
+      "env": {"WHATSAPP_API_KEY": null},
+      "category": "通信",
+      "description": "WhatsApp MCP"
+    },
+    "confluence": {
+      "package": "@modelcontextprotocol/server-confluence",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-confluence"],
+      "env": {"CONFLUENCE_URL": null, "CONFLUENCE_TOKEN": null},
+      "category": "生产力",
+      "description": "Confluence MCP"
+    },
+    "dropbox": {
+      "package": "@modelcontextprotocol/server-dropbox",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-dropbox"],
+      "env": {"DROPBOX_ACCESS_TOKEN": null},
+      "category": "文件系统",
+      "description": "Dropbox MCP"
+    },
+    "googledrive": {
+      "package": "@modelcontextprotocol/server-googledrive",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-googledrive"],
+      "env": {"GOOGLE_DRIVE_CREDENTIALS": null},
+      "category": "文件系统",
+      "description": "Google Drive MCP"
+    },
+    "onepassword": {
+      "package": "@modelcontextprotocol/server-onepassword",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-onepassword"],
+      "env": {"ONEPASSWORD_ACCOUNT": null, "ONEPASSWORD_TOKEN": null},
+      "category": "安全",
+      "description": "1Password MCP"
+    },
+    "newrelic": {
+      "package": "@modelcontextprotocol/server-newrelic",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-newrelic"],
+      "env": {"NEW_RELIC_API_KEY": null},
+      "category": "监控",
+      "description": "New Relic MCP"
+    },
+    "databricks": {
+      "package": "@modelcontextprotocol/server-databricks",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-databricks"],
+      "env": {"DATABRICKS_HOST": null, "DATABRICKS_TOKEN": null},
+      "category": "数据平台",
+      "description": "Databricks MCP"
+    },
+    "dbt": {
+      "package": "@modelcontextprotocol/server-dbt",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-dbt"],
+      "env": {"DBT_API_KEY": null},
+      "category": "数据平台",
+      "description": "dbt MCP"
+    },
+    "fivetran": {
+      "package": "@modelcontextprotocol/server-fivetran",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-fivetran"],
+      "env": {"FIVETRAN_API_KEY": null},
+      "category": "数据平台",
+      "description": "Fivetran MCP"
+    },
+    "segment": {
+      "package": "@modelcontextprotocol/server-segment",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-segment"],
+      "env": {"SEGMENT_API_KEY": null},
+      "category": "数据平台",
+      "description": "Segment MCP"
+    },
+    "mixpanel": {
+      "package": "@modelcontextprotocol/server-mixpanel",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-mixpanel"],
+      "env": {"MIXPANEL_TOKEN": null, "MIXPANEL_API_KEY": null},
+      "category": "数据分析",
+      "description": "Mixpanel MCP"
+    },
+    "amplitude": {
+      "package": "@modelcontextprotocol/server-amplitude",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-amplitude"],
+      "env": {"AMPLITUDE_API_KEY": null},
+      "category": "数据分析",
+      "description": "Amplitude MCP"
+    },
+    "hubspot": {
+      "package": "@modelcontextprotocol/server-hubspot",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-hubspot"],
+      "env": {"HUBSPOT_ACCESS_TOKEN": null},
+      "category": "CRM",
+      "description": "HubSpot MCP"
+    },
+    "salesforce": {
+      "package": "@modelcontextprotocol/server-salesforce",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-salesforce"],
+      "env": {"SALESFORCE_URL": null, "SALESFORCE_TOKEN": null},
+      "category": "CRM",
+      "description": "Salesforce MCP"
+    },
+    "intercom": {
+      "package": "@modelcontextprotocol/server-intercom",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-intercom"],
+      "env": {"INTERCOM_ACCESS_TOKEN": null},
+      "category": "支持",
+      "description": "Intercom MCP"
+    },
+    "openweather": {
+      "package": "@modelcontextprotocol/server-openweather",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-openweather"],
+      "env": {"OPENWEATHER_API_KEY": null},
+      "category": "环境",
+      "description": "OpenWeather MCP"
+    },
+    "nasa": {
+      "package": "@modelcontextprotocol/server-nasa",
+      "install": "npx",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-nasa"],
+      "env": {"NASA_API_KEY": null},
+      "category": "环境",
+      "description": "NASA API MCP"
+    },
+
+    "calculator": {
+      "package": "本地计算器",
+      "install": "python",
+      "command": "python3",
+      "args": ["mcp/calculator_mcp_server.py"],
+      "env": {},
+      "category": "本地工具",
+      "description": "计算器：加减乘除、幂运算、平方根"
+    },
+    "weather": {
+      "package": "本地天气服务",
+      "install": "python",
+      "command": "python3",
+      "args": ["mcp/weather_mcp_server.py"],
+      "env": {},
+      "category": "本地工具",
+      "description": "天气查询：查询城市天气和预报"
+    },
+    "fun": {
+      "package": "本地趣味工具",
+      "install": "python",
+      "command": "python3",
+      "args": ["mcp/fun_mcp_server.py"],
+      "env": {},
+      "category": "本地工具",
+      "description": "趣味工具：笑话、谜语、星座运势"
+    },
+    "file-ops": {
+      "package": "本地文件操作",
+      "install": "python",
+      "command": "python3",
+      "args": ["mcp/file_operations_mcp_server.py"],
+      "env": {},
+      "category": "本地工具",
+      "description": "文件操作：读写、目录管理"
+    },
+    "text-processing": {
+      "package": "本地文本处理",
+      "install": "python",
+      "command": "python3",
+      "args": ["mcp/text_processing_mcp_server.py"],
+      "env": {},
+      "category": "本地工具",
+      "description": "文本处理：大小写、字数统计"
+    },
+    "web-scraper": {
+      "package": "本地网页爬虫",
+      "install": "python",
+      "command": "python3",
+      "args": ["mcp/web_scraper_mcp_server.py"],
+      "env": {},
+      "category": "本地工具",
+      "description": "网页爬虫：爬取微博、百度、B站、知乎等热搜数据"
+    },
+    "gui-automation": {
+      "package": "本地GUI自动化",
+      "install": "python",
+      "command": "python3",
+      "args": ["mcp/gui_automation_mcp_server.py"],
+      "env": {},
+      "category": "本地工具",
+      "description": "GUI自动化：打开应用、浏览器操控、音量调节、截图"
+    },
+    "data-analysis": {
+      "package": "本地数据分析",
+      "install": "python",
+      "command": "python3",
+      "args": ["mcp/data_analysis_mcp_server.py"],
+      "env": {},
+      "category": "本地工具",
+      "description": "数据分析：CSV统计、描述性统计、图表生成"
+    },
+    "translator": {
+      "package": "本地翻译助手",
+      "install": "python",
+      "command": "python3",
+      "args": ["mcp/translator_mcp_server.py"],
+      "env": {},
+      "category": "本地工具",
+      "description": "翻译助手：多语言翻译、语言检测、批量翻译"
+    },
+    "search-engine": {
+      "package": "本地搜索引擎",
+      "install": "python",
+      "command": "python3",
+      "args": ["mcp/search_engine_mcp_server.py"],
+      "env": {},
+      "category": "本地工具",
+      "description": "搜索引擎：联网搜索、深度爬取"
+    },
+    "system-toolbox": {
+      "package": "本地系统工具箱",
+      "install": "python",
+      "command": "python3",
+      "args": ["mcp/system_toolbox_mcp_server.py"],
+      "env": {},
+      "category": "本地工具",
+      "description": "系统工具箱：系统信息、资源监控、计算器、文件列表"
+    },
+    "text-analyzer": {
+      "package": "本地文本分析",
+      "install": "python",
+      "command": "python3",
+      "args": ["mcp/text_analyzer_mcp_server.py"],
+      "env": {},
+      "category": "本地工具",
+      "description": "文本分析：字符数、词数、句子数、关键词提取"
+    },
+    "game": {
+      "package": "本地游戏",
+      "install": "python",
+      "command": "python3",
+      "args": ["mcp/game_mcp_server.py"],
+      "env": {},
+      "category": "本地工具",
+      "description": "游戏：猜数字、石头剪刀布、掷骰子"
+    },
+    "art": {
+      "package": "本地ASCII艺术",
+      "install": "python",
+      "command": "python3",
+      "args": ["mcp/art_mcp_server.py"],
+      "env": {},
+      "category": "本地工具",
+      "description": "ASCII艺术：猫、狗、心形、星星、机器人等图案"
+    },
+    "deep-thinking": {
+      "package": "本地深度思考",
+      "install": "python",
+      "command": "python3",
+      "args": ["mcp/deep_thinking_mcp_server.py"],
+      "env": {},
+      "category": "本地工具",
+      "description": "深度思考：5阶段深度分析框架"
+    },
+    "advanced-automation": {
+      "package": "本地高级自动化",
+      "install": "python",
+      "command": "python3",
+      "args": ["mcp/advanced_automation_mcp_server.py"],
+      "env": {},
+      "category": "本地工具",
+      "description": "高级自动化：工作流、邮件、日历、通知"
+    },
+    "sandbox-tools": {
+      "package": "本地沙盒工具箱",
+      "install": "python",
+      "command": "python3",
+      "args": ["mcp/sandbox_tools_mcp_server.py"],
+      "env": {},
+      "category": "本地工具",
+      "description": "沙盒工具箱：文件读写、目录管理、命令执行"
+    },
+    "awesome-mcp-servers": {
+      "package": "本地MCP服务器管理",
+      "install": "python",
+      "command": "python3",
+      "args": ["mcp/awesome_mcp_servers_mcp_server.py"],
+      "env": {},
+      "category": "本地工具",
+      "description": "MCP服务器管理：搜索、连接、管理800+ MCP服务器"
+    },
+    "openclaw": {
+      "package": "本地OpenClaw工作流",
+      "install": "python",
+      "command": "python3",
+      "args": ["mcp/openclaw_mcp_server.py"],
+      "env": {},
+      "category": "本地工具",
+      "description": "OpenClaw工作流引擎：创建、执行、验证、导出工作流"
+    },
+    "third-party": {
+      "package": "本地第三方应用集成",
+      "install": "python",
+      "command": "python3",
+      "args": ["mcp/third_party_mcp_server.py"],
+      "env": {},
+      "category": "本地工具",
+      "description": "第三方应用集成：Twitter、Discord、Jira、微信等"
+    }
+  }
+}

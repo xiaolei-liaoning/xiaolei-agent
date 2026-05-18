@@ -39,7 +39,7 @@ class AgentTools:
     async def _call_llm(prompt):
         """调用GLM LLM生成内容"""
         try:
-            from core.llm_backend import GLMBackend
+            from core.engine.llm_backend import GLMBackend
             llm = GLMBackend()
             messages = [{"role": "user", "content": prompt}]
             response = await llm.chat(messages)
@@ -602,3 +602,4 @@ Künstliche Intelligenz
         
         result = results.get(agent_type, f"未知Agent: {agent_type}")
         print(result)
+        return result

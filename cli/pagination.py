@@ -56,6 +56,11 @@ class StepDisplay:
         if 0 <= step_index < len(self.step_status):
             self.step_status[step_index] = 'failed'
     
+    def set_step_skipped(self, step_index: int):
+        """设置步骤为跳过状态"""
+        if 0 <= step_index < len(self.step_status):
+            self.step_status[step_index] = 'skipped'
+    
     def get_status_icon(self, status: str) -> str:
         """获取状态图标"""
         icons = {
@@ -181,6 +186,11 @@ class SimpleStepDisplay:
         if 0 <= step_index < len(self.step_status):
             self.step_status[step_index] = 'failed'
     
+    def set_step_skipped(self, step_index: int):
+        """设置步骤为跳过状态"""
+        if 0 <= step_index < len(self.step_status):
+            self.step_status[step_index] = 'skipped'
+    
     def display(self):
         """显示步骤进度"""
         print()
@@ -226,6 +236,11 @@ class CompactStepDisplay:
         if 0 <= step_index < len(self.step_status):
             self.step_status[step_index] = 'failed'
     
+    def set_step_skipped(self, step_index: int):
+        """设置步骤为跳过状态"""
+        if 0 <= step_index < len(self.step_status):
+            self.step_status[step_index] = 'skipped'
+    
     def display(self):
         """显示步骤进度（一行显示）"""
         import sys
@@ -241,6 +256,8 @@ class CompactStepDisplay:
                 step_display += f"{CliColors.CYAN}【●】{step['title']}{CliColors.ENDC}"
             elif status == 'failed':
                 step_display += f"{CliColors.RED}【✗】{step['title']}{CliColors.ENDC}"
+            elif status == 'skipped':
+                step_display += f"{CliColors.GRAY}【○】{step['title']}{CliColors.ENDC}"
             else:
                 step_display += f"{CliColors.GRAY}【 】{step['title']}{CliColors.ENDC}"
             

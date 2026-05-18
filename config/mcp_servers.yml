@@ -1,0 +1,175 @@
+# MCP 服务器配置
+# 在这里定义外部 MCP 服务器，系统启动时自动连接
+# 格式说明:
+#   name: 唯一标识名
+#   command: 启动命令 (npx, python3, uvx, deno 等)
+#   args: 命令参数列表
+#   description: 功能描述
+#   env: 环境变量 (可选)
+#   auto_connect: 是否自动连接 (默认 true)
+
+servers:
+  # ── 本地 MCP 服务器 ──
+  calculator-mcp:
+    command: python3
+    args: ["mcp/calculator_mcp_server.py"]
+    description: "计算器：加减乘除、幂运算、平方根"
+    auto_connect: true
+
+  weather-mcp:
+    command: python3
+    args: ["mcp/weather_mcp_server.py"]
+    description: "天气查询：查询城市天气和预报"
+    auto_connect: true
+
+  fun-mcp:
+    command: python3
+    args: ["mcp/fun_mcp_server.py"]
+    description: "趣味工具：笑话、谜语、星座运势"
+    auto_connect: true
+
+  file-ops-mcp:
+    command: python3
+    args: ["mcp/file_operations_mcp_server.py"]
+    description: "文件操作：读写、目录管理"
+    auto_connect: true
+
+  text-processing-mcp:
+    command: python3
+    args: ["mcp/text_processing_mcp_server.py"]
+    description: "文本处理：大小写、字数统计"
+    auto_connect: true
+
+  web-scraper-mcp:
+    command: python3
+    args: ["mcp/web_scraper_mcp_server.py"]
+    description: "网页爬虫：爬取微博、百度、B站、知乎等热搜数据"
+    auto_connect: true
+
+  gui-automation-mcp:
+    command: python3
+    args: ["mcp/gui_automation_mcp_server.py"]
+    description: "GUI自动化：打开应用、浏览器操控、音量调节、截图"
+    auto_connect: true
+
+  data-analysis-mcp:
+    command: python3
+    args: ["mcp/data_analysis_mcp_server.py"]
+    description: "数据分析：CSV统计、描述性统计、图表生成"
+    auto_connect: true
+
+  translator-mcp:
+    command: python3
+    args: ["mcp/translator_mcp_server.py"]
+    description: "翻译助手：多语言翻译、语言检测、批量翻译"
+    auto_connect: true
+
+  search-engine-mcp:
+    command: python3
+    args: ["mcp/search_engine_mcp_server.py"]
+    description: "搜索引擎：联网搜索、深度爬取"
+    auto_connect: true
+
+  system-toolbox-mcp:
+    command: python3
+    args: ["mcp/system_toolbox_mcp_server.py"]
+    description: "系统工具箱：系统信息、资源监控、计算器、文件列表"
+    auto_connect: true
+
+  text-analyzer-mcp:
+    command: python3
+    args: ["mcp/text_analyzer_mcp_server.py"]
+    description: "文本分析：字符数、词数、句子数、关键词提取"
+    auto_connect: true
+
+  game-mcp:
+    command: python3
+    args: ["mcp/game_mcp_server.py"]
+    description: "游戏：猜数字、石头剪刀布、掷骰子"
+    auto_connect: true
+
+  art-mcp:
+    command: python3
+    args: ["mcp/art_mcp_server.py"]
+    description: "ASCII艺术：猫、狗、心形、星星、机器人等图案"
+    auto_connect: true
+
+  awesome-mcp-servers-mcp:
+    command: python3
+    args: ["mcp/awesome_mcp_servers_mcp_server.py"]
+    description: "MCP服务器管理：搜索、连接、管理800+ MCP服务器"
+    auto_connect: true
+
+  sandbox-tools-mcp:
+    command: python3
+    args: ["mcp/sandbox_tools_mcp_server.py"]
+    description: "沙盒工具箱：文件读写、目录管理、命令执行、macOS操作"
+    auto_connect: true
+
+  deep-thinking-mcp:
+    command: python3
+    args: ["mcp/deep_thinking_mcp_server.py"]
+    description: "深度思考：5阶段深度分析框架"
+    auto_connect: true
+
+  advanced-automation-mcp:
+    command: python3
+    args: ["mcp/advanced_automation_mcp_server.py"]
+    description: "高级自动化：工作流、邮件、日历、通知"
+    auto_connect: true
+
+  openclaw-mcp:
+    command: python3
+    args: ["mcp/openclaw_mcp_server.py"]
+    description: "OpenClaw工作流引擎：创建、执行、验证、导出工作流"
+    auto_connect: true
+
+  third-party-mcp:
+    command: python3
+    args: ["mcp/third_party_mcp_server.py"]
+    description: "第三方应用集成：Twitter、Discord、Jira、微信等"
+    auto_connect: true
+
+  # ── 外部 / 第三方 MCP 服务器 ──
+  # 方式一: from_awesome 引用（推荐）— 自动从精选库拉取 command + args
+  # 精选库位于 data/known_mcp_servers.json，覆盖 80+ 服务器
+  #
+  # my-brave:
+  #   from_awesome: brave-search  # 引用精选库
+  #   env:
+  #     BRAVE_API_KEY: "${BRAVE_API_KEY}"  # 从 .env 读取
+  #
+  # my-postgres:
+  #   from_awesome: postgres
+  #   env:
+  #     DATABASE_URL: "postgresql://user:pass@localhost/db"
+  #
+  # 方式二: 手动指定 command + args
+  #
+  # brave-search:
+  #   command: npx
+  #   args: ["-y", "@anthropic-ai/mcp-server-brave-search"]
+  #   description: "Brave 搜索引擎 MCP"
+  #   env:
+  #     BRAVE_API_KEY: "${BRAVE_API_KEY}"
+  #
+  # fetch:
+  #   command: npx
+  #   args: ["-y", "@anthropic-ai/mcp-server-fetch"]
+  #   description: "HTTP 请求抓取 MCP"
+  #
+  # filesystem:
+  #   command: npx
+  #   args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+  #   description: "文件系统访问 MCP"
+  #
+  # sequential-thinking:
+  #   command: npx
+  #   args: ["-y", "@anthropic-ai/mcp-server-sequential-thinking"]
+  #   description: "顺序思考 MCP"
+  #
+  # playwright:
+  #   command: npx
+  #   args: ["-y", "@anthropic-ai/mcp-server-playwright"]
+  #   description: "浏览器自动化 MCP"
+

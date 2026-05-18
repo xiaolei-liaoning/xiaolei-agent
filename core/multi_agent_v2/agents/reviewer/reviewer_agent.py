@@ -111,6 +111,10 @@ class ReviewerAgent(BaseAgent):
                     output=review_result
                 )
             )
+            
+            # ★ 激活KEPA循环：应用学习
+            if reflection:
+                self._apply_reviewer_learning(reflection, review_result)
 
             # 记录评审历史
             self.review_history.append(review_result)
@@ -129,23 +133,42 @@ class ReviewerAgent(BaseAgent):
             )
 
     async def _review(self, task: Task) -> ReviewResult:
-        """执行评审（使用LLM进行智能评审）"""
+        """评审：LLM驱动，断线重连3次，全失败反问"""
         logger.info(f"开始评审任务: {task.description}")
 
-        # 先尝试使用LLM进行智能评审
-        try:
-            llm_result = await self._review_with_llm(task)
-            if llm_result:
-                return llm_result
-        except Exception as e:
-            logger.warning(f"LLM评审失败，使用模拟评审: {e}")
+        last_error = None
+        for attempt in range(3):
+            try:
+                llm_result = await self._review_with_llm(task)
+                if llm_result:
+                    return llm_result
+            except Exception as e:
+                last_error = str(e)
+                logger.warning(f"LLM评审失败(第{attempt+1}次): {e}")
+                if attempt < 2:
+                    await asyncio.sleep(1)
+                    continue
 
-        # 降级到模拟评审
+        # 3次全失败 → 反问用户
+        answer = await self.ask_user(
+            f"LLM断线重连3次仍失败({str(last_error)[:60]})，是否使用模拟评审降级处理？",
+            context=f"任务: {task.description[:80]}",
+        )
+        if answer == "retry":
+            try:
+                llm = await self._review_with_llm(task)
+                if llm:
+                    return llm
+            except Exception:
+                pass
+        elif answer == "cancel":
+            raise
+
         return await self._review_simulated(task)
 
     async def _review_with_llm(self, task: Task) -> Optional[ReviewResult]:
         """使用LLM进行智能评审"""
-        from core.llm_backend import get_llm_router
+        from core.engine.llm_backend import get_llm_router
         from core.multi_agent_v2.agents.prompts.agent_prompts import get_prompt_manager
         
         llm_router = get_llm_router()
@@ -195,7 +218,7 @@ class ReviewerAgent(BaseAgent):
                 try:
                     score_str = ''.join([c for c in line if c.isdigit() or c == '.'])
                     score = min(float(score_str) / 100, 1.0)
-                except:
+                except (ValueError, TypeError):
                     pass
             # 匹配通过状态
             elif "通过" in line:
@@ -229,53 +252,11 @@ class ReviewerAgent(BaseAgent):
             suggestions=suggestions[:3]
         )
 
-    async def _review_simulated(self, task: Task) -> ReviewResult:
-        """模拟评审过程（降级方案）"""
-        await asyncio.sleep(1.0)
 
-        comments = []
-        issues = []
-        suggestions = []
-
-        for criterion in self.review_criteria:
-            check_result = await self._check_criterion_simulated(task, criterion)
-
-            if check_result["passed"]:
-                comments.append(f"✓ {criterion}: 通过")
-            else:
-                comments.append(f"✗ {criterion}: 未通过")
-                issues.append(f"{criterion}存在问题")
-                suggestions.append(f"建议改进{criterion}")
-
-        passed_count = sum(1 for c in comments if "✓" in c)
-        score = passed_count / len(self.review_criteria)
-        approved = score >= 0.6
-
-        return ReviewResult(
-            approved=approved,
-            score=score,
-            comments=comments,
-            issues=issues,
-            suggestions=suggestions
-        )
-
-    async def _check_criterion_simulated(self, task: Task, criterion: str) -> Dict[str, Any]:
-        """检查单个标准（模拟）"""
-        import random
-        passed = random.random() > 0.3
-
-        return {
-            "criterion": criterion,
-            "passed": passed,
-            "details": f"检查{criterion}的结果"
-        }
 
     async def review_result(self, result: ActionResult) -> ReviewResult:
         """评审执行结果"""
         logger.info(f"评审执行结果: {result.success}")
-
-        # 模拟评审
-        await asyncio.sleep(0.5)
 
         comments = []
         issues = []
@@ -330,3 +311,29 @@ class ReviewerAgent(BaseAgent):
         """设置评审标准"""
         self.review_criteria = criteria
         logger.info(f"评审标准已更新: {criteria}")
+    
+    def _apply_reviewer_learning(self, reflection, review_result) -> None:
+        """应用评审学习"""
+        from datetime import datetime
+        
+        logger.info(f"[KEPA] ReviewerAgent 从反思中学习: {len(reflection.lessons_learned) if hasattr(reflection, 'lessons_learned') else 0} 条经验")
+        
+        # 可以根据评审结果调整评审标准
+        if review_result.approved and hasattr(reflection, 'improvements') and reflection.improvements:
+            # 如果批准但有改进建议，可以考虑
+            pass
+    
+    def get_reviewer_effectiveness(self) -> Dict[str, Any]:
+        """获取评审有效性统计"""
+        if not self.review_history:
+            return {"total_reviews": 0, "approval_rate": 0}
+        
+        approved = sum(1 for r in self.review_history if r.approved)
+        total = len(self.review_history)
+        
+        return {
+            "total_reviews": total,
+            "approved": approved,
+            "approval_rate": approved / total if total > 0 else 0,
+            "avg_score": sum(r.score for r in self.review_history) / total if total > 0 else 0
+        }

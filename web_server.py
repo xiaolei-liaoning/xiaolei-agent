@@ -32,9 +32,8 @@ import httpx
 sys.path.insert(0, str(Path(__file__).parent))
 
 # ⚠️ 移除本地组件初始化，改为转发到main.py
-# from core.task_decomposer import TaskDecomposer
-from core.task_decomposer import get_task_decomposer
-# from core.skill_dispatcher import SkillDispatcher
+from core.tasks.task_processor import task_processor
+# from core.engine.skill_dispatcher import SkillDispatcher
 # from planning_agent import planning_agent
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -44,9 +43,6 @@ app = FastAPI(title="AI任务分解系统", version="1.0.0")
 
 # main.py服务地址
 MAIN_API_BASE = os.getenv("MAIN_API_URL", "http://localhost:8001")
-
-# 获取任务分解器单例
-task_decomposer = get_task_decomposer()
 
 # 注册 Agent 小组路由
 try:
@@ -72,21 +68,121 @@ try:
 except Exception as e:
     logger.warning(f"工作流管理API路由注册失败: {e}")
 
-# 初始化组件 - ⚠️ 已移除，改为转发到main.py
-# task_decomposer = TaskDecomposer()
+# 初始化组件 - 已移除，改为转发到main.py
 # skill_dispatcher = SkillDispatcher()
 
 # WebSocket连接管理
 class ConnectionManager:
-    def __init__(self):
+    def __init__(self, heartbeat_interval: int = 30, heartbeat_timeout: int = 60):
+        """
+        初始化连接管理器
+        
+        Args:
+            heartbeat_interval: 心跳间隔（秒）
+            heartbeat_timeout: 心跳超时时间（秒）
+        """
         self.active_connections: List[WebSocket] = []
+        self.connection_info: Dict[WebSocket, Dict[str, Any]] = {}
+        self.heartbeat_interval = heartbeat_interval
+        self.heartbeat_timeout = heartbeat_timeout
+        self._heartbeat_task: Optional[asyncio.Task] = None
+        self._running = False
+    
+    async def start_heartbeat_check(self):
+        """启动心跳检测任务"""
+        if self._heartbeat_task is not None and not self._heartbeat_task.done():
+            logger.warning("心跳检测任务已在运行")
+            return
+        
+        self._running = True
+        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+        logger.info("心跳检测任务已启动")
+    
+    async def stop_heartbeat_check(self):
+        """停止心跳检测任务"""
+        self._running = False
+        if self._heartbeat_task:
+            self._heartbeat_task.cancel()
+            try:
+                await self._heartbeat_task
+            except asyncio.CancelledError:
+                pass
+        logger.info("心跳检测任务已停止")
+    
+    async def _heartbeat_loop(self):
+        """心跳检测循环"""
+        while self._running:
+            try:
+                await asyncio.sleep(self.heartbeat_interval)
+                await self._check_heartbeats()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"心跳检测循环异常: {e}")
+    
+    async def _check_heartbeats(self):
+        """检查所有连接的心跳状态"""
+        now = datetime.now()
+        connections_to_remove = []
+        
+        for websocket in self.active_connections:
+            info = self.connection_info.get(websocket, {})
+            last_pong = info.get("last_pong")
+            
+            # 发送 ping
+            try:
+                await websocket.send_json({
+                    "type": "ping",
+                    "timestamp": now.isoformat()
+                })
+                info["last_ping"] = now
+                logger.debug(f"发送 ping 到连接: {id(websocket)}")
+            except Exception as e:
+                logger.warning(f"发送 ping 失败: {e}")
+                connections_to_remove.append(websocket)
+                continue
+            
+            # 检查超时
+            if last_pong:
+                time_since_pong = (now - last_pong).total_seconds()
+                if time_since_pong > self.heartbeat_timeout:
+                    logger.warning(f"连接超时: {id(websocket)}, 最后 pong: {time_since_pong:.1f}秒前")
+                    connections_to_remove.append(websocket)
+        
+        # 清理超时连接
+        for websocket in connections_to_remove:
+            try:
+                await self.disconnect(websocket)
+            except Exception as e:
+                logger.error(f"清理超时连接失败: {e}")
     
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
         self.active_connections.append(websocket)
+        self.connection_info[websocket] = {
+            "connected_at": datetime.now(),
+            "last_pong": datetime.now(),
+            "last_ping": None
+        }
+        logger.info(f"新连接: {id(websocket)}, 当前活跃连接数: {len(self.active_connections)}")
     
-    def disconnect(self, websocket: WebSocket):
-        self.active_connections.remove(websocket)
+    async def disconnect(self, websocket: WebSocket):
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+        if websocket in self.connection_info:
+            del self.connection_info[websocket]
+        # 尝试关闭连接
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+        logger.info(f"连接断开: {id(websocket)}, 当前活跃连接数: {len(self.active_connections)}")
+    
+    def update_pong(self, websocket: WebSocket):
+        """更新 pong 时间"""
+        if websocket in self.connection_info:
+            self.connection_info[websocket]["last_pong"] = datetime.now()
+            logger.debug(f"收到 pong 从连接: {id(websocket)}")
     
     async def send_personal_message(self, message: dict, websocket: WebSocket):
         try:
@@ -150,6 +246,16 @@ async def workflow_editor_page(request: Request):
     return templates.TemplateResponse("workflow_editor.html", {"request": request})
 
 
+@app.on_event("startup")
+async def startup_event():
+    """应用启动时启动心跳检测"""
+    await manager.start_heartbeat_check()
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """应用关闭时停止心跳检测"""
+    await manager.stop_heartbeat_check()
+
 @app.websocket("/api/ws/chat")
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket聊天端点"""
@@ -160,6 +266,13 @@ async def websocket_endpoint(websocket: WebSocket):
             request_start_time = datetime.now()
             
             data = await websocket.receive_json()
+            
+            # 检查是否是 pong 消息
+            message_type = data.get("type")
+            if message_type == "pong":
+                manager.update_pong(websocket)
+                continue
+            
             message = data.get("message")
             character_id = data.get("character_id", "default")
             
@@ -183,17 +296,24 @@ async def websocket_endpoint(websocket: WebSocket):
                 "message": "正在处理您的请求...",
                 "timestamp": datetime.now().isoformat()
             }, websocket)
-            
-            # 检查是否需要使用PlanningAgent
-            if any(keyword in message for keyword in ["爬取", "抓取", "crawl", "scrape", "热搜", "天气", "weather", "检索", "搜索", "查找"]):
-                # TODO: 转发到main.py的TaskProcessor处理复杂任务
-                # 当前临时方案: 返回提示消息
-                reply = f"🔄 检测到复杂任务: {message}\n\n⚠️ 当前版本暂不支持WebSocket复杂任务执行\n\n建议:\n1. 使用REST API: POST /api/v1/tasks/execute\n2. 或在命令行运行: python planning_agent.py \"{message}\""
-                
-                logger.info("复杂任务暂未实现WebSocket支持,返回提示信息")
-            else:
-                # 生成简单的回复
-                reply = f"我收到了你的消息: {message}"
+
+            # 转发到main.py处理
+            try:
+                async with httpx.AsyncClient(timeout=60.0) as client:
+                    resp = await client.post(
+                        f"{MAIN_API_BASE}/api/chat",
+                        json={"message": message, "user_id": 1, "agent_id": character_id},
+                    )
+                    if resp.status_code == 200:
+                        result = resp.json()
+                        reply = result.get("reply", "") or result.get("result", "")
+                    else:
+                        reply = f"服务暂时不可用 ({resp.status_code})"
+            except httpx.ConnectError:
+                reply = f"核心服务未启动，请确认 python main.py 已启动 (端口8001)"
+            except Exception as e:
+                logger.error("转发到main.py失败: %s", e)
+                reply = f"处理失败: {str(e)[:100]}"
             
             # 保存助手回复
             assistant_message = {
@@ -601,10 +721,23 @@ async def decompose_task_api(request: DecomposeRequest):
         logger.info("任务分解请求: %s, 选中技能: %s", task, selected_skills)
         
         # 执行任务分解
-        result = await task_decomposer.decompose(task)
+        result = await task_processor.process(task)
         
-        # 转换为字典格式
-        result_dict = result.to_dict()
+        # 转换为字典格式（兼容原有 API）
+        result_dict = {
+            "path": result.path.value,
+            "subtasks": [
+                {
+                    "id": subtask.id,
+                    "action": subtask.action,
+                    "params": subtask.params,
+                    "dependencies": subtask.dependencies,
+                    "priority": subtask.priority,
+                }
+                for subtask in result.subtasks
+            ],
+            "success": result.success,
+        }
         
         # 如果用户选择了特定技能，优先使用这些技能
         if selected_skills:
@@ -615,7 +748,7 @@ async def decompose_task_api(request: DecomposeRequest):
             'success': True,
             'data': result_dict
         })
-        
+
     except HTTPException:
         raise
     except Exception as e:

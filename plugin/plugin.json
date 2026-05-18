@@ -1,0 +1,50 @@
+{
+  "name": "xiaolei-agent-plugins",
+  "version": "3.4.0",
+  "description": "小龙虾 Agent 功能级插件集 — MCP 服务器、本地 Skills、API 路由、配置",
+  "dependencies": {},
+
+  "mcp_servers": {
+    "config_file": "../config/mcp_servers.yml",
+    "servers_dir": "mcp"
+  },
+
+  "skills": {
+    "local_skills": [
+      "workflow_engine",
+      "mcp_connector",
+      "mcp_orchestrator"
+    ],
+    "guidance_skills": {
+      "source": "~/Desktop/claude/everything-claude-code-main/.agents/skills",
+      "system_skills": [
+        "update-config", "keybindings-help", "simplify",
+        "fewer-permission-prompts", "loop", "init", "review",
+        "security-review", "GenericAgent"
+      ]
+    },
+    "persona_skills": [
+      "libai", "goddess", "first_love", "bestfriend",
+      "linus_torvalds", "john_carmack"
+    ]
+  },
+
+  "api_routes": {
+    "routes_dir": "api",
+    "enabled": ["skills", "agent_groups", "system", "chat"]
+  },
+
+  "config_files": {
+    "mcp_servers": "config/mcp_servers.yml",
+    "skill_keywords": "config/skill_keywords.yaml",
+    "app_config": "config/app_config.yaml",
+    "agents": "config/agents.yml"
+  },
+
+  "registration": {
+    "auto_connect_mcp": true,
+    "auto_register_skills": true,
+    "auto_mount_api_routes": true,
+    "load_guidance_skills": true
+  }
+}

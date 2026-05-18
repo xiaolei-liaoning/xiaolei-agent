@@ -21,8 +21,11 @@ from cli.ui_components import (
 )
 
 # 直接导入新模块
-from core.tool_framework import build_tool, register_tool, get_tool_registry, ToolResult, ToolPermission
-from core.shell_executor import run_shell_command, build_shell_command
+try:
+    from core.tool_framework import build_tool, register_tool, get_tool_registry, ToolResult, ToolPermission
+except ImportError:
+    build_tool = register_tool = get_tool_registry = ToolResult = ToolPermission = None
+from core.tools.shell_executor import run_shell_command, build_shell_command
 
 # 直接导入权限系统模块
 import importlib.util
@@ -163,7 +166,12 @@ class DemoRunner:
         print_color("─────────────────────────────────────────────────────────────", CliColors.GRAY)
         print_color("🔧 工具框架演示", CliColors.BOLD + CliColors.CYAN)
         print_color("─────────────────────────────────────────────────────────────", CliColors.GRAY)
-        
+
+        if build_tool is None:
+            print_color("⚠️ 工具框架模块不可用（tool_framework.py 已重构）", CliColors.YELLOW)
+            Dialog.info("工具框架演示跳过")
+            return
+
         # 创建示例工具
         greet_tool = (
             build_tool("greet", "向用户打招呼")
@@ -180,32 +188,32 @@ class DemoRunner:
             .renders_with(lambda result: f"💬 {result.data.get('message', '')}")
             .build()
         )
-        
+
         # 注册工具
         register_tool(greet_tool)
         print_color("✅ 工具已注册", CliColors.GREEN)
-        
+
         # 获取工具
         registry = get_tool_registry()
         tool = registry.get("greet")
-        
+
         if tool:
             print(f"\n📦 工具信息:")
             info = registry.get_tool_info("greet")
             for key, value in info.items():
                 print(f"  {key}: {value}")
-            
+
             # 执行工具
             print("\n🚀 执行工具:")
             result = await tool.execute(name="用户")
             print(tool.render_result(result))
-            
+
             # 搜索工具
             print("\n🔍 搜索工具:")
             results = registry.search("greet")
             for t in results:
                 print(f"  - {t.metadata.name}: {t.metadata.description}")
-        
+
         Dialog.info("工具框架演示完成！")
     
     async def _demo_shell_executor(self):
@@ -236,7 +244,7 @@ class DemoRunner:
         
         # 方式3: 检查安全命令
         print("\n3. 安全命令检查:")
-        from core.shell_executor import is_safe_command
+        from core.tools.shell_executor import is_safe_command
         commands = ["ls -la", "rm -rf /", "echo hello"]
         for cmd in commands:
             safe = is_safe_command(cmd)

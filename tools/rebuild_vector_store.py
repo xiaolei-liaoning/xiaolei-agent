@@ -17,7 +17,7 @@ from typing import List, Dict, Any
 # 添加项目路径
 sys.path.insert(0, str(Path(__file__).parent))
 
-from core.vector_memory import VectorMemoryStore
+from core.memory.vector_memory import VectorMemoryStore
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)

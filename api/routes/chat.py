@@ -26,12 +26,128 @@ from core.handlers import (
     save_chat_history,
     save_task_log,
 )
-from core.bfs_processor import get_bfs_processor
-from core.intelligent_agent_selector import get_intelligent_selector
+from core.workflow.bfs_processor import get_bfs_processor
+from core.agents.intelligent_agent_selector import get_intelligent_selector
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["chat"])
+
+
+# WebSocket 连接管理器
+class ConnectionManager:
+    def __init__(self, heartbeat_interval: int = 30, heartbeat_timeout: int = 60):
+        """
+        初始化连接管理器
+        
+        Args:
+            heartbeat_interval: 心跳间隔（秒）
+            heartbeat_timeout: 心跳超时时间（秒）
+        """
+        from datetime import datetime
+        self.active_connections: dict = {}  # {websocket: {"last_pong": datetime, "connected_at": datetime}}
+        self.heartbeat_interval = heartbeat_interval
+        self.heartbeat_timeout = heartbeat_timeout
+        self._heartbeat_task = None
+        self._running = False
+        self._logger = logging.getLogger(__name__)
+    
+    async def start_heartbeat_check(self):
+        """启动心跳检测任务"""
+        if self._heartbeat_task is not None and not self._heartbeat_task.done():
+            self._logger.warning("心跳检测任务已在运行")
+            return
+        
+        self._running = True
+        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+        self._logger.info("心跳检测任务已启动")
+    
+    async def stop_heartbeat_check(self):
+        """停止心跳检测任务"""
+        self._running = False
+        if self._heartbeat_task:
+            self._heartbeat_task.cancel()
+            try:
+                await self._heartbeat_task
+            except asyncio.CancelledError:
+                pass
+        self._logger.info("心跳检测任务已停止")
+    
+    async def _heartbeat_loop(self):
+        """心跳检测循环"""
+        while self._running:
+            try:
+                await asyncio.sleep(self.heartbeat_interval)
+                await self._check_heartbeats()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                self._logger.error(f"心跳检测循环异常: {e}")
+    
+    async def _check_heartbeats(self):
+        """检查所有连接的心跳状态"""
+        from datetime import datetime
+        now = datetime.now()
+        connections_to_remove = []
+        
+        for websocket, info in list(self.active_connections.items()):
+            last_pong = info.get("last_pong")
+            
+            # 发送 ping
+            try:
+                await websocket.send_json({"type": "ping", "timestamp": now.isoformat()})
+                self._logger.debug(f"发送 ping 到连接: {id(websocket)}")
+            except Exception as e:
+                self._logger.warning(f"发送 ping 失败: {e}")
+                connections_to_remove.append(websocket)
+                continue
+            
+            # 检查超时
+            if last_pong:
+                time_since_pong = (now - last_pong).total_seconds()
+                if time_since_pong > self.heartbeat_timeout:
+                    self._logger.warning(f"连接超时: {id(websocket)}, 最后 pong: {time_since_pong:.1f}秒前")
+                    connections_to_remove.append(websocket)
+        
+        # 清理超时连接
+        for websocket in connections_to_remove:
+            try:
+                await self.disconnect(websocket)
+            except Exception as e:
+                self._logger.error(f"清理超时连接失败: {e}")
+    
+    async def connect(self, websocket: WebSocket):
+        """连接客户端"""
+        from datetime import datetime
+        await websocket.accept()
+        self.active_connections[websocket] = {
+            "connected_at": datetime.now(),
+            "last_pong": datetime.now(),
+            "last_ping": None
+        }
+        self._logger.info(f"新连接: {id(websocket)}, 当前活跃连接数: {len(self.active_connections)}")
+    
+    async def disconnect(self, websocket: WebSocket):
+        """断开连接"""
+        if websocket in self.active_connections:
+            del self.active_connections[websocket]
+            # 尝试关闭连接
+            try:
+                await websocket.close()
+            except Exception:
+                self._logger.warning("关闭WebSocket连接时发生异常")
+            self._logger.info(f"连接断开: {id(websocket)}, 当前活跃连接数: {len(self.active_connections)}")
+    
+    def update_pong(self, websocket: WebSocket):
+        """更新 pong 时间"""
+        from datetime import datetime
+        if websocket in self.active_connections:
+            self.active_connections[websocket]["last_pong"] = datetime.now()
+            self._logger.debug(f"收到 pong 从连接: {id(websocket)}")
+
+
+# 全局连接管理器实例
+manager = ConnectionManager()
 
 
 # ---------------------------------------------------------------------------
@@ -215,7 +331,7 @@ def _needs_multi_agent(message: str) -> bool:
     2. 需要多技能协作的复杂任务
     """
     try:
-        from core.skill_dispatcher import SkillDispatcher
+        from core.engine.skill_dispatcher import SkillDispatcher
         dispatcher = SkillDispatcher()
         return dispatcher.is_multi_agent_required(message)
     except Exception as e:
@@ -360,13 +476,13 @@ async def _handle_with_multi_agent(
         logger.info("深度思考任务，通过multi_agent_v2多Agent系统处理: %s...", message[:50])
 
         # 导入multi_agent_v2模块
-        from core.multi_agent_v2.orchestration.scheduler.intelligent_scheduler import (
-            IntelligentScheduler, CollaborationMode
-        )
-        from core.multi_agent_v2.agents.base.base_agent import Task, TaskStatus
-        from core.multi_agent_v2.orchestration.context.global_context_center import (
-            GlobalContextCenter
-        )
+        # from core.multi_agent_v2.orchestration.scheduler.intelligent_scheduler import (
+        #     IntelligentScheduler, CollaborationMode
+        # )
+        # from core.multi_agent_v2.agents.base.base_agent import Task
+        # from core.multi_agent_v2.orchestration.context.global_context_center import (
+        #     GlobalContextCenter
+        # )
 
         # 保存用户消息到BFS上下文
         try:
@@ -390,9 +506,9 @@ async def _handle_with_multi_agent(
         scheduler = IntelligentScheduler(context_center=context_center)
         
         # 初始化Agent池
-        from core.multi_agent_v2.orchestration.lifecycle.agent_pool import AgentPool
-        from core.multi_agent_v2.agents.lazy_agent import LazyAgent
-        from core.multi_agent_v2.agents.base.base_agent import AgentType
+        # from core.multi_agent_v2.orchestration.lifecycle.agent_pool import AgentPool
+        # from core.multi_agent_v2.agents.worker.worker_agent import WorkerAgent
+        # from core.multi_agent_v2.agents.base.base_agent import AgentType
         
         agent_pool = AgentPool()
         await agent_pool.start()
@@ -426,6 +542,28 @@ async def _handle_with_multi_agent(
         # 智能调度执行
         try:
             schedule_result = await scheduler.schedule(task)
+            
+            # 如果调度成功，使用 TaskExecutor 执行
+            if schedule_result and schedule_result.success:
+                from core.multi_agent_v2.infrastructure.task_executor import TaskExecutor
+                executor = TaskExecutor(agent_pool=scheduler.agent_pool)
+                exec_result = await executor.execute(
+                    schedule_result=schedule_result,
+                    original_task=task,
+                    timeout=300.0  # 5分钟超时
+                )
+                
+                # 将执行结果存入 metadata
+                if exec_result["success"]:
+                    schedule_result.metadata["final_result"] = "任务执行成功"
+                    schedule_result.metadata["execution_time"] = exec_result["execution_time"]
+                    logger.info(f"multi_agent_v2执行成功，耗时: {exec_result['execution_time']:.2f}s")
+                else:
+                    schedule_result.metadata["final_result"] = f"执行失败: {exec_result.get('error', '未知错误')}"
+                    logger.warning(f"multi_agent_v2执行失败: {exec_result.get('error')}")
+            else:
+                logger.warning("multi_agent_v2调度失败")
+                
         except Exception as schedule_error:
             logger.warning(f"multi_agent_v2调度异常: {schedule_error}")
             schedule_result = None
@@ -656,7 +794,8 @@ async def _handle_direct(
                 message,
                 request.user_id,
                 skill_name,
-                request.agent_id
+                request.agent_id,
+                _dispatcher
             )
             elapsed = time.time() - start_time
             logger.info("[直接] 任务完成 [%s]，耗时: %.2fs", skill_name, elapsed)
@@ -750,7 +889,7 @@ async def clear_context(request: ContextRequest):
     try:
         # 尝试从数据库清除
         try:
-            from core.database import get_session, ChatHistory
+            from core.infrastructure.database import get_session, ChatHistory
             session = get_session()
             if session:
                 count = session.query(ChatHistory).filter(ChatHistory.user_id == request.user_id).delete()
@@ -870,9 +1009,8 @@ async def upload_batch(files: List[UploadFile] = File(...)) -> Dict[str, Any]:
 @router.websocket("/ws/chat")
 async def websocket_chat(websocket: WebSocket) -> None:
     """WebSocket 实时聊天端点。"""
-    await websocket.accept()
+    await manager.connect(websocket)
     client_id: str = f"ws_{id(websocket)}"
-    logger.info("WebSocket 客户端已连接: %s", client_id)
 
     try:
         from core.handlers import _dispatcher
@@ -896,16 +1034,18 @@ async def websocket_chat(websocket: WebSocket) -> None:
     try:
         while True:
             try:
-                data: str = await asyncio.wait_for(websocket.receive_text(), timeout=60)
-            except asyncio.TimeoutError:
-                try:
-                    await websocket.send_json({"type": "ping"})
-                except Exception:
-                    break
-                continue
+                data: str = await websocket.receive_text()
+            except Exception:
+                break
 
             try:
                 request_data: Dict[str, Any] = json.loads(data)
+                # 检查是否是 pong 消息
+                message_type = request_data.get("type")
+                if message_type == "pong":
+                    manager.update_pong(websocket)
+                    continue
+                
                 message: str = request_data.get("message", "")
                 user_id: int = request_data.get("user_id", 1)
                 agent_id: str = request_data.get("agent_id", "default")
@@ -958,7 +1098,7 @@ async def websocket_chat(websocket: WebSocket) -> None:
                         "is_aggregated": True,
                     })
                 else:
-                    result = await handle_single_step(message, user_id, skill_name, agent_id)
+                    result = await handle_single_step(message, user_id, skill_name, agent_id, _dispatcher)
                     reply_text = result.get("reply", "处理完成")
                     tool_call_info = result.get("tool_call")
 
@@ -980,4 +1120,4 @@ async def websocket_chat(websocket: WebSocket) -> None:
     except Exception as e:
         logger.info("WebSocket 连接异常关闭: %s (%s)", client_id, e)
     finally:
-        logger.info("WebSocket 连接清理完成: %s", client_id)
+        await manager.disconnect(websocket)

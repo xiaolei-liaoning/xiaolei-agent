@@ -1,0 +1,37 @@
+{
+  "name": "remotion",
+  "version": "1.0.0",
+  "description": "Remotion视频渲染引擎 — 用React代码生成视频，支持提示词→视频、动画合成、云端渲染",
+  "author": "系统默认",
+
+  "mcp_servers": [
+    {
+      "name": "remotion-mcp",
+      "command": "npx",
+      "args": ["-y", "@remotion/mcp@latest"],
+      "description": "Remotion文档查询：搜索Remotion API文档、组件用法、渲染配置"
+    }
+  ],
+
+  "skills": [
+    {
+      "name": "video_generation",
+      "keywords": [
+        "视频", "视频生成", "渲染", "动画", "视频合成",
+        "remotion", "motion graphics", "动效", "短片",
+        "视频编辑", "剪辑", "字幕", "转场",
+        "提示词视频", "prompt to video", "AI视频"
+      ],
+      "priority": 6,
+      "description": "使用Remotion生成视频：提示词→视频、代码动画、视频合成与导出"
+    }
+  ],
+
+  "workflows": [
+    {
+      "name": "视频生成工作流",
+      "steps": ["分析需求", "生成脚本", "创建Remotion合成", "渲染导出"],
+      "keywords": ["做视频", "生成视频", "制作视频", "短视频"]
+    }
+  ]
+}

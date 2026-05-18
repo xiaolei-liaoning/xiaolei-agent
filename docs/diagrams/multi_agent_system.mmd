@@ -1,0 +1,61 @@
+flowchart TB
+    subgraph Master["MasterAgent<br/>(任务调度中心)"]
+        Decompose["TaskDecomposer<br/>(任务分解)"]
+        Schedule["Scheduler<br/>(调度器)"]
+        Aggregate["ResultAggregator<br/>(结果聚合)"]
+    end
+
+    subgraph Workers["Worker Agents"]
+        WA1["WorkerAgent 1"]
+        WA2["WorkerAgent 2"]
+        WAn["WorkerAgent N"]
+    end
+
+    subgraph Experts["Expert Agents"]
+        EA1["ExpertAgent<br/>(爬虫专家)"]
+        EA2["ExpertAgent<br/>(分析专家)"]
+        EAn["ExpertAgent<br/>(领域专家N)"]
+    end
+
+    subgraph Reviewers["Reviewer Agents"]
+        RA1["ReviewerAgent<br/>(质量审查)"]
+        RA2["ReviewerAgent<br/>(安全审查)"]
+    end
+
+    subgraph Tools["Tool Layer"]
+        BuiltIn["Built-in Tools<br/>(内置工具)"]
+        MCP["MCP Servers<br/>(MCP服务器)"]
+        Dynamic["Dynamic Code<br/>(动态代码生成)"]
+    end
+
+    subgraph Infrastructure["Infrastructure"]
+        LLM["LLMFacade<br/>(统一LLM接口)"]
+        Memory["MemorySystem<br/>(记忆系统)"]
+        Observ["Observability<br/>(可观测性)"]
+    end
+
+    Master --> Decompose
+    Master --> Schedule
+    Master --> Aggregate
+
+    Schedule --> Workers
+    Schedule --> Experts
+
+    Workers --> Tools
+    Experts --> Tools
+    Reviewers --> Workers
+
+    Tools --> BuiltIn
+    Tools --> MCP
+    Tools --> Dynamic
+
+    BuiltIn --> LLM
+    MCP --> LLM
+    Dynamic --> LLM
+
+    Workers --> Memory
+    Experts --> Memory
+    Reviewers --> Memory
+
+    Worker["WorkerAgent"] --> RA1
+    RA1 -.->|审查结果| Worker

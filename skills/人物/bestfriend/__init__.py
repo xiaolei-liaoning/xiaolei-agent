@@ -1,6 +1,2 @@
-"""
-知心闺蜜 Skill
-"""
-from .handler import handler
-
-__all__ = ['handler']
+"""bestfriend Skill - SKILL.md驱动"""
+__all__ = []

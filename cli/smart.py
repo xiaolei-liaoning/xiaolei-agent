@@ -59,7 +59,7 @@ async def handle_workflow_save(args):
     wrapper = WorkflowEngineWrapper()
     engine = wrapper.get_engine()
 
-    result = engine.create_smart_workflow(args.request)
+    result = await engine.create_smart_workflow(args.request)
     if not result.get("success"):
         print_error(result.get("error", "创建失败"))
         return

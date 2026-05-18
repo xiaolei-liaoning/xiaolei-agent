@@ -100,10 +100,10 @@
 - `todo.md` - 待办事项
 - `multi_agent_fusion_plan.md` - 多智能体融合计划
 - `多智能体系统文档.md` - 多智能体系统文档
-- `core/agent_architecture.md` - 核心架构文档
 - `skills/*/SKILL.md` - 技能文档（有实际功能）
 
 ### 移动到docs/md的文件
+- `agent_architecture.md` - 核心架构文档（已从core/移动）
 - 所有说明性和总结性文档
 - 所有优化报告
 - 所有指南和参考文档

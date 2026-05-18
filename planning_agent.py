@@ -13,8 +13,8 @@
 import logging
 import asyncio
 from typing import Dict, Any, List
-from skills.advanced_automation.handler import automation_hub
-from core.task_decomposer import get_task_decomposer
+from mcp._impl.advanced_automation.handler import automation_hub
+from core.tasks.task_processor import task_processor
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +24,6 @@ class PlanningAgent:
     
     def __init__(self):
         self.automation_hub = automation_hub
-        self.task_decomposer = get_task_decomposer()
         logger.info("Planning Agent 初始化完成")
     
     async def execute(self, task_description: str) -> dict:
@@ -50,8 +49,8 @@ class PlanningAgent:
         logger.info(f"Planning Agent 接收到任务: {task_description}")
         
         try:
-            # 1. 任务分解
-            decomposition_result = await self.task_decomposer.decompose(task_description)
+            # 1. 任务处理/分解
+            decomposition_result = await task_processor.process(task_description)
             logger.info(f"任务分解完成，共 {len(decomposition_result.subtasks)} 个子任务")
             
             # 2. 生成执行计划

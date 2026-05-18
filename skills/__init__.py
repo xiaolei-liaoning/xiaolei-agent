@@ -1,37 +1,12 @@
-"""Skills模块导出"""
+"""Skills 模块 — 旧 handler 体系已迁移到 MCP
 
-from .advanced_automation import *
-from .calculator import *
-from .data_analysis import *
-from .deep_thinking import *
-from .gui_automation import *
-from .marketplace import *
-from .mcp_connector import *
-from .openclaw import *
-from .search_engine import *
-from .system_toolbox import *
-from .test_demo_skill import *
-from .text_analyzer import *
-from .third_party import *
-from .translator import *
-from .weather import *
-from .web_scraper import *
+所有工具型技能 → <project>/mcp/*_mcp_server.py (独立进程)
+所有指导型技能 → <project>/core/guidance_skills.py (原生嵌入 SkillRegistry)
 
-__all__ = [
-    "advanced_automation",
-    "calculator",
-    "data_analysis",
-    "deep_thinking",
-    "gui_automation",
-    "marketplace",
-    "mcp_connector",
-    "openclaw",
-    "search_engine",
-    "system_toolbox",
-    "test_demo_skill",
-    "text_analyzer",
-    "third_party",
-    "translator",
-    "weather",
-    "web_scraper",
-]
+skills/ 目录现仅保留：
+- 人物/ — 角色扮演配置
+- marketplace/ — 独立技能市场系统
+- mcp_connector/ — MCP 连接器
+- mcp_orchestrator/ — MCP 协调器
+- workflow_engine.py — 工作流引擎
+"""

@@ -94,6 +94,55 @@
 
 ## 二、核心模块与组件之间的依赖关系
 
+### 多Agent系统架构
+
+Agent集群分为两种模式：
+
+**模式一：多Agent编排** — 基于 `core/multi_agent_v2/`，支持 5 种协作策略：
+
+```
+                     IntelligentScheduler (轻调度)
+                     LLM选策略 → CapabilityMatcher分配
+                            │
+                            ▼
+                    SharedBus (消息总线+共享内存)
+                            │
+          ┌─────────────────┼─────────────────┐
+          │                 │                 │
+          ▼                 ▼                 ▼
+   动态Agent (按需)    动态Agent (按需)    动态Agent (按需)
+   ┌─────────────┐   ┌─────────────┐   ┌─────────────┐
+   │ 本地Mind    │   │ 本地Mind    │   │ 本地Mind    │
+   │ 私有记忆    │   │ 私有记忆    │   │ 私有记忆    │
+   └─────────────┘   └─────────────┘   └─────────────┘
+```
+
+- Agent 通过 **RoleTemplate 池** 按任务动态实例化，角色不再写死
+- **Scheduler** 只做轻调度：LLM选策略 → 分配Agent → 发到总线，不参与执行
+- **SharedBus** 统一消息总线+共享内存，Agent 自治（think→act→reflect→publish）
+- 聚合不专属 Master，任何 Agent 可通过总线发起结果协商
+
+5种协作策略（`CollaborationMode` 枚举），**由LLM动态选择**：
+
+| 策略 | 说明 |
+|------|------|
+| PIPELINE（流水线） | 各Agent按阶段顺序执行 |
+| MASTER_SLAVE（主从） | 主Agent分解任务，从Agent执行 |
+| REVIEW（评审） | 多Agent并行执行，评审达成共识 |
+| AUCTION（拍卖） | 任务发布后最合适的Agent竞标执行 |
+| HYBRID（混合） | 动态组合多种模式 |
+
+新增核心模块：
+
+| 模块 | 路径 | 说明 |
+|------|------|------|
+| RoleTemplate | `agents/role_templates.py` | 角色模板池（拆解员/执行者/评审员/研究员/整合员） |
+| AgentFactory | `agents/base/base_agent.py` | 按模板动态创建Agent |
+| SharedBus | `infrastructure/shared_bus.py` | 统一消息总线+共享内存 |
+| 快照持久化 | `infrastructure/persistence.py` | 任务快照存储，Agent用完即弃 |
+
+**模式二：Agent小队模式** — 基于 `core/agents/group_collaboration.py`，按小队分组协作，支持动态Agent创建（TempAgentCreator）。
+
 ### 依赖注入架构图
 
 ```

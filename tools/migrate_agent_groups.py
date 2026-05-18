@@ -20,7 +20,7 @@ def migrate_agent_groups_to_db():
     # 1. 初始化数据库
     print("\n[1/4] 初始化数据库...")
     try:
-        from core.database import init_db, get_session, AgentGroup
+        from core.infrastructure.database import init_db, get_session, AgentGroup
         init_db()
         print("✅ 数据库初始化成功")
     except Exception as e:

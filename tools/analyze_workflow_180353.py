@@ -189,7 +189,7 @@ def test_workflow_execution():
     print("-" * 60)
     
     try:
-        from core.automation_workflow import get_workflow_engine
+        from core.workflow.automation_workflow import get_workflow_engine
         engine = get_workflow_engine()
         
         # 加载修复后的工作流

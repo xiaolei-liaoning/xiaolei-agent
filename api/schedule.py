@@ -31,7 +31,7 @@ class IntervalJobRequest(BaseModel):
 async def add_cron_job(request: CronJobRequest):
     """添加cron定时任务"""
     try:
-        from core.task_scheduler import task_scheduler
+        from core.tasks.task_scheduler import task_scheduler
         
         result = task_scheduler.add_cron_job(
             task_id=request.task_id,
@@ -55,7 +55,7 @@ async def add_cron_job(request: CronJobRequest):
 async def add_interval_job(request: IntervalJobRequest):
     """添加间隔执行任务"""
     try:
-        from core.task_scheduler import task_scheduler
+        from core.tasks.task_scheduler import task_scheduler
         
         result = task_scheduler.add_interval_job(
             task_id=request.task_id,
@@ -81,7 +81,7 @@ async def add_interval_job(request: IntervalJobRequest):
 async def remove_job(task_id: str):
     """删除定时任务"""
     try:
-        from core.task_scheduler import task_scheduler
+        from core.tasks.task_scheduler import task_scheduler
         
         result = task_scheduler.remove_job(task_id)
         
@@ -98,7 +98,7 @@ async def remove_job(task_id: str):
 async def list_jobs():
     """列出所有定时任务"""
     try:
-        from core.task_scheduler import task_scheduler
+        from core.tasks.task_scheduler import task_scheduler
         
         # 获取系统状态和队列状态
         system_status = task_scheduler.get_system_status()

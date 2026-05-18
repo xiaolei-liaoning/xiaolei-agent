@@ -147,42 +147,44 @@ def get_logger() -> SimpleLogger:
 
 
 def init_logger(log_file: str = None, log_to_console: bool = True):
-    """初始化日志系统 - 同时接管标准 logging 模块"""
+    """初始化日志系统 - 控制台只显示 WARNING+，文件记录 INFO+"""
     import logging
-    
+
     # 清理所有已存在的 logging handler
     for handler in logging.root.handlers[:]:
         logging.root.removeHandler(handler)
-    
-    # 配置标准 logging 模块
+
+    logging.root.setLevel(logging.INFO)
+
+    # 文件 handler（记录所有 INFO 及以上）
     if log_file:
-        # 创建文件 handler
         file_handler = logging.FileHandler(log_file, encoding='utf-8')
         file_handler.setFormatter(logging.Formatter('%(asctime)s | %(levelname)s | %(message)s'))
+        file_handler.setLevel(logging.INFO)
         logging.root.addHandler(file_handler)
-        
-        # 如果需要控制台输出，也添加控制台 handler
-        if log_to_console:
-            console_handler = logging.StreamHandler()
-            console_handler.setFormatter(logging.Formatter('%(asctime)s | %(levelname)s | %(message)s'))
-            logging.root.addHandler(console_handler)
-            
-        logging.root.setLevel(logging.WARNING if not log_to_console else logging.INFO)
+
+    # 控制台 handler（只显示 WARNING 及以上，避免 INFO 日志刷屏）
+    if log_to_console:
+        console_handler = logging.StreamHandler()
+        console_handler.setFormatter(logging.Formatter(
+            '%(asctime)s | %(levelname)s | %(message)s'))
+        console_handler.setLevel(logging.WARNING)
+        logging.root.addHandler(console_handler)
+    elif log_file:
+        # 只有文件日志（双终端模式下控制台无日志输出）
+        pass
     else:
-        # 只控制台输出
-        if log_to_console:
-            logging.basicConfig(
-                level=logging.INFO,
-                format='%(asctime)s | %(levelname)s | %(message)s'
-            )
-    
+        # 纯控制台且无文件：只显示 WARNING+
+        logging.basicConfig(
+            level=logging.WARNING,
+            format='%(asctime)s | %(levelname)s | %(message)s'
+        )
+
     # 初始化我们的日志系统
     logger = get_logger()
     if log_file:
         logger.set_log_file(log_file)
     logger.set_log_to_console(log_to_console)
-    
-    # 如果不输出到终端，同时提高日志级别（只显示警告和错误）
     if not log_to_console:
         from cli.logging_system import LogLevel
         logger.set_level(LogLevel.WARNING)

@@ -41,6 +41,9 @@ class WorkerAgent(BaseAgent):
 
         # 定义WorkerAgent的能力
         self.capabilities = self._initialize_capabilities()
+        
+        # 执行学习记录
+        self.execution_history: List[Dict[str, Any]] = []
 
         logger.info(f"WorkerAgent初始化完成: {self.agent_id} (specialization={self.specialization})")
 
@@ -141,6 +144,10 @@ class WorkerAgent(BaseAgent):
 
             # 3. 反思
             reflection = await self.reflect(result)
+            
+            # ★ 激活KEPA循环：应用学习
+            if reflection:
+                self._apply_worker_learning(reflection, task)
 
             return result
 
@@ -290,66 +297,93 @@ class WorkerAgent(BaseAgent):
                 "status": "success"
             }
         except Exception as e:
-            logger.warning(f"调用爬虫技能失败，使用模拟数据: {e}")
-            # 模拟爬取过程
-            await asyncio.sleep(2.0)
-
-            return {
-                "type": "scraping",
-                "data": f"爬取的数据: {task.description}",
-                "count": 100,
-                "status": "success"
-            }
+            logger.error(f"调用爬虫技能失败: {e}")
+            raise
 
     async def _execute_analysis(self, task: Task) -> Dict[str, Any]:
         """执行分析任务"""
         logger.info(f"执行分析任务: {task.description}")
-
-        # 模拟分析过程
-        await asyncio.sleep(3.0)
-
-        return {
-            "type": "analysis",
-            "insights": [
-                "洞察1: 数据呈现上升趋势",
-                "洞察2: 存在异常值需要关注",
-                "洞察3: 建议进一步调查"
-            ],
-            "statistics": {
-                "mean": 50.0,
-                "std": 10.0,
-                "count": 1000
-            },
-            "status": "success"
-        }
+        try:
+            from core.engine.llm_backend import get_llm_router
+            router = get_llm_router()
+            prompt = f"请分析以下任务并提供详细分析结果：{task.description}"
+            result = await router.chat([{"role": "user", "content": prompt}],
+                                     temperature=0.3, max_tokens=500)
+            return {"status": "success", "analysis": result, "task_id": task.task_id}
+        except Exception as e:
+            logger.error(f"分析任务执行失败: {e}")
+            return {"status": "failed", "error": str(e), "task_id": task.task_id}
 
     async def _execute_processing(self, task: Task) -> Dict[str, Any]:
         """执行处理任务"""
         logger.info(f"执行处理任务: {task.description}")
-
-        # 模拟处理过程
-        await asyncio.sleep(1.5)
-
-        return {
-            "type": "processing",
-            "processed_count": 100,
-            "errors": 0,
-            "status": "success"
-        }
+        try:
+            from core.engine.llm_backend import get_llm_router
+            router = get_llm_router()
+            prompt = f"请处理以下任务并提供处理结果：{task.description}"
+            result = await router.chat([{"role": "user", "content": prompt}],
+                                     temperature=0.3, max_tokens=500)
+            return {"status": "success", "processing_result": result, "task_id": task.task_id}
+        except Exception as e:
+            logger.error(f"处理任务执行失败: {e}")
+            return {"status": "failed", "error": str(e), "task_id": task.task_id}
 
     async def _execute_general(self, task: Task) -> Dict[str, Any]:
         """执行通用任务"""
         logger.info(f"执行通用任务: {task.description}")
-
-        # 模拟执行过程
-        await asyncio.sleep(1.0)
-
-        return {
-            "type": "general",
-            "result": f"任务完成: {task.description}",
-            "status": "success"
-        }
+        try:
+            from core.engine.llm_backend import get_llm_router
+            router = get_llm_router()
+            prompt = f"请完成以下任务：{task.description}"
+            result = await router.chat([{"role": "user", "content": prompt}],
+                                     temperature=0.5, max_tokens=1000)
+            return {"status": "success", "result": result, "task_id": task.task_id}
+        except Exception as e:
+            logger.error(f"通用任务执行失败: {e}")
+            return {"status": "failed", "error": str(e), "task_id": task.task_id}
 
     def get_specialization(self) -> str:
         """获取专业领域"""
         return self.specialization
+    
+    def _apply_worker_learning(self, reflection, task: Task) -> None:
+        """WorkerAgent的学习方法"""
+        from datetime import datetime
+        
+        # 记录执行历史
+        execution_record = {
+            "task_id": task.task_id,
+            "task_type": task.type,
+            "specialization": self.specialization,
+            "timestamp": datetime.now().isoformat(),
+            "lessons_learned": reflection.lessons_learned if hasattr(reflection, 'lessons_learned') else [],
+            "improvements": reflection.improvements if hasattr(reflection, 'improvements') else []
+        }
+        
+        self.execution_history.append(execution_record)
+        
+        # 保持最近50条记录
+        if len(self.execution_history) > 50:
+            self.execution_history = self.execution_history[-50:]
+        
+        logger.info(f"[KEPA] WorkerAgent 记录学习: {len(reflection.lessons_learned) if hasattr(reflection, 'lessons_learned') else 0} 条经验")
+    
+    def get_worker_performance(self) -> Dict[str, Any]:
+        """获取Worker性能统计"""
+        if not self.execution_history:
+            return {"total_tasks": 0}
+        
+        # 按专业领域统计
+        specialization_stats = {}
+        for record in self.execution_history:
+            spec = record.get("specialization", "unknown")
+            if spec not in specialization_stats:
+                specialization_stats[spec] = {"count": 0, "total_lessons": 0}
+            specialization_stats[spec]["count"] += 1
+            specialization_stats[spec]["total_lessons"] += len(record.get("lessons_learned", []))
+        
+        return {
+            "total_tasks": len(self.execution_history),
+            "specialization": self.specialization,
+            "specialization_stats": specialization_stats
+        }

@@ -18,6 +18,11 @@ from enum import Enum
 
 logger = logging.getLogger(__name__)
 
+# Agent 执行模式切换
+# True  = 走真实 ToolRegistry/LLM 执行
+# False = 走旧的 mock 执行（兼容模式）
+USE_REAL_AGENT_EXECUTION = True
+
 
 # ==========================================
 # 枚举定义
@@ -28,13 +33,6 @@ class CollaborationMode(Enum):
     PARALLEL_REVIEW = "parallel_review"  # 并行评审模式
     MASTER_SLAVE = "master_slave"        # 主从协作模式
     DYNAMIC_AUCTION = "dynamic_auction"  # 动态拍卖模式
-
-
-class CircuitBreakerStrategy(Enum):
-    """熔断策略枚举"""
-    COUNT_BASED = "count_based"        # 基于失败次数
-    RATE_BASED = "rate_based"          # 基于失败率
-    TIME_BASED = "time_based"          # 基于时间窗口
 
 
 class FailureStrategy(Enum):
@@ -49,14 +47,8 @@ class FailureStrategy(Enum):
 # 数据结构
 # ==========================================
 @dataclass
-class CircuitBreakerState:
-    """熔断器状态"""
-    failure_count: int = 0
-    success_count: int = 0
-    last_failure_time: float = 0.0
-    last_success_time: float = 0.0
-    is_open: bool = False
-    half_open_attempts: int = 0
+
+
 
 
 @dataclass
@@ -107,104 +99,12 @@ class AgentLoadInfo:
 # ==========================================
 # 熔断策略实现
 # ==========================================
-class CircuitBreaker:
-    """熔断器实现"""
-    
-    def __init__(
-        self,
-        strategy: CircuitBreakerStrategy = CircuitBreakerStrategy.COUNT_BASED,
-        failure_threshold: int = 5,
-        failure_rate_threshold: float = 0.5,
-        open_timeout: float = 30.0,
-        half_open_attempts: int = 3
-    ):
-        self.strategy = strategy
-        self.failure_threshold = failure_threshold
-        self.failure_rate_threshold = failure_rate_threshold
-        self.open_timeout = open_timeout
-        self.half_open_attempts = half_open_attempts
-        self.state = CircuitBreakerState()
-    
-    def record_success(self):
-        """记录成功"""
-        self.state.success_count += 1
-        self.state.last_success_time = time.time()
-        
-        # 成功时重置状态
-        if self.state.is_open:
-            # 半开状态成功，关闭熔断器
-            if self.state.half_open_attempts >= 0:
-                self.state.is_open = False
-                self.state.failure_count = 0
-                self.state.half_open_attempts = 0
-        else:
-            # 关闭状态，重置失败计数
-            self.state.failure_count = 0
-    
-    def record_failure(self):
-        """记录失败"""
-        self.state.failure_count += 1
-        self.state.last_failure_time = time.time()
-        self.state.success_count = 0
-        
-        # 根据策略判断是否打开熔断器
-        if self.strategy == CircuitBreakerStrategy.COUNT_BASED:
-            self._check_count_based()
-        elif self.strategy == CircuitBreakerStrategy.RATE_BASED:
-            self._check_rate_based()
-        elif self.strategy == CircuitBreakerStrategy.TIME_BASED:
-            self._check_time_based()
-    
-    def _check_count_based(self):
-        """基于失败次数的熔断"""
-        if self.state.failure_count >= self.failure_threshold:
-            self.state.is_open = True
-            logger.warning(f"熔断器打开（连续失败 {self.state.failure_count} 次）")
-    
-    def _check_rate_based(self):
-        """基于失败率的熔断"""
-        total = self.state.failure_count + self.state.success_count
-        if total >= self.failure_threshold:
-            failure_rate = self.state.failure_count / total
-            if failure_rate >= self.failure_rate_threshold:
-                self.state.is_open = True
-                logger.warning(f"熔断器打开（失败率 {failure_rate:.2%}）")
-    
-    def _check_time_based(self):
-        """基于时间窗口的熔断"""
-        time_window = 60.0
-        now = time.time()
-        
-        if now - self.state.last_failure_time < time_window:
-            if self.state.failure_count >= self.failure_threshold:
-                self.state.is_open = True
-                logger.warning(f"熔断器打开（{time_window}秒内失败 {self.state.failure_count} 次）")
-    
-    def is_allowed(self) -> bool:
-        """检查是否允许执行"""
-        if not self.state.is_open:
-            return True
-        
-        # 检查是否可以半开
-        if time.time() - self.state.last_failure_time >= self.open_timeout:
-            if self.state.half_open_attempts < self.half_open_attempts:
-                self.state.half_open_attempts += 1
-                logger.info(f"熔断器半开，允许尝试 {self.state.half_open_attempts}/{self.half_open_attempts}")
-                return True
-        
-        return False
-    
-    def get_state(self) -> Dict[str, Any]:
-        """获取熔断器状态"""
-        return {
-            "is_open": self.state.is_open,
-            "failure_count": self.state.failure_count,
-            "success_count": self.state.success_count,
-            "last_failure_time": self.state.last_failure_time,
-            "last_success_time": self.state.last_success_time,
-            "half_open_attempts": self.state.half_open_attempts
-        }
+from core.circuit_breaker import CircuitBreaker, CircuitBreakerStrategy
 
+
+# ==========================================
+# 协作编排器实现
+# ==========================================
 
 # ==========================================
 # 协作编排器实现
@@ -408,7 +308,7 @@ class AgentGroupExecutor:
                 # 尝试旧策略映射
                 if strategy in strategy_mapping:
                     return strategy_mapping[strategy]
-                pass
+                logger.warning("未知协作模式: %s，尝试使用小组配置", strategy)
         
         # 获取小组配置的策略
         group_strategy = getattr(group, 'strategy', None)
@@ -419,7 +319,7 @@ class AgentGroupExecutor:
                 # 尝试旧策略映射
                 if group_strategy in strategy_mapping:
                     return strategy_mapping[group_strategy]
-                pass
+                logger.warning("小组策略 %s 无效，将智能推断", group_strategy)
         
         # 智能推断模式
         return self._infer_mode_from_task(message)
@@ -1187,11 +1087,86 @@ class AgentGroupExecutor:
                     return {"success": False, "error": str(e)}
     
     async def _call_agent(self, agent: Any, message: str, timeout: Optional[float]) -> Dict[str, Any]:
-        """调用Agent执行任务"""
-        # 模拟执行（实际应该调用真正的Agent）
+        """调用Agent执行任务
+
+        真实模式：先尝试 ToolRegistry 匹配 → 执行，兜底走 LLM。
+        兼容模式：USE_REAL_AGENT_EXECUTION=False 时走旧的 mock 执行。
+        """
+        if not USE_REAL_AGENT_EXECUTION:
+            await asyncio.sleep(random.uniform(0.5, 2.0))
+            return {
+                "success": True,
+                "agent_id": agent.agent_id,
+                "agent_name": agent.agent_name,
+                "results": [{
+                    "task_id": f"task_{int(time.time())}",
+                    "message": f"已处理任务: {message[:30]}...",
+                    "role": "assistant"
+                }]
+            }
+
+        start = time.time()
+        try:
+            # 1. 先尝试 ToolRegistry 匹配技能
+            from core.skill_base import ToolRegistry
+            skill_name = ToolRegistry.match(message)
+            if skill_name:
+                try:
+                    from core.engine.skill_dispatcher import get_skill_dispatcher
+                    sd = get_skill_dispatcher()
+                    params = sd.extract_params(message, skill_name)
+                except Exception:
+                    params = {"query": message}
+                result = await ToolRegistry.execute(skill_name, params)
+                if result.success:
+                    elapsed = time.time() - start
+                    logger.info(f"_call_agent 技能执行 [{skill_name}] 耗时:{elapsed:.2f}s")
+                    return {
+                        "success": True, "agent_id": agent.agent_id,
+                        "agent_name": agent.agent_name,
+                        "results": [{
+                            "task_id": f"task_{int(time.time())}",
+                            "message": str(result.data or result.to_dict()),
+                            "role": "assistant"
+                        }]
+                    }
+
+            # 2. 兜底：调用 LLM
+            try:
+                from core.engine.llm_backend import get_llm_router
+                router = get_llm_router()
+                system_prompt = getattr(agent, 'role_prompt', None) or \
+                    getattr(agent, 'agent_name', '你是一个通用助手')
+                reply = await router.chat([
+                    {"role": "system", "content": str(system_prompt)},
+                    {"role": "user", "content": message}
+                ])
+                elapsed = time.time() - start
+                logger.info(f"_call_agent LLM 执行成功 耗时:{elapsed:.2f}s")
+                return {
+                    "success": True, "agent_id": agent.agent_id,
+                    "agent_name": agent.agent_name,
+                    "results": [{
+                        "task_id": f"task_{int(time.time())}",
+                        "message": str(reply) if reply else "（LLM 无返回）",
+                        "role": "assistant"
+                    }]
+                }
+            except Exception as llm_err:
+                logger.warning(f"_call_agent LLM 失败: {llm_err}")
+                return {
+                    "success": False, "agent_id": agent.agent_id,
+                    "agent_name": agent.agent_name,
+                    "error": f"技能和 LLM 均失败: {llm_err}", "results": []
+                }
+        except Exception as e:
+            logger.error(f"_call_agent 异常: {e}")
+            return {"success": False, "agent_id": agent.agent_id,
+                    "agent_name": agent.agent_name, "error": str(e), "results": []}
+
+    async def _call_agent_mock(self, agent: Any, message: str, timeout: Optional[float]) -> Dict[str, Any]:
+        """旧的 mock 执行 —— 保留供兼容模式使用"""
         await asyncio.sleep(random.uniform(0.5, 2.0))
-        
-        # 返回模拟结果
         return {
             "success": True,
             "agent_id": agent.agent_id,

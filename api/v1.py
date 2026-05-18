@@ -58,26 +58,26 @@ async def decompose_task(request: TaskDecomposeRequest):
     - 第三层：兜底方案
     """
     try:
-        from core.task_decomposer import get_task_decomposer
-        
-        decomposer = get_task_decomposer()
-        result = await decomposer.decompose(request.task_description)
-        
+        from core.tasks.task_planner import TaskPlanner
+
+        decomposer = TaskPlanner()
+        result = await decomposer.process_task(
+            {"user_message": request.task_description},
+            user_id=1
+        )
+
         return APIResponse(
             success=True,
             data={
-                "path": result.path.value,
-                "subtasks_count": len(result.subtasks),
-                "confidence": result.confidence,
-                "reasoning": result.reasoning,
+                "subtasks_count": len(result),
                 "subtasks": [
                     {
-                        "id": st.id,
-                        "action": st.action,
-                        "params": st.params,
-                        "priority": st.priority
+                        "action": st.get("tool_call", {}).get("name", "unknown"),
+                        "params": st.get("tool_call", {}).get("params", {}),
+                        "user_message": st.get("user_message", ""),
+                        "ai_response": st.get("ai_response", "")
                     }
-                    for st in result.subtasks
+                    for st in result
                 ]
             }
         )
@@ -199,8 +199,8 @@ async def route_to_agent(request: AgentRouteRequest):
 async def backup_memory():
     """手动触发向量存储备份"""
     try:
-        from core.vector_memory import VectorMemoryStore
-        
+        from core.memory.vector_memory import VectorMemoryStore
+
         store = VectorMemoryStore()
         success = store.backup_memory()
         
@@ -218,8 +218,8 @@ async def backup_memory():
 async def get_memory_stats():
     """获取向量存储的统计信息"""
     try:
-        from core.vector_memory import VectorMemoryStore
-        
+        from core.memory.vector_memory import VectorMemoryStore
+
         store = VectorMemoryStore()
         stats = store.get_memory_stats()
         
@@ -236,8 +236,8 @@ async def get_memory_stats():
 async def optimize_memory():
     """执行内存优化（清理旧记忆+备份）"""
     try:
-        from core.vector_memory import VectorMemoryStore
-        
+        from core.memory.vector_memory import VectorMemoryStore
+
         store = VectorMemoryStore()
         result = store.optimize_memory()
         
@@ -266,7 +266,7 @@ class BFSTextProcessRequest(BaseModel):
 async def process_text_bfs(request: BFSTextProcessRequest):
     """使用BFS处理器处理文本"""
     try:
-        from core.bfs_processor import get_bfs_processor
+        from core.workflow.bfs_processor import get_bfs_processor
         
         processor = get_bfs_processor(
             max_depth=request.max_depth, 
@@ -300,7 +300,7 @@ class RAGSearchRequest(BaseModel):
 async def rag_search(request: RAGSearchRequest):
     """执行RAG智能搜索"""
     try:
-        from core.rag_search_engine import RAGSearchEngine
+        from core.search.rag_search_engine import RAGSearchEngine
         
         engine = RAGSearchEngine()
         result = await engine.search_and_learn(
@@ -334,7 +334,7 @@ async def search_by_topic(
 ):
     """按主题搜索知识"""
     try:
-        from core.rag_search_engine import RAGSearchEngine
+        from core.search.rag_search_engine import RAGSearchEngine
         
         engine = RAGSearchEngine()
         result = await engine.search_by_topic(
@@ -356,7 +356,7 @@ async def search_by_topic(
 async def get_knowledge_summary(topic: Optional[str] = None):
     """获取知识库摘要"""
     try:
-        from core.rag_search_engine import RAGSearchEngine
+        from core.search.rag_search_engine import RAGSearchEngine
         
         engine = RAGSearchEngine()
         summary = engine.get_knowledge_summary(topic=topic)
@@ -374,7 +374,7 @@ async def get_knowledge_summary(topic: Optional[str] = None):
 async def get_rag_stats():
     """获取RAG引擎统计信息"""
     try:
-        from core.rag_search_engine import RAGSearchEngine
+        from core.search.rag_search_engine import RAGSearchEngine
         
         engine = RAGSearchEngine()
         stats = engine.get_stats()
@@ -403,3 +403,251 @@ async def health_check():
             "status": "running"
         }
     )
+
+
+# ============================================================================
+# FastAPI App 创建
+# ============================================================================
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
+
+# 全局应用实例
+app: FastAPI = None
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# MCP 管理 API
+# ═══════════════════════════════════════════════════════════════════════
+
+class MCPCallRequest(BaseModel):
+    """MCP工具调用请求"""
+    server: str = Field(..., description="MCP服务器名称")
+    tool: str = Field(..., description="工具名称")
+    arguments: Dict[str, Any] = Field(default_factory=dict, description="参数")
+
+
+@router_v1.get("/mcp/servers", summary="列出所有已配置的MCP服务器")
+async def list_mcp_servers():
+    """返回 config/mcp_servers.yml 中定义的所有服务器"""
+    try:
+        from core.config_loader import load_mcp_servers_config
+        servers = load_mcp_servers_config()
+        connected = []
+        try:
+            from core.mcp.mcp_client import mcp_client
+            connected_names = await mcp_client.list_servers()
+        except Exception:
+            connected_names = []
+        return APIResponse(success=True, data={
+            "configured": [
+                {"name": s["name"], "description": s["description"],
+                 "connected": s["name"] in connected_names}
+                for s in servers
+            ],
+            "total": len(servers),
+        })
+    except Exception as e:
+        return APIResponse(success=False, code=500, message=str(e))
+
+
+@router_v1.post("/mcp/connect/{server_name}", summary="连接指定MCP服务器")
+async def connect_mcp(server_name: str):
+    """从配置连接一个MCP服务器"""
+    try:
+        from core.config_loader import load_mcp_servers_config
+        from core.mcp.mcp_client import mcp_client
+
+        servers = load_mcp_servers_config()
+        srv = next((s for s in servers if s["name"] == server_name), None)
+        if not srv:
+            return APIResponse(success=False, code=404,
+                               message=f"未找到服务器: {server_name}")
+
+        from pathlib import Path
+        cwd = str(Path(__file__).parent.parent)
+        await mcp_client.connect_server(
+            name=srv["name"],
+            command=srv["command"],
+            args=srv["args"],
+            cwd=cwd,
+        )
+        return APIResponse(success=True, data={"server": server_name})
+    except Exception as e:
+        return APIResponse(success=False, code=500, message=str(e))
+
+
+@router_v1.post("/mcp/call", summary="调用MCP工具")
+async def call_mcp_tool(req: MCPCallRequest):
+    """调用指定MCP服务器的工具"""
+    try:
+        from core.mcp.mcp_client import mcp_client
+        result = await mcp_client.call_tool(
+            server_name=req.server,
+            tool_name=req.tool,
+            arguments=req.arguments,
+        )
+        return APIResponse(success=True, data={"result": str(result)[:500]})
+    except Exception as e:
+        return APIResponse(success=False, code=500, message=str(e))
+
+
+@router_v1.get("/mcp/tools/{server_name}", summary="列出MCP服务器可用工具")
+async def list_mcp_tools(server_name: str):
+    try:
+        from core.mcp.mcp_client import mcp_client
+        tools = await mcp_client.list_tools(server_name)
+        return APIResponse(success=True, data={
+            "server": server_name,
+            "tools": [{"name": t.get("name"), "description": t.get("description")}
+                      for t in tools],
+            "total": len(tools),
+        })
+    except Exception as e:
+        return APIResponse(success=False, code=500, message=str(e))
+
+
+# ══════════════════════════════════════════════════════════════════
+# 模式二：小组模式（队长 + 动态队员）API
+# ══════════════════════════════════════════════════════════════════
+
+
+class TeamTaskRequest(BaseModel):
+    """小组模式任务请求"""
+    task: str = Field(..., description="任务描述", min_length=1, max_length=5000)
+
+
+@router_v1.post("/team/execute", summary="小组模式执行")
+async def team_execute(request: TeamTaskRequest):
+    """用小组模式（模式二）执行任务
+
+    队长先用LLM分析任务 → 决定需要几个队员 → 动态创建 → 带队执行 → 聚合结果
+
+    与模式一的区别：
+    - 模式一：三省六部，同事自由通信
+    - 模式二：一个队长带队员，队员只跟队长说话
+    """
+    try:
+        from core.agents.group_collaboration import DynamicTeamCoordinator
+
+        coordinator = DynamicTeamCoordinator()
+        result = await coordinator.execute(request.task)
+
+        return APIResponse(
+            success=result.get("success", False),
+            data={
+                "mode": "team",
+                "task": request.task[:100],
+                "team_size": result.get("team_size", 0),
+                "leader_summary": result.get("leader_summary", ""),
+                "results": result.get("results", []),
+                "errors": result.get("errors"),
+                "reasoning": result.get("reasoning", ""),
+                "duration_seconds": result.get("duration", 0),
+            },
+            message="任务执行完成" if result.get("success") else "任务执行部分完成"
+        )
+    except Exception as e:
+        logger.error(f"小组模式执行失败: {e}")
+        return APIResponse(success=False, code=500, message=str(e))
+
+
+@router_v1.post("/team/plan", summary="小组模式：只分析不执行")
+async def team_plan(request: TeamTaskRequest):
+    """只分析任务并展示团队计划，不实际执行
+
+    用于预览：队长会告诉你要用几个人、各负责什么
+    """
+    try:
+        from core.agents.group_collaboration import TeamLeader
+
+        leader = TeamLeader()
+        plan = await leader._plan_team(request.task)
+
+        members = []
+        for m in plan.members:
+            members.append({
+                "role": m.role_name,
+                "specialization": m.specialization,
+                "description": m.description,
+                "task": m.task_description[:100],
+                "depends_on": m.depends_on,
+            })
+
+        return APIResponse(
+            success=True,
+            data={
+                "reasoning": plan.reasoning,
+                "team_size": len(members),
+                "members": members,
+            },
+            message=f"需要{len(members)}个队员"
+        )
+    except Exception as e:
+        return APIResponse(success=False, code=500, message=str(e))
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """应用生命周期管理"""
+    # 启动时执行
+    yield
+    # 关闭时执行
+    logger.info("应用正在关闭")
+
+
+def create_app() -> FastAPI:
+    """创建并配置 FastAPI 应用"""
+    global app
+
+    app = FastAPI(
+        title="小龙虾Agent API",
+        description="""
+        🦐 小雷版小龙虾 AI Agent - 多Agent协作系统
+
+        功能特性：
+        - 多Agent系统：Master, Worker, Expert, Reviewer, Planner
+        - 技能调度：爬虫、分析、自动化、翻译等
+        - 工作流引擎：BFS遍历、XML配置支持
+        - 记忆系统：短期、角色、向量记忆
+        - MCP集成：连接外部MCP服务器
+
+        API文档：
+        - Swagger UI: /docs
+        - ReDoc: /redoc
+        """,
+        version="3.3.1",
+        docs_url="/docs",
+        redoc_url="/redoc",
+        lifespan=lifespan
+    )
+
+    # CORS中间件
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    # 注册API v1路由
+    app.include_router(router_v1)
+
+    # 根路由
+    @app.get("/")
+    async def root():
+        """根路径"""
+        return {
+            "message": "小龙虾Agent API is running",
+            "version": "3.3.1",
+            "docs": "/docs",
+            "health": "/health"
+        }
+
+    return app
+
+
+# 创建应用实例
+app = create_app()

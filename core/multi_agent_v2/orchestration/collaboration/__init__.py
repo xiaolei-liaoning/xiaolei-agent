@@ -1,5 +1,5 @@
 """
-协作策略模块 - 多Agent协作模式
+协作策略模块 - 多Agent协作模式（已合并：strategies.py 包含全部协作逻辑）
 """
 
 from .strategies import (
@@ -9,11 +9,28 @@ from .strategies import (
     MasterSlaveStrategy,
     ReviewStrategy,
     AuctionStrategy,
-    HybridStrategy
+    HybridStrategy,
+    LLMReflection,
+    ReflectionTrigger,
+    ReflectionDecision,
+    ReflectionResult,
+    ReflectionPrompt,
+    AdaptivePipelineWithReflection,
+    ResultAggregator,
+    PartialResult,
+    AggregationStrategy,
+    ComplexCollaborationEngine,
+    CollaborationMode as ComplexCollaborationMode,
+    DynamicTeamForming,
+    TaskAuction,
+    ConsensusMechanism,
+    KnowledgeSharing,
+    SimpleAggregator,
+    WeightedVoteAggregator,
+    HierarchicalAggregator,
+    LLMAggregator,
+    MasterAgentAggregator,
 )
-from .llm_reflection import LLMReflection, ReflectionTrigger, ReflectionDecision
-from .result_aggregator import ResultAggregator, PartialResult, AggregationStrategy
-from .complex_collaboration import ComplexCollaborationEngine, CollaborationMode
 
 __all__ = [
     "CollaborationResult",
@@ -26,9 +43,21 @@ __all__ = [
     "LLMReflection",
     "ReflectionTrigger",
     "ReflectionDecision",
+    "ReflectionResult",
+    "ReflectionPrompt",
+    "AdaptivePipelineWithReflection",
     "ResultAggregator",
     "PartialResult",
     "AggregationStrategy",
     "ComplexCollaborationEngine",
-    "CollaborationMode"
+    "ComplexCollaborationMode",
+    "DynamicTeamForming",
+    "TaskAuction",
+    "ConsensusMechanism",
+    "KnowledgeSharing",
+    "SimpleAggregator",
+    "WeightedVoteAggregator",
+    "HierarchicalAggregator",
+    "LLMAggregator",
+    "MasterAgentAggregator",
 ]

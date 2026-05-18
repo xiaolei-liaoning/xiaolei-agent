@@ -12,7 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from core.self_check_middleware import SelfCheckMiddleware
-from core.llm_backend import get_llm_router
+from core.engine.llm_backend import get_llm_router
 
 
 def print_separator(title: str):

@@ -43,7 +43,7 @@ def fix_translator_bug():
     print("="*60)
     
     try:
-        from skills.translator.handler import translator
+        from mcp._impl.translator.handler import translator
         
         # 测试翻译
         result = translator.execute(text='Hello World', target_lang='zh')
@@ -66,7 +66,7 @@ def test_ml_prediction():
     print("="*60)
     
     try:
-        from skills.data_analysis.handler import DataAnalysisHandler
+        from mcp._impl.data_analysis.handler import DataAnalysisHandler
         import pandas as pd
         
         # 创建测试数据
