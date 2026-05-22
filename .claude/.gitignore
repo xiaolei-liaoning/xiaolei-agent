@@ -1,0 +1,6 @@
+# 只跟踪 memory/ 文件夹
+# settings.json、settings.local.json、worktrees/ 等忽略
+
+settings.json
+settings.local.json
+worktrees/

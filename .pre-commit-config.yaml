@@ -29,5 +29,5 @@ repos:
       - id: check-yaml           # 检查YAML语法
       - id: check-json           # 检查JSON语法
       - id: check-merge-conflict # 检查合并冲突标记
-      - id: debug-statement      - id: debug-s?语句（如pdb）
+      - id: debug-statement  # 检查调试语句（如pdb）
       - id: detect-private-key   # 检测私钥泄露
