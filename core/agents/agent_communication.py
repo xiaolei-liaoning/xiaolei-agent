@@ -107,6 +107,19 @@ class CommunicationCenter:
         self._topics: Dict[str, list] = {}            # topic → [(agent_id, callback)]
         self._pending_requests: Dict[str, asyncio.Future] = {}
 
+    def _safe_create_task(self, coro: asyncio.coroutine) -> asyncio.Task:
+        """安全创建异步任务，避免异常被静默吞没"""
+        task = asyncio.create_task(coro)
+
+        def _log_exception(fut: asyncio.Future) -> None:
+            if not fut.cancelled() and fut.exception() is not None:
+                logger.error(
+                    "异步任务异常: %s", fut.exception(), exc_info=fut.exception()
+                )
+
+        task.add_done_callback(_log_exception)
+        return task
+
     async def register_agent(
         self,
         agent_id: str,
@@ -153,7 +166,7 @@ class CommunicationCenter:
         cb = self._callbacks.get(receiver, {})
         handler = cb.get("message_received")
         if handler:
-            asyncio.create_task(handler(message))
+            self._safe_create_task(handler(message))
         else:
             logger.warning(f"Agent {receiver} 未注册消息回调，消息丢弃")
         return message_id
@@ -166,7 +179,7 @@ class CommunicationCenter:
             return
         for agent_id, callback in subscribers:
             if agent_id != sender:  # 不发给自己
-                asyncio.create_task(callback(message))
+                self._safe_create_task(callback(message))
 
     async def broadcast(self, sender: str, content: Any) -> None:
         """广播消息给所有Agent"""
@@ -179,7 +192,7 @@ class CommunicationCenter:
             if agent_id != sender:
                 handler = cb.get("message_received")
                 if handler:
-                    asyncio.create_task(handler(message))
+                    self._safe_create_task(handler(message))
 
     async def request(
         self,
@@ -208,7 +221,7 @@ class CommunicationCenter:
             self._pending_requests.pop(request_id, None)
             return None
 
-        asyncio.create_task(self._deliver_and_wait(handler, message, request_id, timeout))
+        self._safe_create_task(self._deliver_and_wait(handler, message, request_id, timeout))
         try:
             result = await asyncio.wait_for(future, timeout=timeout)
             return result

@@ -79,7 +79,9 @@ def setup_dual_terminal() -> bool:
     (script_dir / "logs").mkdir(exist_ok=True)
     Path(log_file).write_text("", encoding="utf-8")
 
-    viewer_script = script_dir / ".sandbox_view.py"
+    # 写入沙盒查看器脚本到临时目录（避免污染项目目录）
+    import tempfile
+    viewer_script = Path(tempfile.gettempdir()) / "xiaolei_sandbox_view.py"
     viewer_script.write_text(_get_sandbox_view_script(), encoding="utf-8")
 
     session_name = "xiaolei_agent"
@@ -103,11 +105,11 @@ def setup_dual_terminal() -> bool:
 
         subprocess.run([
             "tmux", "send-keys", "-t", f"{session_name}:Agent.0",
-            f"cd '{script_dir}' && python cli.py --dual-terminal", "C-m"
+            f"cd '{script_dir}' && python3 cli.py", "C-m"
         ])
         subprocess.run([
             "tmux", "send-keys", "-t", f"{session_name}:Agent.1",
-            f"cd '{script_dir}' && python3 .sandbox_view.py", "C-m"
+            f"cd '{script_dir}' && python3 {viewer_script}", "C-m"
         ])
 
         subprocess.run(["tmux", "select-pane", "-t", "0"])

@@ -334,7 +334,7 @@ class ConfigManager:
         
         加载顺序:
         1. 默认配置
-        2. 配置文件
+        2. 配置文件 (app_config.json 优先)
         3. 环境变量覆盖
         """
         instance = cls()
@@ -351,9 +351,15 @@ class ConfigManager:
         if config_path:
             instance._load_from_file(config, config_path)
         
-        config_file = Path("config") / f"{env_name}.json"
-        if config_file.exists():
-            instance._load_from_file(config, str(config_file))
+        # 优先加载 app_config.json
+        app_config_file = Path("config") / "app_config.json"
+        if app_config_file.exists():
+            instance._load_from_file(config, str(app_config_file))
+        else:
+            # 回退到 {env_name}.json
+            config_file = Path("config") / f"{env_name}.json"
+            if config_file.exists():
+                instance._load_from_file(config, str(config_file))
         
         # 加载技能配置
         skill_config_files = [

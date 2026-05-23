@@ -1,41 +1,35 @@
 #!/usr/bin/env python3
-"""智能多Agent系统 - 支持自主沟通、任务拆解、多Agent协作、反思重试"""
+"""智能多Agent系统 - V1 架构（队长-队员模式）
+
+V1 角色分工型多 Agent：
+- 1 个 LeaderAgent（队长）+ N 个 WorkerAgent（队员）
+- 队长分解任务、分配子任务、分析 Worker 结果、动态规划
+- 队员只负责执行具体子任务
+- 分批模式：队长分配一批 → 并行执行 → 队长分析 → 循环
+"""
 
 import asyncio
 import json
 import time
 import logging
-from typing import List, Dict, Any, Optional, Callable
-from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
+from dataclasses import dataclass, field
 from enum import Enum
+from uuid import uuid4
+
+from core.engine.llm_backend import get_llm_router
 
 logger = logging.getLogger(__name__)
 
-def log_info(msg):
-    logger.info(msg)
-    print(f"ℹ️ {msg}")
 
-def log_success(msg):
-    logger.info(msg)
-    print(f"✅ {msg}")
-
-def log_error(msg):
-    logger.error(msg)
-    print(f"❌ {msg}")
-
-def log_warning(msg):
-    logger.warning(msg)
-    print(f"⚠️ {msg}")
-
-def log_debug(msg):
-    logger.debug(msg)
+# =============================================================================
+# 数据模型
+# =============================================================================
 
 class AgentRole(Enum):
-    STRATEGIST = "策略师"
-    EXECUTOR = "执行者"
-    ANALYZER = "分析师"
-    RESEARCHER = "研究员"
-    REVIEWER = "评审员"
+    LEADER = "队长"
+    WORKER = "队员"
+
 
 class TaskStatus(Enum):
     PENDING = "待执行"
@@ -43,6 +37,7 @@ class TaskStatus(Enum):
     COMPLETED = "已完成"
     FAILED = "失败"
     REFLECTING = "反思中"
+
 
 @dataclass
 class Task:
@@ -62,6 +57,7 @@ class Task:
         if self.subtasks is None:
             self.subtasks = []
 
+
 @dataclass
 class AgentMessage:
     from_agent: str
@@ -74,397 +70,487 @@ class AgentMessage:
         if self.timestamp is None:
             self.timestamp = time.time()
 
-class BaseAgent:
+
+# =============================================================================
+# LLM 工具函数
+# =============================================================================
+
+_llm_semaphore = asyncio.Semaphore(3)  # 限制最多 3 个并发 LLM 调用，替代全局串行锁
+
+
+async def _llm_json(system_prompt: str, user_message: str, max_tokens: int = 800) -> dict:
+    """调用 LLM 并返回解析后的 JSON"""
+    try:
+        router = get_llm_router()
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_message},
+        ]
+        async with _llm_semaphore:
+            response = await router.chat(messages, temperature=0.7, max_tokens=max_tokens)
+        cleaned = (response or "").strip().strip("```json").strip("```").strip()
+        return json.loads(cleaned)
+    except Exception as e:
+        logger.warning(f"LLM 调用/解析失败: {e}")
+        return {}
+
+
+# =============================================================================
+# 提示词模板
+# =============================================================================
+
+SYSTEM_PROMPT_TEMPLATE = """你是一个{role}Agent。你的职责是{description}。
+
+对于给定的任务，你需要：
+1. 分析任务的目标和要求
+2. 制定执行计划
+3. 执行任务并生成结果
+4. 提供详细的过程描述
+
+{extra_context}
+
+输出格式（JSON，不要包含其他内容）：
+{output_format}"""
+
+OUTPUT_FORMATS = {
+    "decompose": """{"task": "原始任务","subtasks": [...],"estimated_steps": 数字,"strategy": "策略"}""",
+    "execute": """{"status": "success/failed","result": "执行结果","details": {...}}""",
+    "research": """{"topic": "主题","findings": [...],"summary": "总结"}""",
+    "analyze": """{"analysis_type": "类型","key_insights": [...],"recommendations": [...],"confidence": 0-1}""",
+    "review": """{"review_score": 0-100,"passed": true/false,"comments": "意见","suggestions": [...]}""",
+    "reflect": """{"analysis": "原因","suggestion": "改进","should_retry": true/false}""",
+    "kepa_decision": """{"decision": "continue/retry/fail","confidence": 0-1,"reason": "原因"}""",
+    "leader_analyze": """{"decision": "complete/retry/reassign","confidence": 0-1,"reason": "原因","retry_tasks": [...],"needed_count": 数字}""",
+}
+
+
+# =============================================================================
+# ContextMemory — 任务级上下文
+# =============================================================================
+
+class ContextMemory:
+    """简单的上下文记忆（任务级）"""
+
+    def __init__(self):
+        self.entries: List[str] = []
+
+    def add(self, entry: str) -> None:
+        self.entries.append(entry)
+        if len(self.entries) > 20:
+            self.entries = self.entries[-20:]
+
+    def get_recent(self, n: int = 5) -> str:
+        return "\n".join(self.entries[-n:]) if self.entries else "（无上下文）"
+
+    def clear(self) -> None:
+        self.entries.clear()
+
+
+# =============================================================================
+# LLMAgent — 统一 Agent 基类（含 KEPA + RAG + 反问 + 上下文）
+# =============================================================================
+
+class LLMAgent:
+    """统一 LLM Agent — KEPA + RAG + 反问 + 上下文"""
+
     def __init__(self, name: str, role: AgentRole):
         self.name = name
         self.role = role
         self.status = "idle"
-        self.task_history: List[Dict] = []
-        self.message_queue: List[AgentMessage] = []
-    
-    async def process_message(self, message: AgentMessage) -> str:
-        """处理收到的消息"""
-        self.message_queue.append(message)
-        log_info(f"📬 {self.name} 收到消息 from {message.from_agent}")
-        return await self._handle_message(message)
-    
-    async def _handle_message(self, message: AgentMessage) -> str:
-        """子类实现具体处理逻辑"""
-        return "已收到消息"
+        self.context = ContextMemory()
 
-class StrategistAgent(BaseAgent):
-    """策略师Agent - 负责任务拆解和规划"""
-    
-    def __init__(self):
-        super().__init__("策略师", AgentRole.STRATEGIST)
-    
-    async def _handle_message(self, message: AgentMessage) -> str:
-        if message.message_type == "task":
-            return await self.decompose_task(message.content)
-        return "消息已处理"
-    
-    async def decompose_task(self, task_description: str) -> str:
-        """智能任务拆解"""
-        log_info(f"🧠 策略师正在分析任务: {task_description}")
-        
-        # 模拟智能任务拆解逻辑
-        task_patterns = {
-            "爬取.*微博": ["分析需求", "打开浏览器", "访问微博", "提取热搜数据", "保存数据"],
-            "打开.*微信": ["分析需求", "查找微信应用", "启动微信"],
-            "生成.*报告": ["分析需求", "收集数据", "分析数据", "生成报告", "审查报告"],
-            "分析.*数据": ["加载数据", "数据清洗", "数据分析", "生成结论"],
-            "搜索.*信息": ["分析搜索需求", "执行搜索", "整理结果", "生成报告"],
+    def _get_role_config(self) -> tuple:
+        configs = {
+            AgentRole.LEADER: ("队长", "负责任务拆解、分配、监管 Worker 执行、分析结果并动态规划", "decompose"),
+            AgentRole.WORKER: ("队员", "负责执行队长分配的具体任务", "execute"),
         }
-        
-        subtasks = ["分析需求", "制定计划", "执行任务", "验证结果"]
-        
-        for pattern, tasks in task_patterns.items():
-            if any(keyword in task_description for keyword in pattern.split(".*")):
-                subtasks = tasks
-                break
-        
-        result = {
-            "task": task_description,
-            "subtasks": subtasks,
-            "estimated_steps": len(subtasks),
-            "strategy": "分步骤执行"
-        }
-        
-        log_success(f"✅ 任务拆解完成，共 {len(subtasks)} 个子任务")
-        return json.dumps(result, ensure_ascii=False)
+        return configs.get(self.role, ("通用", "处理各类任务", "execute"))
 
-class ExecutorAgent(BaseAgent):
-    """执行者Agent - 负责执行具体任务"""
-    
-    def __init__(self):
-        super().__init__("执行者", AgentRole.EXECUTOR)
-    
-    async def _handle_message(self, message: AgentMessage) -> str:
-        if message.message_type == "task":
-            return await self.execute_task(message.content)
-        return "消息已处理"
-    
-    async def execute_task(self, task: str) -> str:
-        """执行任务"""
-        log_info(f"⚡ 执行者开始执行任务: {task}")
-        
-        # 模拟执行延迟
-        await asyncio.sleep(1)
-        
-        # 模拟执行结果
-        success_rate = 0.8
-        if "危险" in task.lower() or "rm" in task.lower():
-            success_rate = 0.3
-        
-        if time.time() % 3 < success_rate:
-            result = {
-                "status": "success",
-                "task": task,
-                "result": f"任务 '{task}' 执行成功",
-                "details": {"steps": 1, "duration": 1.0}
-            }
-            log_success(f"✅ 任务执行成功: {task}")
-        else:
-            result = {
-                "status": "failed",
-                "task": task,
-                "error": f"任务执行失败，需要重试",
-                "retry_suggestion": "检查参数或重试"
-            }
-            log_error(f"❌ 任务执行失败: {task}")
-        
-        return json.dumps(result, ensure_ascii=False)
-
-class ResearcherAgent(BaseAgent):
-    """研究员Agent - 负责信息收集和研究"""
-    
-    def __init__(self):
-        super().__init__("研究员", AgentRole.RESEARCHER)
-    
-    async def _handle_message(self, message: AgentMessage) -> str:
-        if message.message_type == "research":
-            return await self.conduct_research(message.content)
-        return "消息已处理"
-    
-    async def conduct_research(self, topic: str) -> str:
-        """进行研究"""
-        log_info(f"🔍 研究员正在研究: {topic}")
-        
-        # 模拟研究过程
-        await asyncio.sleep(1)
-        
-        research_results = {
-            "topic": topic,
-            "sources": ["网络搜索", "文档查阅", "数据库查询"],
-            "findings": [
-                f"关于 '{topic}' 的关键信息 1",
-                f"关于 '{topic}' 的关键信息 2",
-                f"关于 '{topic}' 的关键信息 3"
-            ],
-            "summary": f"已完成对 '{topic}' 的研究，获取了相关信息"
-        }
-        
-        log_success(f"✅ 研究完成: {topic}")
-        return json.dumps(research_results, ensure_ascii=False)
-
-class AnalyzerAgent(BaseAgent):
-    """分析师Agent - 负责数据分析和报告"""
-    
-    def __init__(self):
-        super().__init__("分析师", AgentRole.ANALYZER)
-    
-    async def _handle_message(self, message: AgentMessage) -> str:
-        if message.message_type == "analyze":
-            return await self.analyze_data(message.content)
-        return "消息已处理"
-    
-    async def analyze_data(self, data: str) -> str:
-        """分析数据"""
-        log_info(f"📊 分析师正在分析数据")
-        
-        # 模拟分析过程
-        await asyncio.sleep(0.5)
-        
-        analysis = {
-            "analysis_type": "综合分析",
-            "key_insights": ["发现趋势 A", "识别模式 B", "异常检测 C"],
-            "recommendations": ["建议行动 1", "建议行动 2"],
-            "confidence": 0.85
-        }
-        
-        log_success(f"✅ 分析完成")
-        return json.dumps(analysis, ensure_ascii=False)
-
-class ReviewerAgent(BaseAgent):
-    """评审员Agent - 负责结果审查和质量保证"""
-    
-    def __init__(self):
-        super().__init__("评审员", AgentRole.REVIEWER)
-    
-    async def _handle_message(self, message: AgentMessage) -> str:
-        if message.message_type == "review":
-            return await self.review_result(message.content)
-        return "消息已处理"
-    
-    async def review_result(self, result: str) -> str:
-        """评审结果"""
-        log_info(f"🔎 评审员正在评审结果")
-        
-        # 模拟评审过程
-        await asyncio.sleep(0.5)
-        
-        # 模拟评审结果
-        score = min(95, int(time.time() % 30) + 70)
-        passed = score >= 80
-        
-        review = {
-            "review_score": score,
-            "passed": passed,
-            "comments": "结果符合预期" if passed else "需要改进",
-            "suggestions": [] if passed else ["建议重新执行", "建议增加检查步骤"]
-        }
-        
-        if passed:
-            log_success(f"✅ 评审通过，得分: {score}")
-        else:
-            log_warning(f"⚠️ 评审未通过，得分: {score}")
-        
-        return json.dumps(review, ensure_ascii=False)
-
-class Reflector:
-    """反思器 - 负责反思和重试逻辑"""
-    
-    def __init__(self):
-        self.history: List[Dict] = []
-    
-    async def reflect(self, task: Task) -> Dict:
-        """反思任务执行过程"""
-        log_info(f"🤔 反思器开始反思任务: {task.name}")
-        
-        if task.error:
-            analysis = await self._analyze_failure(task)
-            suggestion = await self._generate_suggestion(task, analysis)
-            should_retry = task.retry_count < task.max_retries
-            
-            reflection = {
-                "task_id": task.id,
-                "task_name": task.name,
-                "status": "reflection_complete",
-                "analysis": analysis,
-                "suggestion": suggestion,
-                "should_retry": should_retry,
-                "retry_count": task.retry_count,
-                "max_retries": task.max_retries
-            }
-            
-            self.history.append(reflection)
-            return reflection
-        
-        return {"status": "no_reflection_needed"}
-    
-    async def _analyze_failure(self, task: Task) -> str:
-        """分析失败原因"""
-        failure_patterns = {
-            "网络": "可能是网络连接问题",
-            "权限": "可能是权限不足",
-            "超时": "可能是超时问题",
-            "格式": "可能是数据格式问题",
-        }
-        
-        for pattern, reason in failure_patterns.items():
-            if pattern in task.error:
-                return reason
-        
-        return "未知原因导致失败"
-    
-    async def _generate_suggestion(self, task: Task, analysis: str) -> str:
-        """生成改进建议"""
-        suggestions = {
-            "网络": "建议检查网络连接，或稍后重试",
-            "权限": "建议检查权限设置，或使用管理员权限",
-            "超时": "建议增加超时时间，或优化执行逻辑",
-            "格式": "建议检查输入数据格式",
-        }
-        
-        for pattern, suggestion in suggestions.items():
-            if pattern in analysis:
-                return suggestion
-        
-        return "建议检查相关依赖，或尝试其他方法"
-
-class CollaborationEngine:
-    """协作引擎 - 管理多Agent协作"""
-    
-    def __init__(self):
-        self.agents: Dict[str, BaseAgent] = {}
-        self.reflector = Reflector()
-        self.task_queue: List[Task] = []
-        self.completed_tasks: List[Task] = []
-        self.failed_tasks: List[Task] = []
-    
-    def register_agent(self, agent: BaseAgent):
-        """注册Agent"""
-        self.agents[agent.name] = agent
-        log_info(f"👤 注册Agent: {agent.name} ({agent.role.value})")
-    
-    def get_agent_by_role(self, role: AgentRole) -> Optional[BaseAgent]:
-        """按角色获取Agent"""
-        for agent in self.agents.values():
-            if agent.role == role:
-                return agent
-        return None
-    
-    async def send_message(self, from_agent: str, to_agent: str, content: str, message_type: str = "task"):
-        """发送消息"""
-        if to_agent not in self.agents:
-            log_error(f"❌ 目标Agent不存在: {to_agent}")
-            return None
-        
-        message = AgentMessage(
-            from_agent=from_agent,
-            to_agent=to_agent,
-            content=content,
-            message_type=message_type
-        )
-        
-        return await self.agents[to_agent].process_message(message)
-    
-    async def execute_task(self, task_description: str) -> Dict:
-        """执行任务 - 完整流程"""
-        log_info(f"🚀 开始执行任务: {task_description}")
-        
-        # 1. 策略师拆解任务
-        strategist = self.get_agent_by_role(AgentRole.STRATEGIST)
-        if not strategist:
-            return {"error": "策略师Agent未注册"}
-        
-        decomposition_result = await self.send_message(
-            "系统", strategist.name, task_description, "task"
-        )
-        
+    async def _rag_query(self, query: str) -> str:
+        """RAG 检索增强 — 从知识库获取相关信息"""
         try:
-            decomposition = json.loads(decomposition_result)
-            subtasks = decomposition.get("subtasks", [])
-        except json.JSONDecodeError:
-            subtasks = ["执行任务"]
-        
-        # 2. 创建任务对象
-        main_task = Task(
-            id=f"task_{int(time.time())}",
-            name=task_description,
-            description=task_description,
-            status=TaskStatus.IN_PROGRESS,
-            priority=1,
-            subtasks=[Task(id=f"sub_{i}", name=sub, description=sub, status=TaskStatus.PENDING, priority=i+1) 
-                     for i, sub in enumerate(subtasks)]
-        )
-        
-        self.task_queue.append(main_task)
-        
-        # 3. 执行子任务
-        results = []
-        
-        for i, subtask in enumerate(main_task.subtasks):
-            subtask.status = TaskStatus.IN_PROGRESS
-            
-            executor = self.get_agent_by_role(AgentRole.EXECUTOR)
-            if executor:
-                result = await self.send_message(
-                    strategist.name, executor.name, subtask.name, "task"
+            from core.search.rag_search_engine import RAGSearchEngine
+            engine = RAGSearchEngine()
+            result = await engine.search_and_learn(query, max_results=3, learn=False, use_query_cache=True)
+            items = result.get("results", result.get("items", []))
+            if items:
+                return "\n".join(
+                    f"- {r.get('content', r.get('text', ''))[:200]}"
+                    for r in items if r
                 )
-                
-                try:
-                    result_data = json.loads(result)
-                    if result_data.get("status") == "success":
-                        subtask.status = TaskStatus.COMPLETED
-                        subtask.result = result_data
-                        results.append(result_data)
-                        log_success(f"✅ 子任务完成: {subtask.name}")
-                    else:
-                        subtask.status = TaskStatus.FAILED
-                        subtask.error = result_data.get("error", "未知错误")
-                        subtask.retry_count += 1
-                        
-                        reflection = await self.reflector.reflect(subtask)
-                        
-                        if reflection.get("should_retry", False):
-                            log_info(f"🔄 正在重试子任务: {subtask.name} (第 {subtask.retry_count} 次)")
-                            result = await self.send_message(
-                                strategist.name, executor.name, subtask.name, "task"
-                            )
-                            result_data = json.loads(result)
-                            if result_data.get("status") == "success":
-                                subtask.status = TaskStatus.COMPLETED
-                                subtask.result = result_data
-                                results.append(result_data)
-                                log_success(f"✅ 重试成功: {subtask.name}")
-                except Exception as e:
-                    log_error(f"子任务执行异常: {e}")
-        
-        # 4. 评审结果
-        reviewer = self.get_agent_by_role(AgentRole.REVIEWER)
-        if reviewer:
-            review_result = await self.send_message(
-                strategist.name, reviewer.name, json.dumps(results), "review"
+        except Exception as e:
+            logger.debug(f"RAG 检索失败: {e}")
+        return ""
+
+    async def _ask_user(self, question: str, timeout: int = 30) -> Optional[str]:
+        """反问用户 — 降级前征求意见"""
+        try:
+            from core.agents.agent_communication import get_question_registry
+            future = get_question_registry().ask(
+                agent_id=self.name,
+                agent_name=self.name,
+                question=question,
+                timeout=timeout,
             )
-            try:
-                review = json.loads(review_result)
-                if review.get("passed", False):
-                    main_task.status = TaskStatus.COMPLETED
-                    main_task.result = {"results": results, "review": review}
-                    self.completed_tasks.append(main_task)
-                    log_success(f"🎉 任务完成: {task_description}")
-                else:
-                    main_task.status = TaskStatus.FAILED
-                    main_task.error = f"评审未通过: {review.get('comments')}"
-                    self.failed_tasks.append(main_task)
-                    log_error(f"❌ 任务失败: {task_description}")
-            except Exception as e:
-                log_warning(f"评审结果解析失败: {e}")
-        
+            return await asyncio.wait_for(future, timeout=timeout + 5)
+        except ImportError:
+            return None
+        except asyncio.TimeoutError:
+            return None
+        except Exception as e:
+            logger.debug(f"反问失败: {e}")
+            return None
+
+    async def _kepa_reflect(self, result: dict, max_retries: int = 3) -> dict:
+        """KEPA 反思闭环 — think→act→reflect 循环"""
+        for attempt in range(max_retries):
+            KEPA_SYSTEM_PROMPT = (
+                "你是{role}Agent。\n\n"
+                "评估以下执行结果的置信度（0-1），决定继续执行/重试/标记失败。\n\n"
+                "输出JSON:\n{format}"
+            )
+            reflect_system = KEPA_SYSTEM_PROMPT.format(
+                role=self.role.value,
+                format=OUTPUT_FORMATS['kepa_decision'],
+            )
+            reflect_prompt = f"评估以下执行结果的置信度（0-1），决定继续/重试/失败：\n{json.dumps(result, ensure_ascii=False)}"
+            reflection = await _llm_json(
+                reflect_system,
+                reflect_prompt,
+                max_tokens=300,
+            )
+
+            decision = reflection.get("decision", "continue")
+            confidence = reflection.get("confidence", 0.0)
+
+            if decision == "continue" or confidence >= 0.85:
+                result["confidence"] = confidence
+                result["kepa_iterations"] = attempt + 1
+                return result
+
+            if decision == "fail":
+                result["success"] = False
+                result["error"] = reflection.get("reason", "KEPA 判断失败")
+                result["kepa_iterations"] = attempt + 1
+                return result
+
+            # retry
+            logger.info(f"🔄 {self.name} KEPA 重试 #{attempt + 1}: {reflection.get('reason', '')[:60]}")
+            result["retry_reason"] = reflection.get("reason", "")
+
+        result["success"] = False
+        result["error"] = f"KEPA 超过最大重试 {max_retries} 次"
+        result["kepa_iterations"] = max_retries
+        return result
+
+    async def process_message(self, message: AgentMessage) -> str:
+        self.context.add(f"收到: {message.content[:100]}")
+        logger.info(f"📬 {self.name} 收到消息 from {message.from_agent}")
+        result = await self._handle_message(message)
+        self.context.add(f"回复: {result[:100]}")
+        return result
+
+    async def _handle_message(self, message: AgentMessage) -> str:
+        """处理消息 — KEPA + RAG + 反问"""
+        role, desc, fmt_type = self._get_role_config()
+        output_format = OUTPUT_FORMATS.get(fmt_type, OUTPUT_FORMATS["execute"])
+
+        # RAG 检索
+        rag_context = await self._rag_query(message.content)
+
+        extra_context = ""
+        if rag_context:
+            extra_context += f"\n【知识库参考】\n{rag_context}\n"
+        recent_ctx = self.context.get_recent()
+        if recent_ctx != "（无上下文）":
+            extra_context += f"\n【上下文】\n{recent_ctx}\n"
+
+        system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
+            role=role, description=desc, extra_context=extra_context, output_format=output_format
+        )
+
+        result = await _llm_json(
+            system_prompt,
+            f"任务内容:\n{message.content}",
+            max_tokens=1000,
+        )
+
+        if not result:
+            question = f"{self.name} 处理任务时 LLM 调用失败，是否降级使用基础响应？(proceed/cancel)"
+            user_response = await self._ask_user(question)
+            if user_response == "proceed":
+                fallback = {"status": "completed", "message": f"{self.name} 已处理: {message.content[:50]}"}
+                return json.dumps(fallback, ensure_ascii=False)
+            return json.dumps({"status": "failed", "error": "LLM 调用失败，用户取消降级"}, ensure_ascii=False)
+
+        # KEPA 反思闭环
+        kepa_result = await self._kepa_reflect(result)
+
+        if not kepa_result.get("success", True):
+            logger.warning(f"⚠️ {self.name} KEPA 判定失败: {kepa_result.get('error', '')}")
+            return json.dumps({
+                "status": "failed",
+                "success": False,
+                "error": kepa_result.get("error", "KEPA 判定失败"),
+            }, ensure_ascii=False)
+
+        return json.dumps(kepa_result, ensure_ascii=False)
+
+    async def execute_with_context(self, task_content: str, from_agent: str = "系统") -> str:
+        """对外执行接口 — 自动管理 context"""
+        msg = AgentMessage(from_agent=from_agent, to_agent=self.name, content=task_content)
+        return await self.process_message(msg)
+
+
+# =============================================================================
+# LeaderAgent — 队长 Agent（监管 Worker、分析结果、动态规划）
+# =============================================================================
+
+class LeaderAgent(LLMAgent):
+    """队长 Agent — 在 LLMAgent 基础上增加监管 Worker、分析结果、动态规划"""
+
+    def __init__(self, name: str, max_workers: int = 5):
+        super().__init__(name=name, role=AgentRole.LEADER)
+        self.workers: Dict[str, LLMAgent] = {}
+        self.max_workers = max_workers
+        self.active_worker_count = 3
+
+    async def supervise_task(self, task_description: str, workers: List[LLMAgent],
+                             active_count: int = 3, max_rounds: int = 3) -> Dict:
+        """队长主循环：分解→分配→执行→分析→循环/完成
+
+        Args:
+            task_description: 任务描述
+            workers: Worker Agent 列表（全部槽位）
+            active_count: 本轮活跃 Worker 数
+            max_rounds: 最大循环轮次
+
+        Returns:
+            执行结果字典
+        """
+        self.active_worker_count = min(active_count, len(workers))
+        self.workers = {w.name: w for w in workers}
+
+        logger.info(f"🚀 队长 {self.name} 开始执行任务: {task_description}")
+
+        # 1. 分解任务
+        subtasks = await self._decompose_task(task_description)
+        if not subtasks:
+            return {"success": False, "error": "任务分解失败"}
+
+        all_results = []
+        remaining = list(subtasks)
+        round_num = 0
+
+        while remaining and round_num < max_rounds:
+            round_num += 1
+            active = workers[:self.active_worker_count]
+            logger.info(f"📋 第 {round_num} 轮: 分配 {len(remaining)} 个子任务给 {len(active)} 个 Worker")
+
+            # 2. 分配子任务
+            assignments = self._assign(remaining, active)
+            remaining = []
+
+            # 3. Workers 并行执行
+            batch_results = await self._execute_batch(assignments, workers)
+            all_results.extend(batch_results)
+
+            # 4. 队长分析结果
+            analysis = await self._analyze_results(batch_results, task_description, round_num)
+
+            decision = analysis.get("decision", "complete")
+
+            if decision == "complete":
+                logger.info(f"✅ 第 {round_num} 轮: 队长判定完成")
+                break
+
+            elif decision == "retry":
+                retry_tasks = analysis.get("retry_tasks", [])
+                logger.info(f"🔄 第 {round_num} 轮: 需要重试 {len(retry_tasks)} 个子任务")
+                remaining = retry_tasks
+
+            elif decision == "reassign":
+                retry_tasks = analysis.get("retry_tasks", [])
+                needed = analysis.get("needed_count", 0)
+                if needed > 0 and (self.active_worker_count + needed) <= self.max_workers:
+                    self.active_worker_count = min(self.active_worker_count + needed, self.max_workers)
+                    logger.info(f"📈 唤醒更多 Worker: 当前 {self.active_worker_count} 个")
+                remaining = retry_tasks
+
+        success = len(remaining) == 0
+        logger.info(f"{'✅' if success else '❌'} 队长任务完成: 共 {round_num} 轮, {len(all_results)} 个子任务")
+
         return {
-            "task_id": main_task.id,
-            "status": main_task.status.value,
-            "results": results,
-            "subtasks_count": len(subtasks)
+            "success": success,
+            "results": all_results,
+            "rounds": round_num,
+            "total_subtasks": len(subtasks),
         }
+
+    async def _decompose_task(self, task_description: str) -> List[str]:
+        """用 LLM 将任务分解为子任务列表"""
+        system = (
+            "你是队长Agent。负责将复杂任务分解为多个独立的子任务，每个子任务可以并行执行。\n\n"
+            "输出JSON格式:\n"
+            f"{OUTPUT_FORMATS['decompose']}"
+        )
+        user = f"请将以下任务分解为{self.active_worker_count}个左右的子任务：\n{task_description}\n\n注意：不要输出JSON外的其他内容。"
+
+        rag_context = await self._rag_query(task_description)
+        if rag_context:
+            user = f"参考知识库信息后分解任务：\n{rag_context}\n\n任务:\n{task_description}"
+
+        result = await _llm_json(system, user, max_tokens=800)
+        subtasks = result.get("subtasks", [])
+        if not subtasks:
+            # 降级：直接返回原任务作为唯一子任务
+            return [task_description]
+
+        return subtasks[:self.max_workers]
+
+    def _assign(self, tasks: List[str], active_workers: List[LLMAgent]) -> List[Dict]:
+        """分配子任务给空闲 Worker"""
+        assignments = []
+        for i, task in enumerate(tasks):
+            worker = active_workers[i % len(active_workers)]
+            assignments.append({
+                "worker": worker,
+                "task": task,
+                "index": i,
+            })
+        return assignments
+
+    async def _execute_batch(self, assignments: List[Dict], all_workers: List[LLMAgent]) -> List[Dict]:
+        """并行执行一批子任务"""
+        async def _run_one(assignment: Dict) -> Dict:
+            worker = assignment["worker"]
+            task_content = assignment["task"]
+            msg = AgentMessage(
+                from_agent=self.name,
+                to_agent=worker.name,
+                content=task_content,
+                message_type="task",
+            )
+            result_str = await worker.process_message(msg)
+            try:
+                data = json.loads(result_str)
+                is_ok = data.get("success", True) and data.get("status") != "failed"
+            except Exception:
+                data = {"raw": result_str[:200]}
+                is_ok = True
+            return {
+                "worker": worker.name,
+                "task": task_content,
+                "success": is_ok,
+                "result": data,
+            }
+
+        batch = await asyncio.gather(*[_run_one(a) for a in assignments], return_exceptions=True)
+        results = []
+        for item in batch:
+            if isinstance(item, Exception):
+                results.append({"success": False, "error": str(item)})
+            else:
+                results.append(item)
+        return results
+
+    async def _analyze_results(self, batch_results: List[Dict], original_task: str, round_num: int) -> Dict:
+        """用 LLM 分析 Worker 执行结果，决定下一步"""
+        summary_lines = []
+        for r in batch_results:
+            status = "✅" if r.get("success", False) else "❌"
+            summary_lines.append(f"{status} Worker {r.get('worker', '?')}: {json.dumps(r.get('result', {}), ensure_ascii=False)[:200]}")
+
+        system = (
+            "你是队长Agent。你的职责是分析队员(Worker)的执行结果。\n\n"
+            "输出JSON:\n"
+            f"{OUTPUT_FORMATS['leader_analyze']}\n\n"
+            "decision 含义：\n"
+            "- complete: 所有结果满意，任务完成\n"
+            "- retry: 部分结果不满意，需要重试（在 retry_tasks 中列出需要重试的任务）\n"
+            "- reassign: 需要更多 Worker 并重试部分任务"
+        )
+        user = (
+            f"原始任务: {original_task}\n"
+            f"第 {round_num} 轮执行结果:\n"
+            + "\n".join(summary_lines)
+        )
+
+        result = await _llm_json(system, user, max_tokens=500)
+
+        if not result:
+            # LLM 失败，保守策略：再试一次
+            return {"decision": "retry", "confidence": 0.0, "reason": "LLM 分析失败，保守重试"}
+
+        return result
+
+    async def _activate_worker(self, count: int):
+        """激活更多 Worker"""
+        self.active_worker_count = min(self.active_worker_count + count, self.max_workers)
+
+
+# =============================================================================
+# V1LeaderPool — 队长模式 Agent 池
+# =============================================================================
+
+class V1LeaderPool:
+    """队长模式 Agent 池 — 1 个队长 + 最多 max_workers 个 Worker"""
+
+    def __init__(self):
+        self._all_agents: Dict[str, LLMAgent] = {}
+
+    def create_team(self, worker_count: int = 3, max_workers: int = 5) -> tuple:
+        """创建 1 队长 + 最多 max_workers 个 Worker（默认激活 worker_count 个）
+
+        Returns:
+            (LeaderAgent, List[LLMAgent]) — 队长 + 全部 Worker 列表
+        """
+        team_id = uuid4().hex[:8]
+        leader = LeaderAgent(name=f"队长_{team_id}", max_workers=max_workers)
+        self._all_agents[leader.name] = leader
+
+        workers = []
+        for i in range(max_workers):
+            w = LLMAgent(name=f"队员{i+1}_{team_id}", role=AgentRole.WORKER)
+            self._all_agents[w.name] = w
+            workers.append(w)
+
+        leader.workers = {w.name: w for w in workers}
+        leader.active_worker_count = min(worker_count, max_workers)
+
+        logger.info(f"👥 创建队伍: 1 队长 + {worker_count}/{max_workers} Worker (队长={leader.name})")
+        return leader, workers
+
+    async def share_memory(self, agents: List[LLMAgent]) -> None:
+        """执行后广播每个 Agent 的执行摘要"""
+        try:
+            from core.multi_agent_v2.infrastructure.shared_bus import get_shared_bus, Message, MessageType
+            bus = get_shared_bus()
+            for agent in agents:
+                summary = {
+                    "agent_id": agent.name,
+                    "role": agent.role.value,
+                    "context": agent.context.get_recent(),
+                    "status": agent.status,
+                }
+                msg = Message(
+                    type=MessageType.AGENT_BROADCAST,
+                    sender=agent.name,
+                    topic=f"memory:share:v1:{agent.name}",
+                    payload=summary,
+                )
+                await bus.publish(f"memory:share:v1:{agent.name}", msg)
+        except Exception as e:
+            logger.debug(f"V1 share_memory 失败: {e}")
+
+    async def discard(self, agents: List[LLMAgent]) -> None:
+        """清理 Agent"""
+        for agent in agents:
+            self._all_agents.pop(agent.name, None)
+        logger.debug(f"V1LeaderPool: 清理了 {len(agents)} 个 Agent")
+
+    def get_agent(self, name: str) -> Optional[LLMAgent]:
+        return self._all_agents.get(name)
+
+    def get_all_agents(self) -> List[LLMAgent]:
+        return list(self._all_agents.values())

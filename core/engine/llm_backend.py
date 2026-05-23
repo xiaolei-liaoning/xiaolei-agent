@@ -230,13 +230,8 @@ class GLMBackend:
             except Exception as e:
                 logger.error("GLM 客户端初始化失败: %s", e)
         
-        # 初始化免费API客户端（无需API Key）
-        try:
-            import aiohttp
-            self.free_client = aiohttp.ClientSession()
-            logger.info("免费API客户端初始化成功")
-        except Exception as e:
-            logger.error("免费API客户端初始化失败: %s", e)
+        # 初始化免费API客户端（无需API Key）— 延迟到首次调用时初始化
+        # 避免在非异步上下文中创建 aiohttp.ClientSession()
         
         # 检查可用模型
         if not self.api_key:
@@ -311,207 +306,21 @@ class GLMBackend:
             logger.debug(f"提取 Token 用量失败: {e}")
 
     # ========================================================
-    # 非流式调用
-    # ========================================================
-
-    async def chat(
-        self,
-        messages: List[Dict[str, str]],
-        temperature: float = 0.7,
-        max_tokens: int = 2000,
-        model: Optional[str] = None,
-    ) -> str:
-        """发送聊天请求（非流式），带自动重试。
-        
-        Args:
-            messages:    对话消息列表
-            temperature: 采样温度
-            max_tokens:  最大生成 token 数
-            model:       可选覆盖模型
-            
-        Returns:
-            模型回复文本
-        """
-        target_model = model or self.model
-
-        # 速率限制
-        if not await self._rate_limiter.acquire(timeout=30.0):
-            return "请求过于频繁，请稍后再试"
-
-        # 首先尝试 GLM API (支持 chat completions 接口的模型)
-        glm_models = [
-            # GLM-4 系列
-            "glm-4-flash", "glm-4-plus", "glm-4-air", "glm-4-free", "glm-3-turbo",
-            "glm-4-0520", "glm-4v", "glm-4v-plus", "glm-4v-flash",
-            "glm-4-long", "glm-4-flashx", "glm-4.7-flash",
-            "glm-4", "glm-4-9b", "glm-4-airx",
-            "glm-4-32b-0414-128k",
-            "glm-4-flash-250414", "glm-4-flashx-250414", "glm-4-air-250414",
-            "glm-4v-plus-0111",
-            "glm-4-assistant", "glm-4-alltools",
-            # GLM-Z1 系列
-            "glm-z1-air", "glm-z1-flash", "glm-z1-airx", "glm-z1-flashx",
-            "glm-zero-preview",
-            # 多模态 + 思考
-            "glm-4.1v-thinking-flashx", "glm-4.1v-thinking-flash",
-            # 语音
-            "glm-4-voice",
-            # 其他
-            "glm-ocr", "autoglm-phone-multilingual", "autoglm-phone",
-            "glm-realtime", "glm-realtime-flash", "glm-realtime-air",
-            "charglm-4", "glm-experimental-preview",
-            # 浏览器搜索增强
-            "search-std", "search-pro", "web-search-pro",
-        ]
-        if self.client and (target_model in glm_models or not model):
-            last_error: Optional[Exception] = None
-            for attempt in range(MAX_RETRIES):
-                try:
-                    # 添加超时设置
-                    import requests
-                    from requests.exceptions import Timeout
-                    
-                    # 设置超时为30秒
-                    response = self.client.chat.completions.create(
-                        model=target_model if model else "glm-4-flash",
-                        messages=messages,
-                        temperature=temperature,
-                        max_tokens=max_tokens,
-                        stream=False,
-                        timeout=30
-                    )
-                    self._record_usage(response)
-                    content = response.choices[0].message.content
-                    return content or ""
-                except Exception as e:
-                    last_error = e
-                    if attempt < MAX_RETRIES - 1:
-                        backoff = BACKOFF_BASE * (2 ** attempt)
-                        logger.warning(
-                            "GLM API 调用失败 (第 %d/%d 次)，%.1fs 后重试: %s",
-                            attempt + 1, MAX_RETRIES, backoff, e,
-                        )
-                        import asyncio
-                        await asyncio.sleep(backoff)
-                    else:
-                        logger.error(
-                            "GLM API 调用最终失败 (已重试 %d 次): %s",
-                            MAX_RETRIES, e,
-                        )
-
-        # 所有 API 都失败
-        return "模型服务暂时不可用，请稍后再试"
-
-    # ========================================================
-    # 流式调用
-    # ========================================================
-
-    async def chat_stream(
-        self,
-        messages: List[Dict[str, str]],
-        temperature: float = 0.7,
-        max_tokens: int = 2000,
-        model: Optional[str] = None,
-    ) -> AsyncIterator[str]:
-        """发送聊天请求（流式），逐 chunk 返回。
-
-        Args:
-            messages:    对话消息列表
-            temperature: 采样温度
-            max_tokens:  最大生成 token 数
-            model:       可选覆盖模型
-
-        Yields:
-            每次生成的文本片段
-        """
-        target_model = model or self.model
-
-        # 速率限制
-        if not await self._rate_limiter.acquire(timeout=30.0):
-            yield "请求过于频繁，请稍后再试"
-            return
-
-        # 首先尝试 GLM API (支持 chat completions 接口的模型)
-        glm_models = [
-            # GLM-4 系列
-            "glm-4-flash", "glm-4-plus", "glm-4-air", "glm-4-free", "glm-3-turbo",
-            "glm-4-0520", "glm-4v", "glm-4v-plus", "glm-4v-flash",
-            "glm-4-long", "glm-4-flashx", "glm-4.7-flash",
-            "glm-4", "glm-4-9b", "glm-4-airx",
-            "glm-4-32b-0414-128k",
-            "glm-4-flash-250414", "glm-4-flashx-250414", "glm-4-air-250414",
-            "glm-4v-plus-0111",
-            "glm-4-assistant", "glm-4-alltools",
-            # GLM-Z1 系列
-            "glm-z1-air", "glm-z1-flash", "glm-z1-airx", "glm-z1-flashx",
-            "glm-zero-preview",
-            # 多模态 + 思考
-            "glm-4.1v-thinking-flashx", "glm-4.1v-thinking-flash",
-            # 语音
-            "glm-4-voice",
-            # 其他
-            "glm-ocr", "autoglm-phone-multilingual", "autoglm-phone",
-            "glm-realtime", "glm-realtime-flash", "glm-realtime-air",
-            "charglm-4", "glm-experimental-preview",
-            # 浏览器搜索增强
-            "search-std", "search-pro", "web-search-pro",
-        ]
-        if self.client and (target_model in glm_models or not model):
-            last_error: Optional[Exception] = None
-            for attempt in range(MAX_RETRIES):
-                try:
-                    response = self.client.chat.completions.create(
-                        model=target_model if model else "glm-4-flash",
-                        messages=messages,
-                        temperature=temperature,
-                        max_tokens=max_tokens,
-                        stream=True,
-                        timeout=30
-                    )
-                    full_content: str = ""
-                    for chunk in response:
-                        if chunk.choices and chunk.choices[0].delta.content:
-                            text = chunk.choices[0].delta.content
-                            full_content += text
-                            yield text
-
-                    # 流式响应结束后记录 Token（从最后一次 chunk 获取）
-                    if hasattr(response, "usage") and response.usage:
-                        tu = TokenUsage(
-                            prompt_tokens=response.usage.prompt_tokens or 0,
-                            completion_tokens=response.usage.completion_tokens or 0,
-                            total_tokens=response.usage.total_tokens or 0,
-                            model=target_model if model else "glm-4-flash",
-                            timestamp=time.time(),
-                        )
-                        self._token_stats.record(tu)
-                    return  # 成功完成
-                except Exception as e:
-                    last_error = e
-                    if attempt < MAX_RETRIES - 1:
-                        backoff = BACKOFF_BASE * (2 ** attempt)
-                        logger.warning(
-                            "GLM 流式调用失败 (第 %d/%d 次)，%.1fs 后重试: %s",
-                            attempt + 1, MAX_RETRIES, backoff, e,
-                        )
-                        import asyncio
-                        await asyncio.sleep(backoff)
-                    else:
-                        logger.error(
-                            "GLM 流式调用最终失败 (已重试 %d 次): %s",
-                            MAX_RETRIES, e,
-                        )
-
-        # 所有 API 都失败
-        yield "模型服务暂时不可用，请稍后再试"
-
-    # ========================================================
-    # 辅助方法
-    # ========================================================
-
-    # ========================================================
     # 免费模型调用
     # ========================================================
+
+    async def _init_free_client(self) -> bool:
+        """延迟初始化免费API客户端（异步）。"""
+        if self.free_client is not None:
+            return True
+        try:
+            import aiohttp
+            self.free_client = aiohttp.ClientSession()
+            logger.info("免费API客户端初始化成功")
+            return True
+        except Exception as e:
+            logger.error("免费API客户端初始化失败: %s", e)
+            return False
 
     async def _call_free_api(
         self,
@@ -538,7 +347,11 @@ class GLMBackend:
             return None
 
         url = self.FREE_API_ENDPOINTS[model]
-        
+
+        # 延迟初始化免费API客户端
+        if not await self._init_free_client():
+            return None
+
         try:
             headers = {
                 "Content-Type": "application/json",
@@ -575,17 +388,19 @@ class GLMBackend:
         temperature: float = 0.7,
         max_tokens: int = 2000,
         model: Optional[str] = None,
+        tools: Optional[List[Dict]] = None,
     ) -> str:
         """发送聊天请求（非流式），带自动重试和模型降级。
-        
+
         Args:
             messages:    对话消息列表
             temperature: 采样温度
             max_tokens:  最大生成 token 数
             model:       可选覆盖模型
-            
+            tools:       function calling 工具定义列表（GLM 格式）
+
         Returns:
-            模型回复文本
+            模型回复文本 / tool_calls JSON 字符串
         """
         target_model = model or self.model
 
@@ -619,16 +434,46 @@ class GLMBackend:
                 last_error = None
                 for attempt in range(MAX_RETRIES):
                     try:
-                        response = self.client.chat.completions.create(
+                        create_kwargs = dict(
                             model=target_model if model else "glm-4-flash",
                             messages=messages,
                             temperature=temperature,
                             max_tokens=max_tokens,
                             stream=False,
-                            timeout=30
+                            timeout=30,
                         )
+                        if tools:
+                            create_kwargs["tools"] = tools
+                            create_kwargs["tool_choice"] = "auto"
+
+                        response = self.client.chat.completions.create(**create_kwargs)
                         self._record_usage(response)
-                        content = response.choices[0].message.content
+
+                        # 检测原生 tool_calls，转换为 OpenAI 格式
+                        message = response.choices[0].message
+                        content = message.content or ""
+                        tool_calls = getattr(message, 'tool_calls', None)
+                        if tool_calls:
+                            tc_list = []
+                            for tc in tool_calls:
+                                tc_list.append({
+                                    "id": getattr(tc, 'id', ''),
+                                    "type": getattr(tc, 'type', 'function'),
+                                    "function": {
+                                        "name": tc.function.name,
+                                        "arguments": tc.function.arguments,
+                                    }
+                                })
+                            return json.dumps({
+                                "choices": [{
+                                    "message": {
+                                        "role": "assistant",
+                                        "content": content,
+                                        "tool_calls": tc_list,
+                                    }
+                                }]
+                            }, ensure_ascii=False)
+
                         return content or ""
                     except Exception as e:
                         last_error = e
@@ -640,7 +485,7 @@ class GLMBackend:
 
         # 2. 尝试免费API（无需API Key）
         # 使用真实可用的免费端点（Groq/Together AI/OpenRouter）
-        if self.free_client:
+        if await self._init_free_client():
             free_models = [
                 "free-glm-4", "free-qwen", "free-llama", "glm-4-free",
                 "groq-llama3", "groq-gemma", "llama-3.1-8b-instant", "gemma2-9b-it",
@@ -782,7 +627,7 @@ class GLMBackend:
                             )
 
         # 尝试免费API流式调用
-        if self.free_client:
+        if await self._init_free_client():
             free_models = ["free-glm-4", "free-qwen", "free-llama", "glm-4-free"]
             if target_model in free_models or (not self.api_key):
                 try:
@@ -874,6 +719,7 @@ class LLMRouter:
         temperature: float = 0.7,
         max_tokens: int = 2000,
         model: Optional[str] = None,
+        tools: Optional[List[Dict]] = None,
     ) -> str:
         """发送聊天请求（非流式）。
 
@@ -882,13 +728,15 @@ class LLMRouter:
             temperature: 采样温度
             max_tokens:  最大生成 token 数
             model:       可选覆盖模型
+            tools:       function calling 工具定义列表
 
         Returns:
-            模型回复文本
+            模型回复文本 / tool_calls JSON 字符串
         """
         return await self.backend.chat(
             messages, temperature=temperature,
             max_tokens=max_tokens, model=model,
+            tools=tools,
         )
 
     async def simple_chat(

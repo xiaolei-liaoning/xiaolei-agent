@@ -266,10 +266,14 @@ class VectorMemoryStore:
     
     def _start_backup_scheduler(self):
         """启动定时备份调度器"""
+        self._backup_stop = threading.Event()
+
         def backup_scheduler():
-            while self._backup_enabled:
-                time.sleep(60)  # 每分钟检查一次
-                
+            while not self._backup_stop.is_set():
+                # 使用 Event.wait() 替代 sleep，支持优雅关闭
+                if self._backup_stop.wait(timeout=60):
+                    break
+
                 # 检查是否需要备份
                 if time.time() - self._last_backup_time >= self._backup_interval:
                     try:
@@ -279,10 +283,22 @@ class VectorMemoryStore:
                         logger.info("定时备份完成")
                     except Exception as e:
                         logger.error("定时备份失败: %s", e)
-        
-        self._backup_thread = threading.Thread(target=backup_scheduler, daemon=True)
+
+        self._backup_thread = threading.Thread(target=backup_scheduler, daemon=False)
         self._backup_thread.start()
         logger.info("定时备份调度器已启动 (间隔=%d秒)", self._backup_interval)
+
+    def shutdown(self):
+        """优雅关闭备份线程"""
+        self._backup_enabled = False
+        if hasattr(self, '_backup_stop'):
+            self._backup_stop.set()
+        if hasattr(self, '_backup_thread') and self._backup_thread.is_alive():
+            self._backup_thread.join(timeout=10)
+            if self._backup_thread.is_alive():
+                logger.warning("备份线程未能在10秒内结束")
+            else:
+                logger.info("备份线程已优雅关闭")
 
     # ── 集合初始化 ───────────────────────────────────────────────────────────
     def _ensure_initialized(self):
@@ -434,8 +450,10 @@ class VectorMemoryStore:
 
     def clear_all(self):
         """清空所有记忆（重建集合）"""
-        if not self._collection:
+        old_collection = self._collection
+        if not old_collection:
             return
+        self._collection = None  # 先置空，避免中间状态不一致
         try:
             self._client.delete_collection("long_term_memory")
             embed_fn = get_bge_embedding_function()
@@ -447,6 +465,7 @@ class VectorMemoryStore:
             logger.info("向量库已清空并重建 (text2vec-base-chinese)")
         except Exception as e:
             logger.error("清空向量库失败: %s", e)
+            self._collection = old_collection  # 恢复旧引用
 
     def cleanup_old_memories(self, keep_last: int = 1000):
         """清理旧记忆，保留最近 keep_last 条

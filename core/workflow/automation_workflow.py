@@ -447,6 +447,7 @@ class AutomationWorkflowEngine:
         self,
         workflow: Dict[str, Any],
         generate_report: bool = False,
+        on_step = None,
     ) -> Dict[str, Any]:
         """异步执行工作流
 
@@ -456,6 +457,7 @@ class AutomationWorkflowEngine:
         Args:
             workflow: 工作流定义（或JSON字符串）
             generate_report: 是否强制生成报告
+            on_step: 可选回调，格式: async def on_step(step_index, step_type, action, status)
 
         Returns:
             {
@@ -503,20 +505,28 @@ class AutomationWorkflowEngine:
             tasks = []
             for idx in pending:
                 step = steps[idx]
+                if on_step:
+                    await on_step(idx, step.get("type", ""), step.get("action", ""), "start")
                 tasks.append(self._execute_step(idx, step))
 
             group_results = await asyncio.gather(*tasks, return_exceptions=True)
             for idx, result in zip(pending, group_results):
                 if isinstance(result, Exception):
-                    all_results.append({
+                    r = {
                         "step": idx + 1,
                         "type": steps[idx].get("type", "unknown"),
                         "success": False,
                         "error": str(result),
                         "duration": 0,
-                    })
+                    }
+                    all_results.append(r)
+                    if on_step:
+                        await on_step(idx, r["type"], steps[idx].get("action", ""), "failed", r)
                 else:
                     all_results.append(result)
+                    if on_step:
+                        s = "success" if result.get("success") else "failed"
+                        await on_step(idx, result.get("type", ""), steps[idx].get("action", ""), s, result)
             executed.update(pending)
 
             group_duration = time.time() - group_start
@@ -526,7 +536,12 @@ class AutomationWorkflowEngine:
         for i, step in enumerate(steps):
             if i in executed:
                 continue
+            if on_step:
+                await on_step(i, step.get("type", ""), step.get("action", ""), "start")
             result = await self._execute_step(i, step)
+            if on_step:
+                s = "success" if result.get("success") else "failed"
+                await on_step(i, step.get("type", ""), step.get("action", ""), s, result)
             all_results.append(result)
 
         total_time = time.time() - start_time

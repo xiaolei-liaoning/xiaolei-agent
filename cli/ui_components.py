@@ -66,7 +66,7 @@ class ProgressBar:
 class Table:
     """表格组件 — Rich Table 包装"""
     def __init__(self, headers: list, title: str = "", box: Box = HEAVY_HEAD):
-        self._table = rich.table.Table(
+        self._table = RichTable(
             *[str(h) for h in headers],
             title=title,
             title_style="bold",
@@ -122,7 +122,7 @@ class Spinner:
 class Tree:
     """树形结构 — Rich Tree"""
     def __init__(self, label: str):
-        self._tree = rich.tree.Tree(f"[bold]{label}[/bold]")
+        self._tree = RichTree(f"[bold]{label}[/bold]")
 
     def add(self, label: str, children: list = None):
         if children:
@@ -184,7 +184,7 @@ class ClaudeCodeDialog:
     @staticmethod
     def render_user(message: str) -> RichPanel:
         return RichPanel(
-            Markdown(message or "(empty)"),
+            RichMarkdown(message or "(empty)"),
             title="[bold blue]You[/bold blue]",
             border_style="blue",
             padding=(0, 2),
@@ -193,7 +193,7 @@ class ClaudeCodeDialog:
     @staticmethod
     def render_assistant(message: str) -> RichPanel:
         return RichPanel(
-            Markdown(message or "(empty)"),
+            RichMarkdown(message or "(empty)"),
             title="[bold green]Agent[/bold green]",
             border_style="green",
             padding=(0, 2),
@@ -202,11 +202,21 @@ class ClaudeCodeDialog:
     @staticmethod
     def render_system(message: str) -> RichPanel:
         return RichPanel(
-            Markdown(message or "(empty)"),
+            RichMarkdown(message or "(empty)"),
             title="[bold yellow]System[/bold yellow]",
             border_style="yellow",
             padding=(0, 2),
         )
+
+    @staticmethod
+    def user_input(prompt: str = "⌨ > ") -> str:
+        """获取用户输入"""
+        return _console.input(f"[bold cyan]{prompt}[/bold cyan]")
+
+    @staticmethod
+    def section_divider():
+        """打印分隔线"""
+        _console.print("─" * _console.width if hasattr(_console, 'width') else "─" * 60, style="dim")
 
 
 class SandboxPanel:
@@ -246,8 +256,3 @@ class ProgressHeader:
 
     def __exit__(self, *args):
         self._progress.stop()
-
-
-# 导入 rich 原生模块用于内部引用
-import rich.table as _rt
-import rich.tree as _rtree

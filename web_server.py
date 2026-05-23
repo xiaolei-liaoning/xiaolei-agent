@@ -221,7 +221,7 @@ class DecomposeRequest(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     user_id: int = 1
-    agent_id: str = "default"
+    agent_id: str = "auto"  # 默认为智能匹配
 
 
 # 简单的内存存储，用于演示历史记录
@@ -461,13 +461,20 @@ async def get_session_history(
 async def chat(request: ChatRequest) -> Dict[str, Any]:
     """处理聊天请求 - 转发到main.py
     
+    支持智能匹配模式：当 agent_id='auto' 时，后端会自动选择最佳 Agent
+    
     所有聊天逻辑由main.py统一处理，确保：
     - Agent系统正常工作
     - RAG知识库检索
     - BFS上下文记忆
     - MessageBus协作
+    - 智能Agent自动选择（auto_agent_selection）
     """
     try:
+        # 将 agent_id='auto' 转换为 'general'，并启用后端的智能选择
+        # 后端 chat.py 会根据 auto_agent_selection 参数自动选择最佳Agent
+        final_agent_id = request.agent_id if request.agent_id != 'auto' else 'general'
+        
         async with httpx.AsyncClient(timeout=60.0) as client:
             # 转发请求到main.py
             response = await client.post(
@@ -475,8 +482,9 @@ async def chat(request: ChatRequest) -> Dict[str, Any]:
                 json={
                     "message": request.message,
                     "user_id": request.user_id,
-                    "agent_id": request.agent_id,
-                    "agent_name": "小龙虾助手"
+                    "agent_id": final_agent_id,
+                    "agent_name": "小龙虾助手",
+                    "auto_agent_selection": request.agent_id == 'auto'
                 }
             )
             
@@ -661,6 +669,96 @@ async def index(request: Request):
         "request": request,
         "skills": SKILLS_CACHE
     })
+
+
+@app.get("/api/agents")
+async def get_agents_api():
+    """获取所有配置的Agent列表"""
+    try:
+        import yaml
+        agents_config_path = Path(__file__).parent / "config" / "agents.yml"
+        
+        if agents_config_path.exists():
+            with open(agents_config_path, 'r', encoding='utf-8') as f:
+                config = yaml.safe_load(f)
+            
+            agents = []
+            for agent_id, agent_info in config.get('agents', {}).items():
+                # 根据Agent类型生成能力标签
+                capabilities = []
+                tools = agent_info.get('tools', [])
+                
+                # 根据工具推断能力
+                for tool in tools:
+                    if 'chat' in tool:
+                        capabilities.append('聊天')
+                    elif 'calculator' in tool or 'calculator-mcp' in tool:
+                        capabilities.append('计算')
+                    elif 'data' in tool or 'analysis' in tool:
+                        capabilities.append('数据')
+                    elif 'web' in tool or 'scraper' in tool:
+                        capabilities.append('爬虫')
+                    elif 'weather' in tool:
+                        capabilities.append('天气')
+                    elif 'system' in tool:
+                        capabilities.append('系统')
+                    elif 'translator' in tool or 'translate' in tool:
+                        capabilities.append('翻译')
+                    elif 'deep' in tool or 'thinking' in tool:
+                        capabilities.append('思考')
+                    elif 'fun' in tool or 'creative' in tool or 'art' in tool:
+                        capabilities.append('创意')
+                
+                # 去重并限制数量
+                capabilities = list(dict.fromkeys(capabilities))[:3]
+                
+                # 生成友好的显示名称
+                display_names = {
+                    'general': '👤 通用助手',
+                    'data_analyst': '📊 数据分析师',
+                    'web_scraper': '🌐 网络爬虫',
+                    'weather_expert': '☀️ 天气预报员',
+                    'system_toolbox': '🛠️ 系统工具',
+                    'translator': '🌍 翻译官',
+                    'deep_thinker': '🧠 深度思考者',
+                    'creative': '🎨 创意助手'
+                }
+                
+                agents.append({
+                    'id': agent_id,
+                    'name': display_names.get(agent_id, agent_id.replace('_', ' ').title()),
+                    'description': agent_info.get('role_prompt', ''),
+                    'capabilities': capabilities,
+                    'priority': agent_info.get('priority', 1),
+                    'tools': tools
+                })
+            
+            return JSONResponse({
+                'success': True,
+                'data': agents
+            })
+        else:
+            # 返回默认Agent列表
+            default_agents = [
+                {'id': 'general', 'name': '👤 通用助手', 'description': '擅长处理各种日常问题', 'capabilities': ['聊天', '计算', '娱乐']},
+                {'id': 'data_analyst', 'name': '📊 数据分析师', 'description': '擅长数据处理、统计分析和可视化', 'capabilities': ['数据', '分析', '可视化']},
+                {'id': 'web_scraper', 'name': '🌐 网络爬虫', 'description': '擅长从各平台抓取公开数据', 'capabilities': ['爬虫', '数据', '搜索']},
+                {'id': 'weather_expert', 'name': '☀️ 天气预报员', 'description': '可以查询各城市的天气和预报', 'capabilities': ['天气', '预报', '查询']},
+                {'id': 'system_toolbox', 'name': '🛠️ 系统工具', 'description': '可以执行系统命令、管理文件', 'capabilities': ['系统', '命令', '文件']},
+                {'id': 'translator', 'name': '🌍 翻译官', 'description': '精通多语言互译', 'capabilities': ['翻译', '语言', '多语种']},
+                {'id': 'deep_thinker', 'name': '🧠 深度思考者', 'description': '擅长复杂问题的多维度分析和推理', 'capabilities': ['思考', '分析', '推理']},
+                {'id': 'creative', 'name': '🎨 创意助手', 'description': '擅长生成有趣内容、故事和艺术', 'capabilities': ['创意', '写作', '艺术']}
+            ]
+            return JSONResponse({
+                'success': True,
+                'data': default_agents
+            })
+    except Exception as e:
+        logger.error(f"获取Agent列表失败: {e}")
+        return JSONResponse({
+            'success': False,
+            'error': str(e)
+        })
 
 
 @app.get("/api/skills")
@@ -1061,11 +1159,11 @@ async def upload_file(file: UploadFile = File(...)) -> Dict[str, Any]:
 
 
 if __name__ == '__main__':
-    # 启动服务器
+    # 启动服务器（注意：此端口需与 main.py (8001) 和 start_web.py (8000) 区分）
     logger.info("启动FastAPI服务器...")
     uvicorn.run(
         app,
         host="0.0.0.0",
-        port=8001,
+        port=8000,
         log_level="info"
     )

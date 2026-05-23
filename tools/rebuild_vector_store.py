@@ -1,23 +1,24 @@
 #!/usr/bin/env python
-"""向量知识库管理脚本
+"""向量知识库管理脚本（完全重建版）
 
 功能：
-1. 清空向量知识库
-2. 读取所有技能的SKILL.md文件
-3. 为每个技能添加skill标签
-4. 重新写入知识库用于分类
+1. 完全删除向量知识库目录
+2. 重新创建向量知识库
+3. 读取所有技能的SKILL.md文件
+4. 为每个技能添加skill标签
+5. 重新写入知识库用于分类
 """
 
 import os
 import sys
 import logging
+import shutil
 from pathlib import Path
 from typing import List, Dict, Any
+import time
 
 # 添加项目路径
 sys.path.insert(0, str(Path(__file__).parent))
-
-from core.memory.vector_memory import VectorMemoryStore
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -227,73 +228,110 @@ def build_skill_documents(skill_info: Dict[str, Any]) -> List[Dict[str, str]]:
 
 
 def clear_and_rebuild_vector_store():
-    """清空并重建向量知识库"""
+    """完全清空并重建向量知识库"""
     logger.info("="*60)
-    logger.info("开始清空并重建向量知识库")
+    logger.info("开始完全重建向量知识库")
     logger.info("="*60)
     
-    # 1. 初始化向量存储
-    vector_store = VectorMemoryStore()
-    
-    # 2. 清空现有数据
-    logger.info("清空现有向量知识库...")
-    current_count = vector_store.count()
-    logger.info("当前记忆数: %d", current_count)
-    
-    vector_store.clear_all()
-    logger.info("向量知识库已清空")
-    
-    # 3. 获取所有技能
-    skill_dirs = get_all_skill_dirs()
-    
-    if not skill_dirs:
-        logger.error("没有找到任何技能目录")
-        return False
-    
-    # 4. 解析并添加技能文档
-    total_documents = 0
-    
-    for skill_dir in skill_dirs:
-        logger.info("\n处理技能: %s", skill_dir.name)
+    try:
+        # 导入ChromaDB
+        import chromadb
+        from chromadb.config import Settings
         
-        # 解析SKILL.md
-        skill_info = parse_skill_md(skill_dir)
+        # 设置向量库路径
+        persist_dir = os.path.expanduser("~/.小雷版小龙虾/vector_db")
         
-        if not skill_info:
-            logger.warning("跳过技能: %s (解析失败)", skill_dir.name)
-            continue
+        logger.info("向量库路径: %s", persist_dir)
         
-        # 构建文档
-        documents = build_skill_documents(skill_info)
+        # 完全删除现有数据库目录
+        if os.path.exists(persist_dir):
+            logger.info("删除现有向量库目录...")
+            shutil.rmtree(persist_dir)
+            logger.info("向量库目录已删除")
         
-        # 添加到向量库
-        for doc in documents:
-            memory_id = vector_store.add_memory(
-                user_id=0,  # 系统用户
-                content=doc['content'],
-                category='fact',
-                metadata=doc['metadata']
-            )
+        # 重新创建目录
+        os.makedirs(persist_dir, exist_ok=True)
+        logger.info("向量库目录已创建")
+        
+        # 初始化ChromaDB客户端
+        client = chromadb.PersistentClient(
+            path=persist_dir,
+            settings=Settings(anonymized_telemetry=False),
+        )
+        
+        logger.info("ChromaDB客户端初始化成功")
+        
+        # 创建新集合
+        collection = client.create_collection(
+            name="long_term_memory",
+            metadata={"description": "用户长期记忆库"},
+        )
+        
+        logger.info("新集合创建成功")
+        
+        # 获取所有技能
+        skill_dirs = get_all_skill_dirs()
+        
+        if not skill_dirs:
+            logger.error("没有找到任何技能目录")
+            return False
+        
+        # 解析并添加技能文档
+        all_ids = []
+        all_docs = []
+        all_metas = []
+        total_documents = 0
+        
+        for skill_dir in skill_dirs:
+            logger.info("\n处理技能: %s", skill_dir.name)
             
-            if memory_id:
+            # 解析SKILL.md
+            skill_info = parse_skill_md(skill_dir)
+            
+            if not skill_info:
+                logger.warning("跳过技能: %s (解析失败)", skill_dir.name)
+                continue
+            
+            # 构建文档
+            documents = build_skill_documents(skill_info)
+            
+            # 收集文档数据
+            for doc in documents:
+                memory_id = f"skill_{skill_info['skill_name']}_{doc['metadata']['document_type']}_{int(time.time() * 1000)}_{total_documents}"
+                
+                all_ids.append(memory_id)
+                all_docs.append(doc['content'])
+                all_metas.append(doc['metadata'])
                 total_documents += 1
-                logger.debug("  添加文档: %s (%s)", memory_id, doc['metadata']['document_type'])
+                
+                logger.debug("  准备文档: %s (%s)", memory_id, doc['metadata']['document_type'])
+            
+            logger.info("  准备 %d 个文档", len(documents))
         
-        logger.info("  添加 %d 个文档", len(documents))
-    
-    # 5. 强制刷新缓冲区
-    vector_store._flush_buffer()
-    
-    # 6. 验证结果
-    final_count = vector_store.count()
-    logger.info("\n" + "="*60)
-    logger.info("向量知识库重建完成")
-    logger.info("="*60)
-    logger.info("处理技能数: %d", len(skill_dirs))
-    logger.info("添加文档数: %d", total_documents)
-    logger.info("向量库总数: %d", final_count)
-    
-    return True
+        # 批量添加到向量库
+        if all_ids:
+            logger.info("\n批量添加 %d 个文档到向量库...", len(all_ids))
+            collection.add(
+                ids=all_ids,
+                documents=all_docs,
+                metadatas=all_metas
+            )
+            logger.info("批量添加完成")
+        
+        # 验证结果
+        final_count = collection.count()
+        logger.info("\n" + "="*60)
+        logger.info("向量知识库重建完成")
+        logger.info("="*60)
+        logger.info("处理技能数: %d", len(skill_dirs))
+        logger.info("添加文档数: %d", total_documents)
+        logger.info("向量库总数: %d", final_count)
+        
+        return True
+        
+    except Exception as e:
+        logger.error("重建向量知识库失败: %s", e, exc_info=True)
+        return False
 
 
 def test_vector_search():
@@ -302,29 +340,50 @@ def test_vector_search():
     logger.info("测试向量搜索功能")
     logger.info("="*60)
     
-    vector_store = VectorMemoryStore()
-    
-    test_queries = [
-        "天气",
-        "爬取微博热搜",
-        "分析数据",
-        "翻译文字",
-        "打开记事本",
-        "GitHub trending",
-    ]
-    
-    for query in test_queries:
-        logger.info("\n查询: %s", query)
-        results = vector_store.search_memories(query, top_k=3)
+    try:
+        import chromadb
+        from chromadb.config import Settings
         
-        if results:
-            for i, result in enumerate(results, 1):
-                skill_name = result['metadata'].get('skill_name', 'unknown')
-                doc_type = result['metadata'].get('document_type', 'unknown')
-                distance = result['distance']
-                logger.info("  %d. [%s] %s (相似度: %.3f)", i, skill_name, doc_type, 1-distance)
-        else:
-            logger.info("  无结果")
+        persist_dir = os.path.expanduser("~/.小雷版小龙虾/vector_db")
+        client = chromadb.PersistentClient(
+            path=persist_dir,
+            settings=Settings(anonymized_telemetry=False),
+        )
+        
+        collection = client.get_collection("long_term_memory")
+        
+        test_queries = [
+            "天气",
+            "爬取微博热搜",
+            "分析数据",
+            "翻译文字",
+            "打开记事本",
+            "GitHub trending",
+        ]
+        
+        for query in test_queries:
+            logger.info("\n查询: %s", query)
+            results = collection.query(
+                query_texts=[query],
+                n_results=3
+            )
+            
+            if results and results['ids'] and results['ids'][0]:
+                for i, (mem_id, doc, meta, dist) in enumerate(zip(
+                    results['ids'][0],
+                    results['documents'][0],
+                    results['metadatas'][0],
+                    results['distances'][0]
+                ), 1):
+                    skill_name = meta.get('skill_name', 'unknown')
+                    doc_type = meta.get('document_type', 'unknown')
+                    similarity = 1 - dist
+                    logger.info("  %d. [%s] %s (相似度: %.3f)", i, skill_name, doc_type, similarity)
+            else:
+                logger.info("  无结果")
+                
+    except Exception as e:
+        logger.error("测试搜索失败: %s", e, exc_info=True)
 
 
 def main():

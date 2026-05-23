@@ -439,13 +439,23 @@ class SandboxExecutor:
         sandbox_id = f"sandbox_sh_{uuid.uuid4().hex[:8]}"
         logger.info(f"创建Shell沙盒: {sandbox_id}")
 
-        # 安全检查：禁止危险命令
-        dangerous_commands = ["rm -rf", "mkfs", "dd", ":(){:|:&};:", "> /dev/sda"]
-        for cmd in dangerous_commands:
-            if cmd in command:
+        # 安全检查：禁止危险命令（使用正则匹配，防止空格变体绕过）
+        import re as _re
+        dangerous_patterns = [
+            (r'\brm\s+-[rR]f\b', 'rm -rf (递归删除)'),
+            (r'\bmkfs\b', 'mkfs (格式化磁盘)'),
+            (r'\bdd\s+if=', 'dd if= (磁盘写入)'),
+            (r':\(\)\{', 'Fork炸弹'),
+            (r'>\s+/dev/sd[a-z]', '直接写入磁盘设备'),
+            (r'\bchmod\s+-R\s+777\s+/\b', 'chmod 777 / (权限放开)'),
+            (r'\bwget\s+.*\|\s*bash\b', 'wget pipe bash (远程脚本执行)'),
+            (r'\bcurl\s+.*\|\s*bash\b', 'curl pipe bash (远程脚本执行)'),
+        ]
+        for pattern, desc in dangerous_patterns:
+            if _re.search(pattern, command):
                 return SandboxResult(
                     status=ExecutionStatus.FAILED,
-                    error_message=f"禁止执行危险命令: {cmd}",
+                    error_message=f"禁止执行危险命令: {desc}",
                     sandbox_id=sandbox_id
                 )
         

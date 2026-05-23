@@ -19,7 +19,16 @@ from typing import Any, Callable, Dict, List, Optional, Set
 from collections import defaultdict
 import uuid
 
+import asyncio
+
 logger = logging.getLogger(__name__)
+
+# ── 持久化快照存储（MySQL 同步） ─────────────────────────────
+try:
+    from ...infrastructure.persistence import get_snapshot_store
+    _snapshot_store = get_snapshot_store()
+except Exception:
+    _snapshot_store = None
 
 
 class TaskState(Enum):
@@ -200,9 +209,26 @@ class EventSystem:
 
 
 class GlobalContextCenter:
-    """全局上下文与状态中心 - 多Agent协作的核心"""
+    """全局上下文与状态中心 - 多Agent协作的核心
 
-    def __init__(self):
+    单例模式，支持 MySQL 持久化：
+    - 启动时自动 restore 未完成任务
+    - 后台每 30s 刷入 MySQL TaskContextSnapshot
+    """
+
+    _instance: Optional["GlobalContextCenter"] = None
+    _instance_lock = asyncio.Lock()
+
+    def __new__(cls, *args, **kwargs):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def __init__(self, enable_db_persistence: bool = True):
+        # 防止 __init__ 重复执行
+        if getattr(self, "_initialized", False):
+            return
+
         # 任务上下文管理
         self.task_contexts: Dict[str, TaskContext] = {}
 
@@ -224,7 +250,22 @@ class GlobalContextCenter:
         # 锁
         self._lock = asyncio.Lock()
 
-        logger.info("全局上下文中心初始化完成")
+        # ── 持久化 ────────────────────────────────────────
+        self._db_sync_enabled = enable_db_persistence
+        self._snapshot_store = _snapshot_store
+        self._auto_save_task: Optional[asyncio.Task] = None
+        self._pending_saves: Set[str] = set()
+        self._modified_since_last_save: Set[str] = set()
+
+        # ── Token 预算（Layer 3 会用） ──────────────────
+        self._max_context_tokens: int = 32000
+
+        if self._db_sync_enabled:
+            self._restore_from_db()
+            self._start_auto_save()
+
+        self._initialized = True
+        logger.info("全局上下文中心初始化完成 (db_persistence=%s)", enable_db_persistence)
 
     def generate_trace_id(self) -> str:
         """生成追踪ID"""
@@ -255,6 +296,7 @@ class GlobalContextCenter:
             trace_id=trace_id
         ))
 
+        self._mark_dirty(task_id)
         logger.info(f"创建任务上下文: {task_id}")
         return task_id
 
@@ -270,6 +312,8 @@ class GlobalContextCenter:
 
             if metadata:
                 context.metadata.update(metadata)
+
+        self._mark_dirty(task_id)
 
         # 发布状态变更事件
         event_type_map = {
@@ -311,6 +355,10 @@ class GlobalContextCenter:
             trace_id=self.task_contexts[task_id].metadata.get("trace_id")
         ))
 
+        # 检查 token 预算，超限则剪枝
+        self._check_and_prune(task_id)
+        self._mark_dirty(task_id)
+
     async def get_context(self, task_id: str, agent_id: Optional[str] = None) -> Dict[str, Any]:
         """获取上下文"""
         if task_id not in self.shared_contexts:
@@ -339,6 +387,10 @@ class GlobalContextCenter:
 
         logger.info(f"Agent注册: {agent_id}")
 
+        # 标记涉及该 agent 的所有任务为 dirty
+        for tid in self.task_contexts:
+            self._mark_dirty(tid)
+
     async def update_agent_state(self, agent_id: str, state: str) -> None:
         """更新Agent状态"""
         async with self._lock:
@@ -354,6 +406,8 @@ class GlobalContextCenter:
             target_id=None,
             data={"agent_id": agent_id, "state": state}
         ))
+
+        self._mark_dirty("agent_registry")
 
     async def get_agent_info(self, agent_id: str) -> Optional[Dict[str, Any]]:
         """获取Agent信息"""
@@ -418,6 +472,7 @@ class GlobalContextCenter:
         ))
 
         logger.info(f"子任务分配: {subtask_id} -> Agent {agent_id}")
+        self._mark_dirty(task_id)
 
     async def update_partial_result(self, task_id: str, agent_id: str, subtask_id: str, result: Any) -> None:
         """更新部分结果"""
@@ -434,6 +489,7 @@ class GlobalContextCenter:
             context.updated_at = time.time()
 
         logger.info(f"部分结果更新: {task_id}.{subtask_id} by Agent {agent_id}")
+        self._mark_dirty(task_id)
 
     async def get_partial_results(self, task_id: str) -> Dict[str, Any]:
         """获取所有部分结果"""
@@ -454,6 +510,7 @@ class GlobalContextCenter:
             context.updated_at = time.time()
 
         logger.info(f"任务完成: {task_id}")
+        self._mark_dirty(task_id)
 
     async def subscribe(self, agent_id: str, events: List[EventType]) -> None:
         """订阅事件"""
@@ -489,8 +546,174 @@ class GlobalContextCenter:
         """获取任务上下文"""
         return self.task_contexts.get(task_id)
 
+    # ── Token 预算与剪枝 ─────────────────────────────────────────
+
+    @staticmethod
+    def _estimate_tokens(text: Any) -> int:
+        """估算文本 token 数（对中文友好）。"""
+        import re
+        text = str(text)
+        if not text:
+            return 0
+        cjk = len(re.findall(r'[一-鿿぀-ヿ]', text))
+        ascii_chars = sum(1 for c in text if ord(c) < 128 and c != '\n')
+        other = max(0, len(text) - cjk - ascii_chars)
+        return int(cjk * 1.5 + ascii_chars / 4 + other / 2) + 1
+
+    def _estimate_task_tokens(self, task_id: str) -> int:
+        """估算指定任务的总 token 消耗。"""
+        ctx = self.task_contexts.get(task_id)
+        if not ctx:
+            return 0
+        total = self._estimate_tokens(ctx.original_request)
+        total += self._estimate_tokens(ctx.partial_results)
+        total += self._estimate_tokens(ctx.final_result)
+        total += self._estimate_tokens(ctx.metadata)
+        for agent_id in ctx.assigned_agents.values():
+            total += self._estimate_tokens(agent_id)
+        shared = self.shared_contexts.get(task_id)
+        if shared:
+            total += self._estimate_tokens(shared.global_data)
+        return total
+
+    def _check_and_prune(self, task_id: str) -> bool:
+        """检查 token 预算并在超限时剪枝。返回 True 表示已剪枝。"""
+        total = self._estimate_task_tokens(task_id)
+        if total <= self._max_context_tokens:
+            return False
+
+        ctx = self.task_contexts.get(task_id)
+        if not ctx:
+            return False
+
+        logger.info(f"上下文超限: task={task_id} tokens={total} > max={self._max_context_tokens}")
+
+        # 分级剪枝策略
+        pruned = False
+
+        # Level 1: 移除最早的 partial_results（保留最近 3 个）
+        if len(ctx.partial_results) > 3:
+            sorted_keys = sorted(ctx.partial_results.keys(),
+                                 key=lambda k: ctx.partial_results[k].get("timestamp", 0))
+            for old_key in sorted_keys[:-3]:
+                del ctx.partial_results[old_key]
+                pruned = True
+
+        # Level 2: 折叠连续的事件记录（仅保留最近 20 条）
+        if len(self.event_system.event_history) > 50:
+            self.event_system.event_history = self.event_system.event_history[-20:]
+            pruned = True
+
+        # Level 3: 如果仍然超限，从 shared_contexts 中移除最旧的 key
+        shared = self.shared_contexts.get(task_id)
+        if shared and self._estimate_task_tokens(task_id) > self._max_context_tokens:
+            if len(shared.global_data) > 10:
+                old_keys = list(shared.global_data.keys())[:-10]
+                for k in old_keys:
+                    del shared.global_data[k]
+                    pruned = True
+
+        if pruned:
+            logger.info(f"上下文剪枝完成: task={task_id}")
+
+        return pruned
+
+    # ── 持久化：后台保存 ───────────────────────────────────────
+
+    def _restore_from_db(self) -> None:
+        """启动时从 MySQL 恢复未完成任务上下文。"""
+        if not self._snapshot_store:
+            return
+        try:
+            restored = self._snapshot_store.restore_active_tasks()
+            for task_id, snap in restored.items():
+                if task_id in self.task_contexts:
+                    continue
+                ctx = TaskContext(
+                    task_id=task_id,
+                    original_request=snap.get("original_request", ""),
+                    state=TaskState(snap.get("status", "pending")),
+                    partial_results=snap.get("partial_results", {}),
+                    final_result=snap.get("final_result"),
+                    metadata=snap.get("metadata", {}),
+                    assigned_agents=snap.get("assigned_agents", {}),
+                )
+                self.task_contexts[task_id] = ctx
+                shared = SharedContext(task_id=task_id)
+                for k, v in snap.get("partial_results", {}).items():
+                    shared.update("restore", k, v)
+                self.shared_contexts[task_id] = shared
+
+            if restored:
+                logger.info("从 MySQL 恢复了 %d 个未完成任务", len(restored))
+        except Exception as e:
+            logger.debug("restore_from_db 失败（非致命）: %s", e)
+
+    def _start_auto_save(self) -> None:
+        """启动后台自动保存循环（每 30s 刷入 MySQL）。"""
+        if not self._snapshot_store:
+            return
+
+        async def _save_loop():
+            try:
+                while True:
+                    await asyncio.sleep(30)
+                    # 自动清理已完成的任务
+                    await self.cleanup_completed_tasks(older_than_hours=24)
+                    # 对所有活跃任务执行剪枝检查
+                    for tid in list(self.task_contexts.keys()):
+                        self._check_and_prune(tid)
+                    # 刷入 MySQL
+                    await self._flush_pending_saves()
+            except asyncio.CancelledError:
+                logger.debug("自动保存任务已取消")
+
+        coro = _save_loop()
+        try:
+            self._auto_save_task = asyncio.create_task(coro)
+            logger.debug("自动保存后台任务已启动（间隔 30s）")
+        except RuntimeError:
+            # 没有运行中的 event loop（测试环境）
+            coro.close()  # 清理协程对象，避免 "was never awaited" warning
+            logger.debug("未启动自动保存（无 event loop）")
+
+    async def _flush_pending_saves(self) -> None:
+        """将待保存的任务快照刷入 MySQL。"""
+        if not self._snapshot_store or not self._modified_since_last_save:
+            return
+
+        to_save = self._modified_since_last_save.copy()
+        self._modified_since_last_save.clear()
+
+        for task_id in to_save:
+            ctx = self.task_contexts.get(task_id)
+            if not ctx:
+                continue
+            snapshot = {
+                "task_id": task_id,
+                "status": ctx.state.value,
+                "original_request": ctx.original_request,
+                "partial_results": ctx.partial_results,
+                "final_result": ctx.final_result,
+                "assigned_agents": ctx.assigned_agents,
+                "metadata": ctx.metadata,
+                "trace_id": ctx.metadata.get("trace_id"),
+                "agent_registry": {
+                    aid: info for aid, info in self.agent_registry.items()
+                },
+            }
+            try:
+                self._snapshot_store.sync_to_db(task_id, snapshot)
+            except Exception as e:
+                logger.debug("保存快照 %s 失败: %s", task_id, e)
+
+    def _mark_dirty(self, task_id: str) -> None:
+        """标记任务为已修改，等待下次自动保存。"""
+        if self._db_sync_enabled:
+            self._modified_since_last_save.add(task_id)
+
     async def cleanup_completed_tasks(self, older_than_hours: int = 24) -> int:
-        """清理已完成的任务"""
+        """清理已完成的任务（内存 + MySQL）"""
         cutoff_time = time.time() - (older_than_hours * 3600)
         cleaned = 0
 
@@ -505,6 +728,12 @@ class GlobalContextCenter:
                 del self.task_contexts[task_id]
                 if task_id in self.shared_contexts:
                     del self.shared_contexts[task_id]
+                # 同步删除 DB 记录
+                if self._snapshot_store:
+                    try:
+                        self._snapshot_store.sync_delete_from_db(task_id)
+                    except Exception:
+                        pass
                 cleaned += 1
 
         if cleaned > 0:

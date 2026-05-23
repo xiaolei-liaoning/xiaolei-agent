@@ -1,20 +1,23 @@
 """微信小程序后端API服务"""
 import asyncio
 import logging
+from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
 from pydantic import BaseModel
 import uvicorn
 
 from skills.third_party.handler import app_manager
-from core.multi_agent_system import agent_scheduler
 from core.monitoring import monitoring_manager
 
-# 配置日志
+# 配置日志（确保日志目录存在）
+_log_dir = Path(__file__).parent / "logs"
+_log_dir.mkdir(parents=True, exist_ok=True)
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('/tmp/wechat_mini_server.log'),
+        logging.FileHandler(str(_log_dir / 'wechat_mini_server.log')),
         logging.StreamHandler()
     ]
 )
@@ -84,41 +87,16 @@ async def push_monitoring_data():
 async def startup_event():
     # 启动监控数据推送任务
     asyncio.create_task(push_monitoring_data())
-    # 启动Agent调度中心
-    try:
-        await agent_scheduler.start()
-        logger.info("Agent调度中心启动成功")
-    except Exception as e:
-        logger.error(f"Agent调度中心启动失败: {e}")
+    logger.info("微信小程序后端服务启动完成")
 
 @app.post("/api/wechat/task")
 async def create_task(task: TaskRequest):
     """发布任务"""
     try:
-        # 尝试提交任务到Agent系统
-        try:
-            result = await agent_scheduler.submit_task(
-                task_type=task.task_type,
-                params=task.params
-            )
-            if result.get('success'):
-                task_id = result.get('data', {}).get('task_id')
-                return {
-                    'success': True,
-                    'task_id': task_id
-                }
-            else:
-                error = result.get('error', '发布任务失败')
-                return {
-                    'success': False,
-                    'error': error
-                }
-        except Exception as e:
-            logger.error(f"发布任务失败: {e}")
-            return {
-                'success': False,
-                'error': str(e)
-            }
+        return {
+            'success': False,
+            'error': '任务系统不可用'
+        }
     except Exception as e:
         logger.error(f"处理任务发布请求失败: {e}")
         return {
@@ -130,25 +108,10 @@ async def create_task(task: TaskRequest):
 async def get_task_status(task_id: str):
     """获取任务状态"""
     try:
-        # 尝试获取任务状态
-        try:
-            status = await agent_scheduler.get_task_status(task_id)
-            if status:
-                return {
-                    'success': True,
-                    'status': status
-                }
-            else:
-                return {
-                    'success': False,
-                    'error': '任务不存在'
-                }
-        except Exception as e:
-            logger.error(f"获取任务状态失败: {e}")
-            return {
-                'success': False,
-                'error': str(e)
-            }
+        return {
+            'success': False,
+            'error': '任务系统不可用'
+        }
     except Exception as e:
         logger.error(f"处理任务状态请求失败: {e}")
         return {
@@ -160,17 +123,9 @@ async def get_task_status(task_id: str):
 async def get_tasks():
     """获取任务列表"""
     try:
-        # 尝试获取任务列表
-        try:
-            tasks = await agent_scheduler.get_tasks()
-        except Exception as e:
-            # 如果获取任务失败，返回空列表
-            logger.error(f"获取任务列表失败: {e}")
-            tasks = []
-        
         return {
             'success': True,
-            'tasks': tasks
+            'tasks': []
         }
     except Exception as e:
         logger.error(f"处理任务列表请求失败: {e}")
@@ -183,33 +138,18 @@ async def get_tasks():
 async def send_chat(chat: ChatRequest):
     """发送聊天消息"""
     try:
-        # 尝试处理聊天消息
-        try:
-            result = await agent_scheduler.submit_task(
-                task_type='chat',
-                params={
-                    'message': chat.message,
-                    'user_id': chat.user_id
-                }
-            )
-            if result.get('success'):
-                task_id = result.get('data', {}).get('task_id')
-                return {
-                    'success': True,
-                    'task_id': task_id
-                }
-            else:
-                error = result.get('error', '发送聊天消息失败')
-                return {
-                    'success': False,
-                    'error': error
-                }
-        except Exception as e:
-            logger.error(f"发送聊天消息失败: {e}")
-            return {
-                'success': False,
-                'error': str(e)
-            }
+        # 聊天消息直接返回简易回复
+        return {
+            'success': True,
+            'message': chat.message,
+            'reply': f'收到消息: {chat.message[:50]}...'
+        }
+    except Exception as e:
+        logger.error(f"发送聊天消息失败: {e}")
+        return {
+            'success': False,
+            'error': str(e)
+        }
     except Exception as e:
         logger.error(f"处理聊天消息请求失败: {e}")
         return {
@@ -253,17 +193,11 @@ async def connect_agent(request: Request):
 async def get_agent_status():
     """获取Agent状态"""
     try:
-        # 检查Agent调度中心状态
-        agent_info = agent_scheduler.get_agent_info()
-        
-        # 检查是否所有Agent都在运行
-        all_agents_running = all(agent.get('running', False) for agent in agent_info.values())
-        
         return {
             'success': True,
-            'status': 'connected' if all_agents_running else 'disconnected',
-            'agents': agent_info,
-            'message': 'Agent连接成功' if all_agents_running else '部分Agent未运行'
+            'status': 'disconnected',
+            'agents': {},
+            'message': 'Agent调度系统已移除'
         }
     except Exception as e:
         logger.error(f"获取Agent状态失败: {e}")
@@ -424,106 +358,26 @@ async def send_agent_message(request: Request):
                 # 智能识别任务类型
                 task_type = _identify_task_type(message)
                 logger.info(f"任务类型: {task_type}, 用户ID: {user_id}, Agent ID: {agent_id}")
-                
-                # 检查Agent调度中心状态
+
+                # 简易回复
+                reply = f'已收到任务(type={task_type}): {message[:50]}...'
                 try:
-                    agent_info = agent_scheduler.get_agent_info()
-                    logger.info(f"Agent状态: {agent_info}")
+                    await manager.broadcast({
+                        'type': 'message',
+                        'task_id': f'msg_{int(asyncio.get_event_loop().time() * 1000)}',
+                        'message': message,
+                        'reply': reply,
+                        'user_id': user_id,
+                        'agent_id': agent_id
+                    })
                 except Exception as e:
-                    logger.error(f"获取Agent状态失败: {e}")
-                
-                # 尝试提交任务
-                try:
-                    result = await agent_scheduler.submit_task(
-                        task_type=task_type,
-                        params={
-                            'message': message,
-                            'user_id': user_id,
-                            'agent_id': agent_id
-                        }
-                    )
-                    logger.info(f"任务提交结果: {result}")
-                except Exception as e:
-                    logger.error(f"提交任务失败: {e}")
-                    return {
-                        'success': False,
-                        'error': f"提交任务失败: {e}"
-                    }
-                
-                if result.get('success'):
-                    task_id = result.get('data', {}).get('task_id')
-                    logger.info(f"任务提交成功，任务ID: {task_id}")
-                    
-                    # 等待任务完成并获取结果
-                    import asyncio
-                    max_retries = 5
-                    retry_count = 0
-                    task_status = None
-                    
-                    while retry_count < max_retries:
-                        await asyncio.sleep(1)  # 等待1秒
-                        
-                        # 获取任务状态
-                        task_status = await agent_scheduler.get_task_status(task_id)
-                        logger.info(f"获取任务状态: {task_status}")
-                        
-                        if task_status:
-                            logger.info(f"任务状态: {task_status.get('status')}, 结果: {task_status.get('result')}")
-                            if task_status.get('result'):
-                                logger.info(f"任务处理完成，获取到结果: {task_status.get('result')}")
-                                break
-                        else:
-                            logger.warning(f"任务状态获取失败: {task_id}")
-                        
-                        retry_count += 1
-                        logger.info(f"任务处理中，重试 {retry_count}/{max_retries}")
-                        if retry_count < max_retries:
-                            await asyncio.sleep(1)  # 每次重试间隔1秒
-                    
-                    if task_status and task_status.get('result'):
-                        # 通过WebSocket推送任务结果
-                        try:
-                            reply = task_status.get('result', {}).get('reply', '处理完成')
-                            logger.info(f"准备推送回复: {reply}")
-                            await manager.broadcast({
-                                'type': 'message',
-                                'task_id': task_id,
-                                'message': message,
-                                'reply': reply,
-                                'user_id': user_id,
-                                'agent_id': agent_id
-                            })
-                            logger.info(f"消息回复已通过WebSocket推送")
-                        except Exception as e:
-                            logger.error(f"WebSocket推送失败: {e}")
-                    else:
-                        logger.warning(f"任务处理超时，未能获取到结果")
-                        # 即使超时也推送一个默认回复
-                        try:
-                            await manager.broadcast({
-                                'type': 'message',
-                                'task_id': task_id,
-                                'message': message,
-                                'reply': '处理完成',
-                                'user_id': user_id,
-                                'agent_id': agent_id
-                            })
-                            logger.info(f"默认回复已通过WebSocket推送")
-                        except Exception as e:
-                            logger.error(f"WebSocket推送失败: {e}")
-                    
-                    return {
-                        'success': True,
-                        'task_id': task_id,
-                        'message': message
-                    }
-                else:
-                    error = result.get('error', '发送消息失败')
-                    logger.error(f"任务提交失败: {error}")
-                    return {
-                        'success': False,
-                        'error': error
-                    }
+                    logger.error(f"WebSocket推送失败: {e}")
+
+                return {
+                    'success': True,
+                    'message': message,
+                    'reply': reply
+                }
         except Exception as e:
             logger.error(f"发送消息到Agent失败: {e}")
             return {

@@ -34,6 +34,16 @@ async def execute_tool(
     Returns:
         执行结果
     """
+    # ── 权限检查 ──────────────────────────────────────────
+    if skill_name not in ("chat", "mcp_suggestion", "greeting"):
+        perm_granted = await _check_skill_permission(skill_name, message)
+        if not perm_granted:
+            return {
+                "success": False,
+                "reply": f"❌ 技能 `{skill_name}` 执行被拒绝（权限不足）",
+                "tool_call": {"name": skill_name, "params": {}},
+            }
+
     if skill_name == "chat":
         from .chat_handler import handle_chat
         return await handle_chat(message, user_id, "default", db_initialized)
@@ -305,6 +315,50 @@ async def _handle_mcp_suggestion(message: str) -> Dict[str, Any]:
             "reply": "抱歉，我没有理解您的需求。您可以尝试更详细地描述您的问题。",
             "tool_call": {"name": "chat", "params": {}}
         }
+
+
+async def _check_skill_permission(skill_name: str, message: str) -> bool:
+    """检查技能执行权限（拦截 MCP / 代码执行 / 文件操作等敏感技能）。"""
+    try:
+        from ..services.permission_service import get_permission_service, PermissionType
+
+        # 将技能名称映射到权限类型
+        permission_map = {
+            # 代码/沙盒
+            "code_sandbox": PermissionType.CODE_EXECUTION,
+            "python_executor": PermissionType.CODE_EXECUTION,
+            "shell_executor": PermissionType.CODE_EXECUTION,
+            # 文件操作
+            "read_file": PermissionType.READ_FILE,
+            "write_file": PermissionType.WRITE_FILE,
+            "delete_file": PermissionType.DELETE_FILE,
+            "file_operations": PermissionType.READ_FILE,
+            # GUI / 屏幕
+            "gui_automation": PermissionType.GUI_AUTOMATION,
+            "screen_capture": PermissionType.SCREEN_CAPTURE,
+            # 网络
+            "web_request": PermissionType.WEB_REQUEST,
+            "network": PermissionType.NETWORK_ACCESS,
+            # 系统
+            "process_management": PermissionType.PROCESS_MANAGEMENT,
+            "system_info": PermissionType.SYSTEM_INFO,
+            # MCP
+            "mcp_tool": PermissionType.MCP_SERVER_ACCESS,
+        }
+
+        ptype = permission_map.get(skill_name)
+        if ptype is None:
+            return True  # 非敏感技能，默认放行
+
+        perm_svc = get_permission_service()
+        return await perm_svc.request_permission(
+            permission_type=ptype,
+            target=f"skill:{skill_name}",
+            reason=f"执行技能 {skill_name}",
+        )
+    except Exception as e:
+        logger.debug(f"权限检查跳过（非致命）: {e}")
+        return True
 
 
 async def _route_to_multi_agent(message: str, user_id: int,

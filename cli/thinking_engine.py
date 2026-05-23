@@ -94,8 +94,10 @@ class ThinkingEngine:
         """状态消息"""
         if not self.enabled:
             return
-        style = DIM if dim else ""
-        _console.print(f"  [{style}]{text}[/{style}]")
+        if dim:
+            _console.print(f"  [{DIM}]{text}[/{DIM}]")
+        else:
+            _console.print(f"  {text}")
 
     def thinking(self, text: str = "Thinking..."):
         """思考中状态（短暂显示）"""

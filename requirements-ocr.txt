@@ -1,0 +1,4 @@
+# ===== OCR 可选依赖（~1GB） =====
+# 安装: pip install -r requirements-ocr.txt
+paddleocr>=3.0.0
+paddlepaddle>=3.0.0

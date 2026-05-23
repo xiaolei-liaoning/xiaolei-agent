@@ -52,8 +52,8 @@ class ToolSpec:
     priority: int = 5
 
 
-def _build_tools() -> List[ToolSpec]:
-    """从 ToolRegistry + SkillRegistry 构建工具列表（带Schema）"""
+async def _build_tools() -> List[ToolSpec]:
+    """从 ToolRegistry + SkillRegistry + MCP 构建工具列表（带Schema）"""
     tools: List[ToolSpec] = []
     seen: set = set()
 
@@ -79,16 +79,44 @@ def _build_tools() -> List[ToolSpec]:
         except Exception:
             continue
 
+    # 添加 MCP 工具
+    try:
+        from core.mcp.awesome_mcp_manager import awesome_mcp_manager
+        mcp_defs = await awesome_mcp_manager.get_all_tool_definitions()
+    except Exception:
+        mcp_defs = []
+
+    for mcp_def in mcp_defs:
+        name = mcp_def["function"]["name"]
+        if name in seen:
+            continue
+        seen.add(name)
+        tools.append(ToolSpec(
+            name=name,
+            description=mcp_def["function"].get("description", ""),
+            input_schema=mcp_def["function"].get("parameters", {"type": "object"}),
+            is_concurrency_safe=True,
+            priority=8,
+        ))
+
     return tools
 
 
 def _tools_to_prompt(tools: List[ToolSpec]) -> str:
     if not tools:
         return "（暂无可用工具）"
-    return "\n".join(
-        f"- {t.name}: {t.description}" + (" [只读]" if t.is_concurrency_safe else "")
-        for t in sorted(tools, key=lambda x: -x.priority)
-    )
+    lines = []
+    for t in sorted(tools, key=lambda x: -x.priority):
+        line = f"- {t.name}: {t.description}" + (" [只读]" if t.is_concurrency_safe else "")
+        props = t.input_schema.get("properties", {}) if isinstance(t.input_schema, dict) else {}
+        if props:
+            required = t.input_schema.get("required", [])
+            for pname, pinfo in props.items():
+                req_mark = " (必填)" if pname in required else ""
+                pdesc = pinfo.get("description", "")
+                line += f" | {pname}{req_mark}: {pdesc[:40]}"
+        lines.append(line)
+    return "\n".join(lines)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -141,12 +169,34 @@ class PermissionHandler:
 
 
 async def _execute_single(name: str, args: Dict[str, Any]) -> Dict[str, Any]:
+    # GLM 常用"name"替代"path"，修正参数名
+    if "name" in args and "path" not in args:
+        args["path"] = args.pop("name")
+
+    # 尝试 MCP 工具
+    try:
+        from core.mcp.awesome_mcp_manager import awesome_mcp_manager
+        mcp_defs = await awesome_mcp_manager.get_all_tool_definitions()
+        for mcp_def in mcp_defs:
+            if mcp_def["function"]["name"] == name or mcp_def.get("_tool_name") == name:
+                result = await awesome_mcp_manager.call_tool_by_definition(mcp_def, args)
+                if result:
+                    result_body = result.get("result", result)
+                    content_list = result_body.get("content", []) if isinstance(result_body, dict) else []
+                    text = "\n".join(c.get("text", "") for c in content_list if isinstance(c, dict)) if content_list else str(result_body)[:2000]
+                    return {"success": True, "result": text or "(空结果)"}
+    except Exception:
+        pass
+
+    # 本地工具
     try:
         from core.skill_base import ToolRegistry
         result = await ToolRegistry.execute(name, args)
         return {"success": result.success, "result": result.data, "error": result.error}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+    except Exception:
+        pass
+
+    return {"success": False, "error": f"工具未找到: {name}"}
 
 
 async def execute_tools(tool_calls: List[tuple[str, Dict[str, Any]]],
@@ -203,18 +253,23 @@ async def execute_tools(tool_calls: List[tuple[str, Dict[str, Any]]],
 
 
 def _parse_tool_calls(reply: str) -> List[tuple[str, Dict[str, Any]]]:
-    """从LLM回复解析工具调用，支持单条和多条"""
+    """从LLM回复解析工具调用，支持JSON格式和自由文本兜底"""
     text = reply.strip()
     calls: List[tuple[str, Dict]] = []
     candidates: List[str] = []
 
-    if text.startswith(("{", "[")):
-        candidates.append(text)
+    # 1. 提取 ```json ... ``` 块
     if "```" in text:
         for block in text.split("```"):
             cleaned = block.strip().removeprefix("json").strip()
-            if cleaned.startswith("{"):
+            cleaned = cleaned.removeprefix("python").strip()
+            cleaned = cleaned.removeprefix("text").strip()
+            if cleaned.startswith(("{", "[")):
                 candidates.append(cleaned)
+
+    # 2. 直接解析整个文本
+    if text.startswith(("{", "[")):
+        candidates.append(text)
 
     for candidate in candidates:
         try:
@@ -222,22 +277,33 @@ def _parse_tool_calls(reply: str) -> List[tuple[str, Dict[str, Any]]]:
         except json.JSONDecodeError:
             continue
 
-        # 多个工具调用: [{"$action": "tool", ...}, ...]
         if isinstance(parsed, list):
             for item in parsed:
                 if isinstance(item, dict):
-                    name = item.get("name") or item.get("$action") == "tool" and item.get("name")
-                    if name:
-                        calls.append((name, item.get("args", {})))
-        # 单个工具调用
+                    n = item.get("name") or (item.get("$action") == "tool" and item.get("name"))
+                    if n:
+                        calls.append((n, item.get("args", {})))
         elif isinstance(parsed, dict):
-            name = None
+            n = None
             if parsed.get("$action") == "tool":
-                name = parsed.get("name")
+                n = parsed.get("name")
             elif "name" in parsed and "args" in parsed:
-                name = parsed["name"]
-            if name:
-                calls.append((name, parsed.get("args", {})))
+                n = parsed["name"]
+            if n:
+                calls.append((n, parsed.get("args", {})))
+
+    # 3. 兜底：匹配 工具名\n{参数JSON} 格式（GLM 常见输出）
+    if not calls:
+        lines2 = text.strip().split("\n")
+        if len(lines2) >= 2:
+            first = lines2[0].strip()
+            rest = "\n".join(lines2[1:]).strip()
+            try:
+                args = json.loads(rest)
+                if isinstance(args, dict) and first and not first.startswith("{"):
+                    calls.append((first, args))
+            except json.JSONDecodeError:
+                pass
 
     return calls
 
@@ -360,7 +426,7 @@ async def run_agent(
     user_input: str,
     agency_path: str | None = None,
     max_steps: int = 25,
-    step_timeout: float = 30.0,
+    step_timeout: float = 60.0,
     system_prompt_extra: str = "",
     context: Context | None = None,
     enable_reflection: bool = False,
@@ -381,7 +447,7 @@ async def run_agent(
 
     # 加载人格 + 工具
     agency_content = load_agency(agency_path)
-    tools = _build_tools()
+    tools = await _build_tools()
     tool_prompt = _tools_to_prompt(tools)
 
     system_prompt = (
@@ -389,13 +455,19 @@ async def run_agent(
     )
     system_prompt += (
         f"\n\n## 可用工具\n{tool_prompt}\n\n"
-        "## 工具调用规则\n"
-        "- 需要执行操作时，返回以下 JSON 格式：\n"
+        "## 工作方式\n"
+        "你是智能助手。处理任务遵循 thinking loop：\n"
+        "1. **分析拆解** → 理解意图，拆解为子任务\n"
+        "2. **调度工具** → 按需调用（读文件/搜代码/搜索等）\n"
+        "3. **思考结果** → 分析工具返回，判断下一步\n"
+        "4. **继续或完成** → 信息不够继续调工具，够了直接回答\n\n"
+        "## 工具调用格式\n"
+        "需要执行操作时，返回以下格式：\n"
         '  {"$action": "tool", "name": "工具名", "args": {"参数名": "参数值"}}\n'
-        "- 多个工具可以同时调用：\n"
-        '  [{"$action": "tool", "name": "工具A", "args":{}}, {"$action": "tool", "name": "工具B", "args":{}}]\n'
-        "- 执行结果会返回给你，根据结果继续。\n"
-        "- 不需要工具时，直接回复用户。"
+        "多个只读工具可以同时调：\n"
+        '  예: {"$action": "tool", "name": "sandbox-tools-mcp.read_file", "args": {"path": "/tmp/f.txt"}}  \n'
+        "注意：工具名前有 server 前缀（如 sandbox-tools-mcp.read_file），用完整名称\n"
+        "规则：只读工具可并行，写操作一次只做一个，信息够了直接回复\n"
     )
 
     if context:

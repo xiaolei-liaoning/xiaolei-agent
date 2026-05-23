@@ -1,163 +1,149 @@
-"""CLI基础模块 - 工作流引擎包装器和辅助函数
+"""CLI基础模块 - Agent 执行包装器
 
-已整合思考引擎和增强日志系统
+改用 BaseAgent.run() 实现 think → act → reflect → 迭代 的真实思考链路。
+AutomationWorkflowEngine 仅作为底层工具，不再做顶层执行。
 """
 
 import json
+import logging
+import uuid
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 from cli.colors import (
     print_color, print_success, print_error, print_warning,
     print_info, CliColors
 )
 
-# 导入思考引擎
 from cli.thinking_engine import (
     think_start, think_analyze, think_plan, think_step,
     think_log, think_complete, think_data, think_summarize
 )
 
-# 导入日志系统
 from cli.logging_system import (
     log_debug, log_info, log_success, log_warning, log_error
 )
 
 from cli.ui_components import ProgressBar
 
+logger = logging.getLogger(__name__)
+
 
 class WorkflowEngineWrapper:
-    """工作流引擎包装器 - 整合思考引擎和日志"""
+    """Agent 执行包装器 — 使用 BaseAgent.run() 进行迭代思考"""
 
     def __init__(self):
         self._engine = None
-        self._logger = None
 
-    def get_engine(self):
-        """懒加载工作流引擎"""
-        if self._engine is None:
-            from core.workflow.automation_workflow import AutomationWorkflowEngine
-            self._engine = AutomationWorkflowEngine()
-        return self._engine
+    async def create_and_execute(self, user_request: str, chat_history: List[Dict] = None,
+                                  context: Dict = None, mode: str = "single") -> Dict[str, Any]:
+        """统一执行入口
 
-    async def create_and_execute(self, user_request: str, chat_history: List[Dict] = None, context: Dict = None) -> Dict[str, Any]:
-        """智能识别并执行工作流"""
-        engine = self.get_engine()
+        支持三种模式：
+        - single（默认）: 单 WorkerAgent 迭代执行
+        - collaborate: 多 Agent 协作执行
+        - workflow: 文件工作流执行
+
+        BaseAgent.run() 内部流程:
+          think() → act() → reflect() → 置信度不够 → 再 think → ... → 完成
+        """
+        from cli.thinking_trace import get_trace
+        trace = get_trace()
+        trace.start(user_request)
 
         think_log("正在分析用户意图...")
-        log_info(f"分析用户请求: {user_request[:50]}..." if len(user_request) > 50 else f"分析用户请求: {user_request}")
-        
-        # 如果有聊天历史，记录历史长度
-        if chat_history and len(chat_history) > 0:
-            think_log(f"包含 {len(chat_history)} 条对话历史")
-        
+        log_info(f"分析用户请求: {user_request[:80]}, mode={mode}")
+
         if context:
             think_log(f"上下文信息: {context}")
-            log_info(f"上下文信息: {context}")
-        
-        result = await engine.create_smart_workflow(user_request)
 
-        if not result.get("success"):
-            log_error(f"创建工作流失败: {result.get('error', '未知错误')}")
-            return {"success": False, "error": result.get("error", "创建工作流失败")}
+        if mode == "workflow":
+            return await self.execute_workflow_file(user_request)
 
-        workflow = result["workflow"]
+        if mode == "collaborate":
+            return await self._execute_collaborate(user_request, trace)
 
-        if workflow['steps']:
-            first_step = workflow['steps'][0]
-            if first_step.get("description") == "问候语响应":
-                greeting_message = first_step.get("params", {}).get("message", "")
-                if greeting_message:
-                    return {"success": True, "greeting_message": greeting_message}
+        # ── single 模式（默认）：单 WorkAgent ────────────
+        from core.multi_agent_v2.agents import WorkAgent
 
-        think_log(f"识别到工作流: {workflow['name']}")
-        log_info(f"工作流名称: {workflow['name']}")
-        
-        think_log(f"描述: {workflow['description']}")
-        think_log(f"步骤数: {len(workflow['steps'])}")
+        agent = WorkAgent(agent_id="cli-agent")
+        agent.set_trace(trace)
 
-        # 规划步骤
-        plan_steps = []
-        for i, step in enumerate(workflow['steps'], 1):
-            step_type = step.get("type", "unknown")
-            action = step.get("action", step.get("site", ""))
-            desc = step.get("description", "")
-            plan_steps.append({
-                "title": action if action else step_type,
-                "description": desc
-            })
-            
-        think_plan(plan_steps)
+        try:
+            result = await agent.run(user_request, max_iterations=3)
+        except Exception as e:
+            log_error(f"Agent 执行失败: {e}")
+            logger.exception("Agent run failed")
+            return {"success": False, "error": str(e)}
 
-        if workflow.get("generate_report"):
-            think_log("将生成分析报告")
-            log_info("将生成分析报告")
+        success = result.get("success", False)
+        iterations = result.get("iterations", 1)
+        confidence = result.get("confidence", 0)
 
-        think_log("开始执行工作流...")
-        log_info("开始执行工作流")
+        log_info(f"Agent 执行完成: success={success}, 迭代={iterations}轮, 置信度={confidence:.2f}")
 
-        # 执行工作流并跟踪步骤
-        return await self._execute_with_thinking(workflow)
-    
-    async def _execute_with_thinking(self, workflow):
-        """执行工作流并跟踪思考过程"""
-        engine = self.get_engine()
-        total_steps = len(workflow['steps'])
-        
-        progress_bar = ProgressBar(total=total_steps, width=50)
-        
-        # 模拟步骤执行的思考跟踪
-        for step_num, step in enumerate(workflow['steps'], 1):
-            step_type = step.get("type", "unknown")
-            action = step.get("action", step.get("site", ""))
-            
-            think_step(step_num)
-            think_log(f"正在执行: {action if action else step_type}")
-            log_info(f"执行步骤 {step_num}/{total_steps}: {action}")
-            
-            progress_bar.update(step_num - 1)
-        
-        result = await engine.execute_workflow(workflow)
-        
-        progress_bar.update(total_steps)
-        print()
-        
-        # 检查是否有步骤需要用户输入（如clarification）
-        if result.get("results"):
-            for step_result in result["results"]:
-                if step_result.get("requires_user_input"):
-                    # 返回特殊标记，表示需要用户交互
-                    return {
-                        "success": True,
-                        "requires_user_input": True,
-                        "type": "clarification",  # 添加type字段供CLI识别
-                        "clarification_text": step_result.get("clarification_text", ""),
-                        "original_request": step_result.get("original_request", ""),
-                        "questions": step_result.get("questions", []),
-                        "clarification_questions": step_result.get("questions", []),  # 兼容字段名
-                    }
-        
-        # 完成所有步骤的思考
-        for step_num in range(1, total_steps + 1):
-            think_complete(step_num, success=True)
-        
-        # 添加结果数据
-        if result.get("results"):
-            for step_result in result["results"]:
-                if step_result.get("data_preview"):
-                    preview = step_result["data_preview"]
-                    if len(preview) > 30:
-                        preview = preview[:30] + "..."
-                    think_data("数据预览", preview)
-                if step_result.get("csv_path"):
-                    think_data("CSV文件", step_result["csv_path"])
-                if step_result.get("chart_path"):
-                    think_data("图表文件", step_result["chart_path"])
-        
-        return result
+        return {
+            "success": success,
+            "iterations": iterations,
+            "confidence": confidence,
+            "total_time": 0,
+            "results": [{"step": 1, "type": "agent_run", "success": success,
+                         "data_preview": str(result.get("result", ""))[:200]}],
+            "agent_result": result,
+            "mode": mode,
+        }
+
+    async def _execute_collaborate(self, user_request: str, trace) -> Dict[str, Any]:
+        """多 Agent 协作执行"""
+        think_log("启动多 Agent 协作模式...")
+
+        from core.multi_agent_v2.agents import WorkAgent
+        from core.multi_agent_v2.orchestration.scheduler.intelligent_scheduler import IntelligentScheduler
+        from core.multi_agent_v2.infrastructure.shared_bus import get_shared_bus
+        from core.multi_agent_v2.agents.base.base_agent import Task
+
+        try:
+            master = WorkAgent(agent_id="master")
+            worker = WorkAgent(agent_id="worker-1")
+            reviewer = WorkAgent(agent_id="reviewer")
+
+            for a in [master, worker, reviewer]:
+                a.set_trace(trace)
+                await a.register()
+                await a.start()
+
+            task = Task(
+                task_id=f"collab_{uuid.uuid4().hex[:8]}",
+                type="general", description=user_request,
+                keywords=user_request.split(),
+                complexity=0.6, estimated_steps=5,
+            )
+
+            scheduler = IntelligentScheduler(get_shared_bus())
+            plan = await scheduler.schedule(task)
+
+            think_log(f"协作计划完成: {len(plan.steps) if plan else 0} 步")
+            master_result = await master.execute(task)
+
+            return {
+                "success": master_result.success,
+                "result": str(master_result.output)[:500] if master_result.output else "",
+                "iterations": 1,
+                "confidence": 0.8,
+                "total_time": master_result.execution_time,
+                "results": [],
+                "agent_result": {"output": str(master_result.output)[:500]},
+                "mode": "collaborate",
+            }
+        except Exception as e:
+            log_error(f"协作执行失败: {e}")
+            logger.exception("Collaborate mode failed")
+            return {"success": False, "error": str(e), "mode": "collaborate"}
 
     async def execute_workflow_file(self, file_path: str) -> Dict[str, Any]:
-        """从文件执行工作流"""
+        """从文件执行工作流（仍走 AutomationWorkflowEngine）"""
+        from core.workflow.automation_workflow import AutomationWorkflowEngine
+        engine = AutomationWorkflowEngine()
         path = Path(file_path)
         if not path.exists():
             log_error(f"文件不存在: {file_path}")
@@ -170,26 +156,20 @@ class WorkflowEngineWrapper:
             log_error(f"JSON解析失败: {e}")
             return {"success": False, "error": f"JSON解析失败: {e}"}
 
-        engine = self.get_engine()
-        
         think_start(f"执行工作流文件: {file_path}")
         think_analyze("工作流执行")
-        
+
         steps = []
         for i, step in enumerate(workflow.get('steps', []), 1):
-            step_type = step.get("type", "unknown")
-            action = step.get("action", "")
+            action = step.get("action", step.get("type", "unknown"))
             steps.append({
-                "title": action if action else step_type,
+                "title": action,
                 "description": step.get("description", "")
             })
-        
         think_plan(steps)
-        
+
         result = await engine.execute_workflow(workflow)
-        
         think_summarize(result.get("success", False), result)
-        
         return result
 
 

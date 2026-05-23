@@ -13,7 +13,6 @@
 
 from .database import *
 from .cache_manager import *
-from .persistence import *
 from .redis_pool import *
 from .config_manager import *
 from .di_container import *

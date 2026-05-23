@@ -5,3 +5,4 @@
 - [任务记忆写入](feedback_task-memory-logging.md) — 每次完成任务后写入记忆
 - [模式一重构](project_architecture_refactor.md) — RoleTemplate/SharedBus/Scheduler瘦身/LLM策略/Agent自治
 - [执行路径收敛方案](tool_calls_act_convergence.md) — act(tool_calls=...) 统一 WorkerAgent.execute() 和 BaseAgent.run()
+- [Agent 统一化重构](project_agent_unification_refactor.md) — 砍角色别名/6套模板变1套/删模拟降级

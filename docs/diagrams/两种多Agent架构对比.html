@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>两种多Agent架构对比 — 小龙虾Agent</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #f0f2f5; font-family: -apple-system, "Microsoft YaHei", sans-serif; padding: 40px; color: #333; }
+  .container { max-width: 1400px; margin: 0 auto; }
+  h1 { text-align: center; font-size: 28px; margin-bottom: 8px; color: #1a1a2e; }
+  .subtitle { text-align: center; font-size: 14px; color: #666; margin-bottom: 40px; }
+  .section { background: #fff; border-radius: 12px; padding: 32px; margin-bottom: 40px; box-shadow: 0 2px 12px rgba(0,0,0,0.08); }
+  .section-title { font-size: 20px; font-weight: 600; margin-bottom: 6px; }
+  .section-badge {
+    display: inline-block; font-size: 12px; padding: 2px 10px; border-radius: 4px;
+    font-weight: 500; margin-bottom: 16px;
+  }
+  .badge-v1 { background: #fff0f0; color: #d32f2f; }
+  .badge-v2 { background: #f5f0ff; color: #6b3fa0; }
+  .mermaid-wrap { overflow-x: auto; margin: 16px 0; }
+  .mermaid-wrap svg { max-width: 100%; height: auto; }
+  .divider { display: flex; align-items: center; gap: 16px; margin: 40px 0 20px; color: #999; font-size: 13px; }
+  .divider-line { flex: 1; height: 1px; background: #e0e0e0; }
+  table { width: 100%; border-collapse: collapse; margin-top: 16px; font-size: 13px; }
+  th, td { padding: 10px 14px; border: 1px solid #e0e0e0; text-align: left; }
+  th { background: #f5f5f5; font-weight: 600; }
+  tr:hover { background: #fafafa; }
+  .tag { display: inline-block; padding: 1px 8px; border-radius: 3px; font-size: 11px; font-weight: 500; }
+  .tag-v1 { background: #ffe0e0; color: #c62828; }
+  .tag-v2 { background: #e8e0ff; color: #5e35b1; }
+  .legend { display: flex; gap: 24px; margin: 12px 0; flex-wrap: wrap; font-size: 13px; }
+  .legend-item { display: flex; align-items: center; gap: 6px; }
+  .legend-dot { width: 14px; height: 14px; border-radius: 3px; }
+  .legend-arrow { font-size: 18px; }
+  footer { text-align: center; font-size: 12px; color: #999; margin-top: 32px; }
+  @media (max-width: 768px) { body { padding: 16px; } .section { padding: 16px; } }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>两种多Agent架构对比</h1>
+<p class="subtitle">小雷版小龙虾 Agent · V1 角色分工型 vs V2 智能协作型</p>
+
+<!-- ============================== 架构一 ============================== -->
+<div class="section">
+  <div class="section-title">架构一：V1 角色分工型多Agent</div>
+  <span class="section-badge badge-v1">伪多Agent — 调度器分发，固定角色</span>
+
+  <div class="legend">
+    <span class="legend-item"><span class="legend-dot" style="background:#FF6B6B"></span> 调度中心</span>
+    <span class="legend-item"><span class="legend-dot" style="background:#66BB6A"></span> 角色Agent</span>
+    <span class="legend-item"><span class="legend-dot" style="background:#7C8BFF"></span> 核心支撑系统</span>
+    <span class="legend-item"><span class="legend-dot" style="background:#FFA726"></span> 任务处理层</span>
+    <span class="legend-item"><span class="legend-arrow">→</span> 单向分发</span>
+    <span class="legend-item"><span class="legend-arrow">┄→</span> 内部并发分身</span>
+  </div>
+
+  <div class="mermaid-wrap">
+<pre class="mermaid">
+flowchart TB
+  subgraph SchedulerCenter["调度中心"]
+    Scheduler["AgentScheduler<br/><small>负责任务分配<br/>统一任务提交&状态查询<br/>不干涉内部执行</small>"]
+  end
+
+  subgraph Agents["独立角色 Agent"]
+    Checker["CheckerAgent<br/>检查Agent<br/><small>独立任务队列<br/>内部并发分身</small>"]
+    Scraper["ScraperAgent<br/>爬虫Agent<br/><small>独立任务队列<br/>内部并发分身</small>"]
+    Vuln["VulnerabilityAgent<br/>漏洞Agent<br/><small>独立任务队列<br/>内部并发分身</small>"]
+    Summary["SummarizerAgent<br/>总结Agent<br/><small>独立任务队列<br/>内部并发分身</small>"]
+    Frontend["FrontendAgent<br/>前端Agent<br/><small>实时监控展示<br/>WebSocket通信</small>"]
+  end
+
+  subgraph Core["核心支撑系统"]
+    Reasoning["ReasoningEngine<br/>深度思考引擎<br/><small>多轮隐式推理<br/>思维链强化<br/>自我反思机制</small>"]
+    LLM["LLMBackend<br/>LLM后端<br/><small>模型管理·超时重试<br/>模型优先级路由</small>"]
+    Monitor["Monitoring<br/>监控系统<br/><small>指标采集·告警·日志</small>"]
+    ThirdParty["ThirdPartyApp<br/>第三方应用<br/><small>多应用集成·API密钥管理</small>"]
+  end
+
+  subgraph TaskLayer["任务处理层"]
+    TaskProc["TaskProcessor"]
+    TaskExec["TaskExecutor"]
+  end
+
+  %% 数据流
+  TaskProc -->|"提交分解后的任务"| Scheduler
+  TaskExec -->|"执行具体任务"| Scheduler
+
+  Scheduler -->|"分配检查任务"| Checker
+  Scheduler -->|"分配爬虫任务"| Scraper
+  Scheduler -->|"分配漏洞任务"| Vuln
+  Scheduler -->|"分配总结任务"| Summary
+  Scheduler -->|"分配前端任务"| Frontend
+
+  Scheduler -->|"深度思考"| Reasoning
+  Reasoning -->|"API调用"| LLM
+
+  Scheduler -->|"系统监控"| Monitor
+  Monitor -->|"监控数据推送"| Frontend
+
+  Scheduler -->|"第三方调用"| ThirdParty
+
+  %% 内部并发分身标注
+  Checker -."内部并发分身 ×N".- Checker
+  Scraper -."内部并发分身 ×N".- Scraper
+  Vuln -."内部并发分身 ×N".- Vuln
+  Summary -."内部并发分身 ×N".- Summary
+  Frontend -."内部并发分身 ×N".- Frontend
+
+  %% 架构特点标注
+  SchedulerCenter ~~~ Notes1
+  Notes1["<b>★ 架构特点</b><br/>• 1个调度中心 → N个固定角色Agent<br/>• 单向分发，无Agent间通信<br/>• 每个Agent独立队列+并发<br/>• 各Agent职责固定不可变<br/>• 无Agent间协作协商机制<br/>• 单机多实例异步模式<br/>• 故障仅影响单个Agent"]
+  style Notes1 fill:#fff5f5,stroke:#ff6b6b,stroke-dasharray:4
+</pre>
+  </div>
+</div>
+
+<!-- ============================== 分隔 ============================== -->
+<div class="divider"><span class="divider-line"></span> V1 → V2 演进 <span class="divider-line"></span></div>
+
+<!-- ============================== 架构二 ============================== -->
+<div class="section">
+  <div class="section-title">架构二：V2 智能协作型多Agent</div>
+  <span class="section-badge badge-v2">真多Agent — 自治Agent，动态协作</span>
+
+  <div class="legend">
+    <span class="legend-item"><span class="legend-dot" style="background:#9B59B6"></span> 核心调度层</span>
+    <span class="legend-item"><span class="legend-dot" style="background:#8E44AD"></span> 协作策略层</span>
+    <span class="legend-item"><span class="legend-dot" style="background:#2E7D32"></span> Agent池</span>
+    <span class="legend-item"><span class="legend-dot" style="background:#6B3FA0"></span> 全局上下文</span>
+    <span class="legend-item"><span class="legend-dot" style="background:#FF9800"></span> 基础设施</span>
+    <span class="legend-item"><span class="legend-arrow">→</span> 任务流</span>
+    <span class="legend-item"><span class="legend-arrow">↔</span> 双向通信</span>
+    <span class="legend-item"><span class="legend-arrow">..→</span> 依赖/注入</span>
+  </div>
+
+  <div class="mermaid-wrap">
+<pre class="mermaid">
+flowchart TB
+  subgraph UI["用户交互层"]
+    WebUI["Web UI"]
+    API["API 网关"]
+    Mobile["移动端"]
+    Third["第三方"]
+  end
+
+  subgraph Engine["多Agent协作引擎"]
+    subgraph CoreSchedule["核心调度层"]
+      Intent["任务理解<br/><small>意图解析·类型识别<br/>复杂度评估</small>"]
+      Planner["流程编排<br/><small>依赖分析·顺序定义<br/>动态路径规划</small>"]
+      SmartSched["智能调度<br/><small>能力匹配·负载均衡<br/>动态调整·资源管控</small>"]
+      Aggregator["结果聚合<br/><small>结果合并·冲突消解<br/>去重排序</small>"]
+      Intent --> Planner --> SmartSched --> Aggregator
+    end
+
+    subgraph Collab["协作策略层"]
+      Pipeline["PipelineStrategy<br/>流水线模式<br/><small>按阶段顺序执行</small>"]
+      MS["MasterSlaveStrategy<br/>主从模式<br/><small>主分解·从执行</small>"]
+      Review["ReviewStrategy<br/>评审模式<br/><small>并行工作·共识达成</small>"]
+      Auction["AuctionStrategy<br/>拍卖模式<br/><small>竞标执行</small>"]
+      Hybrid["HybridStrategy<br/>混合模式<br/><small>动态选择</small>"]
+    end
+
+    GC["GlobalContextCenter<br/>全局上下文与状态中心<br/><small>统一状态·全链路追踪<br/>上下文共享·广播订阅</small>"]
+  end
+
+  subgraph AgentPool["Agent 池"]
+    Master["MasterAgent<br/>主Agent<br/><small>任务分解·结果聚合</small>"]
+    Worker["WorkerAgent<br/>执行Agent<br/><small>具体执行·工具调用</small>"]
+    Reviewer["ReviewerAgent<br/>评审Agent<br/><small>质量审查·结果验证</small>"]
+    Expert["ExpertAgent<br/>专家Agent<br/><small>领域专长·深度分析</small>"]
+    Monitor["MonitorAgent<br/>监控Agent<br/><small>观测·检测·追踪</small>"]
+    Coord["CoordinatorAgent<br/>协调Agent<br/><small>跨Agent通信·调解</small>"]
+  end
+
+  subgraph Infra["基础设施层"]
+    Pool["AgentPool<br/>生命周期管理<br/><small>注册·发现·注销</small>"]
+    TaskExe["TaskExecutor<br/>执行引擎<br/><small>think→act→reflect</small>"]
+    CB["CircuitBreaker<br/>熔断器<br/><small>自动降级·故障隔离</small>"]
+    Retry["RetryHandler<br/>重试处理器<br/><small>指数退避·限次重试</small>"]
+  end
+
+  subgraph Mind["每个Agent的独立心智系统"]
+    M1["• 独立意图理解<br/>• 独立目标追求"]
+    M2["• 独立记忆系统<br/>• 独立决策逻辑"]
+    M3["• 独立工具调用<br/>• 独立生命周期"]
+  end
+
+  %% 用户层 → 调度层
+  WebUI --> Intent
+  API --> Intent
+  Mobile --> Intent
+  Third --> Intent
+
+  %% 调度 → 策略选择
+  SmartSched -.->|"选择策略"| Pipeline
+  SmartSched -.-> MS
+  SmartSched -.-> Review
+  SmartSched -.-> Auction
+  SmartSched -.-> Hybrid
+
+  %% 调度 → Agent分派
+  SmartSched --> Master
+  SmartSched --> Worker
+  SmartSched --> Reviewer
+  SmartSched --> Expert
+  SmartSched --> Monitor
+  SmartSched --> Coord
+
+  %% Agent间双向通信
+  Master <--> Worker
+  Master <--> Reviewer
+  Worker <--> Coord
+  Reviewer <--> Coord
+  Expert <--> Worker
+  Monitor <--> Master
+
+  %% 上下文注入
+  GC -.->|"状态同步"| CoreSchedule
+  GC -.->|"上下文注入"| Master
+  GC -.-> Worker
+  GC -.-> Reviewer
+
+  %% 基础设施
+  Pool -.->|"池管理"| Master
+  Pool -.-> Worker
+  TaskExe -.->|"执行引擎"| Worker
+  TaskExe -.-> Expert
+  CB -.->|"熔断保护"| Master
+  Retry -.->|"重试机制"| Worker
+
+  %% 独立心智
+  Master -.-> Mind
+  Worker -.-> Mind
+  Reviewer -.-> Mind
+  Expert -.-> Mind
+
+  %% 架构特点
+  Engine ~~~ Notes2
+  Notes2["<b>★ 架构特点</b><br/>• 每个Agent有独立心智·目标·记忆·决策·工具<br/>• 5种协作模式：流水线·主从·评审·拍卖·混合<br/>• 全局上下文中心统一状态管理<br/>• 智能调度：意图理解+能力匹配+负载均衡<br/>• 全生命周期管理：注册→发现→执行→注销<br/>• 故障处理：自动重试+降级+熔断<br/>• Agent间通过消息总线双向通信协作"]
+  style Notes2 fill:#f5f0ff,stroke:#6b3fa0,stroke-dasharray:4
+</pre>
+  </div>
+</div>
+
+<!-- ============================== 对比表 ============================== -->
+<div class="section">
+  <div class="section-title">核心差异对比</div>
+
+  <table>
+    <thead>
+      <tr>
+        <th style="width:14%">维度</th>
+        <th style="width:43%"><span class="tag tag-v1">V1 角色分工型</span></th>
+        <th style="width:43%"><span class="tag tag-v2">V2 智能协作型</span></th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td><strong>Agent 定义</strong></td><td>给模块起个Agent名字</td><td>独立心智、目标、记忆、决策、工具</td></tr>
+      <tr><td><strong>协作模式</strong></td><td>简单函数调用 / 调度器单向分发</td><td>流水线 / 主从 / 评审 / 拍卖 / 混合，自动选择最优</td></tr>
+      <tr><td><strong>上下文管理</strong></td><td>各模块各自维护本地状态</td><td>全局统一上下文中心（GlobalContextCenter）</td></tr>
+      <tr><td><strong>任务分配</strong></td><td>固定规则分发（按类型映射到角色）</td><td>智能匹配 + 能力评分 + 负载均衡 + 动态调整</td></tr>
+      <tr><td><strong>通信方式</strong></td><td>调度器 → Agent 单向</td><td>Agent ↔ Agent 双向消息总线（AgentMessage）</td></tr>
+      <tr><td><strong>故障处理</strong></td><td>无 / 单Agent故障不影响其他</td><td>自动重试 + 降级 + 熔断器（CircuitBreaker）</td></tr>
+      <tr><td><strong>状态同步</strong></td><td>无</td><td>统一状态广播与订阅</td></tr>
+      <tr><td><strong>可观测性</strong></td><td>无 / 基础日志</td><td>全链路追踪 + 日志 + 审计</td></tr>
+      <tr><td><strong>生命周期</strong></td><td>静态创建，运行后不管理</td><td>注册 → 发现 → 执行 → 注销，完整生命周期</td></tr>
+      <tr><td><strong>灵活性</strong></td><td>角色固定不可变，新增需修改调度器</td><td>动态策略切换 + 热加载新Agent类型</td></tr>
+      <tr><td><strong>执行模式</strong></td><td>每个Agent内部并发分身</td><td>think → act → reflect 三阶段循环</td></tr>
+      <tr><td><strong>对应实现</strong></td><td><code>agent_system.py</code> / <code>agent_architecture.md</code></td><td><code>core/multi_agent_v2/</code></td></tr>
+    </tbody>
+  </table>
+</div>
+
+<footer>小雷版小龙虾 Agent 架构文档 · 2026</footer>
+
+</div>
+
+<script>
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'default',
+    themeVariables: {
+      fontFamily: '-apple-system, "Microsoft YaHei", sans-serif',
+      fontSize: '13px',
+    },
+    flowchart: {
+      useMaxWidth: true,
+      htmlLabels: true,
+      curve: 'basis',
+      padding: 16,
+    },
+    securityLevel: 'loose',
+  });
+</script>
+</body>
+</html>

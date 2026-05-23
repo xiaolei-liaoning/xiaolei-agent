@@ -104,6 +104,7 @@ class MCPClientManager:
         self._server_configs: Dict[str, Dict[str, Any]] = {}
         self._connections: Dict[str, _Connection] = {}
         self._http_connections: Dict[str, _HttpConnection] = {}
+        self._request_lock = asyncio.Lock()
 
     async def initialize(self):
         """初始化管理器"""
@@ -374,23 +375,24 @@ class MCPClientManager:
         params: Optional[dict] = None,
         request_id: int = 1,
     ) -> Optional[dict]:
-        """发送 JSON-RPC 请求"""
-        request = {
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "method": method,
-        }
-        if params:
-            request["params"] = params
+        """发送 JSON-RPC 请求（带锁保护，避免并发读写破坏协议）"""
+        async with self._request_lock:
+            request = {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "method": method,
+            }
+            if params:
+                request["params"] = params
 
-        request_str = json.dumps(request) + "\n"
-        process.stdin.write(request_str.encode())
-        await process.stdin.drain()
+            request_str = json.dumps(request) + "\n"
+            process.stdin.write(request_str.encode())
+            await process.stdin.drain()
 
-        response_line = await asyncio.wait_for(
-            process.stdout.readline(), timeout=30.0
-        )
-        return json.loads(response_line.decode()) if response_line else None
+            response_line = await asyncio.wait_for(
+                process.stdout.readline(), timeout=30.0
+            )
+            return json.loads(response_line.decode()) if response_line else None
 
     # ── 进程管理 ──────────────────────────────────────────────────────────────
 

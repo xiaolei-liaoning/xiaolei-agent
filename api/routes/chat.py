@@ -3,25 +3,24 @@
 包含：
 - POST /api/chat - 核心聊天API
 - POST /api/upload - 文件上传API
-- WebSocket /ws/chat - 实时聊天端点
 - POST /api/chat/context - 获取对话上下文
 - POST /api/chat/clear - 清除对话上下文
+
+WebSocket 端点已移至 chat_ws.py。
 """
 
 import asyncio
-import json
 import logging
 import time
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File
+from fastapi import APIRouter, HTTPException, UploadFile, File
 from pydantic import BaseModel, Field
 
 from core.handlers import (
     handle_automation_workflow,
     handle_multi_step,
-    handle_multi_step_streaming,
     handle_single_step,
     save_chat_history,
     save_task_log,
@@ -34,120 +33,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["chat"])
 
 
-# WebSocket 连接管理器
-class ConnectionManager:
-    def __init__(self, heartbeat_interval: int = 30, heartbeat_timeout: int = 60):
-        """
-        初始化连接管理器
-        
-        Args:
-            heartbeat_interval: 心跳间隔（秒）
-            heartbeat_timeout: 心跳超时时间（秒）
-        """
-        from datetime import datetime
-        self.active_connections: dict = {}  # {websocket: {"last_pong": datetime, "connected_at": datetime}}
-        self.heartbeat_interval = heartbeat_interval
-        self.heartbeat_timeout = heartbeat_timeout
-        self._heartbeat_task = None
-        self._running = False
-        self._logger = logging.getLogger(__name__)
-    
-    async def start_heartbeat_check(self):
-        """启动心跳检测任务"""
-        if self._heartbeat_task is not None and not self._heartbeat_task.done():
-            self._logger.warning("心跳检测任务已在运行")
-            return
-        
-        self._running = True
-        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
-        self._logger.info("心跳检测任务已启动")
-    
-    async def stop_heartbeat_check(self):
-        """停止心跳检测任务"""
-        self._running = False
-        if self._heartbeat_task:
-            self._heartbeat_task.cancel()
-            try:
-                await self._heartbeat_task
-            except asyncio.CancelledError:
-                pass
-        self._logger.info("心跳检测任务已停止")
-    
-    async def _heartbeat_loop(self):
-        """心跳检测循环"""
-        while self._running:
-            try:
-                await asyncio.sleep(self.heartbeat_interval)
-                await self._check_heartbeats()
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                self._logger.error(f"心跳检测循环异常: {e}")
-    
-    async def _check_heartbeats(self):
-        """检查所有连接的心跳状态"""
-        from datetime import datetime
-        now = datetime.now()
-        connections_to_remove = []
-        
-        for websocket, info in list(self.active_connections.items()):
-            last_pong = info.get("last_pong")
-            
-            # 发送 ping
-            try:
-                await websocket.send_json({"type": "ping", "timestamp": now.isoformat()})
-                self._logger.debug(f"发送 ping 到连接: {id(websocket)}")
-            except Exception as e:
-                self._logger.warning(f"发送 ping 失败: {e}")
-                connections_to_remove.append(websocket)
-                continue
-            
-            # 检查超时
-            if last_pong:
-                time_since_pong = (now - last_pong).total_seconds()
-                if time_since_pong > self.heartbeat_timeout:
-                    self._logger.warning(f"连接超时: {id(websocket)}, 最后 pong: {time_since_pong:.1f}秒前")
-                    connections_to_remove.append(websocket)
-        
-        # 清理超时连接
-        for websocket in connections_to_remove:
-            try:
-                await self.disconnect(websocket)
-            except Exception as e:
-                self._logger.error(f"清理超时连接失败: {e}")
-    
-    async def connect(self, websocket: WebSocket):
-        """连接客户端"""
-        from datetime import datetime
-        await websocket.accept()
-        self.active_connections[websocket] = {
-            "connected_at": datetime.now(),
-            "last_pong": datetime.now(),
-            "last_ping": None
-        }
-        self._logger.info(f"新连接: {id(websocket)}, 当前活跃连接数: {len(self.active_connections)}")
-    
-    async def disconnect(self, websocket: WebSocket):
-        """断开连接"""
-        if websocket in self.active_connections:
-            del self.active_connections[websocket]
-            # 尝试关闭连接
-            try:
-                await websocket.close()
-            except Exception:
-                self._logger.warning("关闭WebSocket连接时发生异常")
-            self._logger.info(f"连接断开: {id(websocket)}, 当前活跃连接数: {len(self.active_connections)}")
-    
-    def update_pong(self, websocket: WebSocket):
-        """更新 pong 时间"""
-        from datetime import datetime
-        if websocket in self.active_connections:
-            self.active_connections[websocket]["last_pong"] = datetime.now()
-            self._logger.debug(f"收到 pong 从连接: {id(websocket)}")
-
-
-# 全局连接管理器实例
-manager = ConnectionManager()
+# WebSocket 连接管理器（从 chat_ws.py 导入，保持向后兼容性）
+from api.routes.chat_ws import manager
 
 
 # ---------------------------------------------------------------------------
@@ -363,6 +250,59 @@ def _needs_multi_agent(message: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# 内部函数：判断是否需要使用 agency_agent（MCP 工具）
+# ---------------------------------------------------------------------------
+def _needs_mcp_tools(message: str) -> bool:
+    """判断用户是否需要使用 MCP 代码编辑工具"""
+    message_lower = message.lower()
+
+    # 精确短语匹配（优先）
+    exact_phrases = [
+        "读取文件", "写入文件", "编辑文件", "修改文件", "删除文件",
+        "创建文件", "复制文件", "移动文件", "重命名文件", "查看文件",
+        "读文件", "写文件", "改文件", "删文件", "新建文件",
+        "打开文件", "保存文件",
+        "搜索文件", "查找文件", "搜索内容", "搜索代码",
+        "搜索关键字", "搜索文本", "文件中搜索",
+        "创建目录", "创建文件夹", "列出目录", "查看目录",
+        "修改代码", "编辑代码",
+        "添加函数", "删除函数", "修改函数",
+        "read file", "write file", "edit file", "delete file",
+        "create file", "search file", "find file",
+        "grep", "glob",
+    ]
+    for kw in exact_phrases:
+        if kw in message_lower:
+            return True
+
+    # 松散匹配：动词 + 文件/代码/目录
+    action_words = [
+        "读取", "写入", "编辑", "修改", "删除", "创建",
+        "复制", "移动", "重命名", "打开", "查看", "新建",
+        "搜索", "查找", "分析", "优化", "解决", "看",
+        "读", "写", "改", "研究", "审查", "检查",
+    ]
+    objects = [
+        "文件", "代码", "目录", "文件夹", "函数", "报告",
+        "项目", "结构", "问题", "txt", "py",
+        "json", "yml", "yaml", "md", "csv", "xml",
+    ]
+
+    # 检查是否有动作词 + 对象名同时出现（不要求连续）
+    for action in action_words:
+        if action in message_lower:
+            # "读取文件内容" → action "读取" 在 message 中，不需要额外检查对象
+            for obj in objects:
+                if obj in message_lower:
+                    return True
+            # 如果 action 是"读取"且消息中包含 "/" 路径分隔符（可能是文件路径）
+            if "/" in message or "\\" in message:
+                return True
+
+    return False
+
+
+# ---------------------------------------------------------------------------
 # 内部函数：获取BFS上下文
 # ---------------------------------------------------------------------------
 def _get_bfs_context(user_id: int, depth: int = 3, limit: int = 20) -> Dict[str, Any]:
@@ -455,6 +395,10 @@ async def chat(request: ChatRequest) -> ChatResponse:
         # 深度思考任务 → 走multi_agent_v2多Agent系统
         logger.info("检测到深度思考需求，使用multi_agent_v2多Agent系统处理")
         return await _handle_with_multi_agent(request, message, start_time, context_info, execution_plan_info, agents_used)
+    elif _needs_mcp_tools(message):
+        # 文件操作/代码编辑 → 走 agency_agent（集成 MCP 工具）
+        logger.info("检测到文件操作需求，使用 agency_agent 处理")
+        return await _handle_with_agency_agent(request, message, start_time, context_info)
     elif _needs_agent(message):
         # 复杂任务 → 走单Agent系统
         return await _handle_with_agent(request, message, start_time, context_info, execution_plan_info, agents_used)
@@ -513,10 +457,10 @@ async def _handle_with_multi_agent(
         agent_pool = AgentPool()
         await agent_pool.start()
         
-        # 创建基础的Agent
-        master_agent = LazyAgent(agent_type=AgentType.MASTER.value, agent_id="master-001")
+        # 创建基础的Agent（统一为 WORKER）
+        master_agent = LazyAgent(agent_type=AgentType.WORKER.value, agent_id="master-001")
         worker_agent = LazyAgent(agent_type=AgentType.WORKER.value, agent_id="worker-001")
-        reviewer_agent = LazyAgent(agent_type=AgentType.REVIEWER.value, agent_id="reviewer-001")
+        reviewer_agent = LazyAgent(agent_type=AgentType.WORKER.value, agent_id="reviewer-001")
         
         # 初始化Agent
         await master_agent.ensure_initialized()
@@ -581,20 +525,9 @@ async def _handle_with_multi_agent(
             # 调度失败，降级到单Agent系统处理，但保持多Agent展示效果
             logger.info("multi_agent_v2调度失败，降级到单Agent系统")
             try:
-                from core.multi_agent_system import ChatAgent, AgentTask
-                chat_agent = ChatAgent()
-                task_for_agent = AgentTask(
-                    id=f"chat_{int(time.time()*1000)}",
-                    type="chat",
-                    params={
-                        "message": message,
-                        "user_id": request.user_id,
-                        "agent_id": request.agent_id,
-                        "agent_name": request.agent_name
-                    }
-                )
-                fallback_result = await chat_agent._run_task(task_for_agent)
-                reply_text = fallback_result.get("reply", "任务已完成")
+                from core.tasks.task_processor import task_processor
+                fallback_result = await task_processor.process(message)
+                reply_text = fallback_result if isinstance(fallback_result, str) else str(fallback_result)
             except Exception as fallback_error:
                 logger.error(f"单Agent降级也失败: {fallback_error}")
                 reply_text = "抱歉，处理您的问题时遇到了技术问题，请稍后重试。"
@@ -656,7 +589,7 @@ async def _handle_with_agent(
     try:
         logger.info("复杂任务，通过Agent系统处理: %s...", message[:50])
 
-        from core.multi_agent_system import ChatAgent, AgentTask
+        from core.tasks.task_processor import task_processor
 
         # 保存用户消息到BFS上下文
         try:
@@ -675,19 +608,8 @@ async def _handle_with_agent(
                 message = f"{message}\n\n{ocr_text}"
                 logger.info(f"已将OCR结果附加到消息，追加字符数: {len(ocr_text)}")
 
-        chat_agent = ChatAgent()
-        task = AgentTask(
-            id=f"chat_{int(time.time()*1000)}",
-            type="chat",
-            params={
-                "message": message,
-                "user_id": request.user_id,
-                "agent_id": request.agent_id,
-                "agent_name": request.agent_name
-            }
-        )
-
-        result = await chat_agent._run_task(task)
+        result_text = await task_processor.process(message)
+        result = {"reply": result_text if isinstance(result_text, str) else str(result_text), "skill": "task_processor"}
 
         elapsed = time.time() - start_time
         logger.info("Agent系统处理完成，耗时: %.2fs", elapsed)
@@ -726,6 +648,72 @@ async def _handle_with_agent(
     except Exception as e:
         logger.error(f"Agent系统异常，降级到直接处理: {e}", exc_info=True)
         return await _handle_direct(request, message, start_time, context_info, execution_plan_info, agents_used)
+
+
+async def _handle_with_agency_agent(
+    request: ChatRequest,
+    message: str,
+    start_time: float,
+    context_info: Optional[Dict[str, Any]] = None,
+) -> ChatResponse:
+    """使用 agency_agent（集成 MCP 工具）处理用户请求"""
+    try:
+        from core.agency_agent import run_agent
+
+        # 给 agency_agent 一个专门的系统提示，说明它的能力
+        extra_prompt = (
+            "你是一个文件操作和代码编辑助手。\n\n"
+            "面对任何问题，先按这个流程：\n"
+            "1. **分析**：用户到底需要什么？需要读文件、搜索、还是分析？\n"
+            "2. **探索**：先看目录结构、读关键文件，收集信息\n"
+            "3. **判断**：信息够了就直接回答；不够就继续探索\n"
+            "4. **给出**：清晰、有结构的中文回答，加上你的分析\n\n"
+            "可用工具：\n"
+            "- read_file: 读取文件内容\n"
+            "- write_file: 写入文件\n"
+            "- edit_file: 编辑文件（字符串替换）\n"
+            "- glob: 搜索文件\n"
+            "- grep: 在文件中搜索文本\n"
+            "- web_fetch: 获取 URL 内容\n\n"
+            "记住：不要急着给结论，先充分探索和理解。"
+        )
+
+        reply_text = await run_agent(
+            message,
+            system_prompt_extra=extra_prompt,
+            max_steps=15,
+            step_timeout=45.0,
+        )
+
+        elapsed = time.time() - start_time
+        logger.info(f"AgencyAgent 处理完成，耗时: {elapsed:.2f}s")
+
+        # 保存聊天历史
+        try:
+            from core.handlers import save_chat_history
+            save_chat_history(request.user_id, request.agent_id, "user", message)
+            save_chat_history(request.user_id, request.agent_id, "assistant", reply_text, {
+                "skill": "agency_agent_mcp",
+                "elapsed": elapsed,
+            })
+        except Exception:
+            pass
+
+        return ChatResponse(
+            reply=reply_text,
+            skill="agency_agent_mcp",
+            thinking_process={
+                "mode": "mcp_tool_agent",
+                "description": "使用 agency_agent 驱动 MCP 工具",
+            },
+            context_info=context_info,
+            agents_used=[],
+            execution_plan=None,
+        )
+
+    except Exception as e:
+        logger.error(f"AgencyAgent 异常，降级到直接处理: {e}", exc_info=True)
+        return await _handle_direct(request, message, start_time, context_info, {}, [])
 
 
 async def _handle_direct(
@@ -1003,121 +991,3 @@ async def upload_batch(files: List[UploadFile] = File(...)) -> Dict[str, Any]:
     }
 
 
-# ---------------------------------------------------------------------------
-# WebSocket 端点：实时聊天
-# ---------------------------------------------------------------------------
-@router.websocket("/ws/chat")
-async def websocket_chat(websocket: WebSocket) -> None:
-    """WebSocket 实时聊天端点。"""
-    await manager.connect(websocket)
-    client_id: str = f"ws_{id(websocket)}"
-
-    try:
-        from core.handlers import _dispatcher
-        if _dispatcher is None:
-            await websocket.send_json({
-                "reply": "系统尚未初始化完成",
-                "skill": "error",
-                "success": False,
-            })
-            await websocket.close(code=1013)
-            return
-    except ImportError:
-        await websocket.send_json({
-            "reply": "系统尚未初始化完成",
-            "skill": "error",
-            "success": False,
-        })
-        await websocket.close(code=1013)
-        return
-
-    try:
-        while True:
-            try:
-                data: str = await websocket.receive_text()
-            except Exception:
-                break
-
-            try:
-                request_data: Dict[str, Any] = json.loads(data)
-                # 检查是否是 pong 消息
-                message_type = request_data.get("type")
-                if message_type == "pong":
-                    manager.update_pong(websocket)
-                    continue
-                
-                message: str = request_data.get("message", "")
-                user_id: int = request_data.get("user_id", 1)
-                agent_id: str = request_data.get("agent_id", "default")
-            except (json.JSONDecodeError, TypeError):
-                message = data
-                user_id = 1
-                agent_id = "default"
-
-            if not message.strip():
-                await websocket.send_json({
-                    "reply": "消息不能为空",
-                    "skill": "error",
-                    "success": False,
-                })
-                continue
-
-            # 判断是否需要Agent
-            if _needs_agent(message):
-                # 复杂任务 → 走Agent（这里简化处理）
-                await websocket.send_json({
-                    "reply": "该任务需要深度处理，请使用HTTP API",
-                    "skill": "agent",
-                    "success": False,
-                })
-                continue
-
-            # 简单任务 → 直接处理
-            skill_name: str = _dispatcher.match_skill(message)
-
-            try:
-                if skill_name == "advanced_automation":
-                    result = await handle_automation_workflow(message, user_id)
-                    reply_text = result.get("reply", "处理完成")
-                    tool_call_info = {"name": "automation_workflow", "params": {"message": message}}
-                    thinking_process = result.get("thinking_process")
-
-                    await websocket.send_json({
-                        "reply": reply_text,
-                        "skill": skill_name,
-                        "success": result.get("success", True),
-                        "thinking_process": thinking_process,
-                    })
-                elif skill_name == "multi_step":
-                    sub_results = await handle_multi_step_streaming(message, user_id, websocket)
-                    reply_text = sub_results.get("reply", "多步任务完成")
-                    await websocket.send_json({
-                        "reply": reply_text,
-                        "skill": "multi_step",
-                        "success": sub_results.get("success", True),
-                        "is_aggregated": True,
-                    })
-                else:
-                    result = await handle_single_step(message, user_id, skill_name, agent_id, _dispatcher)
-                    reply_text = result.get("reply", "处理完成")
-                    tool_call_info = result.get("tool_call")
-
-                    await websocket.send_json({
-                        "reply": reply_text,
-                        "skill": skill_name,
-                        "success": result.get("success", True),
-                    })
-            except Exception as e:
-                logger.error("WebSocket 消息处理失败: %s", e)
-                await websocket.send_json({
-                    "reply": f"处理失败: {e}",
-                    "skill": "error",
-                    "success": False,
-                })
-
-    except WebSocketDisconnect:
-        logger.info("WebSocket 客户端断开: %s", client_id)
-    except Exception as e:
-        logger.info("WebSocket 连接异常关闭: %s (%s)", client_id, e)
-    finally:
-        await manager.disconnect(websocket)

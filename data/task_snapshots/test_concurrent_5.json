@@ -1,0 +1,16 @@
+{
+  "task_id": "test_concurrent_5",
+  "status": "running",
+  "original_request": "并发测试任务",
+  "collaboration_mode": "hybrid",
+  "assigned_agents": {
+    "step_0": "agent_001"
+  },
+  "execution_plan": [
+    {
+      "subtask_id": "step_0",
+      "description": "步骤1"
+    }
+  ],
+  "_updated_at": 1779505898.0570712
+}

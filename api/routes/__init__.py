@@ -4,6 +4,7 @@
 discover_routes() 用于运行时动态挂载/卸载路由。
 """
 
+import importlib
 import logging
 from pathlib import Path
 from typing import Dict, Any
@@ -36,7 +37,7 @@ def discover_routes() -> Dict[str, Any]:
 
         mod_name = entry.stem  # 去掉 .py
         try:
-            mod = __import__(f"api.routes.{mod_name}", fromlist=["router"])
+            mod = importlib.import_module(f"api.routes.{mod_name}")
             if hasattr(mod, "router"):
                 routes[mod_name] = mod.router
                 logger.debug("发现路由模块: %s", mod_name)

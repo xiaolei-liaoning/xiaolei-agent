@@ -1,5 +1,6 @@
 """工作流管理 API"""
 
+import asyncio
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Dict, Any, Optional
@@ -190,7 +191,10 @@ async def ai_generate_workflow(req: AIGenerateRequest):
 
 只返回XML，不要其他解释。"""
         
-        response = await client.simple_chat(f"{system_prompt}\n\n用户需求: {prompt}")
+        response = await asyncio.wait_for(
+            client.simple_chat(f"{system_prompt}\n\n用户需求: {prompt}"),
+            timeout=60,
+        )
         
         # 提取XML
         xml_start = response.find("<workflow")

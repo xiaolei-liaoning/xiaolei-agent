@@ -1,0 +1,21 @@
+{
+  "name": "test_workflow",
+  "description": "测试工作流（steps 格式）",
+  "steps": [
+    {
+      "id": "step_1",
+      "type": "llm",
+      "config": {
+        "prompt": "你好，请介绍一下自己",
+        "model": "glm-4-flash"
+      }
+    },
+    {
+      "id": "step_2",
+      "type": "output",
+      "config": {
+        "template": "{{step_1.output}}"
+      }
+    }
+  ]
+}

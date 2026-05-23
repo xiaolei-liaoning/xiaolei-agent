@@ -9,6 +9,7 @@ import json
 import re
 import os
 import tempfile
+import time
 from typing import Dict, List, Any, Optional, Callable
 from pathlib import Path
 import logging
@@ -81,9 +82,15 @@ class MCPProcess:
 
         return None
 
-    async def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """调用 MCP 服务器工具"""
-        return await self._send_request("tools/call", {
+    async def call_tool(self, tool_name: str, arguments: Dict[str, Any], method: str = "tools/call") -> Optional[Dict[str, Any]]:
+        """调用 MCP 服务器工具
+
+        Args:
+            tool_name: 工具名
+            arguments: 参数
+            method: 调用的方法名（MCP 标准用 tools/call，本地服务器用 callTool）
+        """
+        return await self._send_request(method, {
             "name": tool_name,
             "arguments": arguments
         })
@@ -510,6 +517,12 @@ class AwesomeMCPManager:
             self._connected_servers[name] = process
             self._emit("connected", name)
             tools = await self._get_server_tools(name)
+            # 连接后立即预填充工具定义缓存，避免 agent 首次查询时为空
+            try:
+                self._tool_defs_cache = await self.get_all_tool_definitions(refresh=True)
+                self._tool_defs_cache_time = time.time()
+            except Exception:
+                pass
             return {
                 "success": True,
                 "message": f"✅ 成功连接 {name}\n命令: {command} {' '.join(args)}",
@@ -551,6 +564,12 @@ class AwesomeMCPManager:
                 self._connected_servers[server_key] = process
                 self._emit("connected", server_key)
                 tools = await self._get_server_tools(server_key)
+                # 预填充工具定义缓存
+                try:
+                    self._tool_defs_cache = await self.get_all_tool_definitions(refresh=True)
+                    self._tool_defs_cache_time = time.time()
+                except Exception:
+                    pass
                 return {
                     "success": True,
                     "message": f"✅ 成功启动 {server_key}\n命令: {config['command']} {' '.join(config['args'])}",
@@ -664,13 +683,97 @@ class AwesomeMCPManager:
         return result
 
     async def _get_server_tools(self, server_name: str) -> Optional[List[str]]:
-        """获取服务器提供的工具列表"""
+        """获取服务器提供的工具名称列表"""
         if server_name not in self._connected_servers:
             return None
         tools = await self._connected_servers[server_name].list_tools()
         if tools:
             return [t.get("name", "unknown") for t in tools]
         return None
+
+    async def get_all_tool_definitions(self, refresh: bool = False) -> List[Dict[str, Any]]:
+        """收集所有已连接 MCP 服务器的工具，转换为 LLM function_call 格式
+        （带缓存：每 60 秒刷新一次）
+
+        返回格式 (OpenAI function calling):
+        [{
+            "type": "function",
+            "function": {
+                "name": "sandbox-tools.read_file",
+                "description": "...",
+                "parameters": {"type": "object", "properties": {...}, "required": [...]}
+            },
+            "_server": "sandbox-tools-mcp",   # 内部字段：用于路由回正确的 MCP 服务器
+            "_tool_name": "read_file",        # 原始工具名
+        }]
+        """
+        now = time.time()
+        # 缓存有效期为 60 秒
+        if hasattr(self, '_tool_defs_cache') and self._tool_defs_cache:
+            cache_time = getattr(self, '_tool_defs_cache_time', 0)
+            if now - cache_time < 60:
+                return self._tool_defs_cache
+
+        definitions = []
+        tool_servers = {}
+
+        for server_name in self._connected_servers:
+            try:
+                tools = await self._connected_servers[server_name].list_tools()
+                if not tools:
+                    continue
+
+                for tool_def in tools:
+                    name = tool_def.get("name", "")
+                    if not name:
+                        continue
+
+                    unique_name = f"{server_name}.{name}"
+                    if unique_name in tool_servers:
+                        continue
+
+                    tool_servers[unique_name] = server_name
+                    input_schema = tool_def.get("inputSchema", {}) or {}
+
+                    definitions.append({
+                        "type": "function",
+                        "function": {
+                            "name": unique_name,
+                            "description": tool_def.get("description", ""),
+                            "parameters": input_schema,
+                        },
+                        "_server": server_name,
+                        "_tool_name": name,
+                    })
+
+            except Exception as e:
+                logger.warning(f"获取 {server_name} 工具列表失败: {e}")
+
+        self._tool_defs_cache = definitions
+        self._tool_defs_cache_time = now
+        return definitions
+
+    async def call_tool_by_definition(self, tool_def: Dict[str, Any], arguments: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """根据工具定义调用 MCP 工具（供 agency_agent 使用）
+
+        Args:
+            tool_def: get_all_tool_definitions() 返回的工具定义条目
+            arguments: 工具参数
+
+        Returns:
+            工具执行结果
+        """
+        server_name = tool_def.get("_server", "")
+        tool_name = tool_def.get("_tool_name", "")
+        if not server_name or not tool_name:
+            return {"error": "无效的工具定义"}
+        # 先试 tools/call（MCP 标准），失败再试 callTool（本地格式）
+        result = await self.call_server_tool(server_name, tool_name, arguments)
+        if result is None or "error" in result:
+            result2 = await self._connected_servers[server_name].call_tool(tool_name, arguments, method="callTool")
+            if result2 and "result" in result2:
+                return result2
+        return result
 
     async def call_server_tool(self, server_name: str, tool_name: str, arguments: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """调用 MCP 服务器的工具"""

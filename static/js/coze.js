@@ -1,9 +1,28 @@
 // ==================== Coze 平台 JavaScript ====================
 
 // 全局变量
-let currentCharacter = 'default';
+let currentAgentId = 'auto';  // 默认使用智能匹配
+let currentAgentInfo = {
+    id: 'auto',
+    name: '智能匹配',
+    description: '让系统智能选择最佳Agent',
+    capabilities: ['智能', '自动', '匹配']
+};
 let messageCount = 0;
 let responseStartTime = 0;
+
+// Agent 配置映射
+const AGENT_CONFIG = {
+    'auto': { name: '智能匹配', description: '让系统智能选择最佳Agent', capabilities: ['智能', '自动', '匹配'] },
+    'general': { name: '通用助手', description: '擅长处理各种日常问题', capabilities: ['聊天', '计算', '娱乐'] },
+    'data_analyst': { name: '数据分析师', description: '擅长数据处理、统计分析和可视化', capabilities: ['数据', '分析', '可视化'] },
+    'web_scraper': { name: '网络爬虫', description: '擅长从各平台抓取公开数据', capabilities: ['爬虫', '数据', '搜索'] },
+    'weather_expert': { name: '天气预报员', description: '可以查询各城市的天气和预报', capabilities: ['天气', '预报', '查询'] },
+    'system_toolbox': { name: '系统工具', description: '可以执行系统命令、管理文件', capabilities: ['系统', '命令', '文件'] },
+    'translator': { name: '翻译官', description: '精通多语言互译', capabilities: ['翻译', '语言', '多语种'] },
+    'deep_thinker': { name: '深度思考者', description: '擅长复杂问题的多维度分析和推理', capabilities: ['思考', '分析', '推理'] },
+    'creative': { name: '创意助手', description: '擅长生成有趣内容、故事和艺术', capabilities: ['创意', '写作', '艺术'] }
+};
 
 // ==================== 用户偏好设置管理 ====================
 const UserPreferences = {
@@ -637,17 +656,29 @@ function sendMessage() {
         
         showLoading();
 
+        // 获取当前选中的Agent
+        const agentId = getCurrentAgentId();
+        const isGroupMode = isGroupModeEnabled();
+        
+        // 根据是否是组模式选择不同的API端点
+        const apiUrl = isGroupMode ? '/api/agent-groups/current/execute' : '/api/chat';
+        
+        // 构建请求体
+        const requestBody = isGroupMode ? {
+            message: message
+        } : {
+            message: message,
+            user_id: 1,
+            agent_id: agentId
+        };
+
         // 直接使用HTTP请求（WebSocket暂时禁用）
-        fetch('/api/chat', {
+        fetch(apiUrl, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({
-                message: message,
-                user_id: 1,
-                agent_id: currentCharacter
-            })
+            body: JSON.stringify(requestBody)
         })
         .then(response => response.json())
         .then(data => {
@@ -875,9 +906,173 @@ const QuickCommandAutocomplete = {
     }
 };
 
-// 在 DOMContentLoaded 中初始化自动补全
+// ==================== Agent 选择器功能 ====================
+
+// 获取当前选中的 Agent ID
+function getCurrentAgentId() {
+    const selector = document.getElementById('agent-selector');
+    if (selector) {
+        return selector.value;
+    }
+    return currentAgentId;
+}
+
+// 检查是否启用组模式
+function isGroupModeEnabled() {
+    const toggle = document.getElementById('group-mode-toggle');
+    return toggle && toggle.checked;
+}
+
+// 更新 Agent 能力标签
+function updateAgentCapabilities(agentId) {
+    const container = document.getElementById('agent-capabilities');
+    if (!container) return;
+    
+    const agentConfig = AGENT_CONFIG[agentId];
+    if (!agentConfig) return;
+    
+    // 更新全局 Agent 信息
+    currentAgentInfo = {
+        id: agentId,
+        name: agentConfig.name,
+        description: agentConfig.description,
+        capabilities: agentConfig.capabilities
+    };
+    
+    // 创建能力标签
+    let html = '<span class="text-xs text-gray-400">能力:</span>';
+    agentConfig.capabilities.forEach((cap, index) => {
+        const colors = ['bg-blue-100 text-blue-700', 'bg-green-100 text-green-700', 'bg-purple-100 text-purple-700', 'bg-orange-100 text-orange-700', 'bg-pink-100 text-pink-700'];
+        const color = colors[index % colors.length];
+        html += `<span class="inline-flex items-center gap-1 px-2 py-1 ${color} rounded-full text-xs">${cap}</span>`;
+    });
+    
+    container.innerHTML = html;
+}
+
+// 处理 Agent 选择变更
+function handleAgentChange(event) {
+    const agentId = event.target.value;
+    currentAgentId = agentId;
+    updateAgentCapabilities(agentId);
+    
+    // 如果选择了智能匹配，显示提示
+    if (agentId === 'auto') {
+        showToast('✅ 将由系统智能选择最佳Agent');
+    } else {
+        const agentConfig = AGENT_CONFIG[agentId];
+        if (agentConfig) {
+            showToast(`✅ 已切换到 ${agentConfig.name}`);
+        }
+    }
+}
+
+// 处理组模式切换
+function handleGroupModeChange(event) {
+    const isEnabled = event.target.checked;
+    const agentSelector = document.getElementById('agent-selector');
+    
+    if (isEnabled) {
+        // 组模式启用时禁用 Agent 选择器
+        agentSelector.disabled = true;
+        agentSelector.classList.add('opacity-50', 'cursor-not-allowed');
+        showToast('🔄 已切换到组模式');
+        
+        // 检查是否有选中的小组
+        checkCurrentGroup();
+    } else {
+        // 组模式禁用时启用 Agent 选择器
+        agentSelector.disabled = false;
+        agentSelector.classList.remove('opacity-50', 'cursor-not-allowed');
+        showToast('🔄 已切换到单 Agent 模式');
+    }
+}
+
+// 检查当前选中的小组
+async function checkCurrentGroup() {
+    try {
+        const response = await fetch('/api/agent-groups/current/selected');
+        const data = await response.json();
+        
+        if (!data.success || !data.data.group) {
+            // 没有选中的小组，显示选择小组的提示
+            showToast('⚠️ 请先选择一个 Agent 小组');
+            // 自动关闭组模式
+            const toggle = document.getElementById('group-mode-toggle');
+            if (toggle) {
+                toggle.checked = false;
+                handleGroupModeChange({ target: toggle });
+            }
+        }
+    } catch (error) {
+        console.error('检查小组状态失败:', error);
+    }
+}
+
+// 从后端加载 Agent 列表
+async function loadAgentList() {
+    try {
+        const response = await fetch('/api/agents');
+        const data = await response.json();
+        
+        if (data.success && data.data) {
+            const selector = document.getElementById('agent-selector');
+            if (selector) {
+                // 清空现有选项（保留智能匹配）
+                const autoOption = selector.querySelector('option[value="auto"]');
+                selector.innerHTML = '';
+                
+                // 添加智能匹配选项
+                const autoOpt = document.createElement('option');
+                autoOpt.value = 'auto';
+                autoOpt.textContent = '🤖 智能匹配';
+                autoOpt.dataset.description = '让系统智能选择最佳Agent';
+                selector.appendChild(autoOpt);
+                
+                // 添加后端返回的 Agent
+                data.data.forEach(agent => {
+                    const option = document.createElement('option');
+                    option.value = agent.id;
+                    option.textContent = agent.name;
+                    option.dataset.description = agent.description;
+                    selector.appendChild(option);
+                });
+                
+                // 更新 AGENT_CONFIG
+                data.data.forEach(agent => {
+                    AGENT_CONFIG[agent.id] = {
+                        name: agent.name,
+                        description: agent.description,
+                        capabilities: agent.capabilities || []
+                    };
+                });
+            }
+        }
+    } catch (error) {
+        console.error('加载 Agent 列表失败:', error);
+    }
+}
+
+// 在 DOMContentLoaded 中初始化
 document.addEventListener('DOMContentLoaded', () => {
     QuickCommandAutocomplete.init();
+    
+    // 初始化 Agent 选择器
+    const agentSelector = document.getElementById('agent-selector');
+    if (agentSelector) {
+        agentSelector.addEventListener('change', handleAgentChange);
+        // 初始化能力标签
+        updateAgentCapabilities(agentSelector.value);
+    }
+    
+    // 初始化组模式开关
+    const groupToggle = document.getElementById('group-mode-toggle');
+    if (groupToggle) {
+        groupToggle.addEventListener('change', handleGroupModeChange);
+    }
+    
+    // 尝试从后端加载 Agent 列表
+    loadAgentList();
 });
 
 // 更新响应时间统计

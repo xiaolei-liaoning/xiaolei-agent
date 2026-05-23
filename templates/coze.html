@@ -6,7 +6,7 @@
     <title>小雷版小龙虾 - AI Agent低代码平台</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked@15.0.7/marked.min.js"></script>
     <link rel="stylesheet" href="/static/css/coze.css">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤖</text></svg>" type="image/svg+xml">
 </head>
@@ -263,6 +263,62 @@
                     
                     <!-- 聊天输入 -->
                     <div class="coze-input-area p-4 mb-4">
+                        <!-- Agent 选择区域 -->
+                        <div class="flex items-center justify-between mb-3">
+                            <div class="flex items-center gap-3">
+                                <!-- Agent 选择下拉框 -->
+                                <div class="relative">
+                                    <select id="agent-selector" class="appearance-none bg-white border border-gray-200 rounded-lg px-4 py-2 pr-10 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer hover:border-blue-300 transition">
+                                        <option value="auto" data-icon="🤖" data-description="让系统智能选择最佳Agent">
+                                            🤖 智能匹配
+                                        </option>
+                                        <option value="general" data-icon="👤" data-description="通用助手，擅长处理各种日常问题">
+                                            👤 通用助手
+                                        </option>
+                                        <option value="data_analyst" data-icon="📊" data-description="数据分析专家，擅长数据处理和可视化">
+                                            📊 数据分析师
+                                        </option>
+                                        <option value="web_scraper" data-icon="🌐" data-description="网络数据采集专家，擅长从各平台抓取公开数据">
+                                            🌐 网络爬虫
+                                        </option>
+                                        <option value="weather_expert" data-icon="☀️" data-description="天气查询助手，可以查询各城市的天气和预报">
+                                            ☀️ 天气预报员
+                                        </option>
+                                        <option value="system_toolbox" data-icon="🛠️" data-description="系统工具助手，可以执行系统命令、管理文件">
+                                            🛠️ 系统工具
+                                        </option>
+                                        <option value="translator" data-icon="🌍" data-description="翻译专家，精通多语言互译">
+                                            🌍 翻译官
+                                        </option>
+                                        <option value="deep_thinker" data-icon="🧠" data-description="深度分析专家，擅长复杂问题的多维度分析和推理">
+                                            🧠 深度思考者
+                                        </option>
+                                        <option value="creative" data-icon="🎨" data-description="创意助手，擅长生成有趣内容、故事和艺术">
+                                            🎨 创意助手
+                                        </option>
+                                    </select>
+                                    <div class="absolute inset-y-0 right-0 flex items-center px-2 pointer-events-none">
+                                        <i class="fa fa-chevron-down text-gray-400"></i>
+                                    </div>
+                                </div>
+                                
+                                <!-- 组模式开关 -->
+                                <label class="flex items-center gap-2 cursor-pointer">
+                                    <input type="checkbox" id="group-mode-toggle" class="sr-only peer">
+                                    <div class="relative w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                                    <span class="text-sm text-gray-600">组模式</span>
+                                </label>
+                            </div>
+                            
+                            <!-- Agent 能力标签 -->
+                            <div id="agent-capabilities" class="flex items-center gap-2">
+                                <span class="text-xs text-gray-400">能力:</span>
+                                <span class="inline-flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-700 rounded-full text-xs">聊天</span>
+                                <span class="inline-flex items-center gap-1 px-2 py-1 bg-green-100 text-green-700 rounded-full text-xs">计算</span>
+                                <span class="inline-flex items-center gap-1 px-2 py-1 bg-purple-100 text-purple-700 rounded-full text-xs">娱乐</span>
+                            </div>
+                        </div>
+                        
                         <!-- 文件拖拽上传区域（隐藏，通过拖拽显示） -->
                         <div id="drop-zone" class="hidden mb-3 border-2 border-dashed border-blue-400 rounded-xl bg-blue-50 p-6 text-center transition-all">
                             <i class="fa fa-cloud-upload text-4xl text-blue-500 mb-2"></i>

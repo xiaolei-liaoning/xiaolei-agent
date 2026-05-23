@@ -326,3 +326,93 @@ async def check_skill_status(skill_name: str, user_id: int = 1, db: Session = De
     except Exception as e:
         logger.error(f"检查技能状态失败: {e}")
         raise HTTPException(status_code=500, detail=f"检查技能状态失败: {str(e)}")
+
+
+# ==================== 技能列表/搜索（从文件系统扫描） ====================
+
+from pathlib import Path
+from typing import List
+
+
+def _get_all_skills() -> List[dict]:
+    """递归扫描 skills/ 目录获取所有技能信息。"""
+    skills_dir = Path(__file__).resolve().parent.parent.parent / "skills"
+    skills = []
+    if not skills_dir.exists():
+        return skills
+
+    for skill_md in skills_dir.rglob("SKILL.md"):
+        parent_dir = skill_md.parent
+        if any(part.startswith('.') or part.startswith('_') for part in parent_dir.parts):
+            continue
+        try:
+            content = skill_md.read_text(encoding='utf-8')
+            skill_name = parent_dir.name
+            description = ""
+            keywords = []
+            in_description = False
+            in_keywords = False
+            for line in content.split('\n'):
+                if '功能描述' in line:
+                    in_description = True
+                    in_keywords = False
+                    continue
+                elif '触发关键词' in line:
+                    in_keywords = True
+                    in_description = False
+                    continue
+                elif line.startswith('##'):
+                    in_description = False
+                    in_keywords = False
+                    continue
+                if in_description and line.strip():
+                    description += line.strip() + ' '
+                elif in_keywords and line.strip():
+                    keywords.append(line.strip())
+            skills.append({
+                'name': skill_name,
+                'display_name': skill_name.replace('_', ' ').title(),
+                'description': description.strip(),
+                'keywords': keywords,
+                'tag': f"@{skill_name}"
+            })
+        except Exception as e:
+            logger.error("读取技能失败: %s, 错误: %s", skill_md, e)
+    return skills
+
+
+_skills_cache = None
+_skills_cache_loaded = False
+
+
+def _get_cached_skills() -> list:
+    global _skills_cache, _skills_cache_loaded
+    if not _skills_cache_loaded:
+        _skills_cache = _get_all_skills()
+        _skills_cache_loaded = True
+    return _skills_cache
+
+
+@router.get("/list", summary="获取可用技能列表")
+async def list_skills():
+    """获取所有可用技能。"""
+    return {"success": True, "data": _get_cached_skills()}
+
+
+@router.get("/search", summary="搜索技能")
+async def search_skills(q: str = ""):
+    """按名称或关键词搜索技能。"""
+    query = q.lower()
+    skills = _get_cached_skills()
+    if not query:
+        return {"success": True, "data": skills}
+    filtered = []
+    for skill in skills:
+        if query in skill['name'].lower() or query in skill['display_name'].lower():
+            filtered.append(skill)
+            continue
+        for kw in skill['keywords']:
+            if query in kw.lower():
+                filtered.append(skill)
+                break
+    return {"success": True, "data": filtered}

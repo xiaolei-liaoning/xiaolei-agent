@@ -1,6 +1,13 @@
+[project]
+name = "xiaolongxia-agent"
+version = "3.4.0"
+requires-python = ">=3.13"
+description = "小雷版小龙虾 AI Agent"
+license = { text = "MIT" }
+
 [tool.black]
 line-length = 88
-target-version = ['py37', 'py38', 'py39', 'py310']
+target-version = ['py313']
 include = '\.pyi?$'
 exclude = '''
 /(

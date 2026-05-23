@@ -71,7 +71,7 @@ class BaiduSearch(BaseSearchEngine):
             from bs4 import BeautifulSoup
 
             url = f"https://www.baidu.com/s?wd={requests.utils.quote(query)}"
-            response = requests.get(url, headers=self._headers, timeout=10, verify=False)
+            response = requests.get(url, headers=self._headers, timeout=10)
             response.encoding = 'utf-8'
 
             soup = BeautifulSoup(response.text, 'html.parser')
@@ -122,7 +122,7 @@ class BingSearch(BaseSearchEngine):
             from bs4 import BeautifulSoup
 
             url = f"https://www.bing.com/search?q={requests.utils.quote(query)}"
-            response = requests.get(url, headers=self._headers, timeout=10, verify=False)
+            response = requests.get(url, headers=self._headers, timeout=10)
             response.encoding = 'utf-8'
 
             soup = BeautifulSoup(response.text, 'html.parser')

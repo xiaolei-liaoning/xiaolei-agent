@@ -1,0 +1,32 @@
+{
+  "name": "test_workflow_dag",
+  "description": "测试工作流（nodes/edges 格式）",
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "config": {
+        "input": "用户输入"
+      }
+    },
+    {
+      "id": "llm_1",
+      "type": "llm",
+      "config": {
+        "prompt": "请总结用户的输入",
+        "model": "glm-4-flash"
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "config": {
+        "output": "{{llm_1.output}}"
+      }
+    }
+  ],
+  "edges": [
+    {"source": "start", "target": "llm_1"},
+    {"source": "llm_1", "target": "end"}
+  ]
+}

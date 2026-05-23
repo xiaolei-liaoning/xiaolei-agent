@@ -172,4 +172,3 @@ servers:
   #   command: npx
   #   args: ["-y", "@anthropic-ai/mcp-server-playwright"]
   #   description: "浏览器自动化 MCP"
-

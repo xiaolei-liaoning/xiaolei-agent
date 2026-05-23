@@ -609,7 +609,9 @@
         
         // 初始化WebSocket连接
         function initWebSocket() {
-            const ws = new WebSocket('ws://localhost:8001/ws/agent');
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const host = window.location.hostname + ':8001';
+            const ws = new WebSocket(protocol + '//' + host + '/ws/agent');
             
             ws.onopen = function() {
                 console.log('WebSocket连接已建立');

@@ -245,6 +245,7 @@ xiaolei-agent/
 ├── docs/                         # 文档
 │   ├── ARCHITECTURE.md         # 架构文档
 │   ├── DEVELOPER_GUIDE.md      # 开发者指南
+│   ├── 两种多Agent架构对比.md   # V1与V2架构详细对比（含图表）
 │   └── DOCUMENTATION_AUDIT_REPORT.md  # 文档审计报告
 │
 ├── tests/                        # 测试文件
@@ -372,14 +373,42 @@ xiaolei-agent/
 
 ---
 
-## 🧠 多 Agent 架构
+## 🧠 多 Agent 架构详解
+
+### 两种架构模式对比
+
+本项目实现了一套完整的多 Agent 系统，包含两套互补的架构：**V1 队长-队员模式** 和 **V2 智能协作型多Agent**。两套架构各有侧重，可适应不同场景需求。
+
+#### 🎯 架构一：V1 队长-队员模式
+- **类型**：伪多Agent — 1 LeaderAgent + N 个 LLMAgent(Worker) + KEPA/反思/上下文
+- **特点**：
+  - V1LeaderPool 创建 1 个 LeaderAgent（继承 LLMAgent）+ 最多 5 个 LLMAgent（Worker）
+  - LeaderAgent 通过 `supervise_task()` 主循环驱动整个执行流程
+  - 分批次执行：LLM分解→round-robin分配→asyncio.gather并行执行→LLM分析→循环/完成
+  - Agent 间通过 SharedBus 共享记忆摘要
+  - 适合 1+N 分层监管场景，队长单向监管 Worker
+
+#### 🚀 架构二：V2 智能协作型多Agent
+- **类型**：真多Agent — IntelligentScheduler + OnDemandAgentPool + 5种协作策略
+- **特点**：
+  - IntelligentScheduler 包含 6 个子模块协同工作
+  - ModeSelector 自动选择 5 种协作策略（Pipeline / MasterSlave / Review / Auction / Hybrid）
+  - OnDemandAgentPool 按需创建 WorkAgent，无预注册
+  - SharedBus 消息总线 + GlobalContextCenter 全局上下文中心
+  - 支持复杂的多 Agent 协作场景，包括并行、评审、竞标等
+
+#### 📊 实测验证结果
+- **V1 测试**：40/40 ✅ 覆盖 LeaderPool 生命周期、supervise_task 完整流程
+- **V2 测试**：27/27 ✅ 覆盖所有核心模块和协作策略
+- **Bug 修复**：共修复 7 个 bug（1个V1 + 6个V2）
+- **测试通过率**：100%（67/67）
 
 ### Agent 类型
 
 | Agent | 职责 | 能力 |
 |-------|------|------|
-| **Master** | 任务调度与协调 | 任务分发、结果汇总 |
-| **Worker** | 执行具体任务 | 技能调用、工具执行 |
+| **Master/Leader** | 任务调度与协调 | 任务分发、结果汇总 |
+| **Worker/LLMAgent** | 执行具体任务 | 技能调用、工具执行 |
 | **Expert** | 领域专家 | 专业知识、深度分析 |
 | **Reviewer** | 结果审查 | 质量检查、优化建议 |
 | **Planner** | 任务规划 | 任务拆解、执行图生成 |
@@ -402,6 +431,24 @@ xiaolei-agent/
     ↓
 返回最终答案
 ```
+
+### 🆚 V1 vs V2 核心差异对比
+
+| 维度 | **V1 队长-队员模式** | **V2 智能协作型** |
+|------|----------------------|------------------|
+| **Agent 定义** | V1LeaderPool 创建 1 LeaderAgent + N LLMAgent(Worker) | OnDemandAgentPool 按需创建统一 WorkAgent |
+| **Agent 类型** | LEADER / WORKER 两种角色 | 单一 WorkAgent，adapt_to_task() 追加 5 种能力 |
+| **角色模板** | 无预设模板，只有 LEADER/WORKER | 已移除角色模板概念 |
+| **Agent 创建方式** | `V1LeaderPool.create_team(worker_count=3)` | `OnDemandAgentPool.create_agents(task, count)` |
+| **Agent 能力** | KEPA + RAG + 反问 + ContextMemory | think → act → reflect + Mind + MemorySystem |
+| **协作模式** | 1+N 队长单向监管 | 5 种策略自动选择（Pipeline/MasterSlave/Review/Auction/Hybrid） |
+| **调度器结构** | V1LeaderPool + LeaderAgent.supervise_task() | IntelligentScheduler 6 子模块协同 |
+| **上下文管理** | 独立 ContextMemory | GlobalContextCenter + SharedBus + MySQL 持久化 |
+| **任务分配** | 队长分解→分配→并行执行→分析→循环 | 模式选择→能力匹配→策略执行→结果聚合 |
+| **通信方式** | 队长 → Worker 单向 | SharedBus 消息总线（pub/sub/direct） |
+| **故障处理** | 单 Agent 故障隔离 | CircuitBreaker 熔断器 + 自动重试 + 降级 |
+| **状态同步** | share_memory() → SharedBus | SharedBus + GCC 事件系统 + TaskSnapshotStore |
+| **适用场景** | 简单的 1+N 分层任务 | 复杂的多 Agent 协作场景 |
 
 ### 🔧 智能降级机制
 
@@ -534,6 +581,14 @@ custom_limits = SandboxResourceLimits(
 **3. 降级触发条件**（`core/handlers.py` - `handle_single_step()`）
 - 调整何时触发代码生成（工具失败、工具不存在等）
 - 自定义重试策略和错误处理逻辑
+
+---
+
+## 📖 详细架构文档
+
+想要查看更详细的架构对比和流程图，请参考：
+- **[两种多Agent架构对比文档](docs/两种多Agent架构对比.md)** - 包含完整的架构图、交互流程和实测验证报告
+- **[两种多Agent架构对比 (HTML版)](两种多Agent架构对比_副本.html)** - 可直接在浏览器中打开，包含交互式架构图
 
 ---
 

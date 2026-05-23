@@ -280,7 +280,7 @@
         </h2>
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-12">
             <!-- 工作流编辑 -->
-            <a href="http://localhost:8000/workflow" target="_blank" class="service-card bg-white rounded-2xl shadow-lg p-6 block">
+            <a href="/workflow" target="_blank" class="service-card bg-white rounded-2xl shadow-lg p-6 block">
                 <div class="flex items-start space-x-4">
                     <div class="w-12 h-12 bg-indigo-100 rounded-xl flex items-center justify-center flex-shrink-0">
                         <i class="fa fa-sitemap text-indigo-600 text-2xl"></i>
@@ -288,13 +288,13 @@
                     <div class="flex-1">
                         <h3 class="font-bold text-lg mb-2 text-gray-800">工作流编辑器</h3>
                         <p class="text-sm text-gray-600 mb-3">可视化创建工作流，实现任务自动化</p>
-                        <span class="text-xs text-indigo-600 font-medium">http://localhost:8000/workflow</span>
+                        <span class="text-xs text-indigo-600 font-medium">/workflow</span>
                     </div>
                 </div>
             </a>
 
             <!-- 用户登录 -->
-            <a href="http://localhost:8000/" target="_blank" class="service-card bg-white rounded-2xl shadow-lg p-6 block">
+            <a href="/" target="_blank" class="service-card bg-white rounded-2xl shadow-lg p-6 block">
                 <div class="flex items-start space-x-4">
                     <div class="w-12 h-12 bg-pink-100 rounded-xl flex items-center justify-center flex-shrink-0">
                         <i class="fa fa-user text-pink-600 text-2xl"></i>
@@ -302,13 +302,13 @@
                     <div class="flex-1">
                         <h3 class="font-bold text-lg mb-2 text-gray-800">用户中心</h3>
                         <p class="text-sm text-gray-600 mb-3">用户登录、注册和个人资料管理</p>
-                        <span class="text-xs text-pink-600 font-medium">http://localhost:8000/</span>
+                        <span class="text-xs text-pink-600 font-medium">/</span>
                     </div>
                 </div>
             </a>
 
             <!-- 微信小程序 -->
-            <a href="http://localhost:8002/" target="_blank" class="service-card bg-white rounded-2xl shadow-lg p-6 block">
+            <a href="http://localhost:8002/" target="_blank" id="wechat-link" class="service-card bg-white rounded-2xl shadow-lg p-6 block">
                 <div class="flex items-start space-x-4">
                     <div class="w-12 h-12 bg-green-100 rounded-xl flex items-center justify-center flex-shrink-0">
                         <i class="fa fa-weixin text-green-600 text-2xl"></i>
@@ -316,13 +316,13 @@
                     <div class="flex-1">
                         <h3 class="font-bold text-lg mb-2 text-gray-800">微信小程序后端</h3>
                         <p class="text-sm text-gray-600 mb-3">小程序API接口和服务</p>
-                        <span class="text-xs text-green-600 font-medium">http://localhost:8002/</span>
+                        <span class="text-xs text-green-600 font-medium">:8002/</span>
                     </div>
                 </div>
             </a>
 
             <!-- Agent监控API -->
-            <a href="http://localhost:8003/api/monitor/agents" target="_blank" class="service-card bg-white rounded-2xl shadow-lg p-6 block">
+            <a href="http://localhost:8003/api/monitor/agents" target="_blank" id="monitor-link" class="service-card bg-white rounded-2xl shadow-lg p-6 block">
                 <div class="flex items-start space-x-4">
                     <div class="w-12 h-12 bg-red-100 rounded-xl flex items-center justify-center flex-shrink-0">
                         <i class="fa fa-server text-red-600 text-2xl"></i>
@@ -330,7 +330,7 @@
                     <div class="flex-1">
                         <h3 class="font-bold text-lg mb-2 text-gray-800">Agent监控API</h3>
                         <p class="text-sm text-gray-600 mb-3">前端Agent监控服务接口</p>
-                        <span class="text-xs text-red-600 font-medium">http://localhost:8003/</span>
+                        <span class="text-xs text-red-600 font-medium">:8003/</span>
                     </div>
                 </div>
             </a>
@@ -379,28 +379,28 @@
                     <ul class="space-y-2">
                         <li class="link-item flex items-center p-2 rounded">
                             <i class="fa fa-angle-right text-gray-400 mr-2"></i>
-                            <a href="http://localhost:8000/" target="_blank" class="text-blue-600 hover:text-blue-800 flex-1">
+                            <a href="/" target="_blank" class="text-blue-600 hover:text-blue-800 flex-1">
                                 登录页面
                             </a>
                             <code class="text-xs bg-gray-100 px-2 py-1 rounded">:8000/</code>
                         </li>
                         <li class="link-item flex items-center p-2 rounded">
                             <i class="fa fa-angle-right text-gray-400 mr-2"></i>
-                            <a href="http://localhost:8000/chat" target="_blank" class="text-blue-600 hover:text-blue-800 flex-1">
+                            <a href="/chat" target="_blank" class="text-blue-600 hover:text-blue-800 flex-1">
                                 聊天界面
                             </a>
                             <code class="text-xs bg-gray-100 px-2 py-1 rounded">:8000/chat</code>
                         </li>
                         <li class="link-item flex items-center p-2 rounded">
                             <i class="fa fa-angle-right text-gray-400 mr-2"></i>
-                            <a href="http://localhost:8000/skills-market" target="_blank" class="text-blue-600 hover:text-blue-800 flex-1">
+                            <a href="/skills-market" target="_blank" class="text-blue-600 hover:text-blue-800 flex-1">
                                 技能市场
                             </a>
                             <code class="text-xs bg-gray-100 px-2 py-1 rounded">:8000/skills-market</code>
                         </li>
                         <li class="link-item flex items-center p-2 rounded">
                             <i class="fa fa-angle-right text-gray-400 mr-2"></i>
-                            <a href="http://localhost:8000/workflow" target="_blank" class="text-blue-600 hover:text-blue-800 flex-1">
+                            <a href="/workflow" target="_blank" class="text-blue-600 hover:text-blue-800 flex-1">
                                 工作流编辑
                             </a>
                             <code class="text-xs bg-gray-100 px-2 py-1 rounded">:8000/workflow</code>
@@ -453,11 +453,28 @@
                 <i class="fa fa-heart text-red-500 animate-pulse"></i>
                 <span>© 2026 小雷版小龙虾AI系统 | 统一服务导航中心</span>
             </div>
-            <p class="text-sm text-gray-500">只需记住一个地址：<code class="bg-gray-200 px-2 py-1 rounded text-blue-600">http://localhost:8001/</code></p>
+            <p class="text-sm text-gray-500">只需记住一个地址：<code class="bg-gray-200 px-2 py-1 rounded text-blue-600">/</code></p>
         </footer>
     </div>
 
     <script>
+        // 服务端口配置（部署时修改此处即可）
+        const SERVICE_PORTS = {
+            wechat: 8002,
+            monitor: 8003,
+        };
+
+        (function initServiceLinks() {
+            const wechatLink = document.getElementById('wechat-link');
+            if (wechatLink) {
+                wechatLink.href = 'http://' + window.location.hostname + ':' + SERVICE_PORTS.wechat + '/';
+            }
+            const monitorLink = document.getElementById('monitor-link');
+            if (monitorLink) {
+                monitorLink.href = 'http://' + window.location.hostname + ':' + SERVICE_PORTS.monitor + '/api/monitor/agents';
+            }
+        })();
+
         // 健康检查
         async function checkHealth() {
             try {

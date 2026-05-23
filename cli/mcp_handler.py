@@ -9,6 +9,21 @@ from cli.colors import CliColors, print_color, print_error, print_warning, print
 logger = logging.getLogger(__name__)
 
 
+async def _check_mcp_permission(action: str, server: str, tool: str = "") -> bool:
+    """检查 MCP 操作权限"""
+    try:
+        from core.services.permission_service import get_permission_service, PermissionType
+        perm_svc = get_permission_service()
+        target = f"mcp:{server}/{tool}" if tool else f"mcp:{server}"
+        return await perm_svc.request_permission(
+            permission_type=PermissionType.MCP_SERVER_ACCESS,
+            target=target,
+            reason=f"MCP {action}: {server}",
+        )
+    except Exception:
+        return True
+
+
 class MCPHandler:
     """MCP 服务器管理命令"""
 
@@ -79,6 +94,12 @@ class MCPHandler:
         if not server_name:
             print_warning("请指定服务器名称")
             return
+
+        # 权限检查
+        if not await _check_mcp_permission("connect", server_name):
+            print_error(f"❌ 连接 {server_name} 被拒绝（权限不足）")
+            return
+
         try:
             from core.mcp.awesome_mcp_manager import awesome_mcp_manager
             print_color(f"\n  🔗 正在连接 {server_name}...", CliColors.CYAN)
@@ -168,6 +189,11 @@ class MCPHandler:
         parts = args.strip().split(maxsplit=1)
         tool_name = parts[0]
         tool_args = parts[1] if len(parts) > 1 else ""
+
+        # 权限检查
+        if not await _check_mcp_permission("call", self.cli.current_mcp_server, tool_name):
+            print_error(f"❌ 调用 {self.cli.current_mcp_server}.{tool_name} 被拒绝（权限不足）")
+            return
 
         try:
             from core.mcp.awesome_mcp_manager import awesome_mcp_manager

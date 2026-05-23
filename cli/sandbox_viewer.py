@@ -234,7 +234,7 @@ class SandboxViewer:
                 if entry.status == "fail" and entry.detail:
                     panel.add_line(f"  {entry.detail[:width-6]}", CliColors.RED)
 
-                last_line = getattr(entry.data, 'command', '')
+                last_line = entry.data.get('command', '') if isinstance(entry.data, dict) else ''
                 if not last_line:
                     last_line = entry.detail
                 if last_line:

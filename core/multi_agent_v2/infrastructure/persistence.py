@@ -7,6 +7,10 @@ Persists only:
 3. ActionResult summaries per step
 
 Agents are discarded after use; task can be rebuilt from snapshots.
+
+Supports two backends:
+- JSON files (default, lightweight)
+- MySQL via SQLAlchemy (for production recovery)
 """
 
 import json
@@ -21,9 +25,14 @@ logger = logging.getLogger(__name__)
 # Default storage directory
 SNAPSHOT_DIR = Path("data") / "task_snapshots"
 
+_TERMINAL_STATES = {"completed", "failed", "cancelled"}
+
 
 class TaskSnapshotStore:
-    """Stores and retrieves task snapshots as JSON files."""
+    """Stores and retrieves task snapshots.
+
+    Dual backend: JSON files by default + optional MySQL sync.
+    """
 
     def __init__(self, storage_dir: Optional[Path] = None):
         self.storage_dir = storage_dir or SNAPSHOT_DIR
@@ -124,6 +133,90 @@ class TaskSnapshotStore:
                 json.dump(data, f, ensure_ascii=False, indent=2, default=str)
         except Exception as e:
             logger.warning(f"Failed to write snapshot {task_id}: {e}")
+
+    # ─── MySQL Sync (via SQLAlchemy) ─────────────────────────
+
+    def sync_to_db(self, task_id: str, snapshot: dict) -> None:
+        """Sync a snapshot to MySQL (upsert by task_id)."""
+        try:
+            from core.infrastructure.database import get_db_session, TaskContextSnapshot
+            from datetime import datetime
+
+            context_json = {
+                "decision_log": snapshot.get("decision_log", []),
+                "partial_results": snapshot.get("partial_results", {}),
+                "assigned_agents": snapshot.get("assigned_agents", {}),
+                "final_result": snapshot.get("final_result"),
+                "metadata": snapshot.get("metadata", {}),
+            }
+
+            with get_db_session() as session:
+                existing = session.query(TaskContextSnapshot).filter(
+                    TaskContextSnapshot.task_id == task_id
+                ).first()
+
+                if existing:
+                    existing.state = snapshot.get("status", "unknown")
+                    existing.context_json = context_json
+                    existing.updated_at = datetime.now()
+                else:
+                    record = TaskContextSnapshot(
+                        task_id=task_id,
+                        state=snapshot.get("status", "pending"),
+                        original_request=snapshot.get("original_request", ""),
+                        context_json=context_json,
+                        agent_registry=snapshot.get("agent_registry"),
+                        trace_id=snapshot.get("trace_id"),
+                    )
+                    session.add(record)
+        except Exception as e:
+            logger.debug(f"sync_to_db failed (non-fatal): {e}")
+
+    def sync_delete_from_db(self, task_id: str) -> None:
+        """Delete a snapshot from MySQL."""
+        try:
+            from core.infrastructure.database import get_db_session, TaskContextSnapshot
+
+            with get_db_session() as session:
+                session.query(TaskContextSnapshot).filter(
+                    TaskContextSnapshot.task_id == task_id
+                ).delete()
+        except Exception as e:
+            logger.debug(f"sync_delete_from_db failed (non-fatal): {e}")
+
+    def restore_active_tasks(self) -> Dict[str, dict]:
+        """Restore all non-terminal task snapshots from MySQL.
+
+        Returns a dict of task_id → snapshot that can be loaded into
+        GlobalContextCenter on startup.
+        """
+        result: Dict[str, dict] = {}
+        try:
+            from core.infrastructure.database import get_db_session, TaskContextSnapshot
+
+            with get_db_session() as session:
+                rows = session.query(TaskContextSnapshot).filter(
+                    ~TaskContextSnapshot.state.in_(_TERMINAL_STATES)
+                ).all()
+
+            for row in rows:
+                snapshot = {
+                    "task_id": row.task_id,
+                    "status": row.state,
+                    "original_request": row.original_request,
+                    "trace_id": row.trace_id,
+                    **(row.context_json or {}),
+                }
+                if row.agent_registry:
+                    snapshot["agent_registry"] = row.agent_registry
+                self._in_memory[row.task_id] = snapshot
+                result[row.task_id] = snapshot
+
+            if result:
+                logger.info(f"Restored {len(result)} active tasks from MySQL")
+        except Exception as e:
+            logger.debug(f"restore_active_tasks failed (non-fatal): {e}")
+        return result
 
 
 # Global instance

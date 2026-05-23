@@ -474,7 +474,7 @@ class RAGSearchEngine:
         """异步获取网页内容"""
         try:
             import httpx
-            async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT, follow_redirects=True, verify=False) as client:
+            async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT, follow_redirects=True) as client:
                 response = await client.get(url, headers={"User-Agent": _BROWSER_UA})
                 return response.text
         except Exception as exc:
@@ -599,7 +599,7 @@ class RAGSearchEngine:
                 vs = self.vector_store
                 if vs:
                     for user_id, content, metadata in self._write_buffer:
-                        vs.add_memory(content, user_id=user_id, metadata=metadata)
+                        vs.add_memory(user_id=user_id, content=content, metadata=metadata)
                 
                 logger.info(f"批量写入 {len(self._write_buffer)} 条记录到向量库")
             except Exception as exc:
@@ -607,10 +607,6 @@ class RAGSearchEngine:
             finally:
                 self._write_buffer.clear()
                 self._last_flush_time = time.time()
-
-    def _update_knowledge_index(self, topic: str, knowledge_points: List[str]) -> None:
-        """更新知识索引文件（已在上文定义）"""
-        pass  # 已定义
 
     def get_status(self) -> Dict[str, Any]:
         """获取引擎状态"""

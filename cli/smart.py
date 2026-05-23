@@ -39,7 +39,7 @@ async def handle_workflow_list(args):
     """列出可用工作流模板"""
     print_header("工作流模板列表")
 
-    workflows_dir = Path("skills") / "workflows"
+    workflows_dir = Path(__file__).resolve().parent.parent / "skills" / "workflows"
     if workflows_dir.exists():
         for item in workflows_dir.rglob("*.json"):
             rel_path = item.relative_to(workflows_dir)

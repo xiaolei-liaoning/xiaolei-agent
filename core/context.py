@@ -42,6 +42,7 @@ class ExecutionContext:
     short_term_memory: Any = None
     permission_service: Any = None
     viewer: Any = None
+    max_context_tokens: int = 32000
 
     _loaded: bool = False
 
@@ -73,10 +74,24 @@ class ExecutionContext:
     # ── 工厂方法 ─────────────────────────────────────────────────────────
 
     @classmethod
-    def create_default(cls) -> "ExecutionContext":
-        """创建默认上下文（优先从 DI 容器加载，降级到全局单例）"""
+    def create_default(cls, max_context_tokens: Optional[int] = None) -> "ExecutionContext":
+        """创建默认上下文（优先从 DI 容器加载，降级到全局单例）
+
+        Args:
+            max_context_tokens: 可选的上下文 token 预算上限，设置后同步到 GlobalContextCenter
+        """
         ctx = cls()
         ctx.ensure_loaded()
+
+        if max_context_tokens is not None:
+            ctx.max_context_tokens = max_context_tokens
+            try:
+                from .multi_agent_v2.orchestration.context.global_context_center import GlobalContextCenter
+                gcc = GlobalContextCenter()
+                gcc._max_context_tokens = max_context_tokens
+            except Exception:
+                pass
+
         return ctx
 
 

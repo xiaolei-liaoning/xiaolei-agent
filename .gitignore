@@ -5,6 +5,8 @@
 
 # Python
 __pycache__/
+.venv/
+venv/
 *.py[cod]
 *$py.class
 *.so
@@ -98,7 +100,6 @@ visualize_performance.py
 example_*.py
 
 # Project management
-uv.lock
 todo.md
 
 # Archive

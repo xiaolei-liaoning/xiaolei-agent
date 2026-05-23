@@ -11,7 +11,7 @@ lxml==5.2.2
 redis==5.0.8
 pymysql==1.1.1
 sqlalchemy==2.0.31
-aioredis==2.0.1
+
 
 # ===== LLM =====
 zhipuai==2.0.1
@@ -41,7 +41,6 @@ numpy==2.2.4
 pyobjc-core==10.1
 pyobjc-framework-ApplicationServices==10.1
 pyobjc-framework-Cocoa==10.1
-AppKit==0.0.1
 PyAutoGUI==0.9.54
 pyperclip==1.8.2
 

@@ -294,6 +294,42 @@ class Skill(Base):
         return f"<Skill(name='{self.name}', version='{self.version}', usage={self.usage_count})>"
 
 
+class TaskContextSnapshot(Base):
+    """GlobalContextCenter 任务上下文快照——进程重启后可恢复"""
+    __tablename__ = "task_context_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    task_id: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True, comment="任务ID")
+    state: Mapped[str] = mapped_column(String(20), nullable=False, comment="任务状态")
+    original_request: Mapped[str] = mapped_column(Text, nullable=False, comment="原始请求")
+    context_json: Mapped[dict] = mapped_column(JSON, nullable=False, comment="完整上下文(JSON)")
+    agent_registry: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True, comment="Agent注册信息快照")
+    trace_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, comment="最近追踪ID")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, comment="创建时间")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now, comment="更新时间")
+
+    def __repr__(self):
+        return f"<TaskContextSnapshot(task_id='{self.task_id}', state='{self.state}')>"
+
+
+class PermissionAuditLog(Base):
+    """权限审计日志——持久化权限授予/拒绝记录"""
+    __tablename__ = "permission_audit_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    permission_type: Mapped[str] = mapped_column(String(50), nullable=False, comment="权限类型")
+    decision: Mapped[str] = mapped_column(String(10), nullable=False, comment="决策: allow/deny")
+    level: Mapped[str] = mapped_column(String(20), nullable=False, comment="风险级别")
+    description: Mapped[str] = mapped_column(Text, nullable=False, comment="权限描述")
+    target: Mapped[Optional[str]] = mapped_column(String(500), nullable=True, comment="操作目标")
+    reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment="请求原因")
+    user_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment="用户备注")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, comment="审计时间")
+
+    def __repr__(self):
+        return f"<PermissionAuditLog(type='{self.permission_type}', decision='{self.decision}')>"
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 #  引擎 & 会话管理
 # ═══════════════════════════════════════════════════════════════════════════════

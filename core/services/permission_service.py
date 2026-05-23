@@ -323,6 +323,27 @@ class PermissionService:
         if len(self._history) > 100:
             self._history = self._history[-100:]
     
+    def _check_cache_by_type_and_target(self, permission_type: PermissionType,
+                                         target: Optional[str]) -> Optional[PermissionResponse]:
+        """检查权限缓存（按类型 + 目标前缀匹配）"""
+        if permission_type in self._permissions_cache:
+            response = self._permissions_cache[permission_type]
+            if response.expires_at and response.expires_at < datetime.now():
+                del self._permissions_cache[permission_type]
+                return None
+            # 如果有目标限制，检查是否匹配
+            if target and response.user_note == f"target:{target}":
+                return response
+            if not target:
+                return response
+            # 检查目标前缀匹配（如 file:/data/ 匹配 file:/data/foo.txt）
+            if response.user_note and response.user_note.startswith("target:"):
+                cached_target = response.user_note[len("target:"):]
+                if target.startswith(cached_target):
+                    return response
+            return response
+        return None
+
     def check_permission(self, permission_type: PermissionType,
                         target: Optional[str] = None,
                         reason: Optional[str] = None) -> PermissionDecision:
@@ -416,12 +437,16 @@ class PermissionService:
                 else:
                     decision = PermissionDecision.ALLOW
 
-        # 创建权限响应
+        # 创建权限响应（含 target 用于细粒度缓存）
+        user_note = None
+        if target:
+            user_note = f"target:{target}"
         response = PermissionResponse(
             permission_type=permission_type,
             decision=decision,
             granted_at=datetime.now(),
-            expires_at=self._calculate_expiry(rule) if rule and decision == PermissionDecision.ALLOW else None
+            expires_at=self._calculate_expiry(rule) if rule and decision == PermissionDecision.ALLOW else None,
+            user_note=user_note,
         )
 
         # 更新缓存
@@ -430,6 +455,9 @@ class PermissionService:
 
         # 记录历史
         self._record_history(request, response, context)
+
+        # 持久化审计日志
+        self._log_audit_to_db(request, response)
 
         if decision == PermissionDecision.ALLOW:
             logger.info(f"权限已授予: {permission_type.value}")
@@ -486,7 +514,24 @@ class PermissionService:
             question += f"\n目标: {request.target}"
         
         return question
-    
+
+    def _log_audit_to_db(self, request: PermissionRequest, response: PermissionResponse) -> None:
+        """持久化权限审计日志到 MySQL PermissionAuditLog 表。"""
+        try:
+            from core.infrastructure.database import get_db_session, PermissionAuditLog
+            with get_db_session() as session:
+                record = PermissionAuditLog(
+                    permission_type=request.permission_type.value,
+                    decision=response.decision.value,
+                    level=request.level.value,
+                    description=request.description,
+                    target=request.target,
+                    reason=request.reason,
+                )
+                session.add(record)
+        except Exception as e:
+            logger.debug(f"权限审计日志写入失败（非致命）: {e}")
+
     def _calculate_expiry(self, rule: PermissionRule) -> Optional[datetime]:
         """计算过期时间"""
         if rule.auto_expire_minutes > 0:
