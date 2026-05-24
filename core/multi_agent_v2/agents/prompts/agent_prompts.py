@@ -86,14 +86,14 @@ class PromptManager:
 
 输出格式：
 ```json
-{
+{{
   "reasoning": "你的推理过程",
   "plan": ["步骤1: ...", "步骤2: ...", "步骤3: ..."],
   "confidence": 0.8,
   "tool_calls": [
-    {"name": "server.tool", "arguments": {"param": "value"}}
+    {{"name": "server.tool", "arguments": {{"param": "value"}}}}
   ]
-}
+}}
 ```
 
 {plan}""",
