@@ -9,7 +9,7 @@
 </p>
 
 <p>
-  <strong>工业级 AI 智能助手系统 | 支持多 Agent 协作与智能降级</strong>
+  <strong>工业级 AI 智能助手系统 | 双架构设计 | 智能降级 | 安全沙盒</strong>
 </p>
 
 </div>
@@ -18,7 +18,7 @@
 
 ## 🌟 项目概述
 
-> **小雷版小龙虾** 是一个面向生产环境的 AI Agent 框架，核心设计理念是 **"工具优先、智能降级、安全执行"**。
+> **小雷版小龙虾** 是面向生产环境的 AI Agent 框架，核心设计理念：**工具优先、智能降级、安全执行**
 
 ### 🎯 核心价值
 
@@ -35,116 +35,171 @@
 
 ### 双架构模式
 
-项目实现了两套互补的多 Agent 架构，根据任务复杂度自动选择：
+项目实现了两套互补的多 Agent 架构，根据任务复杂度**自动选择**：
 
-#### **模式一：队长-队员模式** (V1)
+#### **模式一：V1 队长-队员模式**
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    TeamLeader                              │
+│                    V1LeaderPool                             │
 │  ┌─────────────────────────────────────────────────────┐   │
-│  │  LLM分析 → 任务拆解 → 队员分配 → 结果聚合         │   │
+│  │  create_team() → 1 Leader + 最多 5 Workers          │   │
 │  └─────────────────────────────────────────────────────┘   │
 │                          │                                 │
 │        ┌─────────────────┼─────────────────┐               │
 │        ▼                 ▼                 ▼               │
 │  ┌──────────┐    ┌──────────┐    ┌──────────┐             │
-│  │ TeamWorker│    │ TeamWorker│    │ TeamWorker│             │
-│  │   Agent   │    │   Agent   │    │   Agent   │             │
-│  └──────────┘    └──────────┘    └──────────┘             │
-│        │                 │                 │               │
-│        └─────────────────┴─────────────────┘               │
-│                    TeamMessageCenter                       │
+│  │ Leader   │    │ Worker1  │    │ Worker2  │             │
+│  │ Agent    │    │ LLMAgent │    │ LLMAgent │  ...        │
+│  └────┬─────┘    └──────────┘    └──────────┘             │
+│       │                                                    │
+│       ▼                                                    │
+│  ┌─────────────────────────────────────────────────┐       │
+│  │ supervise_task() 主循环:                        │       │
+│  │   ① _decompose_task() → 任务分解               │       │
+│  │   ② _assign()        → round-robin 分配        │       │
+│  │   ③ _execute_batch() → asyncio.gather 并行      │       │
+│  │   ④ _analyze_results() → LLM 分析决策          │       │
+│  │   循环：complete / retry / reassign             │       │
+│  └─────────────────────────────────────────────────┘       │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**特点**：层级式通信，队员只与队长交互，适合单一复杂任务。
+**架构特点**：
+- 中央协调型：1个LeaderAgent统筹任务分解、分配、分析决策
+- 分批次执行：LLM分解 → round-robin分配 → 并行执行 → LLM分析 → 循环/完成
+- 决策三选一：complete（完成）/ retry（重试失败子任务）/ reassign（唤醒更多Worker）
+- 每个LLMAgent内置 **KEPA反思闭环** + **RAG检索增强** + **反问机制** + **ContextMemory**
 
-#### **模式二：智能协作型** (V2)
+---
+
+#### **模式二：V2 智能协作型**
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│              IntelligentScheduler                          │
+│              IntelligentScheduler (核心大脑)                │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐     │
-│  │Analyzer  │→│Selector  │→│Matcher   │→│Planner   │     │
+│  │Analyzer  │→│Selector  │→│Planner   │→│Matcher   │     │
+│  │          │ │          │ │          │ │          │     │
+│  │ 分析任务 │ │选择策略   │ │执行规划   │ │能力匹配   │     │
 │  └──────────┘ └──────────┘ └──────────┘ └──────────┘     │
 │                          │                                 │
 │                          ▼                                 │
 │              ┌─────────────────────┐                       │
-│              │   SharedBus         │                       │
-│              │  (消息总线)         │                       │
-│              └─────────┬───────────┘                       │
-│        ┌───────────────┼───────────────┐                   │
-│        ▼               ▼               ▼                   │
-│  ┌──────────┐    ┌──────────┐    ┌──────────┐             │
-│  │ WorkAgent│    │ WorkAgent│    │ WorkAgent│             │
-│  │   (平等)  │    │   (平等)  │    │   (平等)  │             │
-│  └──────────┘    └──────────┘    └──────────┘             │
-│        │                 │                 │               │
-│        └─────────────────┴─────────────────┘               │
-│              GlobalContextCenter                           │
+│              │   5种协作策略       │                       │
+│              │  ┌───────────────┐  │                       │
+│              │  │Pipeline/Master│  │                       │
+│              │  │Slave/Review/  │  │                       │
+│              │  │Auction/Hybrid │  │                       │
+│              │  └───────────────┘  │                       │
+│              └──────────┬──────────┘                       │
+│                         │                                 │
+│              ┌──────────▼──────────┐                       │
+│              │   OnDemandAgentPool │                       │
+│              │   按需创建WorkAgent │                       │
+│              └──────────┬──────────┘                       │
+│                         │                                 │
+│        ┌────────────────┼────────────────┐                 │
+│        ▼                ▼                ▼                 │
+│  ┌──────────┐     ┌──────────┐     ┌──────────┐           │
+│  │WorkAgent │     │WorkAgent │     │WorkAgent │           │
+│  │  think   │     │  think   │     │  think   │           │
+│  │  → act   │     │  → act   │     │  → act   │           │
+│  │  → reflect│     │  → reflect│     │  → reflect│           │
+│  └──────────┘     └──────────┘     └──────────┘           │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**特点**：平等协作，通过 SharedBus 自由通信，支持5种协作策略自动切换。
+**架构特点**：
+- 无预注册Agent，按需动态创建
+- **IntelligentScheduler** 6子模块流水线：
+  - TaskAnalyzer → ModeSelector → ExecutionPlanner → CapabilityMatcher → 反问确认 → ResultAggregator
+- **ModeSelector** 策略选择优先级：关键词匹配 > 历史经验 > LLM决策 > 启发式兜底
+- **5种协作模式**：Pipeline / MasterSlave / Review / Auction / Hybrid
+- **CircuitBreaker熔断保护**：5次失败→OPEN→60s→HALF_OPEN→CLOSED
 
 ---
 
 ## 🧠 核心组件
 
-### 1. BaseAgent - 智能体基类
-
-每个 Agent 具备完整的自治能力：
+### 1. IntelligentScheduler - 智能调度器
 
 ```python
-class BaseAgent:
+class IntelligentScheduler:
     def __init__(self):
-        self.mind = Mind(self)           # 思考引擎
-        self.memory = MemorySystem(self)  # 记忆系统
-        self.capabilities = [...]         # 能力集合
+        self.task_analyzer = TaskAnalyzer()
+        self.mode_selector = ModeSelector()
+        self.execution_planner = ExecutionPlanner()
+        self.capability_matcher = CapabilityMatcher()
+        self.result_aggregator = ResultAggregator()
+    
+    async def schedule(self, task):
+        # ① 分析任务复杂度
+        complexity = self.task_analyzer.estimate_complexity(task)
+        
+        # ② 选择协作模式
+        mode = self.mode_selector.select(task, complexity)
+        
+        # ③ 制定执行计划
+        plan = self.execution_planner.create_plan(task, mode)
+        
+        # ④ 匹配Agent能力
+        agents = self.capability_matcher.match(plan)
+        
+        # ⑤ 反问确认
+        await self._ask_user_confirmation(mode, agents)
+        
+        # ⑥ 执行并聚合结果
+        result = await self.result_aggregator.aggregate(agents, plan)
+        return result
+```
+
+### 2. WorkAgent - 工作智能体
+
+每个WorkAgent具备完整的自治能力：
+
+```python
+class WorkAgent(BaseAgent):
+    def __init__(self):
+        self.mind = Mind(self)           # LLM驱动推理
+        self.memory = MemorySystem(self)  # 短期/长期/情景记忆
+        self.capabilities = []            # 5种专项能力
         self._bus = SharedBus()           # 通信总线
+    
+    async def run(self, task):
+        # ① 能力适配
+        await self.adapt_to_task(task)
+        
+        # ② 三阶段循环
+        thought = await self.mind.think(task)
+        result = await self.mind.act(thought.plan, thought.tool_calls)
+        reflection = await self.mind.reflect(result)
+        
+        # ③ 记录工作历史
+        self.memory.record_work_history(task, result, reflection)
+        return result
 ```
-
-**设计亮点**：
-- **独立心智**：每个 Agent 有独立的思考和决策能力
-- **记忆系统**：支持短期/长期/情景记忆
-- **主动通信**：可主动与其他 Agent 沟通协作
-
-### 2. Mind - 思考引擎
-
-```
-思考流程：
-用户输入 → 理解任务 → 制定计划 → 执行 → 检查结果 → 反思优化
-     ↓          ↓           ↓        ↓         ↓          ↓
-   LLM      LLM分析     LLM规划   工具/代码   LLM评估    LLM反思
-```
-
-**核心方法**：
-- `think(task)` - LLM驱动的思考，最多重试3次
-- `_think_with_llm(task)` - 调用LLM进行深度推理
-- `reflect(result)` - 反思执行结果，优化下次决策
 
 ### 3. SharedBus - 消息总线
 
-实现 **发布/订阅/直接消息** 三种通信模式：
+实现**发布/订阅/直接消息**三种通信模式：
 
-```python
-# 订阅主题
-await bus.subscribe("agent:general", handler)
-
-# 发布消息
-await bus.publish("topic:task_completed", message)
-
-# 直接消息
-await bus.send_direct(target_agent_id, message)
-```
+| 方法 | 功能 |
+|------|------|
+| `publish(topic, message)` | 发布消息到主题 |
+| `subscribe(topic, callback)` | 订阅主题 |
+| `send_direct(receiver, message)` | 点对点消息 |
+| `update_context(key, value)` | 共享内存更新 |
+| `get_context(key)` | 获取共享内存 |
 
 ### 4. CircuitBreaker - 熔断器
 
 **故障处理机制**：
-- **熔断状态**：关闭 → 半开 → 打开 → 自动恢复
-- **触发条件**：连续失败次数阈值
-- **恢复策略**：指数退避重试
+
+```
+状态机: CLOSED → OPEN → HALF_OPEN → CLOSED
+         ↓5次失败  ↓60秒超时   ↓成功
+```
 
 ---
 
@@ -189,6 +244,16 @@ cache = {
     "analyze_csv": ("data-analysis", "data_analysis_mcp_server.py", "..."),
     "search.web": ("the-agency", "agency_mcp_server.py", "...")
 }
+```
+
+### 核心实现
+
+工具调用流程：
+
+```
+用户请求 → ToolRegistry匹配 → 找到工具 → 调用MCP服务器 → 返回结果
+                           ↓
+                      无匹配工具 → 触发代码生成降级
 ```
 
 ---
@@ -251,6 +316,51 @@ def should_trigger_code_generation(task):
         return True
     return False
 ```
+
+### 执行引擎核心
+
+```python
+class EnhancedExecutor:
+    def __init__(self):
+        self.sandbox = SandboxEnvironment()
+        self.resource_limiter = ResourceLimiter()
+    
+    async def execute(self, code, context):
+        # ① 代码审查
+        await self._validate_code(code)
+        
+        # ② 设置资源限制
+        limits = ResourceLimits(
+            timeout=30,
+            max_memory_mb=512,
+            allowed_paths=[self.workspace_path]
+        )
+        
+        # ③ 安全执行
+        result = await self.sandbox.run(
+            code=code,
+            context=context,
+            limits=limits
+        )
+        
+        # ④ 返回结果
+        return {"success": result.success, "output": result.output}
+```
+
+---
+
+## 📊 架构对比
+
+| 维度 | V1 队长-队员模式 | V2 智能协作型 |
+|------|------------------|--------------|
+| **架构模式** | 中央协调型 | 分布式协作型 |
+| **Agent创建** | 预创建固定池 | 按需动态创建 |
+| **协作策略** | 单一1+N模式 | 5种策略自动匹配 |
+| **调度机制** | LeaderAgent.supervise_task() | IntelligentScheduler 6子模块 |
+| **上下文管理** | 独立ContextMemory | GlobalContextCenter + MySQL持久化 |
+| **容错机制** | LLM分析决策重试 | CircuitBreaker熔断保护 |
+| **通信方式** | 队长→Worker单向 | SharedBus消息总线 |
+| **适用场景** | 单一复杂任务 | 批量标准化任务 |
 
 ---
 
@@ -332,18 +442,6 @@ python main.py
 
 ---
 
-## 📊 架构对比
-
-| 维度 | V1 队长-队员模式 | V2 智能协作型 |
-|------|------------------|--------------|
-| **通信方式** | 层级式（队长↔队员） | 总线式（平等通信） |
-| **协作策略** | 1种（队长拆分+聚合） | 5种自动选择 |
-| **决策中心** | TeamLeader（LLM） | IntelligentScheduler（规则+LLM） |
-| **适用场景** | 单一复杂任务 | 批量标准化任务 |
-| **容错机制** | LLM不可用回退单兵模式 | CircuitBreaker + 自动重试 |
-
----
-
 ## 🔧 扩展开发
 
 ### 添加新 MCP 工具
@@ -363,17 +461,16 @@ class MyMCPServer:
         return {"success": True, "result": "..."}
 ```
 
-### 添加新 Agent 能力
+### 添加新协作策略
 
 ```python
-# 在 core/multi_agent_v2/agents/ 目录添加
-class MyCapability(Capability):
+# 在 core/multi_agent_v2/orchestration/collaboration/strategies/
+class MyStrategy(CollaborationStrategy):
     def __init__(self):
-        self.name = "my_capability"
-        self.description = "我的能力"
+        self.name = "my_strategy"
     
-    async def execute(self, task):
-        # 实现能力逻辑
+    async def execute(self, task, agents):
+        # 实现策略逻辑
         return result
 ```
 
