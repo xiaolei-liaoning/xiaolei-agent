@@ -31,67 +31,125 @@
 
 ---
 
-## 🏗️ 架构设计
+## 🏗️ 架构设计深度解析
 
-### 双架构模式
+### 架构演进历程
 
-项目实现了两套互补的多 Agent 架构，根据任务复杂度**自动选择**：
+```
+V1 队长-队员模式 ──────────────────────────────────► V2 智能协作型
+    │                                                     │
+    │ 中央协调型                                          │ 分布式协作型
+    │ 1 Leader + N Workers                                │ N 个平等 WorkAgent
+    │ 单向监管                                            │ 双向通信
+    │ 静态角色分配                                        │ 动态能力匹配
+    │                                                        │
+    └────────────────────────────────────────────────────────┘
+                        演进方向
+```
 
-#### **模式一：V1 队长-队员模式**
+---
+
+### 模式一：V1 队长-队员模式（中央协调型）
+
+**架构定位**：适合单一复杂任务的分层监管场景
+
+#### 核心架构
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                    V1LeaderPool                             │
 │  ┌─────────────────────────────────────────────────────┐   │
-│  │  create_team() → 1 Leader + 最多 5 Workers          │   │
+│  │  create_team(worker_count=3, max_workers=5)        │   │
+│  │  返回: (LeaderAgent, List[LLMAgent])               │   │
 │  └─────────────────────────────────────────────────────┘   │
 │                          │                                 │
 │        ┌─────────────────┼─────────────────┐               │
 │        ▼                 ▼                 ▼               │
 │  ┌──────────┐    ┌──────────┐    ┌──────────┐             │
-│  │ Leader   │    │ Worker1  │    │ Worker2  │             │
-│  │ Agent    │    │ LLMAgent │    │ LLMAgent │  ...        │
+│  │ Leader   │    │ Worker1  │    │ Worker2  │  ...        │
+│  │ Agent    │    │ LLMAgent │    │ LLMAgent │             │
 │  └────┬─────┘    └──────────┘    └──────────┘             │
 │       │                                                    │
 │       ▼                                                    │
 │  ┌─────────────────────────────────────────────────┐       │
-│  │ supervise_task() 主循环:                        │       │
-│  │   ① _decompose_task() → 任务分解               │       │
-│  │   ② _assign()        → round-robin 分配        │       │
-│  │   ③ _execute_batch() → asyncio.gather 并行      │       │
-│  │   ④ _analyze_results() → LLM 分析决策          │       │
-│  │   循环：complete / retry / reassign             │       │
+│  │ 主循环 supervise_task():                        │       │
+│  │   ① _decompose_task()  → LLM任务分解           │       │
+│  │   ② _assign()          → round-robin分配       │       │
+│  │   ③ _execute_batch()   → asyncio.gather并行    │       │
+│  │   ④ _analyze_results() → LLM分析决策           │       │
+│  │                                                 │       │
+│  │   决策三选一: complete / retry / reassign      │       │
+│  │   最多循环3轮                                   │       │
 │  └─────────────────────────────────────────────────┘       │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**架构特点**：
-- 中央协调型：1个LeaderAgent统筹任务分解、分配、分析决策
-- 分批次执行：LLM分解 → round-robin分配 → 并行执行 → LLM分析 → 循环/完成
-- 决策三选一：complete（完成）/ retry（重试失败子任务）/ reassign（唤醒更多Worker）
-- 每个LLMAgent内置 **KEPA反思闭环** + **RAG检索增强** + **反问机制** + **ContextMemory**
+#### LLMAgent 内部架构（KEPA + RAG + 反问 + 上下文）
+
+```
+每个 LLMAgent 具备完整的自治能力：
+
+┌─────────────────────────────────────────────────┐
+│              LLMAgent 内部                       │
+├─────────────────────────────────────────────────┤
+│  ┌─────────────┐    ┌─────────────┐            │
+│  │ _rag_query()│───►│ _llm_json() │            │
+│  │  RAG检索    │    │  LLM调用    │            │
+│  └─────────────┘    └──────┬──────┘            │
+│                            │                    │
+│                            ▼                    │
+│  ┌─────────────┐    ┌─────────────┐            │
+│  │ _kepa_reflect│◄───│ _ask_user()│            │
+│  │  KEPA反思   │    │  反问用户   │            │
+│  └──────┬──────┘    └─────────────┘            │
+│         │                                       │
+│         ▼                                       │
+│  ┌─────────────┐                                │
+│  │ContextMemory│  环形缓冲，最近20条记录         │
+│  └─────────────┘                                │
+└─────────────────────────────────────────────────┘
+
+KEPA反思闭环流程：
+  think → act → reflect → confidence≥0.85 → 退出
+                           ↓
+                    最多3次迭代
+```
+
+#### 设计特点
+
+| 特性 | 实现方式 |
+|------|----------|
+| **任务分解** | LeaderAgent._decompose_task() 通过LLM将任务拆分为子任务列表 |
+| **任务分配** | round-robin算法分配给活跃Worker |
+| **并行执行** | asyncio.gather实现Workers并行执行 |
+| **结果分析** | LeaderAgent._analyze_results() 通过LLM分析并决策 |
+| **决策机制** | complete（完成）/ retry（重试）/ reassign（唤醒更多Worker） |
+| **KEPA反思** | 置信度≥0.85退出，最多3次迭代 |
+| **RAG增强** | RAGSearchEngine.search_and_learn() 检索知识库 |
+| **反问降级** | LLM失败时通过QuestionRegistry向用户确认 |
 
 ---
 
-#### **模式二：V2 智能协作型**
+### 模式二：V2 智能协作型（分布式协作型）
+
+**架构定位**：适合批量标准化任务，支持多种协作策略自动切换
+
+#### 核心架构
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│              IntelligentScheduler (核心大脑)                │
+│           IntelligentScheduler (核心大脑)                   │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐     │
 │  │Analyzer  │→│Selector  │→│Planner   │→│Matcher   │     │
-│  │          │ │          │ │          │ │          │     │
 │  │ 分析任务 │ │选择策略   │ │执行规划   │ │能力匹配   │     │
 │  └──────────┘ └──────────┘ └──────────┘ └──────────┘     │
 │                          │                                 │
 │                          ▼                                 │
 │              ┌─────────────────────┐                       │
 │              │   5种协作策略       │                       │
-│              │  ┌───────────────┐  │                       │
-│              │  │Pipeline/Master│  │                       │
-│              │  │Slave/Review/  │  │                       │
-│              │  │Auction/Hybrid │  │                       │
-│              │  └───────────────┘  │                       │
+│              │  Pipeline/MasterSlave│                       │
+│              │  /Review/Auction/   │                       │
+│              │  Hybrid             │                       │
 │              └──────────┬──────────┘                       │
 │                         │                                 │
 │              ┌──────────▼──────────┐                       │
@@ -103,60 +161,50 @@
 │        ▼                ▼                ▼                 │
 │  ┌──────────┐     ┌──────────┐     ┌──────────┐           │
 │  │WorkAgent │     │WorkAgent │     │WorkAgent │           │
-│  │  think   │     │  think   │     │  think   │           │
-│  │  → act   │     │  → act   │     │  → act   │           │
-│  │  → reflect│     │  → reflect│     │  → reflect│           │
+│  │ think→act│     │ think→act│     │ think→act│           │
+│  │  →reflect│     │  →reflect│     │  →reflect│           │
 │  └──────────┘     └──────────┘     └──────────┘           │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**架构特点**：
-- 无预注册Agent，按需动态创建
-- **IntelligentScheduler** 6子模块流水线：
-  - TaskAnalyzer → ModeSelector → ExecutionPlanner → CapabilityMatcher → 反问确认 → ResultAggregator
-- **ModeSelector** 策略选择优先级：关键词匹配 > 历史经验 > LLM决策 > 启发式兜底
-- **5种协作模式**：Pipeline / MasterSlave / Review / Auction / Hybrid
-- **CircuitBreaker熔断保护**：5次失败→OPEN→60s→HALF_OPEN→CLOSED
+#### IntelligentScheduler 子模块架构
 
----
+```
+IntelligentScheduler 包含6个子模块，形成完整的调度流水线：
 
-## 🧠 核心组件
-
-### 1. IntelligentScheduler - 智能调度器
-
-```python
-class IntelligentScheduler:
-    def __init__(self):
-        self.task_analyzer = TaskAnalyzer()
-        self.mode_selector = ModeSelector()
-        self.execution_planner = ExecutionPlanner()
-        self.capability_matcher = CapabilityMatcher()
-        self.result_aggregator = ResultAggregator()
-    
-    async def schedule(self, task):
-        # ① 分析任务复杂度
-        complexity = self.task_analyzer.estimate_complexity(task)
-        
-        # ② 选择协作模式
-        mode = self.mode_selector.select(task, complexity)
-        
-        # ③ 制定执行计划
-        plan = self.execution_planner.create_plan(task, mode)
-        
-        # ④ 匹配Agent能力
-        agents = self.capability_matcher.match(plan)
-        
-        # ⑤ 反问确认
-        await self._ask_user_confirmation(mode, agents)
-        
-        # ⑥ 执行并聚合结果
-        result = await self.result_aggregator.aggregate(agents, plan)
-        return result
+┌──────────────────────────────────────────────────────────────┐
+│                    IntelligentScheduler                       │
+├──────────────────────────────────────────────────────────────┤
+│                                                              │
+│  TaskAnalyzer        ModeSelector        ExecutionPlanner     │
+│       │                    │                    │            │
+│       ▼                    ▼                    ▼            │
+│  analyze()           select()            create_plan()       │
+│  understand()        优先级:             _create_pipeline   │
+│  estimate_complexity()                      │               │
+│       │              关键词>历史>LLM>启发式  ▼               │
+│       │                                    CapabilityMatcher│
+│       │                                         │           │
+│       │                                         ▼           │
+│       │                              ResultAggregator       │
+│       │                                    aggregate()      │
+│       │                                         │           │
+│       └─────────────────────────────────────────┘           │
+│                                                              │
+└──────────────────────────────────────────────────────────────┘
 ```
 
-### 2. WorkAgent - 工作智能体
+#### 5种协作策略
 
-每个WorkAgent具备完整的自治能力：
+| 策略 | 适用场景 | 核心机制 |
+|------|----------|----------|
+| **Pipeline** | 流水线任务 | 按阶段顺序执行 + RecursiveTaskDecomposer |
+| **MasterSlave** | 主从协作 | 主Agent分解 + 从Agent并行执行 + 主Agent聚合校验 |
+| **Review** | 质量评审 | 多Agent并行工作 + Reviewer评审 + ConsensusMechanism |
+| **Auction** | 任务竞标 | Agent竞标 → 中标执行 + DynamicTeamForming |
+| **Hybrid** | 复杂任务 | 按复杂度分支选择：简单/主从/评审 |
+
+#### WorkAgent 设计
 
 ```python
 class WorkAgent(BaseAgent):
@@ -164,46 +212,108 @@ class WorkAgent(BaseAgent):
         self.mind = Mind(self)           # LLM驱动推理
         self.memory = MemorySystem(self)  # 短期/长期/情景记忆
         self.capabilities = []            # 5种专项能力
-        self._bus = SharedBus()           # 通信总线
-    
-    async def run(self, task):
-        # ① 能力适配
-        await self.adapt_to_task(task)
         
-        # ② 三阶段循环
+    async def execute(task):
+        # 动态适配：根据任务追加能力
+        self.adapt_to_task(task)  # 追加 analysis/execution/review/research/integration
+        
+        # 三阶段循环
         thought = await self.mind.think(task)
         result = await self.mind.act(thought.plan, thought.tool_calls)
         reflection = await self.mind.reflect(result)
         
-        # ③ 记录工作历史
+        # 记录工作历史（上限100条）
         self.memory.record_work_history(task, result, reflection)
-        return result
-```
-
-### 3. SharedBus - 消息总线
-
-实现**发布/订阅/直接消息**三种通信模式：
-
-| 方法 | 功能 |
-|------|------|
-| `publish(topic, message)` | 发布消息到主题 |
-| `subscribe(topic, callback)` | 订阅主题 |
-| `send_direct(receiver, message)` | 点对点消息 |
-| `update_context(key, value)` | 共享内存更新 |
-| `get_context(key)` | 获取共享内存 |
-
-### 4. CircuitBreaker - 熔断器
-
-**故障处理机制**：
-
-```
-状态机: CLOSED → OPEN → HALF_OPEN → CLOSED
-         ↓5次失败  ↓60秒超时   ↓成功
 ```
 
 ---
 
-## 🔌 MCP 系统
+## 🧠 核心组件深度解析
+
+### 1. IntelligentScheduler - 智能调度器
+
+**职责**：多Agent系统的核心大脑，负责任务理解、模式选择、Agent匹配、流程编排、动态调整、结果聚合
+
+**核心流程**（schedule方法）：
+
+```python
+async def schedule(task):
+    # ① 任务理解
+    task_analysis = self.analyzer.analyze(task)
+    
+    # ② 模式选择（优先级：关键词 > 历史经验 > LLM > 启发式）
+    collaboration_mode = await self.mode_selector.select(
+        task, task_analysis,
+        collaboration_history=self.collaboration_history  # 跨次学习
+    )
+    
+    # ③ 按需创建Agent
+    agent_count = self._estimate_agent_count(collaboration_mode, task)
+    available_agents = await self.agent_pool.create_agents(task, agent_count)
+    
+    # ④ 创建任务上下文
+    await self.context_center.create_task_context(...)
+    
+    # ⑤ Agent匹配 + 执行计划
+    execution_plan = await self.planner.create_plan(...)
+    
+    # ⑥ 反问确认（可选）
+    user_confirmed = await self._ask_user_confirmation(...)
+    
+    # ⑦ 更新任务状态 + 发布到SharedBus + 持久化快照
+    ...
+```
+
+### 2. SharedBus - 消息总线
+
+**三种通信模式**：
+
+| 模式 | 方法 | 用途 |
+|------|------|------|
+| **发布/订阅** | `publish(topic, message)` / `subscribe(topic, callback)` | 广播消息、事件通知 |
+| **点对点** | `send_direct(receiver, message)` | Agent间直接通信 |
+| **共享内存** | `update_context(key, value)` / `get_context(key)` | 全局状态共享 |
+
+### 3. CircuitBreaker - 熔断器
+
+**状态机设计**：
+
+```
+         ┌─────────────────────────────────────────────┐
+         │                                             │
+         ▼                                             │
+┌────────────────┐        ┌────────────────┐        ┌────────────────┐
+│   CLOSED       │        │    OPEN        │        │   HALF_OPEN    │
+│  正常执行      │        │  故障熔断      │        │  试探恢复      │
+└───────┬────────┘        └───────┬────────┘        └───────┬────────┘
+        │                         │                         │
+        │ 5次失败                 │ 60秒超时                │ 成功
+        ▼                         ▼                         ▼
+┌────────────────────────────────────────────────────────────────────┐
+│                         record_failure()                          │
+│                         record_success()                          │
+│                         can_execute()                             │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+### 4. KEPA 反思闭环
+
+**V2增强版反思机制**（AdaptivePipelineWithReflection）：
+
+```
+执行步骤 → 触发反思条件 → LLM评估 → 决策执行 → 动态调整
+
+反思决策类型：
+├── CONTINUE    → 继续执行下一阶段
+├── SKIP_NEXT   → 跳过下一个步骤
+├── ADD_STEPS   → 添加新步骤
+├── RETRY       → 重试当前步骤
+└── FAIL        → 标记任务失败
+```
+
+---
+
+## 🔌 MCP 系统深度解析
 
 ### 调用协议
 
@@ -211,7 +321,7 @@ MCP（Model Context Protocol）是标准化的工具调用协议：
 
 ```python
 # 工具发现
-tools = await registry.discover_all()
+tools = await registry.discover_all()  # 扫描 mcp/*_mcp_server.py
 
 # 调用工具
 result = await agent.call_tool(
@@ -221,22 +331,7 @@ result = await agent.call_tool(
 )
 ```
 
-### 工具定义格式
-
-```json
-{
-  "name": "analyze_csv",
-  "description": "分析CSV文件（自动查找最近导出的CSV）",
-  "parameters": {
-    "file_path": {"type": "string", "description": "CSV文件路径", "required": false},
-    "analysis_type": {"type": "string", "description": "分析类型", "required": false}
-  }
-}
-```
-
 ### 动态发现机制
-
-系统启动时自动扫描 `mcp/*_mcp_server.py` 文件，建立工具缓存：
 
 ```python
 # 缓存结构: {tool_name_lower: (server_name, script_path, description)}
@@ -246,9 +341,7 @@ cache = {
 }
 ```
 
-### 核心实现
-
-工具调用流程：
+### 工具调用流程
 
 ```
 用户请求 → ToolRegistry匹配 → 找到工具 → 调用MCP服务器 → 返回结果
@@ -258,53 +351,44 @@ cache = {
 
 ---
 
-## 📦 代码沙盒
+## 📦 代码沙盒深度解析
 
-### 实现原理
-
-**安全隔离架构**：
+### 安全隔离架构
 
 ```
-┌─────────────────────────────────────────────┐
-│           代码生成降级流程                   │
-├─────────────────────────────────────────────┤
-│  用户请求                                   │
-│      ↓                                     │
-│  ToolRegistry 查找工具                      │
-│      ↓                                     │
-│  工具存在？                                 │
-│    ├─ 是 → 执行工具 → 返回结果              │
-│    └─ 否 → LLM生成代码                      │
-│              ↓                             │
-│         EnhancedExecutor                    │
-│              ↓                             │
-│         ResourceLimits                      │
-│  ┌───────────────────────────────────────┐  │
-│  │ timeout: 30s                         │  │
-│  │ max_memory_mb: 512                   │  │
-│  │ allowed_paths: [workspace_path]      │  │
-│  │ forbidden_modules: [subprocess, ...] │  │
-│  └───────────────────────────────────────┘  │
-│              ↓                             │
-│         安全执行 → 返回结果                  │
-└─────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                    代码生成降级流程                          │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  用户请求                                                    │
+│      ↓                                                      │
+│  ToolRegistry 查找工具                                       │
+│      ↓                                                      │
+│  ┌──────────────────────────────────────────────────────┐   │
+│  │ 工具存在？                                           │   │
+│  │   ├─ 是 → 执行工具 → 返回结果                        │   │
+│  │   └─ 否 → LLM生成代码                               │   │
+│  │             ↓                                       │   │
+│  │        EnhancedExecutor                             │   │
+│  │             ↓                                       │   │
+│  │        ResourceLimits                               │   │
+│  │   ┌────────────────────────────────────────────┐    │   │
+│  │   │ timeout: 30s                              │    │   │
+│  │   │ max_memory_mb: 512                        │    │   │
+│  │   │ allowed_paths: [workspace_path]            │    │   │
+│  │   │ forbidden_modules: [subprocess, socket...] │    │   │
+│  │   └────────────────────────────────────────────┘    │   │
+│  │             ↓                                       │   │
+│  │        安全执行 → 返回结果                           │   │
+│  └──────────────────────────────────────────────────────┘   │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
 ```
-
-### 安全保障
-
-| 机制 | 实现 |
-|------|------|
-| **超时控制** | 默认30秒，可配置 |
-| **内存限制** | 默认512MB，防止内存泄漏 |
-| **路径白名单** | 仅允许访问工作区目录 |
-| **模块黑名单** | 禁止 subprocess、socket 等危险模块 |
-| **代码审查** | 执行前检查危险操作 |
 
 ### 降级触发条件
 
 ```python
 def should_trigger_code_generation(task):
-    """判断是否触发代码生成降级"""
     # 1. 无匹配工具
     if not registry.has_tool_for_task(task):
         return True
@@ -317,50 +401,23 @@ def should_trigger_code_generation(task):
     return False
 ```
 
-### 执行引擎核心
-
-```python
-class EnhancedExecutor:
-    def __init__(self):
-        self.sandbox = SandboxEnvironment()
-        self.resource_limiter = ResourceLimiter()
-    
-    async def execute(self, code, context):
-        # ① 代码审查
-        await self._validate_code(code)
-        
-        # ② 设置资源限制
-        limits = ResourceLimits(
-            timeout=30,
-            max_memory_mb=512,
-            allowed_paths=[self.workspace_path]
-        )
-        
-        # ③ 安全执行
-        result = await self.sandbox.run(
-            code=code,
-            context=context,
-            limits=limits
-        )
-        
-        # ④ 返回结果
-        return {"success": result.success, "output": result.output}
-```
-
 ---
 
-## 📊 架构对比
+## 📊 V1 vs V2 架构深度对比
 
 | 维度 | V1 队长-队员模式 | V2 智能协作型 |
 |------|------------------|--------------|
-| **架构模式** | 中央协调型 | 分布式协作型 |
-| **Agent创建** | 预创建固定池 | 按需动态创建 |
-| **协作策略** | 单一1+N模式 | 5种策略自动匹配 |
-| **调度机制** | LeaderAgent.supervise_task() | IntelligentScheduler 6子模块 |
-| **上下文管理** | 独立ContextMemory | GlobalContextCenter + MySQL持久化 |
-| **容错机制** | LLM分析决策重试 | CircuitBreaker熔断保护 |
-| **通信方式** | 队长→Worker单向 | SharedBus消息总线 |
-| **适用场景** | 单一复杂任务 | 批量标准化任务 |
+| **架构模式** | 中央协调型（1 Leader + N Workers） | 分布式协作型（N 个平等 WorkAgent） |
+| **Agent创建** | 预创建固定池：`V1LeaderPool.create_team()` | 按需动态创建：`OnDemandAgentPool.create_agents()` |
+| **角色定义** | 固定角色：LEADER / WORKER | 无预设角色，通过 `adapt_to_task()` 动态追加能力 |
+| **协作策略** | 单一1+N模式：分解→分配→并行→分析→循环 | 5种策略自动匹配：Pipeline/MasterSlave/Review/Auction/Hybrid |
+| **调度机制** | LeaderAgent.supervise_task() 主循环 | IntelligentScheduler 6子模块流水线 |
+| **决策机制** | complete/retry/reassign 三选一 | 5种反思决策 + 跨次学习 |
+| **上下文管理** | 每个Agent独立ContextMemory（环形缓冲20条） | GlobalContextCenter + MySQL持久化 + SharedBus |
+| **通信方式** | 队长→Worker单向 | SharedBus发布/订阅/点对点/共享内存 |
+| **容错机制** | LLM分析决策重试 | CircuitBreaker熔断保护（5次失败→OPEN→60s→HALF_OPEN） |
+| **跨次学习** | 无 | 协作模式成功率记录 + Agent能力动态更新 |
+| **适用场景** | 单一复杂任务，需要分层监管 | 批量标准化任务，需要灵活协作 |
 
 ---
 
@@ -413,22 +470,7 @@ python main.py
 /think
 ```
 
-### MCP 工具调用
-
-```bash
-# 连接 MCP 服务器
-/mcp connect the-agency
-
-# 查看可用工具
-/mcp tools
-
-# 调用工具
-/mcp quick joke
-```
-
 ### 智能降级演示
-
-当没有现成工具时，系统自动生成代码：
 
 ```bash
 /run "计算1到100之间所有能被3或5整除的数的和"
@@ -437,42 +479,8 @@ python main.py
 **执行过程**：
 1. 系统发现无匹配工具
 2. LLM 分析需求，生成 Python 代码
-3. 代码在安全沙盒中执行
+3. 代码在安全沙盒中执行（超时30s，内存512MB限制）
 4. 返回结果：`2318`
-
----
-
-## 🔧 扩展开发
-
-### 添加新 MCP 工具
-
-```python
-# 在 mcp/ 目录创建 xxx_mcp_server.py
-class MyMCPServer:
-    def get_tools(self):
-        return [{
-            "name": "my_tool",
-            "description": "我的工具",
-            "parameters": {...}
-        }]
-    
-    def call_tool(self, name, args):
-        # 实现工具逻辑
-        return {"success": True, "result": "..."}
-```
-
-### 添加新协作策略
-
-```python
-# 在 core/multi_agent_v2/orchestration/collaboration/strategies/
-class MyStrategy(CollaborationStrategy):
-    def __init__(self):
-        self.name = "my_strategy"
-    
-    async def execute(self, task, agents):
-        # 实现策略逻辑
-        return result
-```
 
 ---
 
