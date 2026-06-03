@@ -783,55 +783,31 @@ class EnhancedCLI:
             await self.start_chat_mode(mode)
     
     async def handle_smart_request(self, request: str):
-        """处理智能请求 — V2 Subagent 分步执行"""
+        """处理智能请求 — V2 Agent（走 ToolRegistry 全量工具）"""
         if not request.strip():
             return
 
-        from cli.animated_spinner import AsyncSpinner, CLAUDE
-        from cli.thinking_engine import get_thinking_engine
         from cli.colors import print_color, ansi
+        from cli.thinking_trace import get_trace
         from core.multi_agent_v2.agents.base.base_agent import BaseAgent
 
-        # 初始化引擎和 Agent
-        engine = get_thinking_engine()
         agent = BaseAgent()
+        trace = get_trace()
+        trace.enabled = True
+        trace.start(request[:80])
+        agent.set_trace(trace)
 
-        # 拆解任务
-        engine.start_step(1, "正在分析任务...")
-        async with AsyncSpinner("正在分析任务...", color=CLAUDE):
-            steps = await agent._decompose_task(request)
-        if not steps:
-            engine.complete_step(1, success=False, detail="任务拆解失败")
-            return
-        engine.complete_step(1, success=True, detail=f"规划为 {len(steps)} 步")
-        engine.plan_steps([{"title": s, "description": "", "tag": str(i+1)} for i, s in enumerate(steps)])
+        result = await agent.run(request)
 
-        # 分步执行
-        import asyncio
-        results = [None] * len(steps)
-        sem = asyncio.Semaphore(3)
-
-        async def run_subagent(i, step):
-            async with sem:
-                engine.start_step(i + 1, step)
-                try:
-                    async with AsyncSpinner(step, color=CLAUDE):
-                        prompt = f"## 步骤 ({i+1}/{len(steps)})\n{step}\n\n完整任务：{request}\n\n请完成此步骤。可调用工具。完成后给出结果。"
-                        result = await agent._execute_subagent(prompt, None, None)
-                    results[i] = result
-                    engine.complete_step(i + 1, success=bool(result), detail=f"完成")
-                except Exception as e:
-                    engine.complete_step(i + 1, success=False, detail=str(e)[:50])
-
-        await asyncio.gather(*[run_subagent(i, s) for i, s in enumerate(steps)])
-
-        # 输出汇总
-        final = "\n".join(f"• {steps[i]}: {results[i][:100]}" for i in range(len(steps)) if results[i])
-        if final:
-            print_color("\n" + final[:1000], ansi['green'])
-            self.chat_history.append({"role": "assistant", "content": final[:500]})
+        if result.get("success"):
+            final = result["result"].get("final_answer", "")
+            tool_results = result["result"].get("tool_results", [])
+            summary = final or f"任务完成（{len(tool_results)} 步）"
+            print_color(summary[:500], ansi['green'])
+            self.chat_history.append({"role": "assistant", "content": summary[:500]})
         else:
-            print_color("❌ 执行失败", ansi['red'])
+            error = result.get("error") or f"失败（{result.get('iterations',0)}轮，{len(result.get('result',{}).get('tool_results',[]))}次工具调用）"
+            print_color(f"❌ {error}", ansi['red'])
 
     async def start_chat_mode(self, mode: str = "simple"):
         """进入聊天模式"""
