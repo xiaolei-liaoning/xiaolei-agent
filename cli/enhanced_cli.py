@@ -61,9 +61,12 @@ def _pre_init_logger():
     import warnings
     warnings.filterwarnings("ignore", message="pkg_resources is deprecated")
     warnings.filterwarnings("ignore", message="Number of requested results")
+    # 在 ChromaDB 加载前禁用其遥测
+    os.environ["CHROMADB_TELEMETRY_DISABLED"] = "1"
     logging.getLogger("jieba").setLevel(logging.ERROR)
     logging.getLogger("chromadb").setLevel(logging.ERROR)
     logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("core.search.keyword_extractor").setLevel(logging.ERROR)
 
     # ── 快速解析命令行参数中的日志相关选项 ──
     log_file = None
@@ -791,7 +794,7 @@ class EnhancedCLI:
             await self.start_chat_mode(mode)
     
     async def handle_smart_request(self, request: str):
-        """处理智能请求 — V2 Agent（走 ToolRegistry 全量工具）"""
+        """处理智能请求 -- 调 BaseAgent.run()"""
         if not request.strip():
             return
 
@@ -808,14 +811,13 @@ class EnhancedCLI:
         result = await agent.run(request)
 
         if result.get("success"):
-            final = result["result"].get("final_answer", "")
-            tool_results = result["result"].get("tool_results", [])
-            summary = final or f"任务完成（{len(tool_results)} 步）"
-            print_color(summary[:500], ansi['green'])
-            self.chat_history.append({"role": "assistant", "content": summary[:500]})
+            answer = result["result"].get("final_answer", "")
+            text = answer[:500] if answer else "完成（%d 步）" % result.get("iterations", 0)
+            print_color(text, ansi['green'])
         else:
-            error = result.get("error") or f"失败（{result.get('iterations',0)}轮，{len(result.get('result',{}).get('tool_results',[]))}次工具调用）"
-            print_color(f"❌ {error}", ansi['red'])
+            err = result.get("error") or "失败（%d 步）" % result.get("iterations", 0)
+            print_color("❌ " + (err or ""), ansi['red'])
+
 
     async def start_chat_mode(self, mode: str = "simple"):
         """进入聊天模式"""
