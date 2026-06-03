@@ -57,11 +57,29 @@ async def _handle_fetch_url(args: Dict) -> Dict:
     try:
         url.encode("ascii")
     except (UnicodeEncodeError, UnicodeDecodeError):
-        from urllib.parse import urlparse, urlunparse, quote
+        from urllib.parse import urlparse, urlunparse, quote, urlencode, parse_qs
         parsed = urlparse(url)
-        # 只编码 path 和 query，不破坏域名
         path = quote(parsed.path, safe="/%@") if parsed.path else ""
-        query = parsed.query  # query 本身应该是已经编码的或全是 ascii
+        # query 也需要编码（LLM 经常给中文搜索词）
+        query = parsed.query
+        if query:
+            try:
+                query.encode("ascii")
+            except (UnicodeEncodeError, UnicodeDecodeError):
+                # 把 query 拆成 k=v 对逐项编码
+                encoded_pairs = []
+                for part in query.split("&"):
+                    if "=" in part:
+                        k, v = part.split("=", 1)
+                        try:
+                            v.encode("ascii")
+                        except (UnicodeEncodeError, UnicodeDecodeError):
+                            from urllib.parse import quote
+                            v = quote(v, safe="")
+                        encoded_pairs.append(f"{k}={v}")
+                    else:
+                        encoded_pairs.append(part)
+                query = "&".join(encoded_pairs)
         safe_url = urlunparse((parsed.scheme, parsed.netloc, path, parsed.params, query, parsed.fragment))
         url = safe_url
 
@@ -265,7 +283,7 @@ _SANDBOX_TOOL_DEFS = [
         parameters={"type":"object","properties":{"workspace_id":{"type":"string"},"test_path":{"type":"string"},"timeout":{"type":"integer","description":"默认120"}}},
         handler=_handle_run_tests),
     ToolDefinition(name="fetch_url", server=SERVER_BUILTIN, tags=["web","http","fetch"],
-        description="获取网页/API数据（HTTP GET），自动提取页面 JSON（支持 <!--s-data-->、__NEXT_DATA__、__INITIAL_STATE__），数据保存到 /tmp/ 供 execute_code 读取",
+        description="获取网页/API数据（HTTP GET），自动提取页面 JSON（支持 <!--s-data-->、__NEXT_DATA__、__INITIAL_STATE__），数据保存到 /tmp/ 供 execute_code 读取。注意：百度热搜接口为 top.baidu.com/board?tab=realtime，不要用 top.baidu.com/index",
         parameters={"type":"object","properties":{"url":{"type":"string"},"max_length":{"type":"integer","description":"默认80000"}},"required":["url"]},
         handler=_handle_fetch_url),
 ]

@@ -213,6 +213,9 @@ class BaseAgent:
                 if not ok:
                     ctx.last_error = obs[:200]
                     _consecutive_fail += 1
+                    # fetch_url 连续失败 2 次后自动移除
+                    if tn == "fetch_url" and _consecutive_fail >= 2:
+                        ctx.tool_defs = [td for td in ctx.tool_defs if td.get("function",{}).get("name") != "fetch_url"]
                 else:
                     _consecutive_fail = 0
                 # 记忆：记录本轮关键信息
@@ -299,14 +302,15 @@ class BaseAgent:
 
         if iteration == 1:
             lines.append("ReAct 模式：**Thought** → **Action**（调用工具）→ **Observation**\n"
-                         "完成后输出：{\"reasoning\":\"...\",\"summary\":\"回复\",\"done\":true}\n"
-                         "如需调整计划：{\"plan_update\":[\"新步骤1\",\"新步骤2\",...]}\n")
+                         "完成后输出：{\"reasoning\":\"...\",\"summary\":\"回复\",\"done\":true}\n")
         else:
             if results:
                 for r in results[-4:]:
                     tc = r.get("tool_call", {}).get("name", "?")
-                    lines.append(f"[{tc}]: {r.get('error','') or str(r.get('result',''))[:300]}\n")
-            lines.append("继续推理。可按需用 plan_update 调整后续步骤。完成后输出 done=true。\n")
+                    ok = r.get("success", False)
+                    status = "✓" if ok else "✗"
+                    lines.append(f"[{status} {tc}]: {r.get('error','') or str(r.get('result',''))[:300]}\n")
+            lines.append("继续推理。工具失败请换其他工具。完成后输出 done=true。\n")
         if last_error:
             lines.append(f"错误：{last_error}\n")
         return "\n".join(lines)
@@ -317,7 +321,7 @@ class BaseAgent:
             llm = get_llm_router()
             resp = await asyncio.wait_for(
                 llm.chat([
-                    {"role": "system", "content": "ReAct 智能体。调用工具完成任务。可按需调整计划。输出格式：完成时 {\"reasoning\":\"...\",\"summary\":\"回复\",\"done\":true}；调整计划时 {\"plan_update\":[\"新步骤1\",\"新步骤2\",...]}"},
+                    {"role": "system", "content": "ReAct 智能体。调用工具完成任务。工具失败请换其他工具。完成后输出：{\"reasoning\":\"...\",\"summary\":\"回复\",\"done\":true}"},
                     {"role": "user", "content": prompt}],
                     temperature=0.3, max_tokens=2000, tools=tools),
                 timeout=30)
@@ -435,6 +439,8 @@ class BaseAgent:
                     continue
                 except Exception as e:
                     logger.debug(f"handler {tool_name} 失败: {e}")
+                    if trace:
+                        trace.on_tool_error(f"handler 异常: {e}")
             result = None
             try:
                 from core.mcp.mcp_client import mcp_client
