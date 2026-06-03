@@ -69,8 +69,10 @@ class BaseAgent:
             if not reg._initialized:
                 await reg.discover_all()
             raw = reg.get_tools_for_task(task_description, max_tools=25)
-            def _ok(t): return t.name in _HANDLER_MAP or t.handler or (t.server and t.server not in ("__skill__","__api__","__guidance__",""))
-            core_n = ["fetch_url","file","execute_code","workspace_file"]
+            def _ok(t):
+                if t.server == "__builtin__": return True  # builtin handler 全部可用
+                return t.name in _HANDLER_MAP or t.handler is not None
+            core_n = ["fetch_url","file","execute_code"]
             items = [{"type":"function","function":{"name":t.name,"description":t.description,"parameters":t.parameters},
                       "_server":t.server,"_tool_name":t.tool_name} for t in raw if _ok(t)]
             core = [i for i in items if i["function"]["name"] in core_n]

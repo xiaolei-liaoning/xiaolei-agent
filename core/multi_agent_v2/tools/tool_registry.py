@@ -126,21 +126,11 @@ async def _handle_execute_code(args: Dict) -> Dict:
     if action=="run_python":
         code=args.get("code","")
         if not code: return {"result":{"content":[{"text":"缺少 code"}]}}
-        if ws:
-            from core.sandbox.enhanced_executor import get_enhanced_executor
-            r=await get_enhanced_executor().execute_python(ws,code,timeout=args.get("timeout",30))
-            t=r.get("stdout","") or r.get("stderr","") or r.get("error","无输出")
-            return {"result":{"content":[{"text":f"[workspace] {'成功' if r.get('success') else '失败'}\n{t[:3000]}"}]}}
         sr=await ex.execute_python(code,skip_module_check=True)
         o=sr.stdout or sr.stderr or sr.error_message or ""
         return {"result":{"content":[{"text":f"[沙盒] {sr.status.value}\n{o[:3000]}"}]}}
     if action=="run_shell":
         cmd=args.get("command","")
-        if ws:
-            from core.sandbox.enhanced_executor import get_enhanced_executor
-            r=await get_enhanced_executor().execute_shell(ws,cmd,timeout=args.get("timeout",30))
-            t=r.get("stdout","") or r.get("stderr","") or r.get("error","")
-            return {"result":{"content":[{"text":f"[workspace] {'成功' if r.get('success') else '失败'}\n{t[:3000]}"}]}}
         sr=await ex.execute_shell(cmd)
         o=sr.stdout or sr.stderr or sr.error_message or ""
         return {"result":{"content":[{"text":f"[沙盒] {sr.status.value}\n{o[:3000]}"}]}}
