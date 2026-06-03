@@ -52,11 +52,27 @@ SERVER_BUILTIN = "__builtin__"
 async def _handle_fetch_url(args: Dict) -> Dict:
     url = args.get("url", ""); ml = args.get("max_length", 80000)
     if not url: return {"result": {"content": [{"text": "参数缺失: 需要 url"}]}}
-    import ssl, urllib.request
+    import asyncio, ssl, urllib.request
+    # URL 编码处理中文字符
+    try:
+        url.encode("ascii")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        from urllib.parse import urlparse, urlunparse, quote
+        parsed = urlparse(url)
+        # 只编码 path 和 query，不破坏域名
+        path = quote(parsed.path, safe="/%@") if parsed.path else ""
+        query = parsed.query  # query 本身应该是已经编码的或全是 ascii
+        safe_url = urlunparse((parsed.scheme, parsed.netloc, path, parsed.params, query, parsed.fragment))
+        url = safe_url
+
+    loop = asyncio.get_running_loop()
     ctx = ssl.create_default_context(); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    resp = urllib.request.urlopen(req, context=ctx, timeout=15)
-    data = resp.read().decode("utf-8", errors="replace"); text = data[:ml]
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"})
+    try:
+        resp = await loop.run_in_executor(None, lambda: urllib.request.urlopen(req, context=ctx, timeout=15))
+        data = resp.read().decode("utf-8", errors="replace"); text = data[:ml]
+    except Exception as e:
+        return {"result": {"content": [{"text": f"请求失败: {e}"}]}}
     je = None
     for p in [r'<!--s-data:(.*?)-->', r'window\.__INITIAL_STATE__\s*=\s*(\{.*?\});',
               r'<script[^>]*id="__NEXT_DATA__"[^>]*>(.*?)</script>']:
