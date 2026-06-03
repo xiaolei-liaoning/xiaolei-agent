@@ -213,76 +213,87 @@ class SimpleStepDisplay:
         print()
 
 
+# ANSI 转义码（用于直接终端输出，无需 Rich 解析）
+_ANSI = {
+    'green': '\033[38;2;78;186;101m',
+    'cyan': '\033[38;2;0;255;255m',
+    'gray': '\033[38;2;153;153;153m',
+    'red': '\033[38;2;255;107;128m',
+    'end': '\033[0m',
+}
+
+
 class CompactStepDisplay:
     """紧凑版步骤显示 - 一行显示所有步骤"""
-    
+
     def __init__(self, steps: List[Dict]):
         self.steps = steps
         self.step_status = ['pending'] * len(steps)
         self.last_length = 0
-    
+
     def set_step_active(self, step_index: int):
         """设置步骤为活跃状态"""
         if 0 <= step_index < len(self.step_status):
             self.step_status[step_index] = 'active'
-    
+
     def set_step_success(self, step_index: int):
         """设置步骤为成功状态"""
         if 0 <= step_index < len(self.step_status):
             self.step_status[step_index] = 'success'
-    
+
     def set_step_failed(self, step_index: int):
         """设置步骤为失败状态"""
         if 0 <= step_index < len(self.step_status):
             self.step_status[step_index] = 'failed'
-    
+
     def set_step_skipped(self, step_index: int):
         """设置步骤为跳过状态"""
         if 0 <= step_index < len(self.step_status):
             self.step_status[step_index] = 'skipped'
-    
+
     def display(self):
         """显示步骤进度（一行显示）"""
         import sys
-        
+        a = _ANSI
+
         # 构建步骤状态显示
         step_display = ""
         for i, step in enumerate(self.steps):
             status = self.step_status[i]
-            
+
             if status == 'success':
-                step_display += f"{CliColors.GREEN}【✓】{step['title']}{CliColors.ENDC}"
+                step_display += f"{a['green']}【✓】{step['title']}{a['end']}"
             elif status == 'active':
-                step_display += f"{CliColors.CYAN}【●】{step['title']}{CliColors.ENDC}"
+                step_display += f"{a['cyan']}【●】{step['title']}{a['end']}"
             elif status == 'failed':
-                step_display += f"{CliColors.RED}【✗】{step['title']}{CliColors.ENDC}"
+                step_display += f"{a['red']}【✗】{step['title']}{a['end']}"
             elif status == 'skipped':
-                step_display += f"{CliColors.GRAY}【○】{step['title']}{CliColors.ENDC}"
+                step_display += f"{a['gray']}【○】{step['title']}{a['end']}"
             else:
-                step_display += f"{CliColors.GRAY}【 】{step['title']}{CliColors.ENDC}"
-            
+                step_display += f"{a['gray']}【 】{step['title']}{a['end']}"
+
             if i < len(self.steps) - 1:
                 step_display += " → "
-        
+
         # 计算进度
         completed = sum(1 for s in self.step_status if s == 'success')
         total = len(self.steps)
         percent = int((completed / total) * 100)
-        
+
         # 构建进度条
         bar_width = 30
         filled = int((completed / total) * bar_width)
-        progress_bar = f"{CliColors.CYAN}[{CliColors.GREEN}{'█' * filled}{CliColors.GRAY}{'░' * (bar_width - filled)}{CliColors.CYAN}]{CliColors.ENDC} {percent}%"
-        
+        progress_bar = f"{a['cyan']}[{a['green']}{'█' * filled}{a['gray']}{'░' * (bar_width - filled)}{a['cyan']}]{a['end']} {percent}%"
+
         # 构建完整输出
         full_output = f"{step_display}  {progress_bar}"
-        
+
         # 用空格清除之前的输出
         if self.last_length > len(full_output):
             full_output += " " * (self.last_length - len(full_output))
-        
+
         self.last_length = len(full_output)
-        
+
         # 输出到同一行
         sys.stdout.write(f"\r{full_output}")
         sys.stdout.flush()

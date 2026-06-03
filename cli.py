@@ -15,7 +15,7 @@ from cli.enhanced_cli import main, parse_args
 if __name__ == "__main__":
     args = parse_args()
 
-    enable_dual = args.dual_terminal or (not args.single_terminal and os.environ.get("TMUX") is None)
+    enable_dual = args.dual_terminal  # 默认单终端，仅当显式指定 --dual-terminal 时才启用双终端模式
 
     if enable_dual and shutil.which("tmux"):
         from cli.enhanced_cli import setup_dual_terminal

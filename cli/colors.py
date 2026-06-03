@@ -181,3 +181,16 @@ def typing_effect(text: str, delay: float = 0.02, color: str = None) -> None:
 
 def get_console() -> Console:
     return _console
+
+
+# ── ANSI 转义码（用于 input() 等直接终端输出的场景） ───────────────────────
+ansi = {
+    'green': '\033[38;2;78;186;101m',
+    'cyan': '\033[38;2;0;255;255m',
+    'gray': '\033[38;2;153;153;153m',
+    'red': '\033[38;2;255;107;128m',
+    'yellow': '\033[38;2;255;193;7m',
+    'white': '\033[38;2;255;255;255m',
+    'bold': '\033[1m',
+    'end': '\033[0m',
+}

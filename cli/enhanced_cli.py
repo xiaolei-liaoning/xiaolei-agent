@@ -57,7 +57,15 @@ sys.path.insert(0, str(Path(__file__).parent))
 # 先解析参数并初始化日志系统（在导入任何可能产生日志的模块之前）
 def _pre_init_logger():
     """预初始化日志系统 - 在导入其他模块之前"""
-    # 快速解析命令行参数中的日志相关选项
+    # ── 先过滤已知噪音 ──
+    import warnings
+    warnings.filterwarnings("ignore", message="pkg_resources is deprecated")
+    warnings.filterwarnings("ignore", message="Number of requested results")
+    logging.getLogger("jieba").setLevel(logging.ERROR)
+    logging.getLogger("chromadb").setLevel(logging.ERROR)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+
+    # ── 快速解析命令行参数中的日志相关选项 ──
     log_file = None
     no_console_log = False
     

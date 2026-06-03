@@ -11,7 +11,7 @@ from enum import Enum
 from typing import Optional
 from pathlib import Path
 
-from cli.colors import CliColors
+from cli.colors import CliColors, ansi
 
 
 class LogLevel(Enum):
@@ -65,13 +65,13 @@ class SimpleLogger:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
         level_colors = {
-            LogLevel.DEBUG: CliColors.GRAY,
-            LogLevel.INFO: CliColors.CYAN,
-            LogLevel.WARNING: CliColors.YELLOW,
-            LogLevel.ERROR: CliColors.RED,
-            LogLevel.SUCCESS: CliColors.GREEN,
+            LogLevel.DEBUG: ansi['gray'],
+            LogLevel.INFO: ansi['cyan'],
+            LogLevel.WARNING: ansi['yellow'],
+            LogLevel.ERROR: ansi['red'],
+            LogLevel.SUCCESS: ansi['green'],
         }
-        
+
         level_icons = {
             LogLevel.DEBUG: "🔍",
             LogLevel.INFO: "ℹ️",
@@ -79,14 +79,14 @@ class SimpleLogger:
             LogLevel.ERROR: "❌",
             LogLevel.SUCCESS: "✅",
         }
-        
-        color = level_colors.get(level, CliColors.WHITE)
+
+        color = level_colors.get(level, ansi['white'])
         icon = level_icons.get(level, "📝")
-        
+
         if with_color:
             if self._show_timestamp:
-                return f"{timestamp} | {color}{icon} {level.value}{CliColors.ENDC} | {message}"
-            return f"{color}{icon} {level.value}{CliColors.ENDC} | {message}"
+                return f"{timestamp} | {color}{icon} {level.value}{ansi['end']} | {message}"
+            return f"{color}{icon} {level.value}{ansi['end']} | {message}"
         else:
             # 无颜色版本，用于日志文件
             if self._show_timestamp:

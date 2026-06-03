@@ -2,67 +2,67 @@
 
 import readline
 from typing import List, Dict, Callable
-from cli.colors import CliColors
+from cli.colors import CliColors, ansi
 
 
 class AutoCompleter:
     """命令自动补全器"""
-    
+
     def __init__(self):
         self.commands = []
         self.aliases = {}
         self._setup_readline()
-    
+
     def _setup_readline(self):
         """配置readline"""
         readline.set_completer(self._completer)
         readline.parse_and_bind('tab: complete')
         readline.set_completer_delims(' \t\n;')
-        
+
         try:
             readline.read_history_file('.history')
         except FileNotFoundError:
             pass
-    
+
     def add_command(self, command: str, description: str = ""):
         """添加命令"""
         if command not in self.commands:
             self.commands.append(command)
-    
+
     def add_commands(self, commands: List[str]):
         """批量添加命令"""
         for cmd in commands:
             self.add_command(cmd)
-    
+
     def set_aliases(self, aliases: Dict[str, str]):
         """设置命令别名"""
         self.aliases.update(aliases)
-    
+
     def _completer(self, text: str, state: int) -> str:
         """补全函数"""
         matches = [cmd for cmd in self.commands if cmd.startswith(text)]
-        
+
         if state < len(matches):
             return matches[state]
         return None
-    
+
     def get_input(self, prompt: str = "> ") -> str:
         """获取用户输入（带补全）"""
         try:
-            return input(f"{CliColors.GREEN}{prompt}{CliColors.ENDC}").strip()
+            return input(f"{ansi['green']}{prompt}{ansi['end']}").strip()
         except EOFError:
             return ""
-    
+
     def save_history(self):
         """保存命令历史"""
         try:
             readline.write_history_file('.history')
         except Exception:
             pass
-    
+
     def show_commands(self):
         """显示所有可用命令"""
-        print(f"\n{CliColors.BOLD + CliColors.CYAN}可用命令:{CliColors.ENDC}")
+        print(f"\n{ansi['bold']}{ansi['cyan']}可用命令:{ansi['end']}")
         for cmd in sorted(self.commands):
             print(f"  {cmd}")
         print()
@@ -95,7 +95,7 @@ class CommandRegistry:
                 self._commands[command]['handler'](*args)
                 return True
             except Exception as e:
-                print(f"{CliColors.RED}命令执行错误: {e}{CliColors.ENDC}")
+                print(f"{ansi['red']}命令执行错误: {e}{ansi['end']}")
         return False
     
     def get_completer(self) -> AutoCompleter:

@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from cli.colors import CliColors, print_color
+from cli.colors import CliColors, print_color, ansi
 from cli.ui_components import (
     ProgressBar, Table, Card, Spinner, Tree, StatusBar, Menu, Dialog,
     Panel, KeyValueDisplay, AnimatedText, show_progress, show_table, show_card
@@ -79,7 +79,7 @@ class DemoRunner:
         print_color("╚════════════════════════════════════════════════════════════════╝", CliColors.CYAN + CliColors.BOLD)
         
         while True:
-            choice = input(f"\n{CliColors.GREEN}请选择演示项目 (1-5): {CliColors.ENDC}").strip()
+            choice = input(f"\n{ansi['green']}请选择演示项目 (1-5): {ansi['end']}").strip()
             options = {'1': 'ui', '2': 'tool', '3': 'shell', '4': 'permission', '5': 'exit', 'ui': 'ui', 'tool': 'tool', 'shell': 'shell', 'permission': 'permission', 'exit': 'exit'}
             if choice.lower() in options:
                 return options[choice.lower()]

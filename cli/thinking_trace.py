@@ -118,6 +118,7 @@ class ThinkingTrace:
         if not self.enabled or not steps:
             return
         self._plan = steps
+        _console.clear()
         _console.print(f"  [{CLAUDE}]Plan:[/{CLAUDE}]")
         for i, step in enumerate(steps, 1):
             _console.print(f"    [{SUBTLE}]{i}.[/{SUBTLE}] {step}")
