@@ -102,17 +102,35 @@ class BaseAgent:
             chain.add(mw)
         await chain.on_start(ctx)
 
-        # 获取工具定义
+        # 获取工具定义（只暴露可执行的工具）
         try:
-            from core.multi_agent_v2.tools.tool_registry import get_tool_registry
+            from core.multi_agent_v2.tools.tool_registry import get_tool_registry, _HANDLER_MAP, SERVER_BUILTIN, SERVER_MCP
             reg = get_tool_registry()
             if not reg._initialized:
                 await reg.discover_all()
+            raw_tools = reg.get_tools_for_task(task_description, max_tools=25)
+
+            # 只保留有 handler 的 builtin 工具 或 MCP 工具；去掉无执行的 skill/api/guidance
+            def _executable(t):
+                if t.name in _HANDLER_MAP: return True
+                if t.handler is not None: return True
+                if t.server and t.server not in ("__skill__", "__api__", "__guidance__", ""): return True
+                return False
+
             ctx.tool_defs = [
                 {"type": "function", "function": {"name": t.name, "description": t.description, "parameters": t.parameters},
                  "_server": t.server, "_tool_name": t.tool_name}
-                for t in reg.get_tools_for_task(task_description, max_tools=25)
+                for t in raw_tools if _executable(t)
             ]
+
+            # 确保核心工具始终在最前
+            core_names = ["fetch_url", "file", "execute_code", "workspace_file"]
+            core = [td for td in ctx.tool_defs if td["function"]["name"] in core_names]
+            others = [td for td in ctx.tool_defs if td["function"]["name"] not in core_names]
+            ctx.tool_defs = core + others[:20]
+
+            if not ctx.tool_defs:
+                ctx.tool_defs = raw_tools[:10]  # 兜底
         except Exception:
             ctx.tool_defs = []
 
