@@ -205,6 +205,139 @@ class ThinkingTrace:
         if self.enabled:
             _console.rule(style=SUBTLE)
 
+    # ── 结构化步骤展示 ────────────────────────────────────────────
+    _STEP_ICONS = {
+        "pending": "○",
+        "running": "◐",
+        "success": "✓",
+        "failed": "✗",
+        "skipped": "→",
+        "blocked": "⊘",
+    }
+
+    def display_step_plan(self, steps: list):
+        """展示完整的步骤计划（含依赖关系）
+
+        Args:
+            steps: List[Step] 或 List[Dict] 格式的结构化步骤
+        """
+        if not self.enabled or not steps:
+            return
+        _console.print(f"  [{CLAUDE}]Step Plan ({len(steps)} steps):[/{CLAUDE}]")
+        for i, step in enumerate(steps, 1):
+            # 兼容 Step 对象和 Dict
+            if hasattr(step, 'step_id'):
+                step_id = step.step_id
+                name = getattr(step, 'name', step_id)
+                desc = getattr(step, 'description', '')
+                s_type = getattr(step, 'type', '')
+                deps = getattr(step, 'dependencies', [])
+            else:
+                step_id = step.get('step_id', f'step_{i}')
+                name = step.get('name', step_id)
+                desc = step.get('description', '')
+                s_type = step.get('type', '')
+                deps = step.get('dependencies', [])
+
+            # 类型标签
+            type_str = str(s_type).replace("StepType.", "") if not isinstance(s_type, str) else s_type
+            type_label = f"[dim]({type_str})[/dim]" if type_str and type_str != "StepType.TOOL_CALL" else ""
+
+            # 依赖标签
+            dep_str = f" ← {', '.join(deps)}" if deps else ""
+
+            _console.print(
+                f"    {i}. [bold]{name or step_id}[/bold] {type_label}"
+                f"[dim]{dep_str}[/dim]"
+            )
+            if desc and desc != name:
+                _console.print(f"       [dim]{desc[:100]}[/dim]")
+
+    @staticmethod
+    def _get_field(obj, field: str, default=None):
+        """从 Step 对象或 Dict 中安全获取字段"""
+        if hasattr(obj, field):
+            return getattr(obj, field, default)
+        if isinstance(obj, dict):
+            return obj.get(field, default)
+        return default
+
+    def display_dependency_graph(self, steps: list):
+        """以树形展示步骤依赖关系"""
+        if not self.enabled or not steps:
+            return
+
+        # 找出根步骤（无依赖的）
+        roots = []
+        for s in steps:
+            deps = self._get_field(s, "dependencies", [])
+            if not deps:  # 无依赖的步骤是根
+                roots.append(s)
+
+        if not roots and steps:
+            # 全部有依赖时，第一个作为根
+            roots = [steps[0]]
+
+        _console.print(f"  [{CLAUDE}]Dependency Graph:[/{CLAUDE}]")
+
+        def _print_tree(s, depth=0):
+            sid = self._get_field(s, "step_id", "")
+            name = self._get_field(s, "name", sid)
+            indent = "  " * depth
+            marker = "└─" if depth > 0 else "●"
+            _console.print(f"    {indent} {marker} [bold]{name}[/bold]")
+            # 打印子步骤（依赖当前步骤的）
+            children = [x for x in steps
+                       if sid in self._get_field(x, "dependencies", [])]
+            for child in children:
+                _print_tree(child, depth + 1)
+
+        for root in roots:
+            _print_tree(root)
+
+    def on_step_start(self, step) -> None:
+        """步骤开始执行时展示"""
+        if not self.enabled:
+            return
+        step_id = getattr(step, "step_id", "?")
+        name = getattr(step, "name", step_id)
+        desc = getattr(step, "description", "")
+        icon = self._STEP_ICONS.get("running", "◐")
+        _console.print(f"  {icon} [{CLAUDE}]Step:[/{CLAUDE}] [bold]{name}[/bold]")
+        if desc and desc != name:
+            _console.print(f"    [dim]{desc[:100]}[/dim]")
+
+    def on_step_complete(self, step) -> None:
+        """步骤完成时展示结果"""
+        if not self.enabled:
+            return
+        name = getattr(step, "name", getattr(step, "step_id", "?"))
+        result = getattr(step, "result", None)
+        exec_time = getattr(step, "execution_time", 0)
+        icon = self._STEP_ICONS.get("success", "✓")
+
+        result_preview = ""
+        if result is not None:
+            result_str = str(result)
+            if len(result_str) > 150:
+                result_str = result_str[:147] + "..."
+            result_preview = result_str
+
+        time_str = f" ({exec_time:.1f}s)" if exec_time else ""
+        _console.print(f"  {icon} [{SUCCESS}]Done:[/{SUCCESS}] {name}[dim]{time_str}[/dim]")
+        if result_preview:
+            _console.print(f"    {INDENT}[dim]{result_preview}[/dim]")
+
+    def on_step_failed(self, step, error: str = "") -> None:
+        """步骤失败时展示错误"""
+        if not self.enabled:
+            return
+        name = getattr(step, "name", getattr(step, "step_id", "?"))
+        icon = self._STEP_ICONS.get("failed", "✗")
+        _console.print(f"  {icon} [{ERROR}]Failed:[/{ERROR}] {name}")
+        if error:
+            _console.print(f"    {INDENT}[red]{error[:200]}[/red]")
+
     # ── 日志兼容 (对接 think_log 等旧接口) ──────────────────────────
 
     def log(self, text: str, level: str = "info"):

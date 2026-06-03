@@ -121,6 +121,12 @@ class Mind:
             plan="待制定...",
             conclusion="待定",
         )
+        # 附加结构化步骤生成指令（让 LLM 也返回 JSON 格式的步骤）
+        planner_hint = """
+
+如果可能，请额外以 JSON 格式提供结构化执行步骤，格式如下：
+{"steps": [{"step_id": "step_1", "name": "步骤名", "description": "描述", "type": "search/tool_call/llm_task/analysis", "dependencies": [], "expected_output": "预期产出"}]}
+将 JSON 放在 ```json 代码块中。"""
 
         # 查重提醒注入
         try:
@@ -181,11 +187,36 @@ class Mind:
             content = self._extract_openai_content(response) or response
             thought = self._parse_llm_response(content, task)
             thought.tool_calls = tool_calls_parsed
+
+            # 尝试从响应中解析结构化步骤
+            structured = self._try_extract_structured_steps(response)
+            if structured:
+                thought.structured_plan = structured
+                logger.info(f"LLM 返回 {len(structured)} 个结构化步骤")
+
             logger.info(f"LLM 自主选择了 {len(tool_calls_parsed)} 个工具调用")
             return thought
 
         # 解析LLM响应
         thought = self._parse_llm_response(response, task)
+
+        # 尝试从响应中提取结构化步骤
+        structured = self._try_extract_structured_steps(response)
+        if structured:
+            thought.structured_plan = structured
+            logger.info(f"从 LLM 响应中提取了 {len(structured)} 个结构化步骤")
+        else:
+            # 兜底：用 StepPlanner 生成结构化步骤
+            try:
+                from core.multi_agent_v2.orchestration.scheduler.step_planner import StepPlanner
+                planner = StepPlanner(llm_router=self.llm_router)
+                structured_plan = await planner.plan(task)
+                if structured_plan:
+                    thought.structured_plan = structured_plan
+                    logger.info(f"StepPlanner 生成 {len(structured_plan)} 个结构化步骤")
+            except Exception as e:
+                logger.debug(f"StepPlanner 生成结构化步骤失败: {e}")
+
         return thought
 
     def _parse_llm_response(self, response: str, task: Task) -> Thought:
@@ -316,6 +347,21 @@ class Mind:
                 return None
             return choices[0].get("message", {}).get("content")
         except (json.JSONDecodeError, Exception):
+            return None
+
+    def _try_extract_structured_steps(self, response: str) -> Optional[List]:
+        """尝试从 LLM 响应中提取结构化步骤（JSON 格式）
+
+        响应可能包含：
+        ```json
+        {"steps": [{"step_id": "...", "name": "...", ...}]}
+        ```
+        """
+        try:
+            from core.multi_agent_v2.orchestration.scheduler.step_planner import StepPlanner
+            planner = StepPlanner()
+            return planner._parse_llm_response(response)
+        except Exception:
             return None
 
     def _confidence_from_response(self, response: str, plan: List[str]) -> float:

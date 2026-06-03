@@ -10,6 +10,69 @@ from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
 
 
+class StepStatus(Enum):
+    """步骤状态"""
+    PENDING = "pending"          # 待执行
+    RUNNING = "running"          # 执行中
+    SUCCESS = "success"          # 执行成功
+    FAILED = "failed"            # 执行失败
+    SKIPPED = "skipped"          # 已跳过
+    BLOCKED = "blocked"          # 依赖未就绪
+
+
+class StepType(Enum):
+    """步骤类型"""
+    TOOL_CALL = "tool_call"       # 调用工具
+    LLM_TASK = "llm_task"         # LLM 直接生成
+    HUMAN_INPUT = "human_input"   # 需要用户输入
+    SUBTASK = "subtask"           # 子任务（可委派给其他 Agent）
+    DECISION = "decision"         # 决策分支点
+    SEARCH = "search"             # 搜索/查询
+    ANALYSIS = "analysis"         # 分析处理
+
+
+@dataclass
+class Step:
+    """结构化步骤定义"""
+    step_id: str                                      # 步骤唯一 ID
+    name: str                                         # 步骤名称
+    description: str                                  # 步骤描述
+    type: StepType = StepType.TOOL_CALL               # 步骤类型
+    status: StepStatus = StepStatus.PENDING           # 步骤状态
+    dependencies: List[str] = field(default_factory=list)  # 依赖的 step_id 列表
+    tool_name: str = ""                               # 如果是 TOOL_CALL，指定工具
+    tool_args: Dict[str, Any] = field(default_factory=dict)  # 工具参数
+    expected_output: str = ""                         # 预期产出描述
+    result: Any = None                                # 执行结果
+    error: Optional[str] = None                       # 错误信息
+    execution_time: float = 0.0                       # 执行耗时（秒）
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    agent_id: Optional[str] = None                    # 分配给哪个 Agent（None 表示当前）
+
+
+@dataclass
+class StepEvent:
+    """步骤事件（用于进度回调）"""
+    type: str                                         # step_start, step_complete, step_failed, step_skipped, step_progress
+    step: Step                                        # 事件关联的步骤
+    timestamp: float = field(default_factory=time.time)
+    context: Optional[Dict[str, Any]] = None          # 额外上下文
+
+
+@dataclass
+class ExecutionResult:
+    """分步执行结果"""
+    success: bool                                     # 是否全部成功
+    steps: List[Step]                                 # 所有步骤的最终状态
+    total_steps: int = 0
+    completed_steps: int = 0
+    failed_steps: int = 0
+    skipped_steps: int = 0
+    total_execution_time: float = 0.0
+    error: Optional[str] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
 class CommunicationTopic(Enum):
     """通信主题"""
     TASK_COMPLETED = "task_completed"
@@ -73,10 +136,11 @@ class Tool:
 class Thought:
     """思考过程"""
     reasoning: str                       # 推理过程
-    plan: List[str]                     # 执行计划
+    plan: List[str]                     # 执行计划（文本形式，兼容旧路径）
     confidence: float                   # 置信度
     alternatives: List[str] = field(default_factory=list)  # 备选方案
     tool_calls: List[Dict] = field(default_factory=list)   # LLM 选择的工具调用
+    structured_plan: Optional[List[Step]] = None  # 结构化步骤（新路径）
 
 
 @dataclass

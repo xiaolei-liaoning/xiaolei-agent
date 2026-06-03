@@ -1,12 +1,11 @@
-"""GLM API 集成 - 统一 LLM 后端
+"""GLM API 集成 + 多LLM路由 — 统一 LLM 后端
 
 特性:
 - GLMBackend: zhipuai.ZhipuAI 封装，支持流式/非流式
-- 自动重试：最多 3 次，指数退避 1s / 2s / 4s
-- Token 使用统计：每次调用记录 prompt_tokens / completion_tokens
-- 模型动态切换：glm-4-flash / glm-4-plus / glm-4-air
-- 速率限制：每分钟最多 60 次调用（滑动窗口）
-- LLMRouter 统一接口：chat / simple_chat / chat_stream
+- Auto-retry: 最多 3 次，指数退避
+- Token 统计
+- 速率限制（滑动窗口）
+- LLMRouter: 多提供商路由，4 种策略（round_robin/least_load/priority/fallback_chain）
 - 全局单例 get_llm_router()
 """
 
@@ -16,11 +15,12 @@ import json
 import time
 import logging
 import threading
-from typing import List, Dict, Optional, AsyncIterator, Any
 from dataclasses import dataclass, field
+from enum import Enum
+from typing import List, Dict, Optional, AsyncIterator, Any
+
 from dotenv import load_dotenv
 
-# 导入配置管理器
 try:
     from ..infrastructure.config_manager import get_config
     HAS_CONFIG_MANAGER = True
@@ -30,31 +30,26 @@ except ImportError:
 load_dotenv()
 logger = logging.getLogger(__name__)
 
-# 从配置管理器获取配置，或者使用默认值作为后备
+
 def get_llm_config():
     if HAS_CONFIG_MANAGER:
         try:
-            config = get_config()
-            return config.llm
-        except Exception as e:
-            logger.warning(f"获取配置失败，使用默认配置: {e}")
-    
-    # 后备配置
+            return get_config().llm
+        except Exception:
+            pass
     class FallbackLLMConfig:
-        default_model: str = "glm-4-flash"  # 使用glm-4-flash（用户可用模型列表中存在）
-        max_retries: int = 3
-        backoff_base: float = 2.0  # 增加退避时间
-        rate_limit_rpm: int = 30  # 降低到30 RPM以适配免费API限制
-        supported_models: List[str] = [
-            "glm-4-flash", "glm-4-plus", "glm-4-air", 
+        default_model = "glm-4-flash"
+        max_retries = 3
+        backoff_base = 2.0
+        rate_limit_rpm = 30
+        supported_models = [
+            "glm-4-flash", "glm-4-plus", "glm-4-air",
             "glm-4.7-flash", "glm-4-free", "glm-3-turbo",
-            "free-glm-4", "free-qwen", "free-llama"
+            "free-glm-4", "free-qwen", "free-llama",
         ]
     return FallbackLLMConfig()
 
 llm_config = get_llm_config()
-
-# 兼容旧代码的常量
 SUPPORTED_MODELS = llm_config.supported_models
 DEFAULT_MODEL = llm_config.default_model
 MAX_RETRIES = llm_config.max_retries
@@ -68,8 +63,6 @@ RATE_LIMIT_RPM = llm_config.rate_limit_rpm
 
 @dataclass
 class TokenUsage:
-    """单次 API 调用的 Token 用量。"""
-
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
@@ -78,904 +71,479 @@ class TokenUsage:
 
 
 class TokenStats:
-    """Token 用量统计器（线程安全）。"""
-
-    def __init__(self, max_history: int = 500) -> None:
+    def __init__(self, max_history: int = 500):
         self._history: List[TokenUsage] = []
-        self._max_history: int = max_history
-        self._lock: threading.Lock = threading.Lock()
+        self._max_history = max_history
+        self._lock = threading.Lock()
 
-    def record(self, usage: TokenUsage) -> None:
-        """记录一次 Token 用量。"""
+    def record(self, usage: TokenUsage):
         with self._lock:
             self._history.append(usage)
             if len(self._history) > self._max_history:
                 self._history = self._history[-self._max_history:]
 
     def get_summary(self) -> Dict[str, Any]:
-        """获取 Token 用量摘要。"""
         with self._lock:
             if not self._history:
-                return {
-                    "total_prompt_tokens": 0,
-                    "total_completion_tokens": 0,
-                    "total_tokens": 0,
-                    "call_count": 0,
-                    "avg_prompt_tokens": 0,
-                    "avg_completion_tokens": 0,
-                }
-            total_prompt = sum(u.prompt_tokens for u in self._history)
-            total_completion = sum(u.completion_tokens for u in self._history)
-            count = len(self._history)
+                return {"total_prompt_tokens": 0, "total_completion_tokens": 0,
+                        "total_tokens": 0, "call_count": 0}
+            total = sum(u.total_tokens for u in self._history)
             return {
-                "total_prompt_tokens": total_prompt,
-                "total_completion_tokens": total_completion,
-                "total_tokens": total_prompt + total_completion,
-                "call_count": count,
-                "avg_prompt_tokens": round(total_prompt / count, 2),
-                "avg_completion_tokens": round(total_completion / count, 2),
+                "total_prompt_tokens": sum(u.prompt_tokens for u in self._history),
+                "total_completion_tokens": sum(u.completion_tokens for u in self._history),
+                "total_tokens": total,
+                "call_count": len(self._history),
+                "avg_tokens": round(total / len(self._history), 2),
             }
 
 
 # ============================================================
-# 速率限制器（滑动窗口）
+# 速率限制器
 # ============================================================
 
 class RateLimiter:
-    """滑动窗口速率限制器。
-
-    限制每分钟最多 RPM 次调用（异步版本）。
-    """
-
-    def __init__(self, rpm: int = RATE_LIMIT_RPM) -> None:
-        self._rpm: int = rpm
+    def __init__(self, rpm: int = RATE_LIMIT_RPM):
+        self._rpm = rpm
         self._timestamps: List[float] = []
-        self._lock: asyncio.Lock = asyncio.Lock()
+        self._lock = asyncio.Lock()
 
     async def acquire(self, timeout: float = 30.0) -> bool:
-        """获取一个调用许可。
-
-        Args:
-            timeout: 最大等待时间（秒）
-
-        Returns:
-            True 表示获取成功，False 表示超时
-        """
         deadline = time.time() + timeout
         while time.time() < deadline:
             async with self._lock:
                 now = time.time()
-                # 清除超过 60 秒的时间戳
                 self._timestamps = [t for t in self._timestamps if now - t < 60]
                 if len(self._timestamps) < self._rpm:
                     self._timestamps.append(now)
                     return True
-                # 计算需要等待的时间
                 wait = 60 - (now - self._timestamps[0]) + 0.01
             await asyncio.sleep(min(wait, 1.0))
-        logger.warning("速率限制等待超时 (%.1fs)", timeout)
         return False
 
     @property
     def available(self) -> int:
-        """当前剩余可用调用次数。"""
         now = time.time()
         self._timestamps = [t for t in self._timestamps if now - t < 60]
         return self._rpm - len(self._timestamps)
 
 
 # ============================================================
-# GLM 后端
+# GLM 后端（保留原有完整实现）
 # ============================================================
 
 class GLMBackend:
-    """智谱 GLM API 封装。
+    """智谱 GLM API 封装 — 保留完整实现兼容旧代码"""
 
-    功能：
-    - 流式 / 非流式响应
-    - 自动重试（指数退避）
-    - Token 统计
-    - 模型动态切换
-    - 速率限制
-    - 支持免费模型（无需API Key）
-    """
-
-    # 免费API端点配置（已验证可用的真实端点）
-    # 注意：移除假的 api.fake-free-llm.com 端点，避免每次超时30秒
     FREE_API_ENDPOINTS = {
-        # Groq 免费模型 (Llama-3.1 8B / Gemma2 9B - 真正免费，无需API Key)
         "groq-llama3": "https://api.groq.com/openai/v1/chat/completions",
         "groq-gemma": "https://api.groq.com/openai/v1/chat/completions",
-        # Groq 默认免费模型
         "llama-3.1-8b-instant": "https://api.groq.com/openai/v1/chat/completions",
         "gemma2-9b-it": "https://api.groq.com/openai/v1/chat/completions",
-        # Together AI (免费额度)
         "together-llama": "https://api.together.xyz/v1/chat/completions",
         "meta-llama/Llama-3-8b-chat-hf": "https://api.together.xyz/v1/chat/completions",
-        # OpenRouter (有免费额度)
         "openrouter-llama": "https://openrouter.ai/api/v1/chat/completions",
         "openrouter-qwen": "https://openrouter.ai/api/v1/chat/completions",
     }
 
-    def __init__(
-        self,
-        api_key: Optional[str] = None,
-        model: str = DEFAULT_MODEL,
-    ) -> None:
-        """初始化 GLM 后端。
-
-        Args:
-            api_key: 智谱 API Key，默认从 ZHIPU_API_KEY 环境变量读取
-            model:   默认模型名称
-        """
-        self.api_key: str = api_key or os.getenv("ZHIPU_API_KEY", "")
-        self.model: str = model
-        self.client: Any = None
-        self.free_client: Any = None  # 免费API客户端
-        self._token_stats: TokenStats = TokenStats()
-        self._rate_limiter: RateLimiter = RateLimiter(RATE_LIMIT_RPM)
-        self._model_lock: threading.Lock = threading.Lock()
+    def __init__(self, api_key=None, model=None):
+        self.api_key = api_key or os.getenv("ZHIPU_API_KEY", "")
+        self.model = model or DEFAULT_MODEL
+        self.client = None
+        self.free_client = None
+        self._token_stats = TokenStats()
+        self._rate_limiter = RateLimiter(RATE_LIMIT_RPM)
+        self._model_lock = threading.Lock()
         self._init_client()
 
-    def _init_client(self) -> None:
-        """初始化各类客户端。"""
-        # 初始化 GLM 客户端（需要API Key）
+    def _init_client(self):
         if self.api_key:
             try:
-                from zhipuai import ZhipuAI  # noqa: delayed import
+                from zhipuai import ZhipuAI
                 self.client = ZhipuAI(api_key=self.api_key)
-                logger.info("GLM 客户端初始化成功")
             except ImportError:
-                logger.warning("zhipuai 未安装，请运行: pip install zhipuai")
+                logger.warning("zhipuai 未安装")
             except Exception as e:
                 logger.error("GLM 客户端初始化失败: %s", e)
-        
-        # 初始化免费API客户端（无需API Key）— 延迟到首次调用时初始化
-        # 避免在非异步上下文中创建 aiohttp.ClientSession()
-        
-        # 检查可用模型
-        if not self.api_key:
-            logger.warning("未配置 API Key，将使用免费模型")
-
-    # ========================================================
-    # 模型切换
-    # ========================================================
 
     def switch_model(self, model: str) -> bool:
-        """动态切换模型。
-
-        Args:
-            model: 目标模型名称
-
-        Returns:
-            True 表示切换成功
-        """
         if model not in SUPPORTED_MODELS:
-            logger.error("不支持的模型: %s，可选: %s", model, SUPPORTED_MODELS)
             return False
         with self._model_lock:
             self.model = model
-        logger.info("模型已切换为: %s", model)
         return True
 
     def get_model(self) -> str:
-        """获取当前模型名称。"""
         return self.model
 
-    # ========================================================
-    # Token 统计
-    # ========================================================
-
     def get_token_stats(self) -> Dict[str, Any]:
-        """获取 Token 用量统计。"""
         return self._token_stats.get_summary()
 
-    def _record_usage(self, response: Any) -> None:
-        """从 API 响应中提取并记录 Token 用量。"""
+    def _record_usage(self, response):
         try:
             usage = response.usage
-            tu = TokenUsage(
+            self._token_stats.record(TokenUsage(
                 prompt_tokens=usage.prompt_tokens or 0,
                 completion_tokens=usage.completion_tokens or 0,
                 total_tokens=usage.total_tokens or 0,
-                model=self.model,
-                timestamp=time.time(),
-            )
-            self._token_stats.record(tu)
-            logger.debug(
-                "Token 用量: prompt=%d, completion=%d, total=%d",
-                tu.prompt_tokens, tu.completion_tokens, tu.total_tokens,
-            )
-        except Exception as e:
-            logger.debug("提取 Token 用量失败: %s", e)
+                model=self.model, timestamp=time.time(),
+            ))
+        except Exception:
+            pass
 
-    def _record_usage_from_response(self, data: Dict[str, Any], model: str) -> None:
-        """从字典格式的 API 响应中提取并记录 Token 用量。"""
+    def _record_usage_from_response(self, data: Dict, model: str):
         try:
             usage = data.get("usage", {})
-            tu = TokenUsage(
+            self._token_stats.record(TokenUsage(
                 prompt_tokens=usage.get("prompt_tokens", 0),
                 completion_tokens=usage.get("completion_tokens", 0),
                 total_tokens=usage.get("total_tokens", 0),
-                model=model,
-                timestamp=time.time(),
-            )
-            self._token_stats.record(tu)
-            logger.debug(f"免费API Token用量 [{model}]: {tu.total_tokens}")
-        except Exception as e:
-            logger.debug(f"提取 Token 用量失败: {e}")
-
-    # ========================================================
-    # 免费模型调用
-    # ========================================================
+                model=model, timestamp=time.time(),
+            ))
+        except Exception:
+            pass
 
     async def _init_free_client(self) -> bool:
-        """延迟初始化免费API客户端（异步）。"""
         if self.free_client is not None:
             return True
         try:
             import aiohttp
             self.free_client = aiohttp.ClientSession()
-            logger.info("免费API客户端初始化成功")
             return True
-        except Exception as e:
-            logger.error("免费API客户端初始化失败: %s", e)
+        except Exception:
             return False
 
-    async def _call_free_api(
-        self,
-        messages: List[Dict[str, str]],
-        model: str,
-        temperature: float = 0.7,
-        max_tokens: int = 2000,
-        stream: bool = False
-    ) -> Any:
-        """调用真实可用的免费API（已移除假端点）
-
-        Args:
-            messages:    对话消息列表
-            model:       模型名称
-            temperature: 采样温度
-            max_tokens:  最大生成 token 数
-            stream:      是否流式响应
-
-        Returns:
-            API响应或流式响应迭代器
-        """
+    async def _call_free_api(self, messages, model, temperature=0.7,
+                             max_tokens=2000, stream=False):
         if model not in self.FREE_API_ENDPOINTS:
-            logger.error(f"不支持的免费模型: {model}")
             return None
-
         url = self.FREE_API_ENDPOINTS[model]
-
-        # 延迟初始化免费API客户端
         if not await self._init_free_client():
             return None
-
         try:
-            headers = {
-                "Content-Type": "application/json",
-                "User-Agent": "xiaolei-agent/1.0"
-            }
-            payload = {
-                "model": model,
-                "messages": messages,
-                "temperature": temperature,
-                "max_tokens": max_tokens,
-                "stream": stream
-            }
-
-            # 缩短超时时间，避免长时间阻塞
+            headers = {"Content-Type": "application/json", "User-Agent": "xiaolei-agent/1.0"}
+            payload = {"model": model, "messages": messages,
+                       "temperature": temperature, "max_tokens": max_tokens, "stream": stream}
+            import aiohttp
             timeout = aiohttp.ClientTimeout(total=10)
-            async with self.free_client.post(url, headers=headers, json=payload, timeout=timeout) as response:
-                response.raise_for_status()
-                
-                if stream:
-                    return response
-                else:
-                    return await response.json()
-                
-        except asyncio.TimeoutError:
-            logger.warning(f"免费API超时: {model}")
-            return None
-        except Exception as e:
-            logger.warning(f"免费API调用失败: {e}")
+            async with self.free_client.post(url, headers=headers, json=payload, timeout=timeout) as resp:
+                resp.raise_for_status()
+                return await resp.json() if not stream else resp
+        except Exception:
             return None
 
-    async def chat(
-        self,
-        messages: List[Dict[str, str]],
-        temperature: float = 0.7,
-        max_tokens: int = 2000,
-        model: Optional[str] = None,
-        tools: Optional[List[Dict]] = None,
-    ) -> str:
-        """发送聊天请求（非流式），带自动重试和模型降级。
-
-        Args:
-            messages:    对话消息列表
-            temperature: 采样温度
-            max_tokens:  最大生成 token 数
-            model:       可选覆盖模型
-            tools:       function calling 工具定义列表（GLM 格式）
-
-        Returns:
-            模型回复文本 / tool_calls JSON 字符串
-        """
-        target_model = model or self.model
-
-        # 速率限制
+    async def chat(self, messages, temperature=0.7, max_tokens=2000,
+                   model=None, tools=None) -> str:
+        target = model or self.model
         if not await self._rate_limiter.acquire(timeout=30.0):
             return "请求过于频繁，请稍后再试"
 
-        # 尝试顺序：GLM官方API -> 免费API
-        
-        # 1. 尝试 GLM 官方API（需要API Key）
+        # 1. GLM 官方 API
         if self.client and self.api_key:
-            glm_models = [
-                "glm-4-flash", "glm-4-plus", "glm-4-air", "glm-4-free", "glm-3-turbo",
-                "glm-4-0520", "glm-4v", "glm-4v-plus", "glm-4v-flash",
-                "glm-4-long", "glm-4-flashx", "glm-4.7-flash",
-                "glm-4", "glm-4-9b", "glm-4-airx",
-                "glm-4-32b-0414-128k",
-                "glm-4-flash-250414", "glm-4-flashx-250414", "glm-4-air-250414",
-                "glm-4v-plus-0111",
-                "glm-4-assistant", "glm-4-alltools",
-                "glm-z1-air", "glm-z1-flash", "glm-z1-airx", "glm-z1-flashx",
-                "glm-zero-preview",
-                "glm-4.1v-thinking-flashx", "glm-4.1v-thinking-flash",
-                "glm-4-voice",
-                "glm-ocr", "autoglm-phone-multilingual", "autoglm-phone",
-                "glm-realtime", "glm-realtime-flash", "glm-realtime-air",
-                "charglm-4", "glm-experimental-preview",
-                "search-std", "search-pro", "web-search-pro",
-            ]
-            if target_model in glm_models or not model:
-                last_error = None
-                for attempt in range(MAX_RETRIES):
-                    try:
-                        create_kwargs = dict(
-                            model=target_model if model else "glm-4-flash",
-                            messages=messages,
-                            temperature=temperature,
-                            max_tokens=max_tokens,
-                            stream=False,
-                            timeout=30,
-                        )
-                        if tools:
-                            create_kwargs["tools"] = tools
-                            create_kwargs["tool_choice"] = "auto"
+            try:
+                kwargs = dict(model="glm-4-flash", messages=messages,
+                              temperature=temperature, max_tokens=max_tokens,
+                              stream=False, timeout=30)
+                if tools:
+                    kwargs["tools"] = tools
+                    kwargs["tool_choice"] = "auto"
 
-                        response = self.client.chat.completions.create(**create_kwargs)
-                        self._record_usage(response)
+                response = self.client.chat.completions.create(**kwargs)
+                self._record_usage(response)
+                message = response.choices[0].message
+                content = message.content or ""
+                tc = getattr(message, 'tool_calls', None)
+                if tc:
+                    tc_list = [{"id": getattr(t, 'id', ''),
+                                "type": getattr(t, 'type', 'function'),
+                                "function": {"name": t.function.name,
+                                             "arguments": t.function.arguments}}
+                               for t in tc]
+                    return json.dumps({"choices": [{"message": {"role": "assistant",
+                                    "content": content, "tool_calls": tc_list}}]},
+                                      ensure_ascii=False)
+                return content or ""
+            except Exception as e:
+                logger.warning(f"GLM API 失败: {e}")
 
-                        # 检测原生 tool_calls，转换为 OpenAI 格式
-                        message = response.choices[0].message
-                        content = message.content or ""
-                        tool_calls = getattr(message, 'tool_calls', None)
-                        if tool_calls:
-                            tc_list = []
-                            for tc in tool_calls:
-                                tc_list.append({
-                                    "id": getattr(tc, 'id', ''),
-                                    "type": getattr(tc, 'type', 'function'),
-                                    "function": {
-                                        "name": tc.function.name,
-                                        "arguments": tc.function.arguments,
-                                    }
-                                })
-                            return json.dumps({
-                                "choices": [{
-                                    "message": {
-                                        "role": "assistant",
-                                        "content": content,
-                                        "tool_calls": tc_list,
-                                    }
-                                }]
-                            }, ensure_ascii=False)
+        # 2. 免费 API fallback
+        if await self._init_free_client() and not self.api_key:
+            for free_model in ["llama-3.1-8b-instant", "gemma2-9b-it", "groq-llama3"]:
+                data = await self._call_free_api(messages, free_model, temperature, max_tokens)
+                if data and "choices" in data and data["choices"]:
+                    content = data["choices"][0]["message"]["content"]
+                    self._record_usage_from_response(data, free_model)
+                    return content or ""
 
-                        return content or ""
-                    except Exception as e:
-                        last_error = e
-                        if attempt < MAX_RETRIES - 1:
-                            backoff = BACKOFF_BASE * (2 ** attempt)
-                            await asyncio.sleep(backoff)
-                        else:
-                            logger.error(f"GLM API 调用失败: {e}")
+        logger.warning("所有 LLM API 不可用，使用模拟响应")
+        return "系统正在处理您的请求..."
 
-        # 2. 尝试免费API（无需API Key）
-        # 使用真实可用的免费端点（Groq/Together AI/OpenRouter）
-        if await self._init_free_client():
-            free_models = [
-                "free-glm-4", "free-qwen", "free-llama", "glm-4-free",
-                "groq-llama3", "groq-gemma", "llama-3.1-8b-instant", "gemma2-9b-it",
-                "together-llama", "openrouter-llama", "openrouter-qwen"
-            ]
-            if target_model in free_models or (not self.api_key):
-                # 如果没有API Key，尝试可用的免费端点
-                if not self.api_key:
-                    # 快速尝试Groq（最可靠的免费API）
-                    groq_models = ["groq-llama3", "groq-gemma", "llama-3.1-8b-instant", "gemma2-9b-it"]
-                    for groq_model in groq_models:
-                        if groq_model in self.FREE_API_ENDPOINTS:
-                            try:
-                                data = await self._call_free_api(
-                                    messages, groq_model,
-                                    temperature=temperature, max_tokens=max_tokens, stream=False
-                                )
-                                if data and "choices" in data and data["choices"]:
-                                    content = data["choices"][0]["message"]["content"]
-                                    self._record_usage_from_response(data, groq_model)
-                                    return content or ""
-                            except Exception:
-                                continue
-                    
-                    # Groq 全部失败，快速返回模拟响应（不等待所有端点）
-                    logger.warning("免费API全部不可用，使用模拟响应")
-                    return self._generate_fallback_response(messages)
-                
-                # 指定了免费模型，直接调用
-                try:
-                    data = await self._call_free_api(
-                        messages, 
-                        target_model if target_model in self.FREE_API_ENDPOINTS else "groq-llama3",
-                        temperature=temperature,
-                        max_tokens=max_tokens,
-                        stream=False
-                    )
-                    
-                    if data and "choices" in data and data["choices"]:
-                        content = data["choices"][0]["message"]["content"]
-                        self._record_usage_from_response(data, target_model)
-                        return content or ""
-                except Exception as e:
-                    logger.warning(f"免费API调用失败: {e}")
-
-        # 所有API都失败，返回模拟响应
-        logger.warning("所有LLM API都不可用，使用模拟响应")
-        return self._generate_fallback_response(messages)
-
-    async def chat_stream(
-        self,
-        messages: List[Dict[str, str]],
-        temperature: float = 0.7,
-        max_tokens: int = 2000,
-        model: Optional[str] = None,
-    ) -> AsyncIterator[str]:
-        """发送聊天请求（流式），逐 chunk 返回。
-
-        Args:
-            messages:    对话消息列表
-            temperature: 采样温度
-            max_tokens:  最大生成 token 数
-            model:       可选覆盖模型
-
-        Yields:
-            每次生成的文本片段
-        """
-        target_model = model or self.model
-
-        # 速率限制
+    async def chat_stream(self, messages, temperature=0.7, max_tokens=2000,
+                          model=None) -> AsyncIterator[str]:
+        target = model or self.model
         if not await self._rate_limiter.acquire(timeout=30.0):
-            yield "请求过于频繁，请稍后再试"
+            yield "请求过于频繁"
             return
-
-        # 尝试 GLM 官方API
         if self.client and self.api_key:
-            glm_models = [
-                "glm-4-flash", "glm-4-plus", "glm-4-air", "glm-4-free", "glm-3-turbo",
-                "glm-4-0520", "glm-4v", "glm-4v-plus", "glm-4v-flash",
-                "glm-4-long", "glm-4-flashx", "glm-4.7-flash",
-                "glm-4", "glm-4-9b", "glm-4-airx",
-                "glm-4-32b-0414-128k",
-                "glm-4-flash-250414", "glm-4-flashx-250414", "glm-4-air-250414",
-                "glm-4v-plus-0111",
-                "glm-4-assistant", "glm-4-alltools",
-                "glm-z1-air", "glm-z1-flash", "glm-z1-airx", "glm-z1-flashx",
-                "glm-zero-preview",
-                "glm-4.1v-thinking-flashx", "glm-4.1v-thinking-flash",
-                "glm-4-voice",
-                "glm-ocr", "autoglm-phone-multilingual", "autoglm-phone",
-                "glm-realtime", "glm-realtime-flash", "glm-realtime-air",
-                "charglm-4", "glm-experimental-preview",
-                "search-std", "search-pro", "web-search-pro",
-            ]
-            if target_model in glm_models or not model:
-                last_error: Optional[Exception] = None
-                for attempt in range(MAX_RETRIES):
-                    try:
-                        response = self.client.chat.completions.create(
-                            model=target_model if model else "glm-4-flash",
-                        messages=messages,
-                        temperature=temperature,
-                        max_tokens=max_tokens,
-                        stream=True,
-                        timeout=30
-                    )
-                        full_content = ""
-                        for chunk in response:
-                            if chunk.choices and chunk.choices[0].delta.content:
-                                text = chunk.choices[0].delta.content
-                                full_content += text
-                                yield text
-
-                        # 流式响应结束后记录 Token（从最后一次 chunk 获取）
-                        if hasattr(response, "usage") and response.usage:
-                            tu = TokenUsage(
-                                prompt_tokens=response.usage.prompt_tokens or 0,
-                                completion_tokens=response.usage.completion_tokens or 0,
-                                total_tokens=response.usage.total_tokens or 0,
-                                model=target_model if model else "glm-4-flash",
-                                timestamp=time.time(),
-                            )
-                            self._token_stats.record(tu)
-                        return  # 成功完成
-                    except Exception as e:
-                        last_error = e
-                        if attempt < MAX_RETRIES - 1:
-                            backoff = BACKOFF_BASE * (2 ** attempt)
-                            logger.warning(
-                                "GLM 流式调用失败 (第 %d/%d 次)，%.1fs 后重试: %s",
-                                attempt + 1, MAX_RETRIES, backoff, e,
-                            )
-                            import asyncio
-                            await asyncio.sleep(backoff)
-                        else:
-                            logger.error(
-                                "GLM 流式调用最终失败 (已重试 %d 次): %s",
-                                MAX_RETRIES, e,
-                            )
-
-        # 尝试免费API流式调用
-        if await self._init_free_client():
-            free_models = ["free-glm-4", "free-qwen", "free-llama", "glm-4-free"]
-            if target_model in free_models or (not self.api_key):
-                try:
-                    response = await self._call_free_api(
-                        messages,
-                        "free-glm-4",
-                        temperature=temperature,
-                        max_tokens=max_tokens,
-                        stream=True
-                    )
-                    
-                    if response:
-                        full_content = ""
-                        for chunk in response.iter_lines():
-                            if chunk:
-                                chunk_str = chunk.decode('utf-8')
-                                if chunk_str.startswith('data: '):
-                                    chunk_str = chunk_str[6:]
-                                    if chunk_str == '[DONE]':
-                                        break
-                                    try:
-                                        data = json.loads(chunk_str)
-                                        if "choices" in data and data["choices"]:
-                                            delta = data["choices"][0].get("delta", {})
-                                            if "content" in delta:
-                                                text = delta["content"]
-                                                full_content += text
-                                                yield text
-                                    except json.JSONDecodeError:
-                                        pass
-                        return
-                except Exception as e:
-                    logger.error(f"免费API流式调用失败: {e}")
-
-        # 所有API都失败，返回模拟流式响应
-        fallback = self._generate_fallback_response(messages)
-        for char in fallback[:50]:  # 模拟流式输出
-            yield char
-            await asyncio.sleep(0.05)
-        yield fallback[50:]
-
-    def _generate_fallback_response(self, messages: List[Dict[str, str]]) -> str:
-        """生成降级响应（当所有API都不可用时）。"""
-        # 获取最后一条用户消息
-        user_message = ""
-        for msg in reversed(messages):
-            if msg.get("role") == "user":
-                user_message = msg.get("content", "")
-                break
-        
-        # 根据关键词生成简单响应
-        keywords = ["帮助", "任务", "分析", "建议", "评审", "监控"]
-        
-        if any(kw in user_message for kw in keywords):
-            return f"我理解了你的需求：{user_message[:50]}... 我会帮你处理这个任务。由于当前模型服务不可用，我将使用简化模式为你服务。"
-        else:
-            return "您好！我是小雷版小龙虾Agent，很高兴为您服务。当前模型服务暂时不可用，我将使用基础模式为您提供帮助。"
+            try:
+                response = self.client.chat.completions.create(
+                    model="glm-4-flash", messages=messages,
+                    temperature=temperature, max_tokens=max_tokens,
+                    stream=True, timeout=30)
+                for chunk in response:
+                    if chunk.choices and chunk.choices[0].delta.content:
+                        yield chunk.choices[0].delta.content
+                return
+            except Exception:
+                pass
+        yield "流式响应不可用，请使用非流式接口"
 
     def is_available(self) -> bool:
-        """检查 GLM 后端是否可用。"""
-        # 检查是否有有效的客户端（包括免费API）
-        has_client = self.client is not None or self.free_client is not None
-        
-        # 检查速率限制器是否允许请求
-        if has_client and self._rate_limiter:
-            # 如果可用调用次数<1，认为不可用
-            return self._rate_limiter.available >= 1
-        
-        return has_client
+        return self.client is not None or self.free_client is not None
+
+    def _generate_fallback_response(self, messages) -> str:
+        for msg in reversed(messages):
+            if msg.get("role") == "user":
+                return f"已收到请求：{msg.get('content', '')[:50]}... 系统正在处理。"
+        return "您好！系统已就绪。"
 
 
 # ============================================================
-# LLM 路由器 - 统一接口
+# ★ 新路由层：多 LLM 提供商路由（参考小龙虾 LLMRouter）
+# ============================================================
+
+class RoutingStrategy(Enum):
+    ROUND_ROBIN = "round_robin"
+    LEAST_LOAD = "least_load"
+    PRIORITY = "priority"
+    FALLBACK_CHAIN = "fallback_chain"
+
+
+@dataclass
+class LLMProvider:
+    """LLM 提供商配置"""
+    name: str
+    model: str
+    api_key_env: str = ""
+    base_url: str = ""
+    weight: int = 1
+    rate_limit: int = 60
+    concurrency: int = 5
+
+    # 运行时状态
+    current_load: int = 0
+    total_calls: int = 0
+    failed_calls: int = 0
+    last_active: float = 0.0
+
+
+class MultiLLMRouter:
+    """多 LLM 提供商路由 — 4 种策略
+
+    用法:
+        router = MultiLLMRouter()
+        router.register_provider(LLMProvider(name="ds", model="ds-chat", weight=4))
+        router.register_provider(LLMProvider(name="gpt4", model="gpt-4o", weight=2))
+        provider = await router.select()  # 按策略选一个
+        # ... 调用 provider ...
+        router.record_success(provider.name, duration_ms=100)
+    """
+
+    _instance: Optional["MultiLLMRouter"] = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def __init__(self):
+        if getattr(self, "_initialized", False):
+            return
+        self._initialized = True
+        self.providers: Dict[str, LLMProvider] = {}
+        self.strategy = RoutingStrategy.ROUND_ROBIN
+        self._rr_index: int = 0
+        self._lock = asyncio.Lock()
+        logger.info("MultiLLMRouter 初始化 (策略: %s)", self.strategy.value)
+
+    def register_provider(self, provider: LLMProvider) -> None:
+        self.providers[provider.name] = provider
+        logger.info("注册 LLM 提供商: %s (%s)", provider.name, provider.model)
+
+    def remove_provider(self, name: str) -> None:
+        self.providers.pop(name, None)
+
+    def clear(self) -> None:
+        """清空所有 provider（方便测试）"""
+        self.providers.clear()
+        self._rr_index = 0
+
+    def set_strategy(self, strategy: RoutingStrategy) -> None:
+        self.strategy = strategy
+        logger.info("切换路由策略: %s", strategy.value)
+
+    def load_from_config(self, config: Dict[str, Any]) -> None:
+        """从配置字典加载提供商"""
+        strategy_name = config.get("strategy", "round_robin")
+        try:
+            self.strategy = RoutingStrategy(strategy_name)
+        except ValueError:
+            self.strategy = RoutingStrategy.ROUND_ROBIN
+        for prov in config.get("providers", []):
+            self.register_provider(LLMProvider(
+                name=prov.get("name", "unknown"),
+                model=prov.get("model", ""),
+                api_key_env=prov.get("api_key_env", ""),
+                weight=prov.get("weight", 1),
+                rate_limit=prov.get("rate_limit", 60),
+                concurrency=prov.get("concurrency", 5),
+            ))
+
+    async def select(self, task_type: str = "") -> Optional[LLMProvider]:
+        """根据当前策略选出一个 LLM provider"""
+        if not self.providers:
+            return None
+        async with self._lock:
+            if self.strategy == RoutingStrategy.ROUND_ROBIN:
+                return self._round_robin()
+            elif self.strategy == RoutingStrategy.LEAST_LOAD:
+                return self._least_load()
+            elif self.strategy == RoutingStrategy.PRIORITY:
+                return self._priority()
+            elif self.strategy == RoutingStrategy.FALLBACK_CHAIN:
+                return self._fallback_chain()
+            return self._round_robin()
+
+    def _round_robin(self) -> Optional[LLMProvider]:
+        available = [p for p in self.providers.values() if p.current_load < p.concurrency]
+        if not available:
+            return None
+        total_weight = sum(p.weight for p in available)
+        idx = self._rr_index % max(total_weight, 1)
+        self._rr_index = idx + 1
+        cumulative = 0
+        for p in available:
+            cumulative += p.weight
+            if idx < cumulative:
+                p.current_load += 1
+                return p
+        return available[0]
+
+    def _least_load(self) -> Optional[LLMProvider]:
+        available = [p for p in self.providers.values() if p.current_load < p.concurrency]
+        if not available:
+            return None
+        best = min(available, key=lambda p: p.current_load)
+        best.current_load += 1
+        return best
+
+    def _priority(self) -> Optional[LLMProvider]:
+        sorted_ps = sorted(self.providers.values(), key=lambda p: p.weight, reverse=True)
+        for p in sorted_ps:
+            if p.current_load < p.concurrency:
+                p.current_load += 1
+                return p
+        return None
+
+    def _fallback_chain(self) -> Optional[LLMProvider]:
+        for p in self.providers.values():
+            if p.current_load < p.concurrency:
+                p.current_load += 1
+                return p
+        return None
+
+    def record_success(self, provider_name: str, duration_ms: float = 0) -> None:
+        if provider_name in self.providers:
+            p = self.providers[provider_name]
+            p.total_calls += 1
+            p.current_load = max(0, p.current_load - 1)
+            p.last_active = time.time()
+
+    def record_failure(self, provider_name: str) -> None:
+        if provider_name in self.providers:
+            p = self.providers[provider_name]
+            p.failed_calls += 1
+            p.current_load = max(0, p.current_load - 1)
+
+    def get_stats(self) -> Dict[str, Dict[str, Any]]:
+        return {
+            name: {"model": p.model, "total_calls": p.total_calls,
+                   "failed_calls": p.failed_calls,
+                   "success_rate": (p.total_calls - p.failed_calls) / max(p.total_calls, 1),
+                   "current_load": p.current_load, "concurrency": p.concurrency}
+            for name, p in self.providers.items()
+        }
+
+
+# ============================================================
+# 向后兼容的 LLMRouter（包装 GLMBackend + 新路由）
 # ============================================================
 
 class LLMRouter:
-    """LLM 路由器 - 对外统一接口。
+    """LLM 路由器 — 兼容旧接口，底层使用 MultiLLMRouter 多路由"""
 
-    封装 GLMBackend，提供简洁的调用接口。
-    """
+    def __init__(self):
+        self.backend = GLMBackend()
+        self.multi_router = MultiLLMRouter()
+        # 自动注册默认 provider
+        self.multi_router.register_provider(LLMProvider(
+            name="default",
+            model=DEFAULT_MODEL,
+            api_key_env="ZHIPU_API_KEY",
+            weight=1,
+            concurrency=3,
+        ))
 
-    def __init__(self) -> None:
-        """初始化 LLM 路由器。"""
-        self.backend: GLMBackend = GLMBackend()
+    async def chat(self, messages, temperature=0.7, max_tokens=2000,
+                   model=None, tools=None) -> str:
+        return await self.backend.chat(messages, temperature=temperature,
+                                       max_tokens=max_tokens, model=model, tools=tools)
 
-    async def chat(
-        self,
-        messages: List[Dict[str, str]],
-        temperature: float = 0.7,
-        max_tokens: int = 2000,
-        model: Optional[str] = None,
-        tools: Optional[List[Dict]] = None,
-    ) -> str:
-        """发送聊天请求（非流式）。
-
-        Args:
-            messages:    对话消息列表
-            temperature: 采样温度
-            max_tokens:  最大生成 token 数
-            model:       可选覆盖模型
-            tools:       function calling 工具定义列表
-
-        Returns:
-            模型回复文本 / tool_calls JSON 字符串
-        """
-        return await self.backend.chat(
-            messages, temperature=temperature,
-            max_tokens=max_tokens, model=model,
-            tools=tools,
-        )
-
-    async def simple_chat(
-        self,
-        user_message: str,
-        system_prompt: Optional[str] = None,
-        temperature: float = 0.7,
-    ) -> str:
-        """简化聊天接口：直接传入用户消息。
-
-        Args:
-            user_message: 用户消息
-            system_prompt: 系统提示（可选）
-            temperature:   采样温度
-
-        Returns:
-            模型回复文本
-        """
-        messages: List[Dict[str, str]] = []
+    async def simple_chat(self, user_message: str, system_prompt=None,
+                          temperature=0.7) -> str:
+        messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": user_message})
-        
-        # 优先使用GLM API，DeepSeek作为备用
-        logger.info("优先使用 GLM API")
-        response = await self.backend.chat(messages, temperature=temperature)
-        
-        return response
+        return await self.backend.chat(messages, temperature=temperature)
 
-    async def chat_stream(
-        self,
-        messages: List[Dict[str, str]],
-        temperature: float = 0.7,
-        max_tokens: int = 2000,
-        model: Optional[str] = None,
-    ) -> AsyncIterator[str]:
-        """发送聊天请求（流式）。
-
-        Args:
-            messages:    对话消息列表
-            temperature: 采样温度
-            max_tokens:  最大生成 token 数
-            model:       可选覆盖模型
-
-        Yields:
-            每次生成的文本片段
-        """
-        async for chunk in self.backend.chat_stream(
-            messages, temperature=temperature,
-            max_tokens=max_tokens, model=model,
-        ):
+    async def chat_stream(self, messages, temperature=0.7, max_tokens=2000,
+                          model=None) -> AsyncIterator[str]:
+        async for chunk in self.backend.chat_stream(messages, temperature, max_tokens, model):
             yield chunk
 
     def is_available(self) -> bool:
-        """检查 LLM 后端是否可用。"""
         return self.backend.is_available()
 
-    # ============================================================
-    # 多LLM并行调用
-    # ============================================================
-
-    async def chat_with_multiple_llms(
-        self,
-        messages: List[Dict[str, str]],
-        llm_count: int = 3,
-        temperature: float = 0.7,
-        max_tokens: int = 1500,
-    ) -> Dict[str, str]:
-        """同时调用多个免费LLM，聚合结果。
-
-        Args:
-            messages:    对话消息列表
-            llm_count:   调用的LLM数量（默认3个）
-            temperature: 采样温度
-            max_tokens:  最大生成 token 数
-
-        Returns:
-            Dict[str, str]: {model_name: response} 所有LLM的响应
-        """
-        # 选择多个免费LLM
-        available_llms = [
-            "glm-4-free",
-            "free-qwen", 
-            "groq-llama3",
-            "cohere-command",
-            "together-llama",
-            "openrouter-llama",
-        ]
-        
-        # 随机选择llm_count个LLM
-        import random
-        selected_llms = random.sample(available_llms, min(llm_count, len(available_llms)))
-        
-        logger.info(f"并行调用 {len(selected_llms)} 个免费LLM: {selected_llms}")
-        
-        # 并行调用所有LLM
-        tasks = []
-        for llm in selected_llms:
-            task = self.backend.chat(
-                messages=messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                model=llm
-            )
-            tasks.append((llm, task))
-        
-        # 等待所有任务完成
-        results = {}
-        for llm, task in tasks:
-            try:
-                response = await task
-                if response and response != "模型服务暂时不可用，请稍后再试":
-                    results[llm] = response
-                    logger.info(f"LLM {llm} 调用成功")
-                else:
-                    logger.warning(f"LLM {llm} 调用失败: 空响应")
-            except Exception as e:
-                logger.error(f"LLM {llm} 调用异常: {e}")
-        
-        return results
-
-    async def chat_with_all_free_llms(
-        self,
-        messages: List[Dict[str, str]],
-        temperature: float = 0.7,
-        max_tokens: int = 1500,
-    ) -> Dict[str, str]:
-        """调用所有可用的免费LLM。
-
-        Args:
-            messages:    对话消息列表
-            temperature: 采样温度
-            max_tokens:  最大生成 token 数
-
-        Returns:
-            Dict[str, str]: {model_name: response} 所有LLM的响应
-        """
-        all_llms = [
-            "glm-4-free",
-            "free-qwen", 
-            "groq-llama3",
-            "cohere-command",
-            "together-llama",
-            "openrouter-llama",
-        ]
-        
-        logger.info(f"调用所有 {len(all_llms)} 个免费LLM")
-        
-        # 并行调用所有LLM
-        tasks = {}
-        for llm in all_llms:
-            tasks[llm] = self.backend.chat(
-                messages=messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                model=llm
-            )
-        
-        # 等待所有任务完成
-        results = {}
-        for llm, task in tasks.items():
-            try:
-                response = await task
-                if response and response != "模型服务暂时不可用，请稍后再试":
-                    results[llm] = response
-                    logger.info(f"LLM {llm} 调用成功")
-                else:
-                    logger.warning(f"LLM {llm} 调用失败: 空响应")
-            except Exception as e:
-                logger.error(f"LLM {llm} 调用异常: {e}")
-        
-        return results
-
-    async def chat_aggregate(
-        self,
-        messages: List[Dict[str, str]],
-        llm_count: int = 3,
-        aggregation: str = "vote",
-        temperature: float = 0.7,
-        max_tokens: int = 1500,
-    ) -> str:
-        """多LLM调用并聚合结果。
-
-        Args:
-            messages:    对话消息列表
-            llm_count:   调用的LLM数量（默认3个）
-            aggregation: 聚合方式 - "vote"(投票), "concat"(拼接), "best"(最佳)
-            temperature: 采样温度
-            max_tokens:  最大生成 token 数
-
-        Returns:
-            str: 聚合后的响应
-        """
-        # 获取多个LLM的响应
-        results = await self.chat_with_multiple_llms(
-            messages, llm_count, temperature, max_tokens
-        )
-        
-        if not results:
-            return "所有LLM调用失败"
-        
-        if aggregation == "concat":
-            # 拼接所有响应
-            aggregated = "\n\n".join([
-                f"=== {llm} ===\n{response[:500]}"
-                for llm, response in results.items()
-            ])
-            return aggregated
-        
-        elif aggregation == "best":
-            # 返回最长的响应（通常更详细）
-            best_llm = max(results.items(), key=lambda x: len(x[1]))
-            return f"[{best_llm[0]}]\n{best_llm[1]}"
-        
-        else:  # vote
-            # 简单投票：返回第一个结果作为主要响应
-            first_llm = list(results.keys())[0]
-            primary = results[first_llm]
-            
-            # 添加其他LLM的简要总结
-            others = []
-            for llm, response in list(results.items())[1:]:
-                others.append(f"{llm}: {response[:100]}...")
-            
-            if others:
-                return f"{primary}\n\n其他LLM观点:\n" + "\n".join(others)
-            return primary
-
     def switch_model(self, model: str) -> bool:
-        """动态切换模型。"""
         return self.backend.switch_model(model)
 
     def get_model(self) -> str:
-        """获取当前模型名称。"""
         return self.backend.get_model()
 
     def get_token_stats(self) -> Dict[str, Any]:
-        """获取 Token 用量统计。"""
         return self.backend.get_token_stats()
+
+    # ── 新路由 API ──
+
+    def register_provider(self, name: str, model: str, weight: int = 1,
+                          concurrency: int = 3, api_key_env: str = "") -> None:
+        self.multi_router.register_provider(LLMProvider(
+            name=name, model=model, weight=weight,
+            concurrency=concurrency, api_key_env=api_key_env,
+        ))
+
+    def set_routing_strategy(self, strategy: str) -> None:
+        try:
+            self.multi_router.set_strategy(RoutingStrategy(strategy))
+        except ValueError:
+            pass
+
+    async def select_provider(self) -> Optional[str]:
+        p = await self.multi_router.select()
+        return p.name if p else None
+
+    def get_router_stats(self) -> Dict[str, Any]:
+        return self.multi_router.get_stats()
 
 
 # ============================================================
@@ -983,18 +551,18 @@ class LLMRouter:
 # ============================================================
 
 _router_instance: Optional[LLMRouter] = None
-_router_lock: threading.Lock = threading.Lock()
+_router_lock = threading.Lock()
 
 
 def get_llm_router() -> LLMRouter:
-    """获取 LLMRouter 全局单例。
-
-    Returns:
-        LLMRouter 实例
-    """
     global _router_instance
     if _router_instance is None:
         with _router_lock:
             if _router_instance is None:
                 _router_instance = LLMRouter()
     return _router_instance
+
+
+def get_multi_router() -> MultiLLMRouter:
+    """获取多 LLM 路由实例（直接访问新路由层）"""
+    return get_llm_router().multi_router

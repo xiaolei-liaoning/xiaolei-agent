@@ -2,34 +2,16 @@
 BaseAgent - Agent基类模块
 """
 
-from .base_agent import (
-    BaseAgent,
-    AgentState,
-    AgentType,
-    Capability,
-    Tool,
-    Thought,
-    Reflection,
-    AgentMetrics,
-    Mind,
-    MemorySystem,
-    Task,
-    ActionResult,
-    Message
+from .base_agent import BaseAgent, AgentFactory
+from .models import (
+    Step, StepStatus, StepType, StepEvent, ExecutionResult,
+    CommunicationTopic, AgentState, AgentType, Capability, Tool,
+    Thought, Reflection, AgentMetrics, Task, ActionResult, Message,
 )
 
 __all__ = [
-    "BaseAgent",
-    "AgentState",
-    "AgentType",
-    "Capability",
-    "Tool",
-    "Thought",
-    "Reflection",
-    "AgentMetrics",
-    "Mind",
-    "MemorySystem",
-    "Task",
-    "ActionResult",
-    "Message"
+    "BaseAgent", "AgentFactory",
+    "Step", "StepStatus", "StepType", "StepEvent", "ExecutionResult",
+    "CommunicationTopic", "AgentState", "AgentType", "Capability", "Tool",
+    "Thought", "Reflection", "AgentMetrics", "Task", "ActionResult", "Message",
 ]

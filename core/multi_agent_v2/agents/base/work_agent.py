@@ -15,7 +15,8 @@ import logging
 import time
 from typing import Any, Dict, List, Optional
 
-from .base_agent import BaseAgent, AgentType, Capability, Task, ActionResult, Thought
+from .base_agent import BaseAgent
+from .models import AgentType, Capability, Task, ActionResult, Thought
 
 logger = logging.getLogger(__name__)
 
@@ -130,7 +131,7 @@ class WorkAgent(BaseAgent):
 
         # 3. 执行
         try:
-            result = await self.act(thought.plan, thought.tool_calls)
+            result = await self.act(thought.plan, thought.tool_calls, getattr(thought, 'structured_plan', None))
         except Exception as e:
             logger.error(f"执行失败: {e}")
             return ActionResult(success=False, error=f"执行失败: {e}")
