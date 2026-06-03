@@ -95,7 +95,7 @@ def _pre_init_logger():
 _pre_init_logger()
 
 # 导入CLI模块
-from cli.colors import CliColors, print_color, print_chat_bubble, print_success, print_error, print_warning
+from cli.colors import CliColors, print_color, print_chat_bubble, print_success, print_error, print_warning, ansi
 from cli.command_parser import (
     CommandParser, CommandType, ParsedCommand, get_command_parser
 )
@@ -168,26 +168,34 @@ class EnhancedCLI:
         log_info(f"会话已初始化: {self.session_id}")
     
     def print_welcome(self):
-        """打印欢迎界面 - 与 xiaolei.sh 风格保持一致"""
+        """打印欢迎界面 - 现代化风格（参考 paste 样式）"""
         print("\033c", end="")
         print()
-        print_color("   _____                 _       _       _    _ _                 ", CliColors.CYAN)
-        print_color("  | ____|_ __ ___   __ _| |_ ___| |_    | |  | (_)_ __   ___ _ __", CliColors.CYAN)
-        print_color("  |  _| | '_ ` _ \\ / _` | __/ __| __|   | |  | | | '_ \\ / _ \\ '__|", CliColors.CYAN)
-        print_color("  | |___| | | | | | (_| | || (__| |_    | |__| | | | | |  __/ |   ", CliColors.CYAN)
-        print_color("  |_____|_| |_| |_|\\__,_|\\__\\___|\\__|   |_____|_|_|_| |_|\\___|_|   ", CliColors.CYAN)
-        print()
-        print_color("  ╔════════════════════════════════════════════════════════════════╗", CliColors.YELLOW)
-        print_color("  ║            🦞 小雷版小龙虾 AI Agent - 终端命令行工具            ║", CliColors.YELLOW)
-        print_color("  ╠════════════════════════════════════════════════════════════════╣", CliColors.YELLOW)
-        print_color("  ║  🚀 智能工作流 | GUI自动化 | 数据爬取 | 微信消息 | 数据分析   ║", CliColors.YELLOW)
-        print_color("  ╚════════════════════════════════════════════════════════════════╝", CliColors.YELLOW)
-        print()
-        print_color("  📖 输入 '/help' 查看所有命令 | 输入 'exit' 退出终端", CliColors.BLUE)
-        print()
-        print_color("──────────────────────────────────────────────────────────────────────", CliColors.PURPLE)
-        print()
-    
+        brand = "rgb(215,119,87)"
+        soft = "rgb(153,153,153)"
+        dim = "rgb(80,80,80)"
+
+        from rich.console import Console as RichConsole
+        rc = RichConsole()
+        rc.print()
+        rc.print(f"  [{brand}]╭──────────  🦞  小雷版小龙虾  AI  Agent  ──────────╮")
+        rc.print(f"  [{brand}]│                                                     │")
+        rc.print(f"  [{brand}]│    [{dim}]██╗  ██╗██╗ █████╗  ██████╗ ██╗     ███████╗██╗  │")
+        rc.print(f"  [{brand}]│    [{dim}]╚██╗██╔╝██║██╔══██╗██╔═══██╗██║     ██╔════╝██║  │")
+        rc.print(f"  [{brand}]│    [{dim}] ╚███╔╝ ██║███████║██║   ██║██║     █████╗  ██║  │")
+        rc.print(f"  [{brand}]│    [{dim}] ██╔██╗ ██║██╔══██║██║▄▄ ██║██║     ██╔══╝  ██║  │")
+        rc.print(f"  [{brand}]│    [{dim}]██╔╝ ██╗██║██║  ██║╚██████╔╝███████╗███████╗██║  │")
+        rc.print(f"  [{brand}]│    [{dim}]╚═╝  ╚═╝╚═╝╚═╝  ╚═╝ ╚══▀▀═╝ ╚══════╝╚══════╝╚═╝  │")
+        rc.print(f"  [{brand}]│                                                     │")
+        rc.print(f"  [{brand}]╰─────────────────────────────────────────────────────╯")
+        rc.print()
+        rc.print(f"  [{soft}]⚡[/]  [{brand}]工作流[/]  ·  [{brand}]GUI自动化[/]  ·  [{brand}]爬虫[/]  ·  [{brand}]微信[/]  ·  [{brand}]分析[/]")
+        rc.print()
+        rc.print(f"  [{soft}]📖[/]  输入 [{brand}]/help[/] 查看命令  ·  [{dim}]⎿[/]  exit 退出")
+        rc.print()
+        rc.rule(style=dim)
+        rc.print()
+
     async def handle_command(self, parsed_cmd: ParsedCommand):
         """处理解析后的命令"""
         cmd_type = parsed_cmd.command_type
@@ -468,56 +476,70 @@ class EnhancedCLI:
                    CliColors.GREEN if self.debug_mode else CliColors.RED)
     
     async def handle_run(self, parsed_cmd: ParsedCommand):
-        """处理执行工作流命令"""
+        """处理执行工作流命令（增强版 - 动画步骤显示）"""
         request = parsed_cmd.action if parsed_cmd.action else parsed_cmd.remaining
         
         if not request:
             print_error("请提供任务描述")
             return
         
-        # 使用思考引擎
-        think_start(request)
-        think_analyze("智能工作流执行")
-        think_plan([
-            {"title": "分析用户意图", "description": "理解用户需求并创建工作流"},
-            {"title": "执行工作流", "description": "按步骤执行各项任务"},
-            {"title": "汇总结果", "description": "整理并展示执行结果"}
-        ])
+        # 使用增强思考引擎
+        from cli.animated_spinner import AsyncSpinner, print_section, CLAUDE
+        from cli.thinking_engine import get_thinking_engine
         
-        think_step(1)
-        think_log("正在分析用户意图...")
+        engine = get_thinking_engine()
+        print_section(f"🚀 工作流: {request[:50]}{'...' if len(request) > 50 else ''}")
+        
+        # 预设步骤计划
+        step_plan = [
+            {"title": "分析用户意图", "description": "理解用户需求并创建工作流", "tag": "分析"},
+            {"title": "执行工作流", "description": "按步骤执行各项任务", "tag": "执行"},
+            {"title": "汇总结果", "description": "整理并展示执行结果", "tag": "结果"},
+        ]
+        engine.plan_steps(step_plan)
         
         try:
             from cli.base import WorkflowEngineWrapper
             
             wrapper = WorkflowEngineWrapper()
-            think_log("调用工作流引擎...")
             
-            result = await wrapper.create_and_execute(request)
-            think_complete(1, success=True)
+            # Step 1: 分析意图
+            engine.start_step(1, "分析用户意图")
+            async with AsyncSpinner("正在分析用户意图...", color=CLAUDE):
+                await asyncio.sleep(0.2)
+            engine.complete_step(1, success=True)
             
-            think_step(2)
-            think_log("执行工作流...")
+            # Step 2: 执行工作流
+            engine.start_step(2, "执行工作流")
+            async with AsyncSpinner("调用工作流引擎...", color=CLAUDE):
+                result = await wrapper.create_and_execute(request)
+            engine.complete_step(2, success=result.get("success", False),
+                                 detail=f"耗时: {result.get('total_time', 0):.1f}s"
+                                 if result.get("total_time") else "")
             
-            # 工作流已在create_and_execute中执行
-            think_complete(2, success=True)
-            
-            think_step(3)
-            think_log("整理执行结果...")
-            
+            # Step 3: 汇总结果
+            engine.start_step(3, "汇总结果")
             if result.get("success"):
-                think_data("工作流名称", result.get("workflow_name", "未命名"))
-                think_data("耗时", f"{result.get('total_time', 0):.2f}秒")
-            think_complete(3, success=True)
+                async with AsyncSpinner("整理执行结果...", color=CLAUDE):
+                    await asyncio.sleep(0.1)
+                engine.complete_step(3, success=True)
+            else:
+                engine.complete_step(3, success=False,
+                                     error_message=result.get("error", "执行失败"))
             
-            think_summarize(True, result)
+            # 总进度
+            engine.progress_summary()
+            engine.summary(result.get("success", False),
+                          result.get("total_time", 0))
             
             # 显示结果
             self._display_workflow_result(result)
             
         except Exception as e:
-            think_complete(1, success=False, error=str(e))
-            think_summarize(False)
+            if engine._current_step > 0:
+                engine.complete_step(engine._current_step, success=False,
+                                     error_message=str(e))
+            engine.summary(False, 0, detail=str(e))
             log_error(f"执行失败: {e}")
     
     async def handle_analyze(self, parsed_cmd: ParsedCommand):
@@ -761,280 +783,26 @@ class EnhancedCLI:
             await self.start_chat_mode(mode)
     
     async def handle_smart_request(self, request: str):
-        """处理智能请求（非命令前缀）- 带记忆和反思"""
+        """处理智能请求 — V2 Agent（走 ToolRegistry 全量工具）"""
         if not request.strip():
             return
-        
-        steps = [
-            {"title": "记忆检索", "description": "从记忆中检索相关信息"},
-            {"title": "意图识别", "description": "分析用户请求意图"},
-            {"title": "任务执行", "description": "执行相应任务"},
-            {"title": "反思评估", "description": "评估执行结果"},
-            {"title": "记忆保存", "description": "保存关键信息到记忆"}
-        ]
-        
-        from cli.pagination import CompactStepDisplay
-        step_display = CompactStepDisplay(steps)
-        step_display.display()
-        
-        think_start(request)
-        think_analyze("智能任务处理")
-        
-        # 1. 记忆检索
-        think_step(1)
-        step_display.set_step_active(0)
-        step_display.display()
-        
-        think_log("正在检索记忆...")
-        relevant_memory = await self._recall_memory(request)
-        if relevant_memory:
-            think_log(f"检索到相关记忆: {relevant_memory[:50]}...")
-            print_color(f"💡 记忆提示: {relevant_memory}", CliColors.YELLOW)
-        
-        step_display.set_step_success(0)
-        step_display.display()
-        think_complete(1, success=True)
-        
-        # 2. 意图识别和任务执行
-        think_step(2)
-        step_display.set_step_active(1)
-        step_display.display()
-        
-        think_log("正在分析用户意图...")
-        
-        try:
-            from cli.base import WorkflowEngineWrapper
-            
-            wrapper = WorkflowEngineWrapper()
-            result = await wrapper.create_and_execute(request, context={"memory": relevant_memory})
-            
-            # 检查工作流创建是否成功（这包含了意图识别）
-            if not result.get("success"):
-                # 工作流创建失败，可能是意图识别失败
-                step_display.set_step_failed(1)  # 标记意图识别失败
-                step_display.display()
-                think_complete(2, success=False, error=result.get("error", "意图识别或工作流创建失败"))
-                
-                # 后续步骤都标记为跳过
-                for i in range(2, 5):
-                    step_display.set_step_skipped(i)
-                step_display.display()
-                
-                print()
-                think_summarize(False)
-                print_error(result.get("error", "执行失败"))
-                return
-            
-            # 检查是否需要用户输入（clarification场景）
-            if result.get("requires_user_input"):
-                # 显示澄清问题
-                clarification_text = result.get("clarification_text", "")
-                if clarification_text:
-                    print("\n" + clarification_text)
-                
-                # 标记任务执行为等待用户输入状态
-                step_display.set_step_success(1)  # 意图识别成功
-                step_display.set_step_active(2)  # 任务执行中（等待输入）
-                step_display.display()
-                
-                # 后续步骤标记为等待
-                for i in range(3, 5):
-                    step_display.step_status[i] = 'pending'
-                step_display.display()
-                
-                print()
-                think_complete(2, success=True)
-                think_log("等待用户回答澄清问题...")
-                return
-            
-            # 工作流创建成功，意图识别完成
-            step_display.set_step_success(1)
-            step_display.display()
-            think_complete(2, success=True)
-            
-            # 3. 任务执行
-            think_step(3)
-            step_display.set_step_active(2)
-            step_display.display()
-            
-            think_log("执行任务...")
-            
-            if not result.get("success"):
-                # 任务执行失败，但意图识别已成功
-                step_display.set_step_failed(2)  # 标记任务执行为失败
-                step_display.display()
-                think_complete(3, success=False, error=result.get("error", "执行失败"))
-                
-                # 4. 反思评估
-                think_step(4)
-                step_display.set_step_active(3)
-                step_display.display()
-                think_log("反思评估: 任务失败")
-                think_complete(4, success=False)
-                
-                # 5. 记忆保存
-                think_step(5)
-                step_display.set_step_active(4)
-                step_display.display()
-                think_log("保存失败记录...")
-                await self._remember(request, {"success": False, "error": result.get("error")})
-                
-                step_display.set_step_success(4)
-                step_display.display()
-                print()
-                think_complete(5, success=True)
-                
-                think_summarize(False)
-                print_error(result.get("error", "执行失败"))
-                return
-            
-            step_display.set_step_success(2)
-            step_display.display()
-            think_complete(3, success=True)
-            
-            # 4. 反思评估
-            think_step(4)
-            step_display.set_step_active(3)
-            step_display.display()
-            
-            think_log("正在反思评估...")
-            reflection = await self._reflect_on_result(request, result)
-            if reflection:
-                print_color(f"🧠 {reflection}", CliColors.CYAN)
-            
-            step_display.set_step_success(3)
-            step_display.display()
-            think_complete(4, success=True)
-            
-            # 5. 记忆保存
-            think_step(5)
-            step_display.set_step_active(4)
-            step_display.display()
-            
-            think_log("正在保存记忆...")
-            await self._remember(request, result)
-            
-            step_display.set_step_success(4)
-            step_display.display()
-            print()
-            think_complete(5, success=True)
-            
-            think_summarize(True, result)
-            
-            self._display_workflow_result(result)
-            
-        except Exception as e:
-            # 异常发生在任务执行阶段，意图识别已成功
-            # 先确认意图识别步骤已标记为成功
-            if step_display.step_status[1] == 'active':
-                step_display.set_step_success(1)  # 标记意图识别为成功
-            
-            step_display.set_step_failed(2)  # 标记任务执行为失败
-            step_display.display()
-            think_complete(3, success=False, error=str(e))
-            
-            # 反思评估
-            think_step(4)
-            step_display.set_step_active(3)
-            step_display.display()
-            think_log("反思评估: 异常失败")
-            think_complete(4, success=False)
-            
-            think_step(5)
-            step_display.set_step_active(4)
-            step_display.display()
-            think_log("保存失败记录...")
-            await self._remember(request, {"success": False, "error": str(e)})
-            
-            step_display.set_step_success(4)
-            step_display.display()
-            print()
-            think_complete(5, success=True)
-            
-            think_summarize(False)
-            log_error(f"处理失败: {e}")
-    
-    async def _recall_memory(self, query: str) -> str:
-        """从记忆系统检索相关信息"""
-        try:
-            from core.multi_agent_v2.infrastructure.memory.memory_system import MemorySystem, MemoryType
-            
-            memory = MemorySystem("cli_agent")
-            await memory.load_from_disk()
-            
-            results = await memory.search(query)
-            if results:
-                # 返回最重要的记忆
-                results.sort(key=lambda x: x.importance, reverse=True)
-                think_log(f"📖 检索到 {len(results)} 条相关记忆")
-                log_info(f"📖 记忆检索成功: 找到 {len(results)} 条相关记忆")
-                return str(results[0].value)
-            think_log("📖 未检索到相关记忆")
-            log_info("📖 记忆检索: 未找到相关记忆")
-            return ""
-        except Exception as e:
-            think_log(f"❌ 记忆检索失败: {str(e)[:30]}")
-            log_error(f"记忆检索失败: {e}")
-            return ""
-    
-    async def _remember(self, key: str, value: dict):
-        """保存信息到记忆系统"""
-        try:
-            from core.multi_agent_v2.infrastructure.memory.memory_system import MemorySystem, MemoryType
-            
-            memory = MemorySystem("cli_agent")
-            await memory.load_from_disk()
-            
-            importance = 0.7 if value.get("success") else 0.3
-            await memory.remember(
-                key=key[:100],
-                value=value,
-                memory_type=MemoryType.LONG_TERM,
-                importance=importance
-            )
-            await memory.save_to_disk()
-            think_log(f"💾 记忆已保存")
-            log_info(f"💾 记忆保存成功: {key[:50]}...")
-        except Exception as e:
-            think_log(f"❌ 记忆保存失败: {str(e)[:30]}")
-            log_error(f"记忆保存失败: {e}")
-    
-    async def _reflect_on_result(self, request: str, result: dict) -> str:
-        """反思评估执行结果"""
-        try:
-            from core.multi_agent_v2.orchestration.collaboration.llm_reflection import (
-                LLMReflection, ReflectionPrompt, StepResult
-            )
-            
-            step_result = StepResult(
-                step_id="smart_request",
-                step_name="智能请求处理",
-                step_type="general",
-                success=result.get("success", False),
-                output=result.get("output", str(result)[:200]),
-                confidence=result.get("confidence", 0.8),
-                execution_time=result.get("execution_time", 0.0)
-            )
-            
-            prompt = ReflectionPrompt(
-                completed_steps=[step_result],
-                remaining_steps=[],
-                original_goal=request,
-                task_context={}
-            )
-            
-            reflection_engine = LLMReflection()
-            reflection_result = await reflection_engine.reflect(prompt)
-            
-            if reflection_result.confidence < 0.7:
-                return f"反思建议: {reflection_result.reasoning}"
-            elif reflection_result.decision.value != "continue":
-                return f"反思决策: {reflection_result.decision.value} - {reflection_result.reasoning}"
-            return ""
-        except Exception as e:
-            log_error(f"反思评估失败: {e}")
-            return ""
-    
+
+        from cli.colors import print_color, ansi
+        from core.multi_agent_v2.agents.base.base_agent import BaseAgent
+
+        agent = BaseAgent()
+        result = await agent.run(request)
+
+        if result.get("success"):
+            final = result["result"].get("final_answer", "")
+            tool_results = result["result"].get("tool_results", [])
+            summary = final or f"任务完成（{len(tool_results)} 步）"
+            print_color(summary[:500], ansi['green'])
+            self.chat_history.append({"role": "assistant", "content": summary[:500]})
+        else:
+            error = result.get("error", "处理失败")
+            print_color(f"❌ {error}", ansi['red'])
+
     async def start_chat_mode(self, mode: str = "simple"):
         """进入聊天模式"""
         self.chat_mode = True
@@ -1044,7 +812,7 @@ class EnhancedCLI:
         
         while self.chat_mode:
             try:
-                user_input = input(f"\n{CliColors.GREEN}{CliColors.BOLD}你: {CliColors.ENDC}")
+                user_input = input(f"\n{ansi['green']}{ansi['bold']}你: {ansi['end']}")
                 
                 if user_input.lower() in ['quit', 'exit', 'bye', '结束']:
                     print_color("👋 退出聊天模式", CliColors.BLUE)
@@ -1081,7 +849,7 @@ class EnhancedCLI:
         """聊天模式循环（用于带初始消息的情况）"""
         while self.chat_mode:
             try:
-                user_input = input(f"\n{CliColors.GREEN}{CliColors.BOLD}你: {CliColors.ENDC}")
+                user_input = input(f"\n{ansi['green']}{ansi['bold']}你: {ansi['end']}")
                 
                 if user_input.lower() in ['quit', 'exit', 'bye', '结束']:
                     print_color("👋 退出聊天模式", CliColors.BLUE)
@@ -1113,89 +881,22 @@ class EnhancedCLI:
                 log_error(f"聊天处理失败: {e}")
     
     async def handle_smart_request_with_history(self, request: str):
-        """带历史记录的智能请求处理"""
+        """带历史记录的智能请求处理 — V2 Agent"""
         if not request.strip():
             return
-        
-        think_start(request)
-        think_analyze("智能任务处理")
-        think_plan([
-            {"title": "意图识别", "description": "分析用户请求意图"},
-            {"title": "任务执行", "description": "执行相应任务"},
-            {"title": "结果返回", "description": "返回处理结果"}
-        ])
-        
-        think_step(1)
-        think_log("正在分析用户意图...")
-        
-        try:
-            from cli.base import WorkflowEngineWrapper
-            
-            wrapper = WorkflowEngineWrapper()
-            
-            # 传递聊天历史
-            result = await wrapper.create_and_execute(request, chat_history=self.chat_history)
-            
-            think_complete(1, success=True)
-            think_step(2)
-            think_log("执行任务...")
-            
-            think_complete(2, success=True)
-            think_step(3)
-            think_log("整理结果...")
-            
-            # 检查是否得到了有效的响应
-            has_response = result.get("success") and (
-                result.get("greeting_message") or 
-                result.get("summary") or 
-                result.get("result")
-            )
-            
-            # 检查是否是MCP推荐结果
-            is_mcp_recommendation = result.get("success") and result.get("results")
-            if is_mcp_recommendation:
-                first_result = result["results"][0] if result["results"] else {}
-                
-                # 处理反问结果
-                if first_result.get("type") == "clarification":
-                    await self._handle_clarification(first_result, request)
-                    return
-                
-                # 处理MCP推荐结果
-                if first_result.get("type") == "mcp_interaction":
-                    await self._handle_mcp_recommendation(first_result, request)
-                    return
-            
-            # 检查顶层clarification结果（来自create_and_execute的直接返回）
-            if result.get("type") == "clarification":
-                await self._handle_clarification(result, request)
-                return
-            
-            if not has_response:
-                # 如果工作流没有返回有效响应，直接使用LLM响应
-                think_log("工作流未返回有效响应，使用LLM直接响应...")
-                llm_response = await self._chat_with_llm(request)
-                if llm_response:
-                    print_chat_bubble(llm_response, is_user=False)
-                    result = {"success": True, "summary": llm_response}
-                else:
-                    result = {"success": False, "error": "无法生成响应"}
-            
-            if result.get("success"):
-                think_data("任务状态", "成功")
-            
-            think_complete(3, success=True)
-            think_summarize(True, result)
-            
-            # 添加到聊天历史
-            response = result.get("summary", result.get("result", "任务完成"))
-            self.chat_history.append({"role": "assistant", "content": response})
-            
-        except Exception as e:
-            think_log(f"执行失败: {str(e)}")
-            think_complete(1, success=False)
-            think_summarize(False, {"error": str(e)})
-            log_error(f"任务执行失败: {e}")
+
+        from core.multi_agent_v2.agents.base.base_agent import BaseAgent
+
+        agent = BaseAgent()
+        result = await agent.run(request)
+
+        if result.get("success"):
+            final = result["result"].get("final_answer", "")
+            tool_results = result["result"].get("tool_results", [])
+            summary = final or f"任务完成（{len(tool_results)} 步）"
+            if summary:
+                print_chat_bubble(str(summary)[:500], is_user=False)
+                self.chat_history.append({"role": "assistant", "content": str(summary)[:500]})
     
     async def _handle_mcp_recommendation(self, mcp_result: Dict[str, Any], original_request: str):
         """处理MCP服务器推荐结果
@@ -1215,7 +916,7 @@ class EnhancedCLI:
         
         # 获取用户选择
         try:
-            user_choice = input(f"\n{CliColors.YELLOW}{CliColors.BOLD}请选择: {CliColors.ENDC}").strip().lower()
+            user_choice = input(f"\n{ansi['yellow']}{ansi['bold']}请选择: {ansi['end']}").strip().lower()
         except (EOFError, KeyboardInterrupt):
             user_choice = "no"
         
@@ -1294,7 +995,7 @@ class EnhancedCLI:
         
         # 获取用户回答
         try:
-            user_answer = input(f"\n{CliColors.YELLOW}{CliColors.BOLD}请输入您的回答: {CliColors.ENDC}").strip()
+            user_answer = input(f"\n{ansi['yellow']}{ansi['bold']}请输入您的回答: {ansi['end']}").strip()
         except (EOFError, KeyboardInterrupt):
             user_answer = ""
         
@@ -2260,7 +1961,7 @@ MCP命令使用帮助:
         
         while self.running:
             try:
-                user_input = input(f"{CliColors.CYAN}🦞{CliColors.ENDC} {CliColors.GREEN}xiaolei{CliColors.ENDC}> ")
+                user_input = input(f"{ansi['bold']}{ansi['cyan']}❯{ansi['end']} {ansi['bold']}{ansi['green']}xiaolei{ansi['end']} ")
                 
                 if not user_input.strip():
                     continue
