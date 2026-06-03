@@ -60,222 +60,119 @@ class BaseAgent:
         """执行任务（兼容旧接口）"""
         return await self.act(plan=[task.description])
 
-    # ── ReAct 循环 ────────────────────────────────────────────────────
+    # ── Subagent 分步执行 ─────────────────────────────────────────
 
     async def run(self, task_description: str, max_iterations: int = 10) -> Dict:
-        """ReAct 循环：Thought → Action → Observation → done"""
+        """Subagent 分步执行：拆解 + 并行执行 + 汇总"""
         trace = self._trace
-        from core.multi_agent_v2.agents.middleware import RunContext, MiddlewareChain
-        from core.multi_agent_v2.agents.middlewares import (
-            ProfileMiddleware, ConfidenceMiddleware, ReActDepthMiddleware,
-            DataPipelineMiddleware, KEPAMiddleware, BranchMiddleware,
-        )
-
+        from core.multi_agent_v2.agents.middleware import RunContext
         ctx = RunContext(task_description)
-        ctx.max_iterations = max_iterations
         ctx.trace = trace
-        ctx.memory_log = []   # 记忆：每轮关键信息摘要
-        ctx.rag_context = ""  # RAG：首轮检索到的相关知识
 
-        # ── RAG 检索（首轮注入相关知识） ──────────────────────
+        # 获取工具定义
+        tool_defs = []
         try:
-            from core.search.rag_search_engine import RAGSearchEngine
-            rag = RAGSearchEngine()
-            rag_result = await rag.search_and_learn(query=task_description, user_id=1, max_results=3, learn=False)
-            if rag_result and rag_result.get("results"):
-                texts = []
-                for r in rag_result["results"][:3]:
-                    content = r.get("content", r.get("text", ""))
-                    if content:
-                        texts.append(str(content)[:300])
-                if texts:
-                    ctx.rag_context = "\n".join(texts)
-        except Exception as e:
-            logger.debug(f"RAG 检索失败: {e}")
-
-        # 组装中间件链（按需添加，全可选）
-        chain = MiddlewareChain()
-        for cls in [ReActDepthMiddleware, ProfileMiddleware, ConfidenceMiddleware,
-                    BranchMiddleware, DataPipelineMiddleware, KEPAMiddleware]:
-            mw = cls()
-            mw._agent = self
-            chain.add(mw)
-        await chain.on_start(ctx)
-
-        # 获取工具定义（只暴露可执行的工具）
-        try:
-            from core.multi_agent_v2.tools.tool_registry import get_tool_registry, _HANDLER_MAP, SERVER_BUILTIN, SERVER_MCP
+            from core.multi_agent_v2.tools.tool_registry import get_tool_registry, _HANDLER_MAP
             reg = get_tool_registry()
             if not reg._initialized:
                 await reg.discover_all()
-            raw_tools = reg.get_tools_for_task(task_description, max_tools=25)
-
-            # 只保留有 handler 的 builtin 工具 或 MCP 工具；去掉无执行的 skill/api/guidance
-            def _executable(t):
-                if t.name in _HANDLER_MAP: return True
-                if t.handler is not None: return True
-                if t.server and t.server not in ("__skill__", "__api__", "__guidance__", ""): return True
-                return False
-
-            ctx.tool_defs = [
-                {"type": "function", "function": {"name": t.name, "description": t.description, "parameters": t.parameters},
-                 "_server": t.server, "_tool_name": t.tool_name}
-                for t in raw_tools if _executable(t)
-            ]
-
-            # 确保核心工具始终在最前
-            core_names = ["fetch_url", "file", "execute_code", "workspace_file"]
-            core = [td for td in ctx.tool_defs if td["function"]["name"] in core_names]
-            others = [td for td in ctx.tool_defs if td["function"]["name"] not in core_names]
-            ctx.tool_defs = core + others[:20]
-
-            if not ctx.tool_defs:
-                ctx.tool_defs = raw_tools[:10]  # 兜底
+            raw = reg.get_tools_for_task(task_description, max_tools=25)
+            def _ok(t): return t.name in _HANDLER_MAP or t.handler or (t.server and t.server not in ("__skill__","__api__","__guidance__",""))
+            core_n = ["fetch_url","file","execute_code","workspace_file"]
+            items = [{"type":"function","function":{"name":t.name,"description":t.description,"parameters":t.parameters},
+                      "_server":t.server,"_tool_name":t.tool_name} for t in raw if _ok(t)]
+            core = [i for i in items if i["function"]["name"] in core_n]
+            other = [i for i in items if i["function"]["name"] not in core_n]
+            tool_defs = core + other[:20]
         except Exception:
-            ctx.tool_defs = []
+            pass
 
-        # ── 任务拆解：先让 LLM 输出执行计划 ──────────────────────
-        ctx.plan_steps = await self._decompose_task(task_description, ctx.tool_defs)
-        ctx.current_step = 0
+        # 任务拆解
+        steps = await self._decompose_task(task_description, tool_defs)
         if trace:
-            trace.set_plan(ctx.plan_steps)
+            trace.set_plan(steps)
 
-        # ── ReAct 循环 ──────────────────────────────────────────
-        _consecutive_fail = 0  # 连续失败计数，超过 5 次强制退出
-        for iteration in range(1, max_iterations + 1):
-            ctx.iteration = iteration
-            if ctx.interrupted:
-                break
-            if _consecutive_fail >= 5:
-                logger.warning(f"连续 {_consecutive_fail} 次失败，强制退出")
-                if not ctx.final_answer:
-                    ctx.final_answer = "连续执行失败，请重试或检查环境配置"
-                break
-                break
-            if trace:
-                trace.on_thinking(f"第{iteration}步", task_description[:60])
+        if not steps:
+            r = await self._execute_subagent(task_description, tool_defs, trace)
+            return {"success":True,"result":{"tool_results":[],"final_answer":r},"iterations":1}
 
-            await chain.on_think_start(ctx)
-            response = await self._llm_call(
-                self._build_prompt(task_description, iteration, ctx.tool_results, ctx.last_error,
-                                   ctx.plan_steps, ctx.current_step, ctx.memory_log, ctx.rag_context),
-                ctx.tool_defs,
-            )
-            step = self._parse_response(response)
-            await chain.on_think_end(ctx)
+        # 分步执行（最多 3 并发）
+        sem = asyncio.Semaphore(3)
+        results = [None]*len(steps)
 
-            reasoning = step.get("reasoning", "")
-            action = step.get("action", {})
-            text = step.get("text", "")
-            done = step.get("done", False)
-            plan_update = step.get("plan_update", None)
+        async def run_step(i, step):
+            async with sem:
+                prompt = f"## 步骤 ({i+1}/{len(steps)})\n{step}\n\n完整任务：{task_description}\n\n请完成此步骤。可调用工具。完成后给出结果。"
+                if trace: trace.on_tool_call(f"步骤{i+1}", step[:60])
+                r = await self._execute_subagent(prompt, tool_defs, None)
+                results[i] = {"step":step,"result":r}
+                if trace: trace.on_tool_result(f"完成" if r else "无结果")
 
-            # 动态调整执行计划
-            if plan_update and isinstance(plan_update, list) and len(plan_update) > 0:
-                old_steps = list(ctx.plan_steps or [])
-                # 保留已完成步骤，替换剩余步骤
-                completed = old_steps[:ctx.current_step]
-                ctx.plan_steps = completed + plan_update
-                logger.info(f"计划动态调整: {old_steps[ctx.current_step:] if ctx.current_step < len(old_steps) else '全部'} → {plan_update}")
-                if trace:
-                    trace.set_plan(ctx.plan_steps)
+        await asyncio.gather(*[run_step(i,s) for i,s in enumerate(steps)])
 
-            if done:
-                ctx.final_answer = text or reasoning
-                break
+        answer = "\n\n".join(f"步骤{i+1}: {r['result'][:300]}" for i,r in enumerate(results) if r)
+        if trace: trace.done(True, detail=f"{len(steps)} 步完成")
+        return {"success":True,"result":{"tool_results":results,"final_answer":answer},"iterations":len(steps)}
 
-            if not action:
-                if text:
-                    ctx.tool_results.append({"tool_call": {"name": "_reply"}, "success": True, "result": text})
-                elif reasoning and len(reasoning) > 50:
-                    ctx.final_answer = reasoning
-                    break
-                continue
+    async def _execute_subagent(self, prompt: str, tool_defs: list, trace) -> str:
+        """单步 subagent：LLM 调用 + 可选工具调用 + 失败重试一次"""
+        try:
+            resp = await self._llm_call(prompt, tool_defs)
+        except Exception:
+            return ""
+        step = self._parse_response(resp)
+        action = step.get("action", {})
+        if action and action.get("name"):
+            tn = action["name"]
+            tc = {"name":tn,"arguments":action.get("arguments",{}),"_tool_name":tn,"_server":""}
+            if trace: trace.on_tool_call(tn, tc["arguments"])
+            r = await self._execute_single_tool_call(tc)
+            if r.get("success"):
+                obs = self._extract_observation(r)
+                if trace: trace.on_tool_result(obs[:200])
+                return obs
+            # 失败重试一次
+            retry = await self._llm_call(f"工具 {tn} 失败: {(r.get('result') or r.get('error',''))[:200]}\n\n原任务：{prompt}\n请换方法或直接给结果", tool_defs)
+            step2 = self._parse_response(retry)
+            a2 = step2.get("action",{})
+            if a2 and a2.get("name"):
+                tc2 = {"name":a2["name"],"arguments":a2.get("arguments",{}),"_tool_name":a2["name"],"_server":""}
+                r2 = await self._execute_single_tool_call(tc2)
+                if r2.get("success"): return self._extract_observation(r2)
+            return step2.get("text","") or step2.get("reasoning","")[:500]
+        return step.get("text","") or step.get("reasoning","")[:500]
 
-            tn = action.get("name", "")
-            if not tn:
-                continue
-            # 去重
-            recent = [r for r in ctx.tool_results[-6:] if r.get("tool_call", {}).get("name", "") == tn]
-            if len(recent) >= 3:
-                ctx.tool_results.append({"tool_call": action, "success": False, "error": f"跳过 {tn}（连续{len(recent)}次）"})
-                await chain.on_tool_end(ctx)
-                continue
-
-            try:
-                result = await self._execute_single_tool_call(action)
-                ok = result.get("success", False)
-                obs = self._extract_observation(result)
-                ctx.tool_results.append({"tool_call": action, "success": ok, "result": result.get("result", {}), "error": result.get("error", "")})
-                await chain.on_tool_end(ctx)
-                if trace:
-                    trace.on_tool_result(obs[:200], max_lines=3)
-                if not ok:
-                    ctx.last_error = obs[:200]
-                    _consecutive_fail += 1
-                else:
-                    _consecutive_fail = 0
-                # 记忆：记录本轮关键信息
-                if ok and obs:
-                    summary = f"[{tn}] {obs[:100]}"
-                    ctx.memory_log.append(summary)
-                # 步骤推进：成功调用工具后进入下一步
-                if ok and ctx.plan_steps and ctx.current_step < len(ctx.plan_steps) - 1:
-                    ctx.current_step += 1
-                    logger.info(f"推进到第 {ctx.current_step+1}/{len(ctx.plan_steps)} 步: {ctx.plan_steps[ctx.current_step]}")
-            except Exception as e:
-                ctx.tool_results.append({"tool_call": action, "success": False, "error": str(e)})
-                _consecutive_fail += 1
-                await chain.on_tool_end(ctx)
-                if trace:
-                    trace.on_tool_error(str(e)[:200])
-
-        await chain.on_finish(ctx)
-        success = any(r.get("success") for r in ctx.tool_results)
-        if trace:
-            trace.done(success, detail=f"{ctx.iteration}轮, {len(ctx.tool_results)} 工具调用")
-        return {"success": success, "confidence": ctx.confidence_total, "iterations": ctx.iteration,
-                "result": {"tool_results": ctx.tool_results, "final_answer": ctx.final_answer},
-                "error": ctx.last_error if not success else None}
-
-    # ── 任务拆解 ───────────────────────────────────────────────────────
+    # ── 任务拆解 + ReAct 辅助 ─────────────────────────────────────────
 
     async def _decompose_task(self, task: str, tool_defs: list = None) -> list:
         """先让 LLM 把任务拆成 3-5 个步骤"""
-        prompt = f"""请将以下任务拆解为 3-5 个执行步骤，只需要输出步骤名称列表，每行一个。
+        prompt = f"""拆分任务为3-5个步骤，每行一个步骤名（不要序号）：
 
-任务：{task}
+{task}
 
-格式要求（只输出列表，不要其他内容）：
-1. 步骤一名称
-2. 步骤二名称
-3. 步骤三名称"""
+示例：
+获取数据
+分析数据
+生成报告"""
         try:
             response = await self._llm_call(prompt, tools=None)
             text = response
             if isinstance(response, dict):
                 text = str(response)
-            # 解析步骤列表
             lines = text.strip().split("\n")
             steps = []
             for line in lines:
                 line = line.strip()
-                # 去掉序号前缀 "1. "、"2、" 等
                 cleaned = re.sub(r'^[\d]+[.、\)\s]+', '', line)
-                # 去掉 markdown 列表标记 "- "、"* "
                 cleaned = re.sub(r'^[-*\s]+', '', cleaned)
                 if cleaned and len(cleaned) > 2 and not cleaned.startswith("```"):
                     steps.append(cleaned)
-            if steps:
-                logger.info(f"任务拆解为 {len(steps)} 步: {steps}")
-                return steps[:8]
+            return steps[:8]
         except Exception as e:
             logger.debug(f"任务拆解失败: {e}")
         return []
 
-    # ── ReAct 辅助 ────────────────────────────────────────────────────
-
-    def _build_prompt(self, task, iteration, results, last_error=None, plan_steps=None, current_step=0, memory_log=None, rag_context=""):
+    async def _llm_call(self, prompt, tools=None):
         lines = [f"## 任务\n{task}\n"]
 
         # ── RAG 相关知识（首轮注入） ──
