@@ -63,11 +63,11 @@ class ResourceLimits:
     allow_network: bool = False    # 是否允许网络访问
     allowed_paths: List[str] = field(default_factory=list)  # 允许访问的路径
     forbidden_modules: List[str] = field(default_factory=lambda: [
-        "os", "sys", "subprocess", "socket", "requests",
-        "urllib", "http", "ftplib", "smtplib", "poplib",
+        "ctypes", "socket", "ftplib", "smtplib", "poplib",
         "imaplib", "telnetlib", "xmlrpc", "pickle", "shelve",
-        "marshal", "dbm", "gdbm", "sqlite3"
-    ])  # 禁止导入的模块
+        "marshal",
+        "__import__", "compile", "exec", "eval",
+    ])  # 禁止导入的模块（保留 json/os/sys/requests/urllib/pathlib 等常用）
 
 
 @dataclass
