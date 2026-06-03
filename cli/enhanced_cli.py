@@ -788,9 +788,15 @@ class EnhancedCLI:
             return
 
         from cli.colors import print_color, ansi
+        from cli.thinking_trace import get_trace
         from core.multi_agent_v2.agents.base.base_agent import BaseAgent
 
         agent = BaseAgent()
+        trace = get_trace()
+        trace.enabled = True
+        trace.start(request[:80])
+        agent.set_trace(trace)
+
         result = await agent.run(request)
 
         if result.get("success"):
@@ -800,7 +806,7 @@ class EnhancedCLI:
             print_color(summary[:500], ansi['green'])
             self.chat_history.append({"role": "assistant", "content": summary[:500]})
         else:
-            error = result.get("error", "处理失败")
+            error = result.get("error") or f"失败（{result.get('iterations',0)}轮，{len(result.get('result',{}).get('tool_results',[]))}次工具调用）"
             print_color(f"❌ {error}", ansi['red'])
 
     async def start_chat_mode(self, mode: str = "simple"):

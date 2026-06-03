@@ -186,16 +186,20 @@ class SubtaskMiddleware(BaseMiddleware):
 class BranchMiddleware(BaseMiddleware):
     """根据执行状态决定是否需要切换策略"""
 
+    def __init__(self):
+        super().__init__()
+        self._hint_added = False  # 防止重复添加
+
     async def on_think_end(self, ctx: RunContext) -> None:
-        """如果连续失败，在任务描述中注入切换策略提示"""
         if not ctx.last_error:
+            self._hint_added = False
             return
 
         consecutive_fails = sum(1 for r in ctx.tool_results[-3:] if not r.get("success"))
-        if consecutive_fails >= 3:
-            logger.warning("连续 3 次失败，准备切换策略")
-            # 策略切换通过任务描述中的提示实现
+        if consecutive_fails >= 3 and not self._hint_added:
+            logger.warning("连续 3 次失败，尝试切换策略")
             ctx.task_description += "\n[系统] 当前策略连续失败，请换一种方法。"
+            self._hint_added = True
 
 
 # ════════════════════════════════════════════════════════════════

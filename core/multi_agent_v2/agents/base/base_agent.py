@@ -123,9 +123,16 @@ class BaseAgent:
             trace.set_plan(ctx.plan_steps)
 
         # ── ReAct 循环 ──────────────────────────────────────────
+        _consecutive_fail = 0  # 连续失败计数，超过 5 次强制退出
         for iteration in range(1, max_iterations + 1):
             ctx.iteration = iteration
             if ctx.interrupted:
+                break
+            if _consecutive_fail >= 5:
+                logger.warning(f"连续 {_consecutive_fail} 次失败，强制退出")
+                if not ctx.final_answer:
+                    ctx.final_answer = "连续执行失败，请重试或检查环境配置"
+                break
                 break
             if trace:
                 trace.on_thinking(f"第{iteration}步", task_description[:60])
@@ -187,6 +194,9 @@ class BaseAgent:
                     trace.on_tool_result(obs[:200], max_lines=3)
                 if not ok:
                     ctx.last_error = obs[:200]
+                    _consecutive_fail += 1
+                else:
+                    _consecutive_fail = 0
                 # 记忆：记录本轮关键信息
                 if ok and obs:
                     summary = f"[{tn}] {obs[:100]}"
@@ -197,6 +207,7 @@ class BaseAgent:
                     logger.info(f"推进到第 {ctx.current_step+1}/{len(ctx.plan_steps)} 步: {ctx.plan_steps[ctx.current_step]}")
             except Exception as e:
                 ctx.tool_results.append({"tool_call": action, "success": False, "error": str(e)})
+                _consecutive_fail += 1
                 await chain.on_tool_end(ctx)
                 if trace:
                     trace.on_tool_error(str(e)[:200])
@@ -323,6 +334,12 @@ class BaseAgent:
                             result["text"] = inner.get("text", inner.get("summary", ""))
                             result["done"] = inner.get("done", False)
                             result["plan_update"] = inner.get("plan_update", None)
+                            return result
+                        else:
+                            # 纯文本 → 作为 text 返回，让外层处理
+                            result["text"] = content
+                            result["reasoning"] = content[:300]
+                            return result
                     return result
         except Exception:
             pass
