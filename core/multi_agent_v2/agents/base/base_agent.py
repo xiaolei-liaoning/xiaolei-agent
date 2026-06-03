@@ -116,6 +116,19 @@ class BaseAgent:
 
     async def _execute_subagent(self, prompt: str, tool_defs: list, trace) -> str:
         """单步 subagent：LLM 调用 + 可选工具调用 + 失败重试一次"""
+        # 自动获取工具定义
+        if not tool_defs:
+            try:
+                from core.multi_agent_v2.tools.tool_registry import get_tool_registry, _HANDLER_MAP
+                reg = get_tool_registry()
+                if not reg._initialized:
+                    await reg.discover_all()
+                raw = reg.get_tools_for_task(prompt, max_tools=25)
+                tool_defs = [{"type":"function","function":{"name":t.name,"description":t.description,"parameters":t.parameters},
+                              "_server":t.server,"_tool_name":t.tool_name} for t in raw if t.name in _HANDLER_MAP or t.handler]
+            except Exception:
+                tool_defs = []
+
         try:
             resp = await self._llm_call(prompt, tool_defs)
         except Exception:
