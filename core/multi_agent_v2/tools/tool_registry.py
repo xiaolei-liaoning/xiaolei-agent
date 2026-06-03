@@ -70,6 +70,12 @@ async def _handle_fetch_url(args: Dict) -> Dict:
         m = re.search(r'[\{\[]', text)
         if m: je = text[m.start():]
     clean = je or text
+
+    # 检测 CSS/HTML 无意义内容（百度热搜等动态页面）
+    stripped = clean.strip()
+    if not je and (stripped.startswith("<") or "margin-top" in stripped[:500]):
+        return {"result": {"content": [{"text": "网页是动态HTML，无法直接提取数据。请用 execute_code 执行 Python 通过 requests + BeautifulSoup/正则解析来抓取数据。"}]}}
+
     fp = f"/tmp/agent_fetch_{int(time.time())}.json"
     Path(fp).write_text(clean, encoding="utf-8")
     msg = "状态码:%s 原始:%d字符\n📁%s\n%s" % (resp.status, len(text), fp, clean[:300])

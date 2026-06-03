@@ -96,59 +96,60 @@ class BaseAgent:
         if trace:
             trace.set_plan(steps)
 
-        # 逐步骤执行
+        # 逐步骤执行（每步最多尝试 3 个工具）
         results = []
         prev_context = ""
         for step_idx, step_name in enumerate(steps or []):
             if trace:
                 trace.on_tool_call("步骤%d" % (step_idx+1), step_name[:60])
 
-            prompt = "## 当前步骤 (%d/%d)\n%s\n\n完整任务：%s\n\n" % (step_idx+1, len(steps), step_name, task_description)
-            if prev_context:
-                prompt += "### 已完成步骤的结果\n%s\n\n" % prev_context[:1000]
-            prompt += "请执行此步骤。可用的工具有：\n"
-            for td in tool_defs:
-                prompt += "- %s: %s\n" % (td["function"]["name"], td["function"]["description"])
-            prompt += "根据步骤描述选择合适工具直接调用。完成后输出结果。"
-
-            response = await self._llm_call(prompt, tool_defs)
-            step = self._parse_response(response)
-            action = step.get("action", {})
-            text = step.get("text", "") or step.get("reasoning", "")
             result_text = ""
-            used_tool = action.get("name", "") if action else ""
+            used_tool = ""
+            attempt_tools = list(tool_defs)  # 每步从完整工具列表开始
 
-            if action and action.get("name"):
-                tn = action["name"]
-                tc = {"name": tn, "arguments": action.get("arguments", {}), "_tool_name": tn, "_server": ""}
-                r = await self._execute_single_tool_call(tc)
-                ok = r.get("success", False)
-                obs = self._extract_observation(r)
-                if trace:
-                    (trace.on_tool_result if ok else trace.on_tool_error)(obs[:200])
-                if ok:
-                    result_text = obs
+            for attempt in range(3):
+                prompt = "## 步骤 %d/%d\n%s\n\n完整任务：%s\n\n" % (step_idx+1, len(steps), step_name, task_description)
+                if prev_context:
+                    prompt += "已完成：%s\n\n" % prev_context[:800]
+                if attempt == 0:
+                    prompt += "选择最合适的工具执行此步骤。\n"
+                elif attempt == 1:
+                    prompt += "上一步工具失败。请换其他工具或方法。\n提示：如果网页获取失败，可以用 execute_code 写 Python 代码通过 requests 库抓取。\n"
                 else:
-                    # 工具失败，换个方法再试一次
-                    retry = await self._llm_call(
-                        "工具 %s 失败：%s\n请换其他方法完成：%s" % (tn, obs[:200], step_name),
-                        [td for td in tool_defs if td["function"]["name"] != tn])
-                    s2 = self._parse_response(retry)
-                    r2 = None
-                    if s2.get("action") and s2["action"].get("name"):
-                        tc2 = {"name":s2["action"]["name"],"arguments":s2["action"].get("arguments",{}),"_tool_name":s2["action"]["name"],"_server":""}
-                        r2 = await self._execute_single_tool_call(tc2)
-                        if r2.get("success"): result_text = self._extract_observation(r2)
-                    if not result_text:
-                        result_text = s2.get("text","") or s2.get("reasoning","")[:500]
-            else:
-                result_text = text
-                if trace:
-                    trace.on_tool_result(result_text[:200])
+                    prompt += "仍然失败。请换第三种方法或直接给出答案。\n提示：用 execute_code 执行 Python 代码可以完成绝大多数任务。\n"
+                for td in attempt_tools:
+                    prompt += "- %s: %s\n" % (td["function"]["name"], td["function"]["description"])
+
+                response = await self._llm_call(prompt, attempt_tools)
+                step = self._parse_response(response)
+                action = step.get("action", {})
+                text = step.get("text", "") or step.get("reasoning", "")
+
+                if action and action.get("name"):
+                    tn = action["name"]
+                    used_tool = tn
+                    tc = {"name": tn, "arguments": action.get("arguments", {}), "_tool_name": tn, "_server": ""}
+                    r = await self._execute_single_tool_call(tc)
+                    ok = r.get("success", False)
+                    obs = self._extract_observation(r)
+                    if trace:
+                        (trace.on_tool_result if ok else trace.on_tool_error)(obs[:200] or "无结果")
+                    if ok:
+                        result_text = obs
+                        break  # 成功后进入下一步
+                    # 失败，排除这个工具再试
+                    attempt_tools = [td for td in attempt_tools if td["function"]["name"] != tn]
+                else:
+                    result_text = text
+                    if trace:
+                        trace.on_tool_result(text[:200])
+                    break  # LLM 直接回答了，接受
+
+            if not result_text:
+                result_text = "(步骤执行失败)"
 
             results.append({"step": step_name, "result": result_text, "tool_call": used_tool})
-            summary = result_text[:200].replace("\n", " ").strip() if result_text else step_name
-            prev_context += "\n步骤%d (%s): %s\n" % (step_idx+1, step_name, summary)
+            prev_context += "\n步骤%d (%s): %s\n" % (step_idx+1, step_name, result_text[:200].replace("\n"," "))
 
         answer = "\n\n".join("步骤%d: %s" % (i+1, r["result"][:300]) for i, r in enumerate(results) if r.get("result"))
         if trace:
