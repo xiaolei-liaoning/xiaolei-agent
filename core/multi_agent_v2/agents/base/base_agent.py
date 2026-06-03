@@ -112,6 +112,8 @@ class BaseAgent:
                     (trace.on_tool_result if ok else trace.on_tool_error)(obs[:200])
                 if ok:
                     result_text = obs
+                    # 工具成功后从列表移除，防止后续步骤重复调用
+                    tool_defs = [td for td in tool_defs if td.get("function", {}).get("name") != tn]
                 else:
                     retry = await self._llm_call("工具失败，请直接给出 %s 的结果" % step_name, tool_defs)
                     s2 = self._parse_response(retry)
@@ -124,7 +126,8 @@ class BaseAgent:
                     trace.on_tool_result(result_text[:200])
 
             results.append({"step": step_name, "result": result_text, "tool_call": action.get("name", "")})
-            prev_context += "\n步骤%d (%s): %s\n" % (step_idx+1, step_name, result_text[:300])
+            summary = result_text[:200].replace("\n", " ").strip() if result_text else step_name
+            prev_context += "\n步骤%d (%s): %s\n" % (step_idx+1, step_name, summary)
 
         answer = "\n\n".join("步骤%d: %s" % (i+1, r["result"][:300]) for i, r in enumerate(results) if r.get("result"))
         if trace:
