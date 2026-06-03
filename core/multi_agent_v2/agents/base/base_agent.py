@@ -81,8 +81,18 @@ class BaseAgent:
         except Exception:
             pass
 
-        # 任务拆解
-        steps = await self._decompose_task(task_description, tool_defs)
+        # 判断是否简单对话（无需工具），直接回复
+        simple = len(task_description) < 30 and not any(kw in task_description for kw in
+            ["搜索","查找","写","创建","生成","分析","报告","爬","保存","桌面","文件","数据","代码","游戏","脚本"])
+        if simple:
+            resp = await self._llm_call(task_description, None)
+            step = self._parse_response(resp)
+            answer = step.get("text","") or step.get("reasoning","")
+            if trace: trace.done(True, detail="直接回答")
+            return {"success":True,"result":{"tool_results":[],"final_answer":answer},"iterations":1}
+
+        # 固定 3 步模板，每步标注工具
+        steps = await self._decompose_task(task_description)
         if trace:
             trace.set_plan(steps)
 
@@ -96,13 +106,17 @@ class BaseAgent:
             prompt = "## 当前步骤 (%d/%d)\n%s\n\n完整任务：%s\n\n" % (step_idx+1, len(steps), step_name, task_description)
             if prev_context:
                 prompt += "### 已完成步骤的结果\n%s\n\n" % prev_context[:1000]
-            prompt += "请执行此步骤。完成后输出结果。如需调用工具，直接调用。"
+            prompt += "请执行此步骤。可用的工具有：\n"
+            for td in tool_defs:
+                prompt += "- %s: %s\n" % (td["function"]["name"], td["function"]["description"])
+            prompt += "根据步骤描述选择合适工具直接调用。完成后输出结果。"
 
             response = await self._llm_call(prompt, tool_defs)
             step = self._parse_response(response)
             action = step.get("action", {})
             text = step.get("text", "") or step.get("reasoning", "")
             result_text = ""
+            used_tool = action.get("name", "") if action else ""
 
             if action and action.get("name"):
                 tn = action["name"]
@@ -114,20 +128,25 @@ class BaseAgent:
                     (trace.on_tool_result if ok else trace.on_tool_error)(obs[:200])
                 if ok:
                     result_text = obs
-                    # 工具成功后从列表移除，防止后续步骤重复调用
-                    tool_defs = [td for td in tool_defs if td.get("function", {}).get("name") != tn]
                 else:
-                    retry = await self._llm_call("工具失败，请直接给出 %s 的结果" % step_name, tool_defs)
+                    # 工具失败，换个方法再试一次
+                    retry = await self._llm_call(
+                        "工具 %s 失败：%s\n请换其他方法完成：%s" % (tn, obs[:200], step_name),
+                        [td for td in tool_defs if td["function"]["name"] != tn])
                     s2 = self._parse_response(retry)
-                    result_text = s2.get("text", "") or s2.get("reasoning", "")[:500]
-                    if trace:
-                        trace.on_tool_result(result_text[:200] if result_text else "(无结果)")
+                    r2 = None
+                    if s2.get("action") and s2["action"].get("name"):
+                        tc2 = {"name":s2["action"]["name"],"arguments":s2["action"].get("arguments",{}),"_tool_name":s2["action"]["name"],"_server":""}
+                        r2 = await self._execute_single_tool_call(tc2)
+                        if r2.get("success"): result_text = self._extract_observation(r2)
+                    if not result_text:
+                        result_text = s2.get("text","") or s2.get("reasoning","")[:500]
             else:
                 result_text = text
                 if trace:
                     trace.on_tool_result(result_text[:200])
 
-            results.append({"step": step_name, "result": result_text, "tool_call": action.get("name", "")})
+            results.append({"step": step_name, "result": result_text, "tool_call": used_tool})
             summary = result_text[:200].replace("\n", " ").strip() if result_text else step_name
             prev_context += "\n步骤%d (%s): %s\n" % (step_idx+1, step_name, summary)
 
@@ -138,22 +157,21 @@ class BaseAgent:
 
     # ── 任务拆解 ───────────────────────────────────────────────────────
 
-    async def _decompose_task(self, task: str, tool_defs: list = None) -> list:
-        prompt = "请将以下任务拆解为 3-5 个执行步骤，每行一个步骤名（不要序号）：\n\n%s\n\n示例：\n获取数据\n分析数据\n生成报告" % task
+    async def _decompose_task(self, task: str) -> list:
+        """固定 3 步拆解，标注工具"""
+        prompt = "拆解任务为3个步骤。\n\n任务：%s\n\n可用工具：fetch_url(获取网页), execute_code(执行代码), file(文件)\n格式每行：工具:步骤\n示例：\nfetch_url:获取热搜数据\nexecute_code:分析数据\nfile:保存到桌面" % task
         try:
             response = await self._llm_call(prompt, tools=None)
             text = response if isinstance(response, str) else str(response)
             steps = []
             for line in text.strip().split("\n"):
-                line = line.strip()
-                cl = re.sub(r'^[\d]+[.、\)\s]+', '', line)
+                cl = re.sub(r'^[\d]+[.、\)\s]+', '', line.strip())
                 cl = re.sub(r'^[-*\s]+', '', cl)
-                if cl and len(cl) > 2 and not cl.startswith("```"):
+                if cl and len(cl) > 4 and not cl.startswith("```"):
                     steps.append(cl)
-            return steps[:8]
-        except Exception as e:
-            logger.debug("任务拆解失败: %s" % e)
-        return []
+            return steps[:3]
+        except:
+            return ["获取数据", "分析处理", "输出结果"]
 
     # ── LLM 调用 ───────────────────────────────────────────────────────
 
