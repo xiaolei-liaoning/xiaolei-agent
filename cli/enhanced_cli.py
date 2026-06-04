@@ -794,30 +794,28 @@ class EnhancedCLI:
             await self.start_chat_mode(mode)
     
     async def handle_smart_request(self, request: str):
-        """处理智能请求 -- 调 BaseAgent.run()"""
+        """处理智能请求 - 转发到 core 的 ReActCore"""
         if not request.strip():
             return
 
+        from core.multi_agent_v2.agents.react_core import run_react
         from cli.colors import print_color, ansi
         from cli.thinking_trace import get_trace
-        from core.multi_agent_v2.agents.base.base_agent import BaseAgent
 
-        agent = BaseAgent()
         trace = get_trace()
         trace.enabled = True
         trace.start(request[:80])
-        agent.set_trace(trace)
 
-        result = await agent.run(request)
+        result = await run_react(request)
 
         if result.get("success"):
-            answer = result["result"].get("final_answer", "")
-            text = answer[:500] if answer else "完成（%d 步）" % result.get("iterations", 0)
-            print_color(text, ansi['green'])
+            answer = result.get("answer", "")
+            text = answer[:500] if answer else "完成（%d 轮）" % result.get("iterations", 0)
+            if text:
+                print_color(text, ansi['green'])
         else:
-            err = result.get("error") or "失败（%d 步）" % result.get("iterations", 0)
-            print_color("❌ " + (err or ""), ansi['red'])
-
+            err = result.get("error") or "失败"
+            print_color("\u274c %s" % err, ansi['red'])
 
     async def start_chat_mode(self, mode: str = "simple"):
         """进入聊天模式"""
@@ -897,22 +895,19 @@ class EnhancedCLI:
                 log_error(f"聊天处理失败: {e}")
     
     async def handle_smart_request_with_history(self, request: str):
-        """带历史记录的智能请求处理 — V2 Agent"""
+        """带历史记录的智能请求处理 — 转发到 core 的 ReActCore"""
         if not request.strip():
             return
 
-        from core.multi_agent_v2.agents.base.base_agent import BaseAgent
+        from core.multi_agent_v2.agents.react_core import run_react
 
-        agent = BaseAgent()
-        result = await agent.run(request)
+        result = await run_react(request)
 
         if result.get("success"):
-            final = result["result"].get("final_answer", "")
-            tool_results = result["result"].get("tool_results", [])
-            summary = final or f"任务完成（{len(tool_results)} 步）"
-            if summary:
-                print_chat_bubble(str(summary)[:500], is_user=False)
-                self.chat_history.append({"role": "assistant", "content": str(summary)[:500]})
+            answer = result.get("answer", "")
+            if answer:
+                print_chat_bubble(str(answer)[:500], is_user=False)
+                self.chat_history.append({"role": "assistant", "content": str(answer)[:500]})
     
     async def _handle_mcp_recommendation(self, mcp_result: Dict[str, Any], original_request: str):
         """处理MCP服务器推荐结果
