@@ -94,6 +94,25 @@ async def _handle_file(args: Dict) -> Dict:
         return {"result":{"content":[{"text":f"已写入 {path} ({len(c)} bytes)"}]}}
     return {"result":{"content":[{"text":"file 需要 action=read|write"}]}}
 
+async def _handle_search(args: Dict) -> Dict:
+    """搜索 — 使用 RAG 搜索引擎"""
+    query = args.get("query", "")
+    if not query: return {"result": {"content": [{"text": "需要 query 参数"}]}}
+    try:
+        from core.search.rag_search_engine import RAGSearchEngine
+        engine = RAGSearchEngine()
+        result = await engine.search_and_learn(query, user_id=1, max_results=5, learn=False)
+        if result and result.get("results"):
+            items = result["results"]
+            text = "\n\n".join(
+                "【%d】%s" % (i+1, r.get("content", r.get("text", ""))[:300])
+                for i, r in enumerate(items)
+            )
+            return {"result": {"content": [{"text": "搜索结果:\n" + text}]}}
+        return {"result": {"content": [{"text": "未找到相关结果"}]}}
+    except Exception as e:
+        return {"result": {"content": [{"text": "搜索失败: %s" % e}]}}
+
 async def _handle_execute_code(args: Dict) -> Dict:
     from core.tools.sandbox_executor import SandboxExecutor
     ex=SandboxExecutor(); action=args.get("action","")
@@ -112,6 +131,7 @@ async def _handle_execute_code(args: Dict) -> Dict:
     return {"result":{"content":[{"text":"execute_code 需要 action=run_python|run_shell"}]}}
 
 _HANDLER_MAP: Dict[str, Callable] = {
+    "search": _handle_search,
     "execute_code": _handle_execute_code,
     "file": _handle_file,
     "fetch_url": _handle_fetch_url,
@@ -130,6 +150,10 @@ _SANDBOX_TOOL_DEFS = [
         description="HTTP GET 获取网页数据，自动提取 JSON，保存到 /tmp/",
         parameters={"type":"object","properties":{"url":{"type":"string"},"max_length":{"type":"integer","description":"默认80000"}},"required":["url"]},
         handler=_handle_fetch_url),
+    ToolDefinition(name="search", server=SERVER_BUILTIN, tags=["web","search"],
+        description="联网搜索查询信息。当用户要求搜索、查找、查询时使用",
+        parameters={"type":"object","properties":{"query":{"type":"string","description":"搜索关键词"}},"required":["query"]},
+        handler=_handle_search),
 ]
 
 def _safe(raw: str) -> str:
