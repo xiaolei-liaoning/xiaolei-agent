@@ -73,6 +73,52 @@ class ExecutionResult:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass
+class ProgressSnapshot:
+    """执行进度快照 — Agent 在 think() 时可见
+
+    追踪已完成/进行中/待执行的步骤，以及各步骤的失败次数。
+    to_prompt() 格式化为 LLM prompt 可读的文本看板。
+    """
+    completed: List[Dict] = field(default_factory=list)
+    current: Optional[Dict] = None
+    remaining: List[Dict] = field(default_factory=list)
+    failed_attempts: Dict[str, int] = field(default_factory=dict)
+
+    def to_prompt(self) -> str:
+        lines = ["[执行进度]"]
+        for c in self.completed:
+            status = "✅" if c.get("status") == "success" else "❌"
+            result = str(c.get("result", ""))[:120]
+            lines.append(f"  {status} {c['step_id']} {c.get('name','')} — {result}")
+        if self.current:
+            fa = self.failed_attempts.get(self.current["step_id"], 0)
+            warn = f" ⚠️ 已失败 {fa} 次" if fa > 0 else ""
+            lines.append(f"  🔄 {self.current['step_id']} {self.current.get('name','')} — 执行中{warn}")
+        for r in self.remaining:
+            fa = self.failed_attempts.get(r["step_id"], 0)
+            warn = f" ⚠️ 已失败 {fa} 次" if fa > 0 else ""
+            lines.append(f"  ⏳ {r['step_id']} {r.get('name','')} — 待执行{warn}")
+        if not lines:
+            return "[执行进度] 尚未开始"
+        return "\n".join(lines)
+
+
+class NeedsReflection(Exception):
+    """步骤失败 2 次后抛出的反思信号
+
+    WorkAgent 捕获后决定是重试还是重规划。
+    """
+    def __init__(self, step_id: str, reason: str, progress: ProgressSnapshot,
+                 remaining_steps: list, failed_step: dict = None):
+        self.step_id = step_id
+        self.reason = reason
+        self.progress = progress
+        self.remaining_steps = remaining_steps
+        self.failed_step = failed_step or {}
+        super().__init__(f"步骤 {step_id} 需要反思: {reason[:100]}")
+
+
 class CommunicationTopic(Enum):
     """通信主题"""
     TASK_COMPLETED = "task_completed"

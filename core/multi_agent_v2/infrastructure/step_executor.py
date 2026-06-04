@@ -14,15 +14,59 @@ StepExecutor - 分步执行引擎
 import asyncio
 import json
 import logging
+import re
 import time
 import uuid
 from typing import Any, Callable, Dict, List, Optional, Set
 
 from core.multi_agent_v2.agents.base.models import (
     Step, StepStatus, StepType, StepEvent, ExecutionResult, Task,
+    ProgressSnapshot, NeedsReflection,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_text(result_obj: Any, max_len: int = 300) -> str:
+    """从 tool_results 的标准嵌套格式提取 text 字符串
+
+    处理 "tool_results" -> "result" -> "content" 链，
+    兼容 dict/list 多种格式，返回合并后的字符串。
+
+    Args:
+        result_obj: 步骤结果对象（可能是 dict 或其他类型）
+        max_len: 每段文本最大长度
+
+    Returns:
+        提取出的文本字符串
+    """
+    if not isinstance(result_obj, dict):
+        return str(result_obj)[:max_len]
+
+    texts = []
+    for tr in result_obj.get("tool_results", []):
+        t = tr.get("result", {})
+        if not isinstance(t, dict):
+            texts.append(str(t)[:max_len])
+            continue
+        # 新结构化摘要格式（P0 改造后）
+        if t.get("structured") and t.get("summary"):
+            texts.append(f"[摘要] {t['summary'][:max_len]}")
+            for kp in (t.get("key_points") or [])[:3]:
+                texts.append(f"  - {kp[:200]}")
+        # 旧原始格式
+        else:
+            content = t.get("result", {}).get("content", [])
+            for c in content if isinstance(content, list) else [content]:
+                if isinstance(c, dict):
+                    texts.append(str(c.get("text", ""))[:max_len])
+                elif isinstance(c, str):
+                    texts.append(c[:max_len])
+
+    if result_obj.get("text"):
+        texts.append(str(result_obj["text"])[:500])
+
+    return "\n".join(texts) or str(result_obj)[:max_len]
 
 
 class StepExecutor:
@@ -32,6 +76,11 @@ class StepExecutor:
         self.llm_router = llm_router
         self.agent_pool = agent_pool
         self._event_listeners: List[Callable[[StepEvent], None]] = []
+        self.progress = ProgressSnapshot()
+
+    def get_progress(self) -> ProgressSnapshot:
+        """返回当前执行进度快照"""
+        return self.progress
 
     def on_step_event(self, callback: Callable[[StepEvent], None]) -> None:
         """注册步骤事件监听器"""
@@ -120,7 +169,7 @@ class StepExecutor:
         failed_count = 0
         skipped_count = 0
 
-        for step in sorted_steps:
+        for exec_step_idx, step in enumerate(sorted_steps):
             # 检查依赖是否全部满足
             deps_met, blocking = self._check_dependencies(step, exec_ctx["completed"])
             if not deps_met:
@@ -135,6 +184,18 @@ class StepExecutor:
                     skipped_count += 1
                 continue
 
+            # Set current step in progress
+            self.progress.current = {
+                "step_id": step.step_id,
+                "name": step.name,
+                "type": step.type.value if hasattr(step.type, 'value') else str(step.type),
+            }
+            # Remove from remaining if present
+            self.progress.remaining = [
+                r for r in self.progress.remaining
+                if r["step_id"] != step.step_id
+            ]
+
             # ── 步骤开始 ──
             step.status = StepStatus.RUNNING
             self._emit_event("step_start", step)
@@ -147,18 +208,10 @@ class StepExecutor:
             step_start_time = time.time()
 
             try:
-                if step.type == StepType.SEARCH:
-                    result = await self._execute_search_step(step, exec_ctx)
-                elif step.type == StepType.ANALYSIS:
-                    result = await self._execute_analysis_step(step, exec_ctx)
-                elif step.type == StepType.TOOL_CALL:
-                    result = await self._execute_tool_call_step(step, exec_ctx)
-                elif step.type == StepType.LLM_TASK:
-                    result = await self._execute_llm_step(step, exec_ctx)
-                elif step.type == StepType.HUMAN_INPUT:
+                if step.type == StepType.HUMAN_INPUT:
                     result = await self._execute_human_input_step(step, exec_ctx)
                 else:
-                    result = await self._execute_llm_step(step, exec_ctx)
+                    result = await self._execute_step_via_react(step, exec_ctx)
 
                 # ── 步骤成功 ──
                 step.execution_time = time.time() - step_start_time
@@ -166,6 +219,28 @@ class StepExecutor:
                 step.result = result
                 exec_ctx["completed"][step.step_id] = step
                 completed_count += 1
+
+                # 记忆存储
+                try:
+                    from core.multi_agent_v2.agents.memory import get_task_memory, MemoryEntry
+                    get_task_memory().remember(MemoryEntry(
+                        task_id=f"step_{step.step_id}",
+                        description=step.description or step.name,
+                        result=str(result)[:200] if result else "success",
+                        success=True,
+                        tools_used=[step.tool_name] if step.tool_name else [],
+                    ))
+                except Exception:
+                    pass
+
+                # Update progress
+                self.progress.completed.append({
+                    "step_id": step.step_id,
+                    "name": step.name,
+                    "result": str(result)[:200] if result else "",
+                    "status": "success",
+                })
+                self.progress.current = None
 
                 self._emit_event("step_complete", step)
                 if on_step_complete:
@@ -178,11 +253,60 @@ class StepExecutor:
 
             except Exception as e:
                 # ── 步骤失败 ──
+                # 记忆存储（失败也记录，供后续反思参考）
+                try:
+                    from core.multi_agent_v2.agents.memory import get_task_memory, MemoryEntry
+                    get_task_memory().remember(MemoryEntry(
+                        task_id=f"step_{step.step_id}",
+                        description=step.description or step.name,
+                        result=f"failed: {str(e)[:200]}",
+                        success=False,
+                        tools_used=[step.tool_name] if step.tool_name else [],
+                    ))
+                except Exception:
+                    pass
                 step.execution_time = time.time() - step_start_time
                 step.status = StepStatus.FAILED
                 step.error = str(e)
                 exec_ctx["completed"][step.step_id] = step
                 failed_count += 1
+
+                # Count failure
+                self.progress.failed_attempts[step.step_id] = \
+                    self.progress.failed_attempts.get(step.step_id, 0) + 1
+                fa = self.progress.failed_attempts[step.step_id]
+
+                if fa >= 2:
+                    # Trigger reflection
+                    self.progress.completed.append({
+                        "step_id": step.step_id,
+                        "name": step.name,
+                        "result": str(e)[:200],
+                        "status": "failed",
+                    })
+                    self.progress.current = None
+                    remaining_summary = [
+                        {"step_id": s.step_id, "name": s.name,
+                         "type": s.type.value if hasattr(s.type, 'value') else str(s.type)}
+                        for s in sorted_steps[exec_step_idx:]
+                        if s.step_id != step.step_id
+                    ]
+                    raise NeedsReflection(
+                        step_id=step.step_id,
+                        reason=str(e),
+                        progress=self.progress,
+                        remaining_steps=remaining_summary,
+                        failed_step={"step_id": step.step_id, "name": step.name, "error": str(e)},
+                    )
+                else:
+                    # First failure - add to completed as failed and continue
+                    self.progress.completed.append({
+                        "step_id": step.step_id,
+                        "name": step.name,
+                        "result": str(e)[:200],
+                        "status": "failed",
+                    })
+                    self.progress.current = None
 
                 self._emit_event("step_failed", step)
                 if on_step_failed:
@@ -270,107 +394,59 @@ class StepExecutor:
 
         return len(blocking) == 0, blocking
 
-    # ── 各类型步骤执行器 ──────────────────────────────────────
+    # ── 步骤执行（统一走 ReActCore） ─────────────────────────────
 
-    async def _execute_search_step(self, step: Step, ctx: Dict) -> Any:
-        """执行搜索/查询类步骤"""
-        query = step.description
-        # 优先用上一步上下文中的信息丰富查询
-        if ctx.get("completed"):
-            last_result = list(ctx["completed"].values())[-1].result
-            if last_result:
-                if isinstance(last_result, str) and len(last_result) > 20:
-                    query = f"{step.description}\n上下文: {last_result[:200]}"
+    async def _execute_step_via_react(self, step: Step, ctx: Dict) -> Any:
+        """执行单个步骤
 
-        # 尝试 RAG 搜索
-        try:
-            from core.search.rag_search_engine import RAGSearchEngine
-            engine = RAGSearchEngine()
-            result = await engine.search_and_learn(
-                query=query, user_id=1, max_results=5, learn=True
-            )
-            if result:
-                return result
-        except Exception as e:
-            logger.debug(f"RAG 搜索失败: {e}")
-
-        # 兜底：调用 LLM
-        return await self._call_llm(f"请搜索并整理以下信息：\n{query}")
-
-    async def _execute_analysis_step(self, step: Step, ctx: Dict) -> Any:
-        """执行分析处理类步骤"""
-        # 收集上一步的结果作为分析素材
-        previous_results = {}
-        for dep_id in step.dependencies:
-            dep_step = ctx["completed"].get(dep_id)
-            if dep_step and dep_step.result:
-                previous_results[dep_id] = dep_step.result
-
-        context_str = ""
-        if previous_results:
-            context_str = "前序步骤结果：\n"
-            for dep_id, res in previous_results.items():
-                res_str = str(res)[:500] if res else "(无结果)"
-                context_str += f"[{dep_id}]: {res_str}\n\n"
-
-        prompt = f"{context_str}请完成以下分析任务：\n{step.description}"
-        if step.expected_output:
-            prompt += f"\n\n预期产出：{step.expected_output}"
-
-        return await self._call_llm(prompt)
-
-    async def _execute_tool_call_step(self, step: Step, ctx: Dict) -> Any:
-        """执行工具调用类步骤"""
-        tool_name = step.tool_name
-        tool_args = dict(step.tool_args) if step.tool_args else {}
-
-        # 尝试调用 MCP 工具
-        try:
-            from core.mcp.mcp_client import mcp_client as mcp
-            if not mcp._initialized:
-                await mcp.initialize()
-
-            servers = await mcp.list_servers()
-            for server in servers:
-                tools = await mcp.list_tools(server)
-                for tool in tools:
-                    tname = tool.get("name", "")
-                    desc = tool.get("description", "")
-                    if tool_name and (tname == tool_name or tname.lower() in tool_name.lower()):
-                        result = await mcp.call_tool(server, tname, tool_args)
-                        return {"tool": tname, "server": server, "result": result}
-                    if not tool_name and (step.description.lower() in desc.lower()):
-                        result = await mcp.call_tool(server, tname, tool_args)
-                        return {"tool": tname, "server": server, "result": result}
-
-        except Exception as e:
-            logger.debug(f"MCP 工具调用失败: {e}")
-
-        # 兜底：用 LLM 处理
-        prompt = f"请完成以下工具操作：\n{step.description}"
-        if step.tool_args:
-            prompt += f"\n参数：{json.dumps(step.tool_args, ensure_ascii=False)}"
-        return await self._call_llm(prompt)
-
-    async def _execute_llm_step(self, step: Step, ctx: Dict) -> Any:
-        """执行 LLM 生成类步骤"""
-        # 收集上下文
+        如果步骤已指定工具（tool_name）→ 直接调工具，不走 LLM
+        否则 → run_react() 经过完整 MiddlewareChain（含 KEPA/反问/反思）
+        """
+        # 收集前序步骤结果作为上下文
         context_parts = []
         for dep_id in step.dependencies:
             dep_step = ctx["completed"].get(dep_id)
             if dep_step and dep_step.result:
-                res = dep_step.result
-                res_str = str(res)[:800] if res else "(无结果)"
-                context_parts.append(f"[{dep_step.name}]: {res_str}")
+                context_parts.append(
+                    f"[{dep_step.name}]: {_extract_text(dep_step.result)}"
+                )
 
-        prompt = ""
+        # ── 统一走 run_react() 标准路径（全中间件链） ──
+        task_desc = step.description
         if context_parts:
-            prompt += "已有信息：\n" + "\n\n".join(context_parts) + "\n\n"
-        prompt += f"任务：{step.description}"
+            task_desc = "### 已有上下文\n" + "\n\n".join(context_parts) + \
+                        "\n\n### 当前任务\n" + task_desc
         if step.expected_output:
-            prompt += f"\n\n预期产出：{step.expected_output}"
+            task_desc += f"\n\n预期产出：{step.expected_output}"
 
-        return await self._call_llm(prompt)
+        # 若步骤涉及代码执行，注入 macOS 系统上下文（通过任务描述提示 LLM）
+        if 'execute_code' in (step.tool_name or '') or '代码' in (step.description or ''):
+            task_desc += ("\n\n[系统环境] macOS Darwin, home=/Users/leiyuxuan, "
+                          "desktop=/Users/leiyuxuan/Desktop。请只使用 Python 标准库，"
+                          "不要安装或使用第三方包。")
+
+        # RAG 知识注入（非阻塞——8 秒内拿不到就算了）
+        try:
+            import asyncio
+            async def _rag_inject():
+                from core.search.rag_search_engine import RAGSearchEngine
+                engine = RAGSearchEngine()
+                rag_result = await engine.search_and_learn(
+                    query=step.description, user_id=1, max_results=2, learn=False
+                )
+                if rag_result and rag_result.get("results"):
+                    return f"\n\n### 相关知识\n{str(rag_result['results'])[:1000]}"
+                return ""
+            rag_text = await asyncio.wait_for(_rag_inject(), timeout=8.0)
+            task_desc += rag_text
+        except asyncio.TimeoutError:
+            pass  # RAG 超时不影响执行
+        except Exception:
+            pass
+
+        from core.multi_agent_v2.agents.react_core import run_react
+        result = await run_react(task_desc)
+        return result
 
     async def _execute_human_input_step(self, step: Step, ctx: Dict) -> Any:
         """执行需要用户输入的步骤
@@ -393,45 +469,136 @@ class StepExecutor:
         except asyncio.TimeoutError:
             raise TimeoutError(f"用户输入超时: {step.name}")
 
-    async def _call_llm(self, prompt: str) -> str:
-        """调用 LLM"""
-        if self.llm_router:
-            try:
-                response = await asyncio.wait_for(
-                    self.llm_router.chat(
-                        [{"role": "user", "content": prompt}],
-                        temperature=0.7,
-                        max_tokens=1000,
-                    ),
-                    timeout=20,
-                )
-                if isinstance(response, dict):
-                    content = (response.get("choices", [{}])[0]
-                               .get("message", {})
-                               .get("content", ""))
-                    return content or json.dumps(response, ensure_ascii=False)
-                return str(response)
-            except Exception as e:
-                logger.warning(f"LLM 调用失败: {e}")
-                raise
-
-        # 没有 LLM 时的兜底
-        return f"[模拟执行] {prompt[:100]}..."
-
     async def execute_step(self, step: Step, context: Dict) -> Step:
         """执行单个独立步骤（外部调用入口）"""
-        if step.type == StepType.SEARCH:
-            step.result = await self._execute_search_step(step, context)
-        elif step.type == StepType.ANALYSIS:
-            step.result = await self._execute_analysis_step(step, context)
-        elif step.type == StepType.TOOL_CALL:
-            step.result = await self._execute_tool_call_step(step, context)
-        elif step.type == StepType.LLM_TASK:
-            step.result = await self._execute_llm_step(step, context)
-        elif step.type == StepType.HUMAN_INPUT:
+        if step.type == StepType.HUMAN_INPUT:
             step.result = await self._execute_human_input_step(step, context)
         else:
-            step.result = await self._execute_llm_step(step, context)
+            step.result = await self._execute_step_via_react(step, context)
 
         step.status = StepStatus.SUCCESS if step.error is None else StepStatus.FAILED
         return step
+
+    async def _summarize_tool_result(
+        self, tool_name: str, tool_args: Dict, raw_result: Any, step_description: str
+    ) -> Dict:
+        """对工具返回的原始结果进行 LLM 分析，产出结构化摘要
+
+        Args:
+            tool_name: 工具名称
+            tool_args: 工具参数
+            raw_result: 工具原始返回结果
+            step_description: 步骤描述
+
+        Returns:
+            结构化摘要字典，包含 summary/key_points/findings/raw_excerpt/has_errors 等字段
+            降级时 is_raw=True 保留原始文本片段
+        """
+        # ── 提取文本内容 ──
+        raw_text = ""
+        if isinstance(raw_result, dict):
+            content = raw_result.get("content", [])
+            if isinstance(content, list):
+                texts = []
+                for c in content:
+                    if isinstance(c, dict) and c.get("type") == "text":
+                        texts.append(c.get("text", ""))
+                raw_text = "\n".join(texts)
+            elif isinstance(content, str):
+                raw_text = content
+            else:
+                raw_text = str(raw_result.get("result", str(raw_result)))
+        elif isinstance(raw_result, str):
+            raw_text = raw_result
+        else:
+            raw_text = str(raw_result)
+
+        # 结果太短不需要分析，直接返回
+        if len(raw_text) < 200:
+            return {
+                "summary": raw_text[:500],
+                "key_points": [],
+                "findings": {},
+                "raw_excerpt": raw_text[:200],
+                "has_errors": False,
+                "is_raw": True,
+                "structured": False,
+            }
+
+        # ── 构造 LLM 分析 prompt ──
+        try:
+            tool_args_str = json.dumps(tool_args, ensure_ascii=False)[:500]
+        except Exception:
+            tool_args_str = str(tool_args)[:500]
+
+        prompt = f"""你是一个数据分析助手。请分析以下工具执行结果，产出结构化摘要。
+
+### 工具名称
+{tool_name}
+
+### 工具参数
+{tool_args_str}
+
+### 步骤目标
+{step_description[:300]}
+
+### 原始执行结果
+```text
+{raw_text[:4000]}
+```
+
+请分析上述结果，返回 JSON 格式的结构化摘要：
+
+1. "summary" (str): 一段简洁的中文摘要，总结关键发现（200字以内）
+2. "key_points" (List[str]): 3-5 个关键数据点或结论，每点不超过 50 字
+3. "findings" (dict): 按类别组织的重要发现（至少包含 2 个类别）
+4. "raw_excerpt" (str): 原始结果中最重要的段落（200字以内）
+5. "has_errors" (bool): 结果中是否包含错误信息
+
+仅返回 JSON，不要包含其他文字。"""
+
+        try:
+            import anthropic
+            client = anthropic.Anthropic()
+            response = client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=2000,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            content_text = response.content[0].text if response.content else ""
+
+            # 从 LLM 响应中提取 JSON
+            json_str = None
+            # 优先匹配 markdown 代码块
+            m = re.search(r'```(?:json)?\s*(.*?)\s*```', content_text, re.DOTALL)
+            if m:
+                json_str = m.group(1)
+            else:
+                # 匹配裸 JSON 对象
+                m = re.search(r'(\{.*\})', content_text, re.DOTALL)
+                if m:
+                    json_str = m.group(1)
+
+            if json_str:
+                structured = json.loads(json_str)
+                structured.setdefault("summary", content_text[:300])
+                structured.setdefault("key_points", [])
+                structured.setdefault("findings", {})
+                structured.setdefault("raw_excerpt", raw_text[:200])
+                structured.setdefault("has_errors", False)
+                structured["is_raw"] = False
+                structured["structured"] = True
+                return structured
+        except Exception as e:
+            logger.debug(f"LLM 分析工具结果失败: {e}")
+
+        # ── 降级：直接返回原始结果摘要 ──
+        return {
+            "summary": raw_text[:500],
+            "key_points": [],
+            "findings": {},
+            "raw_excerpt": raw_text[:200],
+            "has_errors": False,
+            "is_raw": True,
+            "structured": False,
+        }

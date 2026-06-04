@@ -17,8 +17,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from core.shared.enums import TaskComplexity, ResourceType
 from core.multi_agent_v2.agents.base.base_agent import (
-    BaseAgent, AgentType, Task, Capability
+    BaseAgent, AgentType, Task,
 )
+from core.multi_agent_v2.agents.base.models import Capability
 from core.multi_agent_v2.orchestration.context.global_context_center import (
     GlobalContextCenter
 )

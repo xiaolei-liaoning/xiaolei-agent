@@ -8,9 +8,9 @@
 自动发现：MCP 服务器（mcp/ 目录 + .mcp.json）
 """
 
-import json, logging, os, re, time
+import asyncio, json, logging, os, re, time
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Set
 from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
@@ -83,54 +83,142 @@ async def _handle_fetch_url(args: Dict) -> Dict:
 
 async def _handle_file(args: Dict) -> Dict:
     action=args.get("action",""); path=args.get("path","")
+    if not path: return {"result":{"content":[{"text":"需要 path 参数"}]}}
+    # 处理 Windows 路径（%USERPROFILE% 等）— macOS 上替换为 $HOME
+    import re
+    path = re.sub(r'%([^%]+)%', lambda m: os.environ.get(m.group(1), os.environ.get('HOME', '~')), path)
+    path = os.path.expanduser(path)
     if action=="read":
-        if not path or not os.path.isfile(path): return {"result":{"content":[{"text":"文件不存在"}]}}
+        if not os.path.isfile(path): return {"result":{"content":[{"text":f"文件不存在: {path}"}]}}
         return {"result":{"content":[{"text":open(path,encoding="utf-8").read()}]}}
     if action=="write":
         c=args.get("content","")
-        if not path or not c: return {"result":{"content":[{"text":"需要 path 和 content"}]}}
-        path=os.path.expanduser(path); Path(path).parent.mkdir(parents=True,exist_ok=True)
+        if not c: return {"result":{"content":[{"text":"需要 content 参数"}]}}
+        Path(path).parent.mkdir(parents=True,exist_ok=True)
         Path(path).write_text(c,encoding="utf-8")
         return {"result":{"content":[{"text":f"已写入 {path} ({len(c)} bytes)"}]}}
     return {"result":{"content":[{"text":"file 需要 action=read|write"}]}}
 
 async def _handle_search(args: Dict) -> Dict:
-    """搜索 — 使用 RAG 搜索引擎"""
+    """搜索 — 并发尝试多个搜索引擎，谁先返回有效结果用谁"""
     query = args.get("query", "")
     if not query: return {"result": {"content": [{"text": "需要 query 参数"}]}}
-    try:
-        from core.search.rag_search_engine import RAGSearchEngine
-        engine = RAGSearchEngine()
-        result = await engine.search_and_learn(query, user_id=1, max_results=5, learn=False)
-        if result and result.get("results"):
-            items = result["results"]
-            text = "\n\n".join(
-                "【%d】%s" % (i+1, r.get("content", r.get("text", ""))[:300])
-                for i, r in enumerate(items)
-            )
-            return {"result": {"content": [{"text": "搜索结果:\n" + text}]}}
-        return {"result": {"content": [{"text": "未找到相关结果"}]}}
-    except Exception as e:
-        return {"result": {"content": [{"text": "搜索失败: %s" % e}]}}
+    from urllib.parse import quote
+    encoded = quote(query)
+
+    async def _try_one(url: str) -> str:
+        try:
+            result = await _handle_fetch_url({"url": url, "max_length": 10000})
+            text = result.get("result", {}).get("content", [{}])[0].get("text", "")
+            if text and "请求失败" not in text and "动态HTML" not in text and len(text) > 80:
+                return f"搜索结果({url}):\n{text[:2000]}"
+        except BaseException:
+            pass  # 捕获 CancelledError 等（Python 3.13 中 CancelledError 继承 BaseException）
+        return ""
+
+    urls = [
+        f"https://cn.bing.com/search?q={encoded}&count=10",
+        f"https://www.google.com/search?q={encoded}&hl=zh-CN&num=10",
+        f"https://www.baidu.com/s?wd={encoded}&rn=10",
+    ]
+    # 并发搜，谁先回用谁（超时10秒）
+    tasks = [asyncio.create_task(_try_one(u)) for u in urls]
+    done, pending = await asyncio.wait(tasks, timeout=10.0, return_when=asyncio.FIRST_COMPLETED)
+    # 取消还没完成的
+    for p in pending: p.cancel()
+    for task in done:
+        text = task.result()
+        if text:
+            return {"result": {"content": [{"text": text}]}}
+    # 全部失败，等剩余的完成
+    for task in tasks:
+        if task not in done:
+            try:
+                text = await asyncio.wait_for(task, timeout=5.0)
+                if text:
+                    return {"result": {"content": [{"text": text}]}}
+            except BaseException:
+                pass
+    return {"result": {"content": [{"text": "搜索暂时无法获取结果，请用 fetch_url 直接访问目标网址"}]}}
 
 async def _handle_execute_code(args: Dict) -> Dict:
-    from core.tools.sandbox_executor import SandboxExecutor
-    ex=SandboxExecutor(); action=args.get("action","")
+    action=args.get("action","")
     if action=="run_python":
         code=args.get("code","")
         if not code: return {"result":{"content":[{"text":"缺少 code 参数"}]}}
-        sr=await ex.execute_python(code,skip_module_check=True)
-        o=sr.stdout or sr.stderr or sr.error_message or "(空输出)"
-        return {"result":{"content":[{"text":f"[沙盒] {sr.status.value}\n{o[:5000]}"}]}}
+        # 第1层：沙盒执行
+        try:
+            from core.tools.sandbox_executor import SandboxExecutor
+            ex=SandboxExecutor()
+            sr=await ex.execute_python(code,skip_module_check=True)
+            o=sr.stdout or sr.stderr or sr.error_message or ""
+            if sr.status.value == "success":
+                return {"result":{"content":[{"text":f"[沙盒] success\n{o[:5000]}"}]}}
+        except Exception:
+            pass
+        # 第2层：本地 exec() 兜底 — 使用 textwrap.dedent 处理缩进
+        exec_error = None
+        try:
+            import io, contextlib, textwrap
+            dedented = textwrap.dedent(code)
+            f=io.StringIO(); err=io.StringIO()
+            with contextlib.redirect_stdout(f), contextlib.redirect_stderr(err):
+                try:
+                    exec(dedented)
+                except SyntaxError as se:
+                    exec_error = f"[本地] 语法错误: 行 {se.lineno}: {se.msg}\n{se.text}"
+                except Exception as ie:
+                    exec_error = f"[本地] 执行异常: {type(ie).__name__}: {ie}"
+                else:
+                    o=f.getvalue() or err.getvalue() or "(无输出)"
+                    return {"result":{"content":[{"text":f"[本地] success\n{o[:5000]}"}]}}
+        except Exception as e:
+            if exec_error is None:
+                exec_error = f"[本地] 异常: {e}"
+        # 第3层：subprocess 兜底 — 写入临时文件执行
+        tmp_path = f"/tmp/agent_script_{os.urandom(4).hex()}.py"
+        subprocess_error = None
+        try:
+            Path(tmp_path).write_text(code, encoding="utf-8")
+            proc = await asyncio.create_subprocess_exec(
+                "python3", tmp_path,
+                stdout=-1,
+                stderr=-1
+            )
+            stdout, stderr = await proc.communicate()
+            out_text = stdout.decode("utf-8", errors="replace")
+            err_text = stderr.decode("utf-8", errors="replace")
+            if proc.returncode == 0:
+                return {"result":{"content":[{"text":f"[subprocess] success\n{out_text[:5000]}"}]}}
+            subprocess_error = f"[subprocess] exit code {proc.returncode}"
+            if out_text: subprocess_error += f"\nstdout: {out_text[:2000]}"
+            if err_text: subprocess_error += f"\nstderr: {err_text[:2000]}"
+        except Exception as sub_e:
+            subprocess_error = f"[subprocess] 执行失败: {sub_e}"
+        finally:
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except Exception:
+                pass
+        # 所有方式均失败
+        msg = exec_error or subprocess_error or "[本地] 未知错误"
+        return {"result":{"content":[{"text":msg[:5000]}]}}
     if action=="run_shell":
         cmd=args.get("command","")
         if not cmd: return {"result":{"content":[{"text":"缺少 command"}]}}
-        sr=await ex.execute_shell(cmd)
-        o=sr.stdout or sr.stderr or sr.error_message or ""
-        return {"result":{"content":[{"text":f"[沙盒] {sr.status.value}\n{o[:3000]}"}]}}
+        try:
+            import asyncio
+            proc=await asyncio.create_subprocess_shell(cmd,stdout=-1,stderr=-1)
+            o,_=await proc.communicate()
+            return {"result":{"content":[{"text":f"[本地] {proc.returncode}\n{o.decode()[:3000]}"}]}}
+        except Exception as e:
+            return {"result":{"content":[{"text":f"[本地] failed\n{str(e)[:2000]}"}]}}
     return {"result":{"content":[{"text":"execute_code 需要 action=run_python|run_shell"}]}}
 
 _HANDLER_MAP: Dict[str, Callable] = {
+    "fetch_url": _handle_fetch_url,
+    "file": _handle_file,
     "search": _handle_search,
     "execute_code": _handle_execute_code,
 }
@@ -144,17 +232,48 @@ _SANDBOX_TOOL_DEFS = [
         description="联网搜索查询信息。当用户要求搜索、查找、查询时使用",
         parameters={"type":"object","properties":{"query":{"type":"string","description":"搜索关键词"}},"required":["query"]},
         handler=_handle_search),
+    ToolDefinition(name="fetch_url", server=SERVER_BUILTIN, tags=["web","fetch"],
+        description="HTTP GET 获取网页/API数据。用于抓取网页内容、调用API接口",
+        parameters={"type":"object","properties":{"url":{"type":"string","description":"目标URL"},"max_length":{"type":"integer","description":"最大返回字符数"}},"required":["url"]},
+        handler=_handle_fetch_url),
+    ToolDefinition(name="file", server=SERVER_BUILTIN, tags=["file","storage"],
+        description="直接读写文件。action=read 读取文件内容；action=write 写入文件内容",
+        parameters={"type":"object","properties":{"action":{"type":"string","enum":["read","write"]},"path":{"type":"string","description":"文件路径"},"content":{"type":"string","description":"写入内容（write时必填）"}},"required":["action","path"]},
+        handler=_handle_file),
 ]
 
 def _safe(raw: str) -> str:
     return re.sub(r'[^a-zA-Z0-9_-]', '_', raw)
 
 class ToolRegistry:
+    """工具注册表 — 懒加载 MCP + 智能工具筛选"""
+
     def __init__(self):
         self._tools: Dict[str, ToolDefinition] = {}
         self._initialized = False
+        self._mcp_servers_discovered: Set[str] = set()  # 已配置但未连的 MCP 服务器
+
+    async def ensure_mcp_tools_loaded(self) -> None:
+        """懒加载：连接 MCP 服务器并获取工具定义（首次需要工具时调用）"""
+        if not self._mcp_servers_discovered:
+            return
+        from core.mcp.mcp_client import mcp_client
+        servers = list(self._mcp_servers_discovered)
+        self._mcp_servers_discovered.clear()
+        for srv in servers:
+            try:
+                for tool in await asyncio.wait_for(mcp_client.list_tools(srv), timeout=3):
+                    raw = tool.get("name",""); fn = _safe(f"{srv}_{raw}")
+                    if not raw or fn in self._tools: continue
+                    t = ToolDefinition(name=fn, description=tool.get("description",""),
+                        parameters=tool.get("inputSchema",{}) or {}, server=srv,
+                        tool_name=raw, tags=["mcp"])
+                    self._tools[fn] = t
+            except Exception:
+                pass  # 连接失败就跳过，不影响其他工具
 
     async def discover_all(self) -> List[ToolDefinition]:
+        """发现所有工具来源，MCP 只注册配置不启动进程"""
         all_tools = []
         # Source 1: awesome_mcp
         try:
@@ -167,56 +286,62 @@ class ToolRegistry:
                         tool_name=td.get("_tool_name", raw), tags=["mcp"])
                     all_tools.append(t); self._tools[name] = t
         except: pass
-        # Source 2: mcp_client
+        # Source 2: builtin tools — 先加载，不阻塞
+        for sd in _SANDBOX_TOOL_DEFS:
+            if sd.name not in self._tools:
+                self._tools[sd.name] = sd
+                all_tools.append(sd)
+        self._initialized = True
+
+        # Source 3: mcp_client — 后台任务，不阻塞返回
+        asyncio.ensure_future(self._connect_mcp_servers())
+
+        return all_tools
+
+    async def _connect_mcp_servers(self) -> None:
+        """后台连接 MCP 服务器（不阻塞 discover_all 返回）"""
         try:
             from core.mcp.mcp_client import mcp_client
-            proot = os.path.normpath(os.path.join(os.path.dirname(__file__),"..",".."))
+            proot = os.path.normpath(os.path.join(os.path.dirname(__file__),"..","..",".."))
             existing = set(await mcp_client.list_servers())
-            # auto-discover mcp/ directory
+            bg_tasks = []
+            srv_names = []
+
             mcp_dir = os.path.join(proot, "mcp")
             if os.path.isdir(mcp_dir):
                 for fn in sorted(os.listdir(mcp_dir)):
                     if not fn.endswith("_mcp_server.py"): continue
                     srv = fn.replace("_mcp_server.py","").replace("_","-")
                     if srv in existing: continue
-                    try:
-                        import asyncio
-                        await asyncio.wait_for(mcp_client.connect_server(name=srv,command="python3",
-                            args=[os.path.join(mcp_dir,fn)],cwd=proot,env={"PYTHONPATH":proot}), timeout=5)
-                        existing.add(srv)
-                    except: pass
-            # .mcp.json
+                    srv_names.append(srv)
+                    bg_tasks.append(asyncio.wait_for(
+                        mcp_client.connect_server(name=srv, command="python3",
+                            args=[os.path.join(mcp_dir,fn)], cwd=proot,
+                            env={"PYTHONPATH": proot}), timeout=5))
+
             mcj = os.path.join(proot, ".mcp.json")
             if os.path.exists(mcj):
                 try:
                     with open(mcj) as f: cfg = json.load(f)
                     for srv,sc in cfg.get("mcpServers",{}).items():
                         if srv in existing: continue
-                        try:
-                            import asyncio
-                            await asyncio.wait_for(mcp_client.connect_server(name=srv,command=sc["command"],
-                                args=sc.get("args",[]),cwd=proot,env={"PYTHONPATH":proot}), timeout=5)
-                            existing.add(srv)
-                        except: pass
+                        srv_names.append(srv)
+                        bg_tasks.append(asyncio.wait_for(
+                            mcp_client.connect_server(name=srv, command=sc["command"],
+                                args=sc.get("args",[]), cwd=proot,
+                                env={"PYTHONPATH": proot}), timeout=5))
                 except: pass
-            for srv in existing:
-                try:
-                    import asyncio
-                    for tool in await asyncio.wait_for(mcp_client.list_tools(srv), timeout=3):
-                        raw = tool.get("name",""); fn = _safe(f"{srv}_{raw}")
-                        if not raw or fn in self._tools: continue
-                        t = ToolDefinition(name=fn, description=tool.get("description",""),
-                            parameters=tool.get("inputSchema",{}) or {}, server=srv, tool_name=raw, tags=["mcp"])
-                        all_tools.append(t); self._tools[fn] = t
-                except: pass
-        except: pass
-        # Source 3: builtin tools
-        for sd in _SANDBOX_TOOL_DEFS:
-            if sd.name not in self._tools:
-                self._tools[sd.name] = sd
-                all_tools.append(sd)
-        self._initialized = True
-        return all_tools
+
+            if bg_tasks:
+                results = await asyncio.gather(*bg_tasks, return_exceptions=True)
+                for i, r in enumerate(results):
+                    if i < len(srv_names) and not isinstance(r, Exception):
+                        existing.add(srv_names[i])
+            known = {t.server for t in self._tools.values()
+                     if t.server not in ("__builtin__","__mcp__","")}
+            self._mcp_servers_discovered.update(existing - known)
+        except Exception:
+            pass
 
     def get_handler_map(self) -> Dict[str, Callable]:
         result = dict(_HANDLER_MAP)
@@ -230,17 +355,28 @@ class ToolRegistry:
         td = self._tools.get(name)
         return td.handler if td else None
 
-    def get_tools_for_task(self, task: str, max_tools=25) -> List[ToolDefinition]:
-        if not self._initialized: return list(self._tools.values())[:max_tools]
-        desc = task.lower(); scored = []
+    async def get_tools_for_task(self, task: str, max_tools=25) -> List[ToolDefinition]:
+        """按任务相关性排序的工具列表（含中文关键词）"""
+        if self._mcp_servers_discovered:
+            await self.ensure_mcp_tools_loaded()
+        if not self._initialized:
+            return list(self._tools.values())[:max_tools]
+        desc = task.lower()
+        scored = []
         for t in self._tools.values():
-            s = 0.0; dl = t.description.lower(); nl = t.name.lower()
+            s = 0.0
+            dl = t.description.lower()
+            nl = t.name.lower()
             for kw in desc.split():
                 kw = kw.strip().lower()
                 if len(kw) > 1:
                     if kw in dl: s += 2.0
                     if kw in nl: s += 3.0
-            if t.server == SERVER_BUILTIN: s += 1.0
+            if len(desc) > 1:
+                if any(c in dl for c in desc if len(c.strip()) > 0):
+                    s += 0.5
+            if t.server == SERVER_BUILTIN:
+                s += 1.0
             scored.append((s, t))
         scored.sort(key=lambda x: -x[0])
         result = [t for s,t in scored if s > 0]

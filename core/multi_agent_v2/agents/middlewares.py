@@ -136,7 +136,7 @@ class ConfidenceMiddleware(BaseMiddleware):
 class ReflectionMiddleware(BaseMiddleware):
     """定期对执行结果进行反思，沉淀经验"""
 
-    REFLECTION_INTERVAL = 3  # 每 N 轮反思一次
+    REFLECTION_INTERVAL = 2  # 每 N 轮反思一次（ReAct最多2轮，改为2确保每步触发）
 
     async def on_tool_end(self, ctx: RunContext) -> None:
         if ctx.iteration < 2:
@@ -159,6 +159,8 @@ class ReflectionMiddleware(BaseMiddleware):
 
         if success == 0 and total > 0:
             logger.warning(f"反思: 连续 {total} 次工具调用全部失败")
+            ctx.task_description += "\n[系统反馈] 工具调用全部失败，请换策略"
+            ctx.profile["reflection_feedback"] = True
 
 
 # ════════════════════════════════════════════════════════════════
@@ -210,20 +212,19 @@ class KEPAMiddleware(BaseMiddleware):
     """将执行结果发布到 SharedBus（Knowledge → Execution → Perception → Adjustment）"""
 
     async def on_tool_end(self, ctx: RunContext) -> None:
-        if not ctx.profile.get("use_shared_bus"):
-            return
         try:
             from core.multi_agent_v2.infrastructure.shared_bus import get_shared_bus, Message, MessageType
             bus = get_shared_bus()
             if ctx.tool_results:
                 last = ctx.tool_results[-1]
+                agent_id = self._agent.agent_id if self._agent else "unknown"
                 msg = Message(
                     type=MessageType.TASK_PROGRESS if last.get("success") else MessageType.TASK_FAILED,
-                    sender=self.agent.agent_id if self.agent else "unknown",
+                    sender=agent_id,
                     topic="kepa:tool_result",
                     payload={
                         "type": "tool_result",
-                        "agent_id": self.agent.agent_id if self.agent else "unknown",
+                        "agent_id": agent_id,
                         "iteration": ctx.iteration,
                         "tool_name": last.get("tool_call", {}).get("name", "?"),
                         "success": last.get("success", False),
@@ -237,21 +238,20 @@ class KEPAMiddleware(BaseMiddleware):
 
     async def on_finish(self, ctx: RunContext) -> None:
         """发布最终执行报告"""
-        if not ctx.profile.get("use_shared_bus"):
-            return
         try:
             from core.multi_agent_v2.infrastructure.shared_bus import get_shared_bus, Message, MessageType
             bus = get_shared_bus()
+            agent_id = self._agent.agent_id if self._agent else "unknown"
             msg = Message(
                 type=MessageType.TASK_COMPLETED,
-                sender=self.agent.agent_id if self.agent else "unknown",
+                sender=agent_id,
                 topic="agent:done",
                 payload={
-                    "success": ctx.confidence_total > 0.5,
+                    "success": ctx.final_answer or ctx.confidence_total > 0.5,
                     "iterations": ctx.iteration,
                     "total_tools": len(ctx.tool_results),
                     "confidence": ctx.confidence_total,
-                    "final_answer": ctx.final_answer[:500],
+                    "final_answer": (ctx.final_answer or "")[:500],
                     "timestamp": time.time(),
                 },
             )

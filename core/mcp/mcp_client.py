@@ -154,6 +154,7 @@ class MCPClientManager:
         args: List[str],
         cwd: Optional[str] = None,
         http_url: Optional[str] = None,
+        env: Optional[Dict[str, str]] = None,
     ) -> bool:
         """配置 MCP 服务器（进程按需启动）"""
         self._server_configs[name] = {
@@ -161,6 +162,7 @@ class MCPClientManager:
             "args": args,
             "cwd": cwd,
             "http_url": http_url,
+            "env": env or None,
             "type": "http" if http_url else "stdio",
         }
 
@@ -402,6 +404,11 @@ class MCPClientManager:
         if not config:
             raise ValueError(f"服务器 '{name}' 未配置")
 
+        proc_env = None
+        if config.get("env"):
+            proc_env = os.environ.copy()
+            proc_env.update(config["env"])
+
         process = await asyncio.wait_for(
             asyncio.create_subprocess_exec(
                 config["command"],
@@ -410,6 +417,7 @@ class MCPClientManager:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=config["cwd"],
+                env=proc_env,
             ),
             timeout=10.0,
         )

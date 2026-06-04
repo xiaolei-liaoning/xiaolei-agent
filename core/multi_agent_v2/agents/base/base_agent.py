@@ -31,11 +31,15 @@ class BaseAgent:
     def set_trace(self, trace):
         self._trace = trace
 
-    # ── Think/Act/Reflect（兼容 collaboration 策略） ─────────────────
+    # ── Think/Act/Reflect/Execute ─────────────────────────────────
 
     async def think(self, task: Task) -> "Thought":
+        """LLM 分析任务，生成计划"""
         from .models import Thought
-        return Thought(reasoning=f"任务: {task.description}", plan=[], confidence=0.5)
+        prompt = "分析任务并制定执行计划。\n\n任务：%s\n\n输出计划步骤，每行一个。" % task.description
+        resp = await self._llm_call(prompt, None)
+        step = self._parse_response(resp)
+        return Thought(reasoning=step.get("reasoning","") or task.description, plan=[], confidence=0.5)
 
     async def act(self, plan: list = None, tool_calls: list = None) -> "ActionResult":
         from .models import ActionResult
@@ -46,11 +50,32 @@ class BaseAgent:
         return ActionResult(success=True, output=[])
 
     async def reflect(self, result: "ActionResult") -> "Reflection":
+        """反思执行结果"""
         from .models import Reflection
-        return Reflection(success=result.success, lessons_learned=[], improvements=[], performance_metrics={})
+        lessons = []
+        try:
+            from core.auto_reviewer import get_auto_reviewer
+            review = await get_auto_reviewer().review(
+                task_id="", task_description="",
+                execution_logs=str(result.output)[:500],
+                task_result=str(result.output)[:500],
+            )
+            if review and review.what_went_well:
+                lessons = [review.what_went_well[:200]]
+        except Exception:
+            pass
+        return Reflection(success=result.success, lessons_learned=lessons,
+                          improvements=[], performance_metrics={})
 
     async def execute(self, task: Task) -> "ActionResult":
-        return await self.act(plan=[task.description])
+        """执行任务：think -> act -> reflect"""
+        thought = await self.think(task)
+        result = await self.act(thought.plan, getattr(thought, 'tool_calls', None))
+        try:
+            await self.reflect(result)
+        except Exception:
+            pass
+        return result
 
     # ── 分步执行 ─────────────────────────────────────────────────────
 
@@ -68,16 +93,11 @@ class BaseAgent:
             reg = get_tool_registry()
             if not reg._initialized:
                 await reg.discover_all()
-            raw = reg.get_tools_for_task(task_description, max_tools=25)
-            def _ok(t):
-                if t.server == "__builtin__": return True  # builtin handler 全部可用
-                return t.name in _HANDLER_MAP or t.handler is not None
-            core_n = ["search","execute_code"]
+            raw = await reg.get_tools_for_task(task_description, max_tools=100)
+            # 所有工具全部暴露给 LLM（不做过滤）
             items = [{"type":"function","function":{"name":t.name,"description":t.description,"parameters":t.parameters},
-                      "_server":t.server,"_tool_name":t.tool_name} for t in raw if _ok(t)]
-            core = [i for i in items if i["function"]["name"] in core_n]
-            other = [i for i in items if i["function"]["name"] not in core_n]
-            tool_defs = core + other[:20]
+                      "_server":t.server,"_tool_name":t.tool_name} for t in raw]
+            tool_defs = items
         except Exception:
             pass
 
@@ -107,16 +127,14 @@ class BaseAgent:
             used_tool = ""
             attempt_tools = list(tool_defs)  # 每步从完整工具列表开始
 
-            for attempt in range(3):
+            for attempt in range(2):
                 prompt = "## 步骤 %d/%d\n%s\n\n完整任务：%s\n\n" % (step_idx+1, len(steps), step_name, task_description)
                 if prev_context:
                     prompt += "已完成：%s\n\n" % prev_context[:800]
                 if attempt == 0:
                     prompt += "选择最合适的工具执行此步骤。\n"
-                elif attempt == 1:
-                    prompt += "上一步工具失败。请换其他工具或方法。\n提示：如果网页获取失败，可以用 execute_code 写 Python 代码通过 requests 库抓取。\n"
                 else:
-                    prompt += "仍然失败。请换第三种方法或直接给出答案。\n提示：用 execute_code 执行 Python 代码可以完成绝大多数任务。\n"
+                    prompt += "上一步工具失败。请换其他工具或方法。\n提示：如果网页获取失败，可以用 execute_code 写 Python 代码通过 requests 库抓取。\n"
                 for td in attempt_tools:
                     prompt += "- %s: %s\n" % (td["function"]["name"], td["function"]["description"])
 
@@ -136,14 +154,13 @@ class BaseAgent:
                         (trace.on_tool_result if ok else trace.on_tool_error)(obs[:200] or "无结果")
                     if ok:
                         result_text = obs
-                        break  # 成功后进入下一步
-                    # 失败，排除这个工具再试
+                        break
                     attempt_tools = [td for td in attempt_tools if td["function"]["name"] != tn]
                 else:
                     result_text = text
                     if trace:
                         trace.on_tool_result(text[:200])
-                    break  # LLM 直接回答了，接受
+                    break
 
             if not result_text:
                 result_text = "(步骤执行失败)"
@@ -159,19 +176,24 @@ class BaseAgent:
     # ── 任务拆解 ───────────────────────────────────────────────────────
 
     async def _decompose_task(self, task: str) -> list:
-        """固定 3 步拆解，标注工具"""
-        prompt = "拆解任务为3个步骤。\n\n任务：%s\n\n可用工具：fetch_url(获取网页), execute_code(执行代码), file(文件)\n格式每行：工具:步骤\n示例：\nfetch_url:获取热搜数据\nexecute_code:分析数据\nfile:保存到桌面" % task
+        """拆解任务 — 委托给 StepPlanner"""
         try:
-            response = await self._llm_call(prompt, tools=None)
-            text = response if isinstance(response, str) else str(response)
-            steps = []
-            for line in text.strip().split("\n"):
-                cl = re.sub(r'^[\d]+[.、\)\s]+', '', line.strip())
-                cl = re.sub(r'^[-*\s]+', '', cl)
-                if cl and len(cl) > 4 and not cl.startswith("```"):
-                    steps.append(cl)
-            return steps[:3]
-        except:
+            from core.multi_agent_v2.orchestration.scheduler.step_planner import StepPlanner
+            from core.multi_agent_v2.agents.base.models import Task as TaskModel
+            from core.multi_agent_v2.tools.tool_registry import get_tool_registry
+            from core.engine.llm_backend import get_llm_router
+
+            llm = get_llm_router()
+            registry = get_tool_registry()
+            if not registry._initialized:
+                await registry.discover_all()
+
+            t = TaskModel(task_id="decompose", type="general", description=task, estimated_steps=3)
+            planner = StepPlanner(llm_router=llm)
+            steps = await planner.plan(t, tool_registry=registry)
+            return [f"{s.tool_name}:{s.name}" if s.tool_name else s.name for s in steps] or ["获取数据", "分析处理", "输出结果"]
+        except Exception as e:
+            logger.debug(f"StepPlanner 拆解失败，使用兜底: {e}")
             return ["获取数据", "分析处理", "输出结果"]
 
     # ── LLM 调用 ───────────────────────────────────────────────────────
@@ -288,18 +310,35 @@ class BaseAgent:
             server = tc.get("_server", "")
             if trace:
                 trace.on_tool_call(tool_name, args)
+
+            # ── 直接路由：已知 server → 直达 MCP ──
+            if server and server not in ("__builtin__", "__skill__", "__api__", "__guidance__"):
+                try:
+                    from core.mcp.mcp_client import mcp_client
+                    rt = await mcp_client.call_tool(server, tool_name, args)
+                    result = {"result": {"content": [{"text": rt}]}}
+                    results.append({"tool_call": tc, "success": True, "result": result})
+                    if trace: trace.on_tool_result(str(result)[:200])
+                    continue
+                except Exception as e:
+                    logger.debug("MCP 直达路由失败 %s/%s: %s" % (server, tool_name, e))
+                    if trace: trace.on_tool_error("MCP 直达失败: %s" % e)
+                    results.append({"tool_call": tc, "success": False, "error": str(e)})
+                    continue
+
+            # ── Handler 路由 ──
             handler = registry.get_handler(tool_name)
             if handler:
                 try:
                     r = await handler(args)
                     results.append({"tool_call": tc, "success": True, "result": r})
-                    if trace:
-                        trace.on_tool_result(str(r)[:200])
+                    if trace: trace.on_tool_result(str(r)[:200])
                     continue
                 except Exception as e:
                     logger.debug("handler %s 失败: %s" % (tool_name, e))
-                    if trace:
-                        trace.on_tool_error("handler 异常: %s" % e)
+                    if trace: trace.on_tool_error("handler 异常: %s" % e)
+
+            # ── 兜底 MCP 路由 ──
             result = None
             try:
                 from core.mcp.mcp_client import mcp_client
@@ -313,8 +352,7 @@ class BaseAgent:
                                 rt = await mcp_client.call_tool(srv, tool_name, args)
                                 result = {"result": {"content": [{"text": rt}]}}
                                 break
-                        if result:
-                            break
+                        if result: break
                 if not result:
                     from core.mcp.awesome_mcp_manager import awesome_mcp_manager
                     for td in await awesome_mcp_manager.get_all_tool_definitions():

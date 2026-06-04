@@ -236,7 +236,9 @@ class StepCounter:
         """渲染总进度概览"""
         done = sum(1 for s in self._tasks.values() if s in ("success", "error"))
         text = Text()
-        text.append(f"  [{CLAUDE}]进度:[/{CLAUDE}] ", style=BOLD)
+        text.append("  ", style=BOLD)
+        text.append("进度:", style=CLAUDE)
+        text.append(" ", style=BOLD)
 
         # 进度条块
         for i in range(1, self.total + 1):
@@ -251,7 +253,7 @@ class StepCounter:
                 text.append("▱", style=SUBTLE)
 
         elapsed = time.time() - self._start_time
-        text.append(f" [{done}/{self.total}] [{SUBTLE}]{elapsed:.1f}s[/{SUBTLE}]")
+        text.append(" %d/%d  %.1fs" % (done, self.total, elapsed), style=SUBTLE)
         return text
 
     def step_start(self, step_num: int, description: str = ""):
@@ -268,7 +270,7 @@ class StepCounter:
         self._console.print(msg)
 
     def step_done(self, step_num: int, description: str = "",
-                  success: bool = True, detail: str = ""):
+                  success: bool = True, detail: str = "", elapsed: str = ""):
         """标记步骤完成"""
         self._tasks[step_num] = "success" if success else "error"
         desc = description or self._task_descriptions.get(step_num, "")
@@ -278,7 +280,8 @@ class StepCounter:
         else:
             icon = f"[{ERROR}]● ✗[/{ERROR}]"
 
-        msg = f"  {icon} [{SUBTLE}]{step_num}/{self.total}[/{SUBTLE}] {desc}"
+        time_tag = f" [{SUBTLE}]{elapsed}[/{SUBTLE}]" if elapsed else ""
+        msg = f"  {icon} [{SUBTLE}]{step_num}/{self.total}[/{SUBTLE}] {desc}{time_tag}"
         self._console.print(msg)
 
         if detail:

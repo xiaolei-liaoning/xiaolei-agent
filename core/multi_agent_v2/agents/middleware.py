@@ -54,6 +54,9 @@ class RunContext:
     react_depth: int = 0
     consecutive_failures: Dict[str, int] = field(default_factory=dict)
 
+    # MiddlewareChain 引用（由 run_react 在 on_start 后设置，供 _execute 使用）
+    _chain: Optional[Any] = None
+
     # 7阶段流水线（由 DynamicStageRoutingMiddleware 管理）
     stage: Optional[Dict] = None
 
@@ -115,6 +118,15 @@ class BaseMiddleware:
     async def on_tool_end(self, ctx: RunContext) -> None:
         """工具调用结束后"""
         pass
+
+    async def on_wrap_tool_call(self, ctx: RunContext, next_mw: Callable) -> Any:
+        """包裹工具调用（洋葱模式）
+
+        调用前可拦截/修改参数，调用后可修改/过滤结果。
+        必须调用 await next_mw() 继续执行链。
+        示例：安全检查、参数校验、结果过滤、错误重试
+        """
+        return await next_mw()
 
     async def on_finish(self, ctx: RunContext) -> None:
         """执行完成"""
@@ -185,6 +197,22 @@ class MiddlewareChain:
                 await mw.on_finish(ctx)
             except Exception as e:
                 logger.warning(f"Middleware {mw} on_finish error: {e}")
+
+    async def on_wrap_tool_call(self, ctx: RunContext, tool_args: Dict) -> Dict:
+        """洋葱式包裹工具调用 — 每个 middleware 可以拦截/修改/重试
+
+        执行顺序：mw1(→mw2(→mw3(→实际工具调用)→mw3后置)→mw2后置)→mw1后置
+        任意 middleware 可以不调 next_mw() 直接返回（拦截调用）
+        """
+        async def _run_chain(index: int) -> Dict:
+            if index >= len(self._middlewares):
+                # 执行实际工具调用
+                from core.multi_agent_v2.agents.base.base_agent import BaseAgent
+                agent = BaseAgent()
+                return await agent._execute_single_tool_call(tool_args)
+            mw = self._middlewares[index]
+            return await mw.on_wrap_tool_call(ctx, lambda: _run_chain(index + 1))
+        return await _run_chain(0)
 
     def __len__(self) -> int:
         return len(self._middlewares)

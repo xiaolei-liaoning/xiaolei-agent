@@ -21,40 +21,31 @@ from core.multi_agent_v2.agents.base.models import (
 logger = logging.getLogger(__name__)
 
 # LLM 拆解提示词模板
-SYSTEM_PROMPT = """你是一个专业任务规划师，负责将用户的任务拆解为可执行的步骤。
+SYSTEM_PROMPT = """你是一个专业任务规划师，将用户任务拆解为最少可执行步骤。
 
-你需要遵循以下原则：
-1. 每个步骤必须有明确的目标和产出
-2. 步骤之间通过 dependencies 声明依赖关系（引用其他步骤的 step_id）
-3. 无依赖的步骤可以并行执行
-4. 每个步骤推荐合适的工具类型（tool_call/llm_task/search/analysis）
-5. 步骤数量控制在 3-8 个之间，不要太细也不要太粗
-6. 如果有明确的先后顺序，用 dependencies 表达
+原则：
+1. 最少步骤原则：用最少的步骤完成任务（通常 2-3 步），不要多余步骤
+2. 每个步骤必须有具体产出，步骤名应描述具体任务（如"搜索百度热搜"而非"初始化搜索环境"）
+3. 步骤名应描述具体任务（如"搜索百度热搜"），而非工具调用（如"调用 fetch_url 搜索百度热搜"）。tool_name 字段用于指定使用的工具
+4. 步骤间用 dependencies 表达先后依赖
+5. 只有最后一步需要 LLM 分析结果（type=llm_task），前面的步骤尽量直接调工具
+6. 工具选择：只能使用 fetch_url / file / search / execute_code 这四个内置工具，不要使用 MCP 工具或其他外部工具
 
-可用步骤类型：
-- tool_call: 调用外部工具
-- llm_task: LLM 直接处理
-- search: 搜索/查询信息
-- analysis: 分析处理数据
-- human_input: 需要用户输入
-- decision: 决策分支点
-
-请以 JSON 格式输出，格式如下：
+JSON 格式：
 {
   "steps": [
     {
       "step_id": "step_1",
-      "name": "步骤名称",
-      "description": "步骤详细描述",
-      "type": "search 或 tool_call 或 llm_task 或 analysis",
-      "dependencies": [],  // 依赖的 step_id，无依赖填 []
-      "expected_output": "预期产出描述",
-      "tool_name": "推荐使用的工具名称（如果有）"
+      "name": "具体步骤名（如：搜索百度热搜）",
+      "description": "具体做什么",
+      "type": "tool_call 或 llm_task",
+      "dependencies": [],
+      "expected_output": "预期产出",
+      "tool_name": "如果是 tool_call 必须填工具名，如 fetch_url"
     }
   ]
 }
-
-只输出 JSON，不要额外说明。"""
+只输出 JSON。"""
 
 
 class StepPlanner:
@@ -63,12 +54,15 @@ class StepPlanner:
     def __init__(self, llm_router=None):
         self.llm_router = llm_router
 
-    async def plan(self, task: Task, context: Optional[Dict] = None) -> List[Step]:
+    async def plan(self, task: Task, context: Optional[Dict] = None,
+                   tool_registry=None, history=None) -> List[Step]:
         """将任务拆解为结构化步骤列表
 
         Args:
             task: 任务定义
             context: 额外上下文（可用工具列表等）
+            tool_registry: 工具注册表，用于获取当前任务可用工具
+            history: 历史执行记录字符串
 
         Returns:
             带依赖关系的结构化步骤列表
@@ -76,6 +70,22 @@ class StepPlanner:
         if not task.description:
             logger.warning("空任务描述，返回兜底步骤")
             return self._fallback_steps(task)
+
+        # 处理 tool_registry：获取当前任务可用工具并注入 context
+        if tool_registry:
+            if context is None:
+                context = {}
+            try:
+                tools = await tool_registry.get_tools_for_task(task.description)
+                context["available_tools"] = tools
+            except Exception as e:
+                logger.warning(f"获取工具列表失败: {e}")
+
+        # 处理 history：通过 context 传递给 plan_with_llm
+        if history:
+            if context is None:
+                context = {}
+            context["history"] = history
 
         # 主路径：LLM 拆解
         if self.llm_router:
@@ -101,12 +111,29 @@ class StepPlanner:
         tools_hint = ""
         if context and context.get("available_tools"):
             tools = context["available_tools"]
-            tool_names = [t.get("name", t.get("function", {}).get("name", "?")) for t in tools[:15]]
+            # 过滤：只给 LLM 展示内置工具，不展示 MCP 工具
+            builtin_names = {"fetch_url", "file", "search", "execute_code"}
+            builtin_tools = [t for t in tools if hasattr(t, 'name') and t.name in builtin_names]
+            # 兼容 ToolDefinition 对象（attribute）和 dict（.get）
+            tool_names = []
+            for t in builtin_tools[:15]:
+                if hasattr(t, 'name'):
+                    tool_names.append(t.name)
+                elif isinstance(t, dict):
+                    tool_names.append(t.get("name", t.get("function", {}).get("name", "?")))
+                else:
+                    tool_names.append(str(t)[:40])
             tools_hint = f"\n\n可用工具：\n" + "\n".join(f"- {n}" for n in tool_names)
+
+        # 历史执行记录提示
+        history_hint = ""
+        if context and context.get("history"):
+            history_hint = f"\n\n历史执行记录：{context['history']}"
 
         user_prompt = f"""任务描述：{task.description}
 任务类型：{task.type or 'general'}
 {tools_hint}
+{history_hint}
 
 请将上述任务拆解为3-8个可独立执行的步骤，用 JSON 格式输出。"""
 
@@ -131,6 +158,69 @@ class StepPlanner:
         except (asyncio.TimeoutError, ValueError) as e:
             logger.warning(f"LLM 拆解异常: {e}")
             raise
+
+    async def replan(self, original_steps: List[Step],
+                     completed_ids: List[str],
+                     failed_step_id: str,
+                     failed_reason: str) -> List[Step]:
+        """
+        局部重规划：保留已完成步骤，只修改未完成步骤
+        """
+        completed = [s for s in original_steps if s.step_id in completed_ids]
+        remaining = [s for s in original_steps if s.step_id not in completed_ids]
+
+        # Build summary of what's done
+        done_summary = "\n".join(
+            f"- [{s.step_id}] {s.name}: {str(s.result)[:200] if hasattr(s, 'result') and s.result else '已完成'}"
+            for s in completed
+        )
+
+        # Build remaining summary
+        remain_summary = "\n".join(
+            f"- [{s.step_id}] {s.name}: {s.description[:200]}"
+            for s in remaining
+        )
+
+        prompt = f"""原计划执行到步骤 [{failed_step_id}] 时失败。
+失败原因：{failed_reason}
+
+已完成步骤：
+{done_summary or '(暂无)'}
+
+剩余未完成步骤：
+{remain_summary or '(无)'}
+
+请保留已完成步骤不变，只重新规划剩余步骤。
+输出格式（JSON）：
+{{"steps": [每个step的 name/description/type/dependencies/expected_output]}}
+只输出 JSON，不要多余解释。"""
+
+        if self.llm_router:
+            try:
+                messages = [
+                    {"role": "system", "content": "你是一个任务规划师，负责在任务中途调整计划。请保留已完成步骤，只修改未完成的部分。"},
+                    {"role": "user", "content": prompt}
+                ]
+                response = await asyncio.wait_for(
+                    self.llm_router.chat(messages, temperature=0.3, max_tokens=2000),
+                    timeout=25,
+                )
+                new_remaining = self._parse_llm_response(response)
+                if new_remaining:
+                    # Re-number step_ids to avoid conflicts
+                    for i, s in enumerate(new_remaining):
+                        s.step_id = f"step_replan_{i+1}"
+                        s.status = StepStatus.PENDING
+                    result = completed + new_remaining
+                    return self._post_process_steps(result)
+            except Exception as e:
+                logger.warning(f"LLM 重规划失败: {e}")
+
+        # Fallback: keep original remaining, just reset status
+        for s in remaining:
+            s.status = StepStatus.PENDING
+            s.error = None
+        return completed + remaining
 
     def plan_with_rules(self, task: Task) -> List[Step]:
         """基于启发式规则的兜底拆解

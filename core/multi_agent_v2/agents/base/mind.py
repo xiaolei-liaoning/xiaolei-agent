@@ -53,7 +53,7 @@ class Mind:
             await registry.discover_all()
 
         if task_description:
-            tools = registry.get_tools_for_task(task_description, max_tools=20)
+            tools = await registry.get_tools_for_task(task_description, max_tools=100)
         else:
             tools = list(registry._tools.values())
 
@@ -128,9 +128,10 @@ class Mind:
 {"steps": [{"step_id": "step_1", "name": "步骤名", "description": "描述", "type": "search/tool_call/llm_task/analysis", "dependencies": [], "expected_output": "预期产出"}]}
 将 JSON 放在 ```json 代码块中。"""
 
-        # 查重提醒注入
+        # 记忆检索注入（历史经验）
         try:
-            _advice = self.agent._tracker.advice(task.description)
+            from core.multi_agent_v2.agents.memory import get_task_memory
+            _advice = get_task_memory().advice(task.description)
             if _advice:
                 thinking_prompt += f"\n\n{_advice}"
         except Exception:
@@ -148,6 +149,14 @@ class Mind:
                 thinking_prompt += f"\n\n### 相关知识\n{knowledge[:2000]}"
         except Exception as e:
             logger.debug(f"RAG 知识注入失败: {e}")
+
+        # 执行进度注入 — Agent 能看到自己执行到哪了
+        try:
+            progress = getattr(self.agent, '_progress', None)
+            if progress is not None:
+                thinking_prompt += f"\n\n### 当前执行进度\n{progress.to_prompt()}"
+        except Exception as e:
+            logger.debug(f"进度注入失败: {e}")
 
         # 获取工具定义并注入（按任务描述筛选，减少 LLM 选择噪音）
         tool_defs = await self._get_available_tool_definitions(task_description=task.description)
@@ -205,17 +214,6 @@ class Mind:
         if structured:
             thought.structured_plan = structured
             logger.info(f"从 LLM 响应中提取了 {len(structured)} 个结构化步骤")
-        else:
-            # 兜底：用 StepPlanner 生成结构化步骤
-            try:
-                from core.multi_agent_v2.orchestration.scheduler.step_planner import StepPlanner
-                planner = StepPlanner(llm_router=self.llm_router)
-                structured_plan = await planner.plan(task)
-                if structured_plan:
-                    thought.structured_plan = structured_plan
-                    logger.info(f"StepPlanner 生成 {len(structured_plan)} 个结构化步骤")
-            except Exception as e:
-                logger.debug(f"StepPlanner 生成结构化步骤失败: {e}")
 
         return thought
 

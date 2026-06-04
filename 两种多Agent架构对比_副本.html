@@ -206,8 +206,17 @@ flowchart TB
 
 <!-- ============================== 架构二 V2 ============================== -->
 <div class="section">
-  <div class="section-title">架构二：V2 Agent</div>
-  <span class="section-badge badge-v2">Agent = LLM + Tools + MiddlewareChain</span>
+  <div class="section-title">架构二：V2 Agent — 轻量 ReAct</div>
+  <span class="section-badge badge-v2">CLI → MiddlewarePipeline → ReActMiddleware → ToolRegistry</span>
+
+  <div class="legend">
+    <span class="legend-item"><span class="legend-dot" style="background:#E65100"></span> 入口层</span>
+    <span class="legend-item"><span class="legend-dot" style="background:#8E44AD"></span> 中间件层</span>
+    <span class="legend-item"><span class="legend-dot" style="background:#1565C0"></span> 核心执行</span>
+    <span class="legend-item"><span class="legend-dot" style="background:#2E7D32"></span> 工具层</span>
+    <span class="legend-item"><span class="legend-arrow">→</span> 控制流</span>
+    <span class="legend-item"><span class="legend-arrow">..→</span> 依赖</span>
+  </div>
 
   <div class="mermaid-wrap" id="mermaid-v2">
     <div class="zoom-controls">
@@ -218,14 +227,55 @@ flowchart TB
     </div>
 <pre class="mermaid">
 flowchart TB
-  A["<b>BaseAgent.run()</b><br/><br/>ReAct 循环<br/>Thought → Action(工具) → Observation<br/>→ ... → done"]
-  LLM["LLM<br/>模型推理"]
-  Tools["ToolRegistry<br/>8 handler + MCP"]
-  MW["MiddlewareChain<br/>(可插拔)"]
+  subgraph CLI["用户入口"]
+    Input["xiaolei + 请求"]
+    Handler["enhanced_cli.handle_smart_request()"]
+    Input --> Handler
+  end
 
-  A --> LLM
-  A --> Tools
-  MW -.-> A
+  subgraph Pipeline["MiddlewarePipeline"]
+    MW["AgentMiddleware 链 / ReActMiddleware"]
+    Ctx["Context (request/response/state)"]
+    MW -.- Ctx
+  end
+
+  subgraph React["ReActMiddleware"]
+    LLM["LLM 推理: 调工具 or 直接回答"]
+    Parse["_parse_tool_calls()"]
+    Loop["循环(最多3轮) 工具结果回 LLM"]
+  end
+
+  subgraph Tools["ToolRegistry"]
+    HandlerMap["_HANDLER_MAP 字典路由"]
+    S1["search (RAG 搜索)"]
+    S2["fetch_url (HTTP 网页)"]
+    S3["execute_code (沙盒执行)"]
+    S4["file (读写文件)"]
+    MCP["MCP fallback"]
+  end
+
+  subgraph Agent["BaseAgent"]
+    Exec["_execute_single_tool_call()"]
+  end
+
+  Handler --> Pipeline
+  Pipeline --> React
+  React -->|"获取工具"| Tools
+  React -->|"LLM 决策"| LLM
+  LLM -->|"tool_calls"| Parse
+  Parse -->|"有工具"| Loop
+  Loop -->|"执行"| Exec
+  Exec -->|"handler 优先"| HandlerMap
+  HandlerMap --> S1
+  HandlerMap --> S2
+  HandlerMap --> S3
+  HandlerMap --> S4
+  Exec -.->|"handler 失败"| MCP
+  Parse -->|"纯文本"| Final["输出答案"]
+  Loop -->|"超 3 轮"| Final
+
+  HandlerMap ~~~ Notes["V2 执行流程\n\n旧: 5步固定流程 + WorkAgent 3轮循环 = ~9次 LLM\n新: 1次 LLM 判断 + 0-2 次工具调用 = ~2-3 次 LLM\n\n核心路径:\n入口 > MiddlewarePipeline > ReActMiddleware > ToolRegistry > handler"]
+  style Notes fill:#f5f0ff,stroke:#6b3fa0,stroke-dasharray:4
 </pre>
   </div>
 </div>

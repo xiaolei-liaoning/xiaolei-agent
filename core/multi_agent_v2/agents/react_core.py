@@ -9,12 +9,13 @@ ReActCore - V2 单 Agent 核心执行器
 import asyncio
 import json
 import logging
+from typing import Optional
 
 from .middleware import RunContext, BaseMiddleware, MiddlewareChain
 
 logger = logging.getLogger(__name__)
 
-_MAX_ROUNDS = 3
+_MAX_ROUNDS = 2
 
 
 class ReActCoreMiddleware(BaseMiddleware):
@@ -27,12 +28,14 @@ class ReActCoreMiddleware(BaseMiddleware):
             reg = get_tool_registry()
             if not reg._initialized:
                 await reg.discover_all()
-            raw = reg.get_tools_for_task(ctx.task_description, max_tools=25)
+            raw = await reg.get_tools_for_task(ctx.task_description, max_tools=100)
+            # 所有工具全部暴露给 LLM，靠 LLM 自己根据任务选取
             ctx.tool_defs = [
                 {"type":"function","function":{"name":t.name,"description":t.description,"parameters":t.parameters},
                  "_server":t.server,"_tool_name":t.tool_name}
-                for t in raw if t.name in _HANDLER_MAP or t.handler
+                for t in raw
             ]
+            logger.info(f"暴露 {len(ctx.tool_defs)} 个工具给 LLM")
         except Exception as e:
             logger.debug("获取工具定义失败: %s", e)
             ctx.tool_defs = []
@@ -53,7 +56,7 @@ class ReActCoreMiddleware(BaseMiddleware):
         ctx.iteration = ctx.react_depth
 
         messages = [
-            {"role": "system", "content": "你是一个 AI 助手，可以使用工具来完成任务。每次思考后，要么调用工具，要么给出最终答案。"},
+            {"role": "system", "content": "你是多步骤计划的执行者。当前步骤已有明确任务，直接执行即可，无需重新选择工具类型。"},
             {"role": "user", "content": ctx.task_description},
         ]
         if ctx.tool_results:
@@ -114,7 +117,7 @@ class ReActCoreMiddleware(BaseMiddleware):
                 args = {}
 
             logger.info("第%d轮 调用: %s", ctx.iteration, name)
-            result = await self._execute(tc)
+            result = await self._execute(tc, ctx)
 
             ok = result.get("success", False)
             ctx.tool_results.append({
@@ -124,28 +127,51 @@ class ReActCoreMiddleware(BaseMiddleware):
             })
 
         if ctx.react_depth >= _MAX_ROUNDS and not ctx.final_answer:
-            if ctx.tool_results:
+            # 检查所有轮次中是否有成功的工具调用
+            has_success = any(r.get("success") for r in ctx.tool_results)
+
+            if has_success:
                 last = ctx.tool_results[-1]
                 text = str(last.get("result", last.get("error", "")))
                 if text and text != "None":
                     ctx.final_answer = text[:500]
-            if not ctx.final_answer:
-                ctx.final_answer = "已执行完毕。"
+                if not ctx.final_answer:
+                    ctx.last_error = "步骤未实际执行任何工具调用"
+            else:
+                ctx.last_error = "步骤未实际执行任何工具调用"
             ctx.interrupted = True
 
-    async def _execute(self, tc: dict) -> dict:
-        """执行单个工具调用"""
+    async def _execute(self, tc: dict, ctx: Optional[RunContext] = None) -> dict:
+        """执行单个工具调用 — 通过 chain.on_wrap_tool_call 走洋葱包裹"""
+        tool_args = {
+            "name": tc.get("function", {}).get("name", ""),
+            "arguments": json.loads(tc.get("function", {}).get("arguments", "{}")),
+            "_tool_name": tc.get("function", {}).get("name", ""),
+            "_server": self._lookup_server(tc.get("function", {}).get("name", ""), ctx),
+        }
+        # 如果有 chain 引用，走 wrap 链
+        if ctx and hasattr(ctx, '_chain') and ctx._chain:
+            try:
+                return await ctx._chain.on_wrap_tool_call(ctx, tool_args)
+            except Exception as e:
+                return {"success": False, "result": {"error": str(e)}}
+        # 无 chain 引用时直接调
         from core.multi_agent_v2.agents.base.base_agent import BaseAgent
         agent = BaseAgent()
         try:
-            return await agent._execute_single_tool_call({
-                "name": tc.get("function", {}).get("name", ""),
-                "arguments": json.loads(tc.get("function", {}).get("arguments", "{}")),
-                "_tool_name": tc.get("function", {}).get("name", ""),
-                "_server": "",
-            })
+            return await agent._execute_single_tool_call(tool_args)
         except Exception as e:
             return {"success": False, "result": {"error": str(e)}}
+
+    @staticmethod
+    def _lookup_server(tool_name: str, ctx: RunContext) -> str:
+        """从 ctx.tool_defs 中根据工具名称查找对应的 _server"""
+        if not ctx or not ctx.tool_defs or not tool_name:
+            return ""
+        for td in ctx.tool_defs:
+            if td.get("function", {}).get("name") == tool_name:
+                return td.get("_server", "")
+        return ""
 
     @staticmethod
     def _parse_tool_calls(reply: str) -> list:
@@ -164,9 +190,21 @@ class ReActCoreMiddleware(BaseMiddleware):
 
 
 def build_default_chain() -> MiddlewareChain:
-    """构建默认中间件链：ReActCore 为核心"""
+    """构建默认中间件链：Profile → ReActDepth → ReActCore → Confidence → Reflection → KEPA → Branch → AskUser"""
     chain = MiddlewareChain()
-    chain.add(ReActCoreMiddleware())
+    from .middlewares import (
+        ProfileMiddleware, ReActDepthMiddleware,
+        ConfidenceMiddleware, ReflectionMiddleware,
+        KEPAMiddleware, BranchMiddleware, AskUserMiddleware,
+    )
+    chain.add(ProfileMiddleware())       # 任务画像
+    chain.add(ReActDepthMiddleware())    # 深度控制
+    chain.add(ReActCoreMiddleware())     # ReAct 核心循环
+    chain.add(ConfidenceMiddleware())    # 置信度评估
+    chain.add(ReflectionMiddleware())    # 执行反思
+    chain.add(KEPAMiddleware())          # KEPA 闭环（执行结果→SharedBus）
+    chain.add(BranchMiddleware())        # 策略分支
+    chain.add(AskUserMiddleware())       # 用户交互
     return chain
 
 
@@ -175,9 +213,15 @@ async def run_react(task_description: str) -> dict:
     ctx = RunContext(task_description)
     chain = build_default_chain()
     await chain.on_start(ctx)
+    ctx._chain = chain  # 让 ReActCoreMiddleware 能调 chain.on_wrap_tool_call
     while not ctx.interrupted and ctx.react_depth < _MAX_ROUNDS:
         await chain.on_think_start(ctx)
         await chain.on_think_end(ctx)
+        await chain.on_tool_end(ctx)  # 触发 KEPA/反思/置信度中间件
+        # 检测反思反馈：工具全部失败且无产出时提前中断，防止空转
+        if ctx.profile.get("reflection_feedback") and not ctx.final_answer:
+            ctx.interrupted = True
+            logger.warning("检测到反思反馈且无产出，提前终止空转")
     await chain.on_finish(ctx)
     return {
         "success": bool(ctx.final_answer),
