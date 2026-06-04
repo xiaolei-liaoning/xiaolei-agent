@@ -52,7 +52,10 @@ class ReActCoreMiddleware(BaseMiddleware):
         ctx.react_depth += 1
         ctx.iteration = ctx.react_depth
 
-        messages = [{"role": "user", "content": ctx.task_description}]
+        messages = [
+            {"role": "system", "content": "你是一个 AI 助手，可以使用工具来完成任务。每次思考后，要么调用工具，要么给出最终答案。"},
+            {"role": "user", "content": ctx.task_description},
+        ]
         if ctx.tool_results:
             # 有前序结果时构建完整对话
             for r in ctx.tool_results:
@@ -120,10 +123,15 @@ class ReActCoreMiddleware(BaseMiddleware):
                 "result": result.get("result", result),
             })
 
-        # 未达上限则继续
-        if ctx.react_depth >= _MAX_ROUNDS:
-            # 超限，强制 LLM 给结论
-            asyncio.ensure_future(self._force_answer(ctx))
+        if ctx.react_depth >= _MAX_ROUNDS and not ctx.final_answer:
+            if ctx.tool_results:
+                last = ctx.tool_results[-1]
+                text = str(last.get("result", last.get("error", "")))
+                if text and text != "None":
+                    ctx.final_answer = text[:500]
+            if not ctx.final_answer:
+                ctx.final_answer = "已执行完毕。"
+            ctx.interrupted = True
 
     async def _execute(self, tc: dict) -> dict:
         """执行单个工具调用"""
@@ -138,24 +146,6 @@ class ReActCoreMiddleware(BaseMiddleware):
             })
         except Exception as e:
             return {"success": False, "result": {"error": str(e)}}
-
-    async def _force_answer(self, ctx: RunContext) -> None:
-        """超出最大轮次时强制 LLM 给结论"""
-        from core.engine.llm_backend import get_llm_router
-        router = get_llm_router()
-        if not router:
-            return
-        try:
-            reply = await asyncio.wait_for(
-                router.chat(
-                    [{"role": "user", "content": "请基于已有的信息给出最终回答。"}],
-                    temperature=0.3, max_tokens=1000,
-                ),
-                timeout=15,
-            )
-            ctx.final_answer = reply.strip()
-        except Exception:
-            pass
 
     @staticmethod
     def _parse_tool_calls(reply: str) -> list:
