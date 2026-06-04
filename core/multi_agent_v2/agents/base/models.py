@@ -10,6 +10,20 @@ from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
 
 
+class ToolType(Enum):
+    """工具类型 — 用于分类追踪 Agent 调用的工具"""
+    BUILTIN = "builtin"           # 内置（fetch_url/file/search）
+    MCP = "mcp"                   # MCP 服务器工具
+    RAG = "rag"                   # RAG 搜索
+    SKILL = "skill"               # 技能
+    KEPA = "kepa"                 # KEPA 反思
+    CLARIFICATION = "clarification"  # 反问
+    REFLECTION = "reflection"     # 自我反思
+    API = "api"                   # 外接 API
+    PYTHON = "python"             # Python 代码执行
+    SHELL = "shell"               # Shell 命令
+
+
 class StepStatus(Enum):
     """步骤状态"""
     PENDING = "pending"          # 待执行

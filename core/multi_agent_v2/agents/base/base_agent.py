@@ -89,7 +89,7 @@ class BaseAgent:
         # 获取工具定义
         tool_defs = []
         try:
-            from core.multi_agent_v2.tools.tool_registry import get_tool_registry, _HANDLER_MAP
+            from core.multi_agent_v2.tools.tool_registry import get_tool_registry
             reg = get_tool_registry()
             if not reg._initialized:
                 await reg.discover_all()
@@ -134,7 +134,7 @@ class BaseAgent:
                 if attempt == 0:
                     prompt += "选择最合适的工具执行此步骤。\n"
                 else:
-                    prompt += "上一步工具失败。请换其他工具或方法。\n提示：如果网页获取失败，可以用 execute_code 写 Python 代码通过 requests 库抓取。\n"
+                    prompt += "上一步工具失败。请换其他工具或方法。\n提示：如果网页获取失败，可以用 execute_python 写 Python 代码通过 requests 库抓取。\n"
                 for td in attempt_tools:
                     prompt += "- %s: %s\n" % (td["function"]["name"], td["function"]["description"])
 

@@ -147,8 +147,11 @@ class WorkAgent(BaseAgent):
         if llm is not None:
             try:
                 _judge_prompt = (
-                    f"用户请求: {task.description}\n\n"
-                    f'这个请求需要调用工具(搜索/写文件/执行代码)来完成吗？只回答"需要"或"不需要"'
+                    f"判断这个请求需要调用工具吗？\n"
+                    f"请求: {task.description}\n"
+                    f"举例：\"你好\"→不需要，\"现在几点\"→不需要，\"搜索天气\"→需要，"
+                    f"\"搜一下百度热搜\"→需要，\"写文件\"→需要，\"执行代码\"→需要\n"
+                    f"只回答「需要」或「不需要」"
                 )
                 _judge_resp = await llm.chat(
                     [{"role": "user", "content": _judge_prompt}],
@@ -204,7 +207,7 @@ class WorkAgent(BaseAgent):
             steps = await planner.plan(task, tool_registry=registry)
         except Exception as e:
             logger.warning(f"任务拆解失败，使用兜底: {e}")
-            from .models import Step, StepStatus, StepType
+            from .models import Step
             steps = [
                 Step(step_id="step_1", name="执行任务", description=task.description,
                      type=StepType.LLM_TASK, expected_output="执行结果"),

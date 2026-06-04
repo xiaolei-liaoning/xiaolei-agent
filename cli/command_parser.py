@@ -56,6 +56,8 @@ class CommandType(Enum):
     SMART = "smart"
     RESET = "reset"
     TEST = "test"
+    TOOLS = "tools"
+    SHOW = "show"
     UNKNOWN = "unknown"
 
 
@@ -103,6 +105,8 @@ class CommandParser:
         "/plugin": CommandType.PLUGIN,
         "/smart": CommandType.SMART,
         "/reset": CommandType.RESET,
+        "/tools": CommandType.TOOLS,
+        "/show": CommandType.SHOW,
     }
     
     # 命令帮助信息
@@ -131,6 +135,8 @@ class CommandParser:
         "/plugin": "插件工具，如: /plugin list, /plugin create name",
         "/smart": "智能多Agent协作，如: /smart \"任务\", /smart demo, /smart status, /smart <模式> <任务> (模式: pipeline/master/review/auction/hybrid)",
         "/reset": "重置会话，如: /reset (清空历史) 或 /reset all (清空历史和记忆)",
+        "/tools": "查看所有可用工具及其状态（按类型分组）",
+        "/show": "展开之前折叠的详细输出，如: /show <id>",
     }
     
     def __init__(self):

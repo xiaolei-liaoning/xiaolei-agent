@@ -194,3 +194,52 @@ ansi = {
     'bold': '\033[1m',
     'end': '\033[0m',
 }
+
+
+def render_markdown_result(text: str, title: str = "Result") -> None:
+    """将工具结果渲染为格式化的 Markdown/Panel"""
+    from rich.markdown import Markdown
+    from rich.panel import Panel
+
+    if "```" in text or "#" in text or "**" in text:
+        _console.print(Panel(
+            Markdown(text),
+            title=title,
+            border_style=CLAUDE,
+            padding=(0, 2),
+        ))
+    else:
+        _console.print(Panel(
+            text,
+            title=title,
+            border_style=CLAUDE,
+            padding=(0, 2),
+        ))
+
+
+def display_tool_results_table(results: list, title: str = "工具执行结果") -> None:
+    """将工具执行结果展示为 Rich 表格"""
+    from rich.table import Table
+
+    if not results:
+        _console.print(f"  [{SUBTLE}](无结果)[/{SUBTLE}]")
+        return
+
+    table = Table(
+        title=title, title_style="bold",
+        border_style=SUBTLE, box=HEAVY_HEAD,
+    )
+    table.add_column("步骤", style=BOLD, no_wrap=True)
+    table.add_column("工具", style="cyan", no_wrap=True)
+    table.add_column("状态", style=BOLD)
+    table.add_column("结果摘要")
+
+    for i, r in enumerate(results):
+        step = f"#{i+1}"
+        tool = r.get("tool_call", {}).get("name", r.get("name", "?"))
+        status = f"[{SUCCESS}]✅[/{SUCCESS}]" if r.get("success") else f"[{ERROR}]❌[/{ERROR}]"
+        result_text = str(r.get("result", r.get("output", "")))[:100]
+        table.add_row(step, tool, status, result_text)
+
+    _console.print(table)
+

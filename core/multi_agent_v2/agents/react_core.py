@@ -24,18 +24,20 @@ class ReActCoreMiddleware(BaseMiddleware):
     async def on_start(self, ctx: RunContext) -> None:
         """on_start 时获取工具定义"""
         try:
-            from core.multi_agent_v2.tools.tool_registry import get_tool_registry, _HANDLER_MAP
+            from core.multi_agent_v2.tools.tool_registry import get_tool_registry
             reg = get_tool_registry()
             if not reg._initialized:
                 await reg.discover_all()
             raw = await reg.get_tools_for_task(ctx.task_description, max_tools=100)
-            # 所有工具全部暴露给 LLM，靠 LLM 自己根据任务选取
+            # 全部工具暴露给 LLM（内置 + MCP），由 LLM 自主选择
             ctx.tool_defs = [
                 {"type":"function","function":{"name":t.name,"description":t.description,"parameters":t.parameters},
                  "_server":t.server,"_tool_name":t.tool_name}
                 for t in raw
             ]
-            logger.info(f"暴露 {len(ctx.tool_defs)} 个工具给 LLM")
+            builtin_n = sum(1 for t in raw if t.server == "__builtin__")
+            mcp_n = sum(1 for t in raw if t.server not in ("__builtin__","__mcp__",""))
+            logger.info(f"暴露 {len(ctx.tool_defs)} 个工具 ({builtin_n} 内置 + {mcp_n} MCP)")
         except Exception as e:
             logger.debug("获取工具定义失败: %s", e)
             ctx.tool_defs = []
@@ -208,13 +210,20 @@ def build_default_chain() -> MiddlewareChain:
     return chain
 
 
-async def run_react(task_description: str) -> dict:
-    """快捷入口：直接用 ReActCore 处理任务"""
+async def run_react(task_description: str, max_rounds: int = 0) -> dict:
+    """快捷入口：直接用 ReActCore 处理任务
+    Args:
+        task_description: 任务描述
+        max_rounds: 最大轮数，0 表示使用默认 _MAX_ROUNDS(2)，有工具提示时自动降为1
+    """
+    if max_rounds == 0:
+        # 有工具提示的步骤只需 1 轮（直接调工具，不需要 LLM 分析）
+        max_rounds = 1 if "[工具提示]" in task_description else _MAX_ROUNDS
     ctx = RunContext(task_description)
     chain = build_default_chain()
     await chain.on_start(ctx)
     ctx._chain = chain  # 让 ReActCoreMiddleware 能调 chain.on_wrap_tool_call
-    while not ctx.interrupted and ctx.react_depth < _MAX_ROUNDS:
+    while not ctx.interrupted and ctx.react_depth < max_rounds:
         await chain.on_think_start(ctx)
         await chain.on_think_end(ctx)
         await chain.on_tool_end(ctx)  # 触发 KEPA/反思/置信度中间件
@@ -222,7 +231,21 @@ async def run_react(task_description: str) -> dict:
         if ctx.profile.get("reflection_feedback") and not ctx.final_answer:
             ctx.interrupted = True
             logger.warning("检测到反思反馈且无产出，提前终止空转")
+        # 检查反思历史：如果连续2轮都失败且有反思记录，将失败信息注入下一轮提示
+        if ctx.reflection_history and not ctx.final_answer:
+            last_ref = ctx.reflection_history[-1]
+            if last_ref.get("success_rate", 1) == 0 and last_ref.get("total_calls", 0) > 0:
+                # 在下一轮 task_description 注入提示
+                if not ctx.task_description.endswith("[反思]"):
+                    ctx.task_description += "\n[反思] 上一轮全部失败，请换一种方法（换工具或直接回答）。"
+                    logger.info("已注入反思提示到下一轮")
     await chain.on_finish(ctx)
+    # 如果没设 final_answer 但有成功工具调用，用最后工具结果当 answer
+    if not ctx.final_answer and ctx.tool_results:
+        last = ctx.tool_results[-1]
+        text = str(last.get("result", last.get("error", "")))
+        if text and text != "None":
+            ctx.final_answer = text[:500]
     return {
         "success": bool(ctx.final_answer),
         "answer": ctx.final_answer,

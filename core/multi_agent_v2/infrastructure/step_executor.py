@@ -413,6 +413,10 @@ class StepExecutor:
 
         # ── 统一走 run_react() 标准路径（全中间件链） ──
         task_desc = step.description
+        # 注入 tool_name 到 prompt，让 LLM 第1轮直接调工具而不是重新选择
+        step_tool_name = getattr(step, 'tool_name', '') or ''
+        if step_tool_name:
+            task_desc += f"\n\n[工具提示] 请使用工具「{step_tool_name}」完成此步骤。不需要选择其他工具。"
         if context_parts:
             task_desc = "### 已有上下文\n" + "\n\n".join(context_parts) + \
                         "\n\n### 当前任务\n" + task_desc
@@ -420,7 +424,7 @@ class StepExecutor:
             task_desc += f"\n\n预期产出：{step.expected_output}"
 
         # 若步骤涉及代码执行，注入 macOS 系统上下文（通过任务描述提示 LLM）
-        if 'execute_code' in (step.tool_name or '') or '代码' in (step.description or ''):
+        if any(t in (step.tool_name or '') for t in ('execute_python','execute_shell','execute_code')) or '代码' in (step.description or ''):
             task_desc += ("\n\n[系统环境] macOS Darwin, home=/Users/leiyuxuan, "
                           "desktop=/Users/leiyuxuan/Desktop。请只使用 Python 标准库，"
                           "不要安装或使用第三方包。")

@@ -54,6 +54,13 @@ class RunContext:
     react_depth: int = 0
     consecutive_failures: Dict[str, int] = field(default_factory=dict)
 
+    # 新工具类型追踪
+    rag_results: List[Dict] = field(default_factory=list)
+    skill_results: List[Dict] = field(default_factory=list)
+    api_calls: List[Dict] = field(default_factory=list)
+    reflect_results: List[Dict] = field(default_factory=list)
+    kepa_states: List[str] = field(default_factory=list)
+
     # MiddlewareChain 引用（由 run_react 在 on_start 后设置，供 _execute 使用）
     _chain: Optional[Any] = None
 

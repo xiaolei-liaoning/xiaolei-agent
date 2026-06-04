@@ -116,6 +116,23 @@ class AsyncSpinner:
         await self.stop()
 
 
+    @asynccontextmanager
+    async def pause(self):
+        """暂停动画（执行耗时操作时使用）"""
+        await self.stop()
+        try:
+            yield
+        finally:
+            await self.start()
+
+    async def update(self, message: str = None, color: str = None):
+        """更新动画文字（不中断动画）"""
+        if message:
+            self._message = message
+        if color:
+            self._color = color
+
+
 class RichAsyncSpinner:
     """基于 Rich Live 的异步动画加载器
 
@@ -386,3 +403,192 @@ def print_status_line(icon: str, message: str, color: str = CLAUDE,
     _console.print(f"  [{color}]{icon}[/{color}] {message}")
     if dim_detail:
         _console.print(f"    [{DIM}]{dim_detail}[/{DIM}]")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 增强动画类型
+# ═══════════════════════════════════════════════════════════════════
+
+class StepProgressSpinner:
+    """步骤进度动画 — 带进度条和步骤描述
+
+    显示格式:
+      ┌──────────────────────┐
+      │ ▰▰▰▰▰▰▱▱▱▱  3/8 步骤  │
+      │ ◐ 正在执行: 获取数据   │
+      └──────────────────────┘
+    """
+
+    def __init__(self, total_steps: int = 1, title: str = "",
+                 console: Console = None):
+        self.total = total_steps
+        self.current = 0
+        self.title = title
+        self._console = console or _console
+        self._live: Optional[Live] = None
+        self._status = "running"
+        self._descriptions: dict = {}
+        self._task_statuses: dict = {}
+
+    def start(self):
+        """启动进度显示"""
+        self._live = Live(
+            self._render(),
+            console=self._console,
+            refresh_per_second=10,
+            transient=True,
+        )
+        self._live.start()
+
+    def _render(self) -> Text:
+        """渲染当前进度"""
+        text = Text()
+
+        if self.title:
+            text.append(f"  [{CLAUDE}]▸[/] [{BOLD}]{self.title}[/]\n")
+
+        # 进度条
+        done = sum(1 for s in self._task_statuses.values() if s in ("success", "error"))
+        bar_len = 15
+        filled = int(bar_len * done / max(self.total, 1))
+        bar = "▰" * filled + "▱" * (bar_len - filled)
+        text.append(f"  [{SUCCESS}]{bar}[/] ")
+        text.append(f"[{SUBTLE}]{done}/{self.total}[/]\n")
+
+        # 当前步骤
+        if self.current > 0 and self.current <= self.total:
+            desc = self._descriptions.get(self.current, "")
+            text.append(f"  [{CLAUDE}]◐[/] [{SUBTLE}]步骤 {self.current}[/] {desc}")
+
+        return text
+
+    def step_start(self, step_num: int, description: str = ""):
+        """标记步骤开始"""
+        self.current = step_num
+        self._task_statuses[step_num] = "running"
+        self._descriptions[step_num] = description
+        if self._live:
+            self._live.update(self._render())
+
+    def step_done(self, step_num: int, success: bool = True):
+        """标记步骤完成"""
+        self._task_statuses[step_num] = "success" if success else "error"
+        if self._live:
+            self._live.update(self._render())
+
+    def complete(self, success: bool = True):
+        """完成"""
+        self._status = "success" if success else "error"
+        if self._live:
+            self._live.update(self._render())
+            self._live.stop()
+            self._live = None
+
+
+class MultiLineSpinner:
+    """多行并发动画 — 同时显示多个并行任务的状态
+
+    显示格式:
+      ◐ [1/3] 搜索数据...      (运行中)
+      ◐ [2/3] 分析内容...      (完成 ✓)
+      ⏳ [3/3] 生成报告        (等待中)
+    """
+
+    def __init__(self, tasks: list = None, console: Console = None):
+        """
+        Args:
+            tasks: [(task_id, description), ...]
+        """
+        self._console = console or _console
+        self._tasks = tasks or []
+        self._statuses: dict = {}  # task_id -> "pending"|"running"|"success"|"error"
+        self._live: Optional[Live] = None
+        self._running = False
+
+    def set_tasks(self, tasks: list):
+        self._tasks = tasks
+        for tid, _ in tasks:
+            if tid not in self._statuses:
+                self._statuses[tid] = "pending"
+
+    def start(self):
+        self._running = True
+        self._live = Live(
+            self._render(),
+            console=self._console,
+            refresh_per_second=10,
+            transient=True,
+        )
+        self._live.start()
+
+    def _render(self) -> Text:
+        text = Text()
+        if not self._tasks:
+            text.append(f"  [{SUBTLE}](无任务)[/{SUBTLE}]")
+            return text
+
+        for i, (tid, desc) in enumerate(self._tasks):
+            status = self._statuses.get(tid, "pending")
+            if status == "running":
+                icon = f"[{CLAUDE}]◐[/]"
+            elif status == "success":
+                icon = f"[{SUCCESS}]● ✓[/]"
+            elif status == "error":
+                icon = f"[{ERROR}]● ✗[/]"
+            else:
+                icon = f"[{SUBTLE}]⏳[/]"
+
+            text.append(f"  {icon} [{SUBTLE}]{i+1}/{len(self._tasks)}[/] ")
+            text.append(desc)
+            if status == "running":
+                text.append(Text("  (运行中)", style=DIM))
+            elif status == "success":
+                text.append(Text("  ✓", style=f"bold {SUCCESS}"))
+            elif status == "error":
+                text.append(Text("  ✗", style=f"bold {ERROR}"))
+            text.append("\n")
+
+        return text
+
+    def set_status(self, task_id: str, status: str):
+        """更新任务状态：pending|running|success|error"""
+        self._statuses[task_id] = status
+        if self._live:
+            self._live.update(self._render())
+
+    def all_done(self) -> bool:
+        return all(s in ("success", "error") for s in self._statuses.values())
+
+    def stop(self):
+        self._running = False
+        if self._live:
+            self._live.update(self._render())
+            self._live.stop()
+            self._live = None
+
+    def __enter__(self):
+        self.start()
+        return self
+
+    def __exit__(self, *args):
+        self.stop()
+
+
+# ── 工具类型的图标映射 ──
+TOOL_ICONS = {
+    "execute_python":     "🐍",
+    "execute_shell":      "💻",
+    "search":             "🔍",
+    "rag_search":         "🧠",
+    "fetch_url":          "🌐",
+    "file":               "📁",
+    "call_api":           "🔗",
+    "skill_execute":      "🎯",
+    "kepa_reflect":       "🔄",
+    "ask_clarification":  "❓",
+    "self_reflect":       "📋",
+}
+
+def get_tool_icon(tool_name: str) -> str:
+    """获取工具对应的图标"""
+    return TOOL_ICONS.get(tool_name, "⚙️")

@@ -200,9 +200,26 @@ class EnhancedCLI:
         rc.print(f"  [{brand}]│                                                     │")
         rc.print(f"  [{brand}]╰─────────────────────────────────────────────────────╯")
         rc.print()
+
+        # 获取工具数量
+        tool_info = ""
+        try:
+            from core.multi_agent_v2.tools.tool_registry import get_tool_registry
+            reg = get_tool_registry()
+            summary = reg.get_available_tools_summary()
+            total = summary.get("total", 0)
+            mcp = summary.get("mcp_connected", 0)
+            if total > 0:
+                tool_info = f"  [{soft}]🔧 {total} 工具已就绪  ·  {mcp} MCP 已连接[/]"
+        except Exception:
+            tool_info = f"  [{soft}]🔧 工具系统就绪[/]"
+
         rc.print(f"  [{soft}]⚡[/]  [{brand}]工作流[/]  ·  [{brand}]GUI自动化[/]  ·  [{brand}]爬虫[/]  ·  [{brand}]微信[/]  ·  [{brand}]分析[/]")
+        if tool_info:
+            rc.print(tool_info)
         rc.print()
-        rc.print(f"  [{soft}]📖[/]  输入 [{brand}]/help[/] 查看命令  ·  [{dim}]⎿[/]  exit 退出")
+        rc.print(f"  [{soft}]📖[/]  输入 [{brand}]/help[/] 查看命令  ·  [{dim}]⎿  exit 退出[/]")
+        rc.print()
         rc.print()
         rc.rule(style=dim)
         rc.print()
@@ -212,7 +229,12 @@ class EnhancedCLI:
         cmd_type = parsed_cmd.command_type
 
         if cmd_type == CommandType.HELP:
-            self.handle_help()
+            # /help search <term> 支持
+            remaining = parsed_cmd.remaining or ""
+            if remaining.startswith("search"):
+                self.handle_help(search_term=remaining[6:].strip())
+            else:
+                self.handle_help()
 
         elif cmd_type == CommandType.QUIT or cmd_type == CommandType.EXIT:
             self.handle_quit()
@@ -283,14 +305,298 @@ class EnhancedCLI:
         elif cmd_type == CommandType.TEST:
             await self.handle_test(parsed_cmd)
 
+        elif cmd_type == CommandType.TOOLS:
+            await self.handle_tools()
+
+        elif cmd_type == CommandType.SHOW:
+            self.handle_show(parsed_cmd)
+
         else:
             # 非命令，作为智能任务请求
             await self.handle_smart_request(parsed_cmd.remaining)
 
-    def handle_help(self):
-        """处理帮助命令"""
-        help_text = self.command_parser.get_help_text()
-        print_color(help_text, CliColors.WHITE)
+    def handle_help(self, search_term: str = ""):
+        """分类帮助系统 — 命令按类别分面板展示"""
+        from rich.console import Console as RichConsole, Group
+        from rich.panel import Panel
+        from rich.table import Table
+        from rich.columns import Columns
+        from cli.colors import CLAUDE, SUCCESS, SUBTLE, BOLD, INACTIVE
+
+        rc = RichConsole()
+
+        # 如果指定了搜索词，搜索命令
+        if search_term:
+            self._handle_help_search(search_term)
+            return
+
+        # 命令分类
+        categories = {
+            "📋 Core": ["/run", "/chat", "/smart"],
+            "📊 Analysis": ["/analyze", "/review", "/scrape"],
+            "🤖 Automation": ["/automate", "/wechat"],
+            "⚙️ System": ["/status", "/config", "/mcp", "/tools", "/plugin"],
+            "🎮 Tools": ["/agent", "/game", "/fun", "/art"],
+            "🔄 Session": ["/help", "/history", "/clear", "/debug", "/think", "/reset", "/quit"],
+        }
+
+        help_map = self.command_parser.COMMAND_HELP
+
+        panels = []
+        for cat_name, cmds in categories.items():
+            table = Table(show_header=False, box=None, padding=(0, 2, 0, 0))
+            table.add_column("Cmd", style=f"bold {CLAUDE}", no_wrap=True)
+            table.add_column("Desc", style="white")
+            for cmd in cmds:
+                desc = help_map.get(cmd, "")
+                table.add_row(cmd, desc)
+            panels.append(Panel(
+                table, title=f"[bold]{cat_name}[/bold]",
+                border_style=SUBTLE, padding=(1, 2),
+            ))
+
+        # 分两列展示
+        rc.print()
+        left = Group(*panels[:3])
+        right = Group(*panels[3:])
+
+        help_layout = Panel(
+            Columns([left, right], equal=True, expand=True),
+            title=f"[bold {CLAUDE}]🦞 xiaolei AI Agent 命令参考[/bold {CLAUDE}]",
+            border_style=CLAUDE, padding=(1, 2),
+        )
+        rc.print(help_layout)
+        rc.print(f"\n  [{INACTIVE}]💡 提示: /help search <关键词> 搜索命令 /tools 查看所有工具状态[/{INACTIVE}]")
+        rc.print()
+
+    def _handle_help_search(self, term: str):
+        """搜索命令帮助"""
+        from rich.console import Console as RichConsole
+        from rich.table import Table
+        from cli.colors import CLAUDE, SUBTLE, INACTIVE
+
+        rc = RichConsole()
+        help_map = self.command_parser.COMMAND_HELP
+        results = []
+        term_lower = term.lower()
+        for cmd, desc in help_map.items():
+            if term_lower in cmd.lower() or term_lower in desc.lower():
+                results.append((cmd, desc))
+
+        if not results:
+            rc.print(f"\n  [{INACTIVE}]未找到包含 \"{term}\" 的命令[/{INACTIVE}]")
+            return
+
+        table = Table(title=f"搜索 \"{term}\" 结果 ({len(results)} 条)",
+                      title_style="bold", border_style=SUBTLE,
+                      header_style=f"bold {CLAUDE}")
+        table.add_column("命令", style=f"bold {CLAUDE}")
+        table.add_column("说明", style="white")
+        for cmd, desc in results:
+            # 高亮匹配部分
+            idx = cmd.lower().find(term_lower)
+            if idx >= 0:
+                cmd = cmd[:idx] + f"[{CLAUDE}]{cmd[idx:idx+len(term)]}[/{CLAUDE}]" + cmd[idx+len(term):]
+            table.add_row(cmd, desc)
+        rc.print()
+        rc.print(table)
+        rc.print()
+
+    async def handle_tools(self):
+        """查看所有可用工具 — 按类型分组展示"""
+        from rich.console import Console as RichConsole
+        from rich.panel import Panel
+        from rich.table import Table
+        from rich.columns import Columns
+        from cli.colors import CLAUDE, SUCCESS, ERROR, SUBTLE, BOLD, INACTIVE, WARNING
+
+        rc = RichConsole()
+
+        try:
+            from core.multi_agent_v2.tools.tool_registry import get_tool_registry
+            reg = get_tool_registry()
+            if not reg._initialized:
+                await reg.discover_all()
+
+            summary = reg.get_available_tools_summary()
+
+            # 按标签分组
+            groups = {
+                "🔧 代码执行": reg.get_tools_by_tag("code"),
+                "🔍 搜索": reg.get_tools_by_tag("search"),
+                "🌐 网络": reg.get_tools_by_tag("web") + reg.get_tools_by_tag("api"),
+                "🧠 反思": reg.get_tools_by_tag("reflect"),
+                "🎯 技能": reg.get_tools_by_tag("skill"),
+                "📦 MCP": reg.get_tools_by_tag("mcp"),
+                "📁 文件": reg.get_tools_by_tag("file"),
+            }
+
+            # 按服务器分组
+            by_server = {}
+            for t in reg._tools.values():
+                by_server.setdefault(t.server, []).append(t)
+
+            # 概览
+            overview = (
+                f"[{BOLD}]{summary['total']}[/] 个工具 | "
+                f"[{SUCCESS}]{summary['builtin']}[/] 内置 | "
+                f"[{CLAUDE}]{summary['mcp_awesome']}[/] MCP 已发现 | "
+                f"[{SUCCESS}]{summary['mcp_connected']}[/] MCP 已连接"
+            )
+
+            # 按标签表格
+            tag_table = Table(show_header=False, box=None, padding=(0, 2, 0, 0))
+            tag_table.add_column("类别", style=f"bold {CLAUDE}", no_wrap=True)
+            tag_table.add_column("工具", style="white")
+
+            for group_name, tools in groups.items():
+                if not tools:
+                    continue
+                names = ", ".join(f"[{SUBTLE}]{t.name}[/{SUBTLE}]" for t in tools)
+                tag_table.add_row(group_name, names)
+
+            # MCP 服务器
+            mcp_rows = []
+            for server, tools in sorted(by_server.items()):
+                if server in ("__builtin__", "__mcp__", ""):
+                    continue
+                names = ", ".join(t.name for t in tools)
+                mcp_rows.append(f"  [{CLAUDE}]●[/] {server}: [{SUBTLE}]{names}[/{SUBTLE}]")
+
+            panels = [Panel(tag_table, title="[bold]工具列表[/bold]", border_style=SUBTLE, padding=(1, 2))]
+
+            if mcp_rows:
+                mcp_text = "\n".join(mcp_rows)
+                from rich.text import Text
+                panels.append(Panel(mcp_text, title="[bold]MCP 服务器[/bold]", border_style=CLAUDE, padding=(1, 2)))
+
+            # 输出
+            rc.print()
+            rc.print(Panel(
+                f"  {overview}",
+                title=f"[bold]🔧 工具系统概览[/bold]",
+                border_style=SUBTLE, padding=(0, 1),
+            ))
+            for p in panels:
+                rc.print(p)
+            rc.print(f"  [{INACTIVE}]💡 提示: 工具按任务需求自动筛选，用自然语言描述任务即可自动使用合适工具[/{INACTIVE}]")
+            rc.print()
+
+        except Exception as e:
+            self._display_error_panel(e, "获取工具列表失败")
+
+    def handle_show(self, parsed_cmd: 'ParsedCommand'):
+        """展开之前折叠的输出"""
+        target = parsed_cmd.action or parsed_cmd.remaining
+        if not target:
+            from cli.colors import print_warning
+            print_warning("请指定要展开的内容，如: /show error")
+            return
+
+        # 从折叠缓存中查找
+        key = target.strip().lower()
+        if hasattr(self, '_collapsed_outputs') and key in self._collapsed_outputs:
+            from cli.colors import _console
+            from rich.panel import Panel
+            from rich.text import Text
+            data = self._collapsed_outputs[key]
+            _console.print(Panel(
+                str(data)[:10000],
+                title=f"[+] {key}",
+                border_style="grey58",
+            ))
+        else:
+            from cli.colors import print_warning
+            print_warning(f"未找到展开内容: {target}")
+
+    def _display_collapsible_result(self, title: str, content: str,
+                                     collapsed: bool = True,
+                                     max_chars: int = 500) -> str:
+        """显示可折叠的结果 — 长内容自动折叠，可通过 /show <id> 展开
+
+        Returns:
+            result_id: 用于 /show 命令的ID
+        """
+        from rich.console import Console as RichConsole
+        from rich.panel import Panel
+        from cli.colors import _console, CLAUDE, SUBTLE, INACTIVE
+
+        # 生成唯一ID
+        import hashlib
+        result_id = hashlib.md5(title.encode()).hexdigest()[:8]
+
+        if len(content) <= max_chars:
+            _console.print(Panel(
+                content,
+                title=title,
+                border_style=SUBTLE,
+                padding=(0, 2),
+            ))
+        else:
+            preview = content[:max_chars]
+            remaining = len(content) - max_chars
+            _console.print(Panel(
+                f"{preview}\n\n[{INACTIVE}]...（剩余 {remaining} 字符，/show {result_id} 展开全文）[/{INACTIVE}]",
+                title=f"[+] {title}",
+                border_style=SUBTLE,
+                padding=(0, 2),
+            ))
+
+            # 存入折叠缓存
+            if not hasattr(self, '_collapsed_outputs'):
+                self._collapsed_outputs = {}
+            self._collapsed_outputs[result_id] = content
+
+        return result_id
+
+    def _display_error_panel(self, error: Exception, context: str = "",
+                              suggestions: list = None) -> None:
+        """显示带建议操作的错误面板"""
+        from rich.console import Console as RichConsole
+        from rich.panel import Panel
+        from rich.syntax import Syntax
+        from rich.text import Text
+        from cli.colors import _console, ERROR, SUBTLE, BOLD, INACTIVE, WARNING
+        import traceback
+
+        tb = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+
+        # 错误面板
+        _console.print()
+        _console.print(Panel(
+            f"[bold {ERROR}]⚠️  {type(error).__name__}[/]\n{str(error)}",
+            title=f"❌ {context or '执行出错'}",
+            border_style=ERROR,
+            padding=(0, 2),
+        ))
+
+        # 建议
+        if suggestions:
+            _console.print(f"  [{WARNING}]💡 建议:[/{WARNING}]")
+            for s in suggestions:
+                _console.print(f"    [{INACTIVE}]→[/{INACTIVE}] {s}")
+
+        # 可展开的堆栈
+        if len(tb) > 200:
+            import hashlib
+            key = hashlib.md5(tb.encode()).hexdigest()[:8]
+            _console.print(Panel(
+                Syntax(tb, "python", theme="monokai", line_numbers=True),
+                title=f"[+] 堆栈 (/show {key})",
+                border_style=SUBTLE,
+                padding=(0, 1),
+            ))
+            if not hasattr(self, '_collapsed_outputs'):
+                self._collapsed_outputs = {}
+            self._collapsed_outputs[key] = tb
+        else:
+            _console.print(Panel(
+                Syntax(tb, "python", theme="monokai"),
+                title="堆栈",
+                border_style=SUBTLE,
+                padding=(0, 1),
+            ))
+        _console.print()
 
     def handle_quit(self):
         """处理退出命令"""
@@ -314,6 +620,8 @@ class EnhancedCLI:
     def handle_debug(self):
         """处理调试模式切换"""
         self.debug_mode = self.command_parser.toggle_debug()
+        if self._status_bar:
+            self._status_bar.set_debug(self.debug_mode)
         if self.debug_mode:
             log_success("调试模式已启用")
         else:
@@ -1987,18 +2295,39 @@ MCP命令使用帮助:
         """运行CLI主循环"""
         self.print_welcome()
 
+        # ── 启动状态栏 ──
+        self._status_bar = None
+        try:
+            from cli.status_bar import StatusBar
+            import uuid
+            sid = getattr(self, 'session_id', uuid.uuid4().hex[:8])
+            self._status_bar = StatusBar(session_id=sid, debug_mode=self.debug_mode)
+            await self._status_bar.start()
+        except Exception:
+            pass
+
         while self.running:
             try:
                 user_input = input(f"{ansi['bold']}{ansi['cyan']}❯{ansi['end']} {ansi['bold']}{ansi['green']}xiaolei{ansi['end']} ")
 
                 if not user_input.strip():
+                    # 空输入时刷新状态栏
+                    if self._status_bar:
+                        await self._status_bar.update()
                     continue
+
+                # 更新状态栏的命令信息
+                if self._status_bar:
+                    self._status_bar.set_last_command(user_input)
 
                 # 如果不以 / 开头，作为智能任务请求处理
                 if not user_input.startswith('/'):
                     await self.handle_smart_request(user_input)
-                    print_color("──────────────────────────────────────────────────────────────────────", CliColors.PURPLE)
+                    print_color("───────────────────────────────────────────────────────────", CliColors.PURPLE)
                     print()
+                    if self._status_bar:
+                        await self._status_bar.refresh_stats()
+                        await self._status_bar.update()
                     continue
 
                 # 解析命令
@@ -2007,11 +2336,23 @@ MCP命令使用帮助:
                 # 处理命令
                 await self.handle_command(parsed_cmd)
 
+                # 命令处理后刷新状态栏
+                if self._status_bar:
+                    await self._status_bar.refresh_stats()
+                    await self._status_bar.update()
+
             except KeyboardInterrupt:
                 print_color("\n👋 再见！", CliColors.BLUE)
                 self.running = False
             except Exception as e:
                 log_error(f"处理异常: {e}")
+
+        # ── 停止状态栏 ──
+        if self._status_bar:
+            try:
+                await self._status_bar.stop()
+            except Exception:
+                pass
 
 
 async def main(log_file: str = None, log_to_console: bool = True):
