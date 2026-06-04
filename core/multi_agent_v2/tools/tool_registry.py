@@ -133,23 +133,13 @@ async def _handle_execute_code(args: Dict) -> Dict:
 _HANDLER_MAP: Dict[str, Callable] = {
     "search": _handle_search,
     "execute_code": _handle_execute_code,
-    "file": _handle_file,
-    "fetch_url": _handle_fetch_url,
 }
 
 _SANDBOX_TOOL_DEFS = [
     ToolDefinition(name="execute_code", server=SERVER_BUILTIN, tags=["code","sandbox"],
-        description="沙盒执行代码。action=run_python 执行 Python；action=run_shell 执行 Shell",
+        description="沙盒执行代码。action=run_python 执行 Python(网络/文件/数据分析)；action=run_shell 执行 Shell",
         parameters={"type":"object","properties":{"action":{"type":"string","enum":["run_python","run_shell"]},"code":{"type":"string"},"command":{"type":"string"},"timeout":{"type":"integer"}},"required":["action"]},
         handler=_handle_execute_code),
-    ToolDefinition(name="file", server=SERVER_BUILTIN, tags=["file","direct"],
-        description="直接读写文件。action=read/write，支持绝对路径",
-        parameters={"type":"object","properties":{"action":{"type":"string","enum":["read","write"]},"path":{"type":"string"},"content":{"type":"string"}},"required":["action","path"]},
-        handler=_handle_file),
-    ToolDefinition(name="fetch_url", server=SERVER_BUILTIN, tags=["web","http","fetch"],
-        description="HTTP GET 获取网页数据，自动提取 JSON，保存到 /tmp/",
-        parameters={"type":"object","properties":{"url":{"type":"string"},"max_length":{"type":"integer","description":"默认80000"}},"required":["url"]},
-        handler=_handle_fetch_url),
     ToolDefinition(name="search", server=SERVER_BUILTIN, tags=["web","search"],
         description="联网搜索查询信息。当用户要求搜索、查找、查询时使用",
         parameters={"type":"object","properties":{"query":{"type":"string","description":"搜索关键词"}},"required":["query"]},
