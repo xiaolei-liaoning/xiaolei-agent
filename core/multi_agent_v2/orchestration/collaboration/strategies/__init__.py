@@ -50,6 +50,9 @@ class CollaborationMode(Enum):
 class BaseCollaborationStrategy(ABC):
     """所有协作策略的基类"""
 
+    def __init__(self, context_center=None):
+        self.context_center = context_center
+
     @abstractmethod
     async def execute(
         self,

@@ -38,6 +38,16 @@ class Completer:
         self._get_help = get_help_fn
         self._matches: List[str] = []
 
+    @property
+    def commands(self) -> List[str]:
+        """获取命令列表"""
+        return self._get_commands()
+
+    @property
+    def help_map(self) -> Dict[str, str]:
+        """获取命令帮助映射"""
+        return self._get_help()
+
     # ── 公共 API ──────────────────────────────────────────────────────────
 
     def install(self):

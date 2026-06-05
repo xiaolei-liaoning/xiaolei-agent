@@ -1,0 +1,4 @@
+  File "<string>", line 6
+    new = '''    async def _run_with_scheduler(self, task: str):
+          ^
+SyntaxError: unterminated triple-quoted string literal (detected at line 7)

@@ -102,6 +102,11 @@ def print_info(message: str) -> None:
     _console.print(f"  [steel_blue]{message}[/steel_blue]")
 
 
+def log_status(message: str, color: str = "steel_blue") -> None:
+    """打印状态信息（兼容 /orchestrate 等命令的旧接口）"""
+    _console.print(f"  [{color}]{message}[/{color}]")
+
+
 def print_dim(message: str) -> None:
     _console.print(f"  [dim]{message}[/dim]")
 
