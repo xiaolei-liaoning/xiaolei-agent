@@ -1001,92 +1001,143 @@ class EnhancedCLI:
                         print_success(f"✅ 成功 ({result.execution_time:.1f}s)")
                         print(result.text()[:1000])
                 return
-            # 无匹配工作流，尝试用调度器自动编排
+            # 无匹配工作流，LLM 动态编排
             await self._run_with_scheduler(task)
             return
 
-        await self._run_ad_hoc(remaining)
+        # remaining 有内容 → LLM 动态编排
+        await self._run_with_scheduler(remaining)
 
     async def _run_with_scheduler(self, task: str):
-        """调度模式：分析任务 -> 选模式 -> 生成 plan -> orchestrator 执行"""
+        """动态编排：LLM 分析任务 → 生成编排方案 → orchestrator 执行
+
+        类似 Claude Code CLI Workflow：Claude 动态写编排脚本，
+        这里用 LLM 分析生成子任务列表和编排模式，然后 orchestrator 执行。
+        """
         from cli.colors import CLAUDE, log_status, print_error, print_success
-        from cli.animated_spinner import print_section
+        from cli.animated_spinner import print_section, AsyncSpinner
         from core.multi_agent_v2.orchestration.orchestrator import (
-            phase, log, agent, parallel, reset,
+            phase, log, agent, parallel, reset, AgentResult,
         )
-        from core.multi_agent_v2.orchestration.scheduler.task_analyzer import TaskAnalyzer
-        from core.multi_agent_v2.orchestration.scheduler.mode_selector import ModeSelector
-        from core.multi_agent_v2.orchestration.scheduler.intelligent_scheduler import (
-            CollaborationMode,
-        )
-        from core.multi_agent_v2.agents.base.base_agent import Task as SchedTask
+        import json
 
         reset()
-        print_section("🤖 智能调度 - 多Agent编排")
+        print_section("🤖 动态编排 - 多Agent协作")
 
-        import uuid, re
-        task_obj = SchedTask(
-            task_id="sched_" + uuid.uuid4().hex[:8],
-            type="general", description=task,
-            keywords=task.split()[:5],
-            complexity=0.6, estimated_steps=3,
-        )
+        try:
+            # 1. LLM 分析任务，生成编排方案
+            log("正在分析任务并制定多Agent编排方案...")
+            plan_result = await agent(
+                f"分析以下任务，制定一个多Agent协作执行方案。\n\n"
+                f"任务: {task}\n\n"
+                f"请输出 JSON 格式（不要其他内容）：\n"
+                f"{{\n"
+                f'  "subtasks": ["子任务1描述", "子任务2描述", ...],\n'
+                f'  "pattern": "parallel",  // parallel=并行, pipeline=流水线, review=评审\n'
+                f'  "reason": "为什么选这个模式"'
+                f"}}\n\n"
+                f"要求：\n"
+                f"- subtasks 至少3个，最多6个\n"
+                f"- 每个子任务是独立的、可并行执行的搜索或分析场景\n"
+                f"- 涉及对比类任务，子任务覆盖多个维度\n"
+                f"- 涉及代码或实现类，子任务覆盖不同方案\n"
+                f"- pattern 选最适合的编排模式",
+                {"label": "编排分析", "timeout": 60, "force_recompute": True},
+            )
 
-        # 1. 分析任务
-        analyzer = TaskAnalyzer()
-        analysis = analyzer.analyze(task_obj)
-        log(f"分析: type={analysis.get('task_type','?')}, "
-            f"complexity={analysis.get('complexity',0.5):.2f}, "
-            f"steps={analysis.get('estimated_steps',3)}")
+            if not plan_result or not plan_result.success:
+                log_status("LLM 编排分析失败，走默认并行模式", color="yellow")
+                raise ValueError("LLM编排分析失败")
 
-        # 2. 选模式
-        mode_selector = ModeSelector()
-        mode = await mode_selector.select(task_obj, analysis, None, None, {})
-        log(f"模式: {mode.value}")
+            # 2. 解析 LLM 生成的编排方案
+            plan_text = plan_result.text()
+            plan = None
+            try:
+                # 尝试提取 JSON
+                import re
+                json_match = re.search(r'\{.*\}', plan_text, re.DOTALL)
+                if json_match:
+                    plan = json.loads(json_match.group())
+            except Exception:
+                pass
 
-        # 3. 拆子任务
-        subtasks = [t.strip() for t in re.split(r"[和与及、,，]", task) if t.strip()]
-        if len(subtasks) < 2:
-            steps = max(analysis.get("estimated_steps", 3), 2)
-            subtasks = [f"{task} - {i+1}" for i in range(min(steps, 6))]
-        log(f"{len(subtasks)} 个子任务, 模式={mode.value}")
+            if not plan or "subtasks" not in plan:
+                log_status("编排方案解析失败，走默认并行模式", color="yellow")
+                raise ValueError("编排方案解析失败")
 
-        # 4. 按模式执行
-        if mode == CollaborationMode.PIPELINE:
-            phase("流水线")
-            last_o, ars = "", []
-            for i, t in enumerate(subtasks):
-                p = t + ("\n[prev]\n" + last_o[:600]) if last_o else t
-                ar = await agent(p, {"label": f"s{i+1}", "timeout": 180})
-                ars.append(ar)
-                if ar and ar.success:
-                    last_o = ar.text() if hasattr(ar, "text") else str(ar.output or "")
-                if not ar or not ar.success:
-                    break
-            parts = [f"[s{i+1}]\n{ar.text()[:400]}" for i, ar in enumerate(ars) if ar and ar.success]
-            final = await agent("结果:\n\n" + "\n\n".join(parts), {"label": "汇总", "timeout": 120})
+            subtasks = plan["subtasks"][:6]
+            pattern = plan.get("pattern", "parallel")
+            log(f"编排方案: {pattern} 模式, {len(subtasks)} 个子任务")
+            for i, s in enumerate(subtasks):
+                log(f"  [{i+1}] {s[:80]}")
 
-        elif mode == CollaborationMode.REVIEW:
-            phase("并行")
-            rs = await parallel([lambda t=t: agent(t, {"timeout": 180}) for t in subtasks[:4]], max_concurrent=4)
-            phase("评审")
-            good = [r for r in rs if r and r.success]
-            parts = [f"[{i+1}]\n{r.text()[:400]}" for i, r in enumerate(good)]
-            final = await agent("评审以下方案，给出综合结论:\n\n" + "\n\n".join(parts),
-                                {"label": "评审", "timeout": 180})
-        else:
-            phase("并行")
-            rs = await parallel([lambda t=t: agent(t, {"timeout": 180}) for t in subtasks[:6]], max_concurrent=4)
-            phase("汇总")
-            good = [r for r in rs if r and r.success]
-            parts = [f"[{i+1}]\n{r.text()[:400]}" for i, r in enumerate(good)]
-            final = await agent("综合以下:\n\n" + "\n\n".join(parts), {"label": "汇总", "timeout": 180})
+            # 3. 按模式执行
+            if pattern == "pipeline":
+                # 流水线：顺序执行，上一步输出注入下一步
+                phase("流水线执行")
+                last_output, ars = "", []
+                for i, s in enumerate(subtasks):
+                    prompt = s
+                    if last_output:
+                        prompt = f"{s}\n\n【上一步结果】\n{last_output[:600]}"
+                    ar = await agent(prompt, {"label": f"step_{i+1}", "timeout": 240})
+                    ars.append(ar)
+                    if ar and ar.success:
+                        last_output = ar.text() if hasattr(ar, "text") else str(ar.output or "")
+                    if not ar or not ar.success:
+                        log_status(f"步骤{i+1}失败，终止流水线", color="yellow")
+                        break
 
-        if final and final.success:
-            print_section("结果")
-            print(final.text()[:2000])
-        else:
-            log_status("汇总失败", color="red")
+                phase("综合汇总")
+                parts = [f"[步骤{i+1}]\n{ar.text()[:400]}" for i, ar in enumerate(ars) if ar and ar.success]
+                final = await agent(
+                    f"综合以下流水线各步骤的结果，给出关于「{task}」的最终结论:\n\n" + "\n\n".join(parts),
+                    {"label": "汇总", "timeout": 180},
+                )
+
+            elif pattern == "review":
+                # 评审模式：并行执行后交叉验证
+                phase("并行调研")
+                results = await parallel([
+                    lambda s=s, i=i: agent(s, {"label": f"方案_{i+1}", "timeout": 240})
+                    for i, s in enumerate(subtasks[:4])
+                ], max_concurrent=4)
+
+                phase("交叉评审与汇总")
+                good = [r for r in results if r and r.success]
+                parts = [f"[方案{i+1}]\n{r.text()[:400]}" for i, r in enumerate(good)]
+                final = await agent(
+                    f"评审以下对「{task}」的多个分析方案的结论。\n"
+                    f"逐一评审每个方案的质量和准确性，指出共识点和分歧点，给出综合结论:\n\n" + "\n\n".join(parts),
+                    {"label": "评审汇总", "timeout": 240},
+                )
+
+            else:
+                # 并行模式（默认）：同时执行所有子任务后汇总
+                phase("并行调研")
+                results = await parallel([
+                    lambda s=s, i=i: agent(s, {"label": f"调研_{i+1}", "timeout": 240})
+                    for i, s in enumerate(subtasks[:6])
+                ], max_concurrent=4)
+
+                phase("综合汇总")
+                good = [r for r in results if r and r.success]
+                parts = [f"[调研{i+1}]\n{r.text()[:400]}" for i, r in enumerate(good)]
+                final = await agent(
+                    f"综合以下对「{task}」的多维度调研结果，给出完整的分析结论:\n\n" + "\n\n".join(parts),
+                    {"label": "综合汇总", "timeout": 240},
+                )
+
+            # 4. 输出结果
+            if final and final.success:
+                print_section("📋 最终结果")
+                print(final.text()[:2000])
+            else:
+                log_status("汇总失败", color="red")
+
+        except (ValueError, Exception) as e:
+            log_status(f"LLM编排受阻 ({str(e)[:60]})，走简单并行", color="yellow")
+            await self._run_ad_hoc(task)
 
     async def _run_ad_hoc(self, task: str):
         """ad-hoc 模式：自动拆解为多Agent并行任务"""
