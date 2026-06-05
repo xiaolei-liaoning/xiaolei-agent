@@ -16,16 +16,16 @@ import time
 from typing import Any, Dict, List, Optional
 
 from .base_agent import BaseAgent
-from .models import AgentType, Capability, Task, ActionResult, Thought, StepStatus
+from .models import AgentType, Capability, Task, ActionResult, Thought, StepStatus, StepType
 
 logger = logging.getLogger(__name__)
 
 
 class WorkAgent(BaseAgent):
-    """统一工作 Agent - 根据任务动态调整行为和能力
+    """统一工作 Agent — 支持两种运行模式
 
-    替代 WorkerAgent / MasterAgent / ReviewerAgent / ExpertAgent / CoordinatorAgent / MonitorAgent。
-    不再预设 specialization，而是根据任务类型动态适配。
+    - 完整模式（execute）：StepPlanner + StepExecutor + spinner + 记忆（默认）
+    - 轻量模式（_execute_fast）：直通 ReAct，跳过 StepPlanner 全链路（orchestrator 子 Agent）
     """
 
     def __init__(
@@ -33,6 +33,7 @@ class WorkAgent(BaseAgent):
         agent_id: Optional[str] = None,
         name: Optional[str] = None,
         description: str = "通用工作 Agent，根据任务动态调整",
+        light_mode: bool = False,
     ):
         super().__init__(
             agent_id=agent_id,
@@ -50,10 +51,16 @@ class WorkAgent(BaseAgent):
         # 执行进度（供 Mind 注入）
         self._progress = None
 
-        logger.info(f"WorkAgent 初始化完成: {self.agent_id}")
+        # 轻量模式：orchestrator 子 Agent 跳过 StepPlanner/记忆等重链路
+        self._light_mode = light_mode
+
+        # LLM 和 registry 缓存（子 Agent 共享）
+        self._llm = None
+        self._registry = None
+
+        logger.info(f"WorkAgent {'[轻量]' if light_mode else ''}: {self.agent_id}")
 
     def _default_capabilities(self) -> List[Capability]:
-        """提供一组通用的默认能力，具体匹配由 scheduler 动态完成"""
         return [
             Capability(
                 name="general_task",
@@ -64,54 +71,52 @@ class WorkAgent(BaseAgent):
         ]
 
     def adapt_to_task(self, task: Task) -> None:
-        """根据任务动态调整 Agent 的能力配置
-
-        每个 Agent 拥有完整能力（不做裁剪），根据任务类型追加专项能力。
-        """
         task_type = task.type or "general"
         task_keywords = task.keywords or []
-
-        # 追加全部能力类型（不做关键词过滤），每个 Agent 天然具备所有能力
         extra_capabilities = [
-            Capability(
-                name=f"analysis_{task_type}",
-                description=f"分析能力: {task.description[:50]}",
-                keywords=task_keywords + ["分析", "评估"],
-                expertise_level=0.8,
-            ),
-            Capability(
-                name=f"execution_{task_type}",
-                description=f"执行能力: {task.description[:50]}",
-                keywords=task_keywords + ["执行", "处理"],
-                expertise_level=0.8,
-            ),
-            Capability(
-                name=f"review_{task_type}",
-                description=f"评审能力: {task.description[:50]}",
-                keywords=task_keywords + ["评审", "质量"],
-                expertise_level=0.85,
-            ),
-            Capability(
-                name=f"research_{task_type}",
-                description=f"研究能力: {task.description[:50]}",
-                keywords=task_keywords + ["研究", "检索"],
-                expertise_level=0.75,
-            ),
-            Capability(
-                name=f"integration_{task_type}",
-                description=f"整合能力: {task.description[:50]}",
-                keywords=task_keywords + ["整合", "汇总"],
-                expertise_level=0.8,
-            ),
+            Capability(name=f"analysis_{task_type}", description=f"分析能力: {task.description[:50]}",
+                keywords=task_keywords + ["分析", "评估"], expertise_level=0.8),
+            Capability(name=f"execution_{task_type}", description=f"执行能力: {task.description[:50]}",
+                keywords=task_keywords + ["执行", "处理"], expertise_level=0.8),
+            Capability(name=f"review_{task_type}", description=f"评审能力: {task.description[:50]}",
+                keywords=task_keywords + ["评审", "质量"], expertise_level=0.85),
+            Capability(name=f"research_{task_type}", description=f"研究能力: {task.description[:50]}",
+                keywords=task_keywords + ["研究", "检索"], expertise_level=0.75),
+            Capability(name=f"integration_{task_type}", description=f"整合能力: {task.description[:50]}",
+                keywords=task_keywords + ["整合", "汇总"], expertise_level=0.8),
         ]
-
         self.capabilities = self._default_capabilities() + extra_capabilities
-        logger.info(
-            f"WorkAgent {self.agent_id} 已适配任务: {task_type} "
-            f"(完整能力: 基础+分析/执行/评审/研究/整合)"
-        )
+
+    # ── 统一入口：轻量模式走快路径 ──
 
     async def execute(self, task: Task) -> ActionResult:
+        """执行任务 — 轻量模式直接走 ReAct 快路径"""
+        if self._light_mode:
+            return await self._execute_fast(task)
+        return await self._execute_full(task)
+
+    async def _execute_fast(self, task: Task) -> ActionResult:
+        """轻量执行 — 直通 ReAct，跳过 StepPlanner/StepExecutor/spinner/记忆"""
+        start = time.time()
+        self.adapt_to_task(task)
+
+        # 走 ReActCore 快路径
+        from core.multi_agent_v2.agents.react_core import run_react
+        result = await run_react(task.description, max_rounds=2)
+
+        elapsed = time.time() - start
+        self.metrics.tasks_completed += 1
+        self.metrics.total_execution_time += elapsed
+        self.metrics.avg_execution_time = elapsed
+
+        return ActionResult(
+            success=result.get("success", False),
+            output=result.get("answer", ""),
+            execution_time=elapsed,
+            metadata={"light_mode": True, "iterations": result.get("iterations", 0)},
+        )
+
+    async def _execute_full(self, task: Task) -> ActionResult:
         """执行任务 - 统一的执行入口
 
         workflow:
@@ -142,61 +147,33 @@ class WorkAgent(BaseAgent):
         except Exception:
             pass
 
-        # ── 工具需求判断：先问 LLM 是否需要工具 ──────────────────────────
-        # 纯聊天/知识查询则直通回答，避免不必要的 StepPlanner + StepExecutor 开销。
-        if llm is not None:
+        # ── 纯聊天快速通道（仅对明显不含行动词的聊天请求）────
+        chat_kw = ["你好", "嗨", "hello", "hi", "再见", "bye", "你是谁", "你能做什么"]
+        action_kw = ["搜索", "搜", "查找", "写", "创建", "生成", "分析", "报告",
+                     "爬", "保存", "桌面", "文件", "数据", "代码", "游戏", "脚本",
+                     "下载", "翻译", "总结"]
+        is_chat = any(kw in task.description.lower() for kw in chat_kw) and \
+                  not any(kw in task.description.lower() for kw in action_kw)
+        if is_chat and llm is not None:
             try:
-                _judge_prompt = (
-                    f"判断这个请求需要调用工具吗？\n"
-                    f"请求: {task.description}\n"
-                    f"举例：\"你好\"→不需要，\"现在几点\"→不需要，\"搜索天气\"→需要，"
-                    f"\"搜一下百度热搜\"→需要，\"写文件\"→需要，\"执行代码\"→需要\n"
-                    f"只回答「需要」或「不需要」"
+                print(f"\n  💬 纯聊天请求，直接回答...")
+                _fast_resp = await llm.chat([
+                    {"role": "system", "content": "你是一个智能助手，请直接回答用户的问题。"},
+                    {"role": "user", "content": task.description},
+                ], temperature=0.7, max_tokens=2000)
+                output_text = str(_fast_resp).strip() if _fast_resp else ""
+                if not output_text or output_text == "系统正在处理您的请求...":
+                    output_text = "您好，请问有什么可以帮您的？"
+                self.work_history.append({
+                    "task_id": task.task_id, "task_type": task.type,
+                    "success": True, "execution_time": 0, "timestamp": time.time(), "replans": 0,
+                })
+                return ActionResult(
+                    success=True, output=output_text, execution_time=0,
+                    metadata={"fast_path": True, "needs_tool": False},
                 )
-                _judge_resp = await llm.chat(
-                    [{"role": "user", "content": _judge_prompt}],
-                    max_tokens=10,
-                )
-                _judge_text = str(_judge_resp).strip() if _judge_resp else ""
-                logger.info(f"工具需求判断结果: {_judge_text}")
-
-                if "不需要" in _judge_text:
-                    from rich.console import Console
-                    _rcon = Console()
-                    _rcon.print("  💬 检测为纯聊天/知识请求，直接回答...")
-                    _fast_start = time.time()
-                    try:
-                        _fast_resp = await llm.chat([
-                            {"role": "system", "content": "你是一个智能助手，请直接回答用户的问题。"},
-                            {"role": "user", "content": task.description},
-                        ], temperature=0.7, max_tokens=2000)
-                        output_text = str(_fast_resp).strip() if _fast_resp else ""
-                        if not output_text or output_text == "系统正在处理您的请求...":
-                            output_text = "您好，请问有什么可以帮您的？"
-                    except Exception as e:
-                        logger.error(f"快速通道 LLM 回答失败: {e}")
-                        output_text = f"抱歉，处理您的请求时出现了问题: {e}"
-                    _elapsed = time.time() - _fast_start
-
-                    self.work_history.append({
-                        "task_id": task.task_id,
-                        "task_type": task.type,
-                        "success": True,
-                        "execution_time": _elapsed,
-                        "timestamp": time.time(),
-                        "replans": 0,
-                    })
-                    if len(self.work_history) > 100:
-                        self.work_history = self.work_history[-100:]
-
-                    return ActionResult(
-                        success=True,
-                        output=output_text,
-                        execution_time=_elapsed,
-                        metadata={"fast_path": True, "needs_tool": False},
-                    )
-            except Exception as e:
-                logger.warning(f"工具需求判断失败，走完整流程: {e}")
+            except Exception:
+                pass
 
         # ── 结束快速通道，以下为完整流程 ──────────────────────────────────
 
@@ -220,14 +197,12 @@ class WorkAgent(BaseAgent):
         from core.multi_agent_v2.infrastructure.step_executor import StepExecutor
         from .models import NeedsReflection, ProgressSnapshot
 
-        # 步骤指示 — ◐ → Rich 旋转 → ✅
-        from rich.console import Console
-        _rcon = Console()
+        # 步骤指示 — 使用 sys.stdout 防止 Rich Console 干扰终端
+        import sys as _sys
         total = len(steps)
         _counter = [0]
 
         async def _spin(step_num: int, name: str, stop_evt: asyncio.Event):
-            """1秒后启动 Rich 旋转动画，步骤完成自动消失"""
             await asyncio.sleep(1.0)
             if stop_evt.is_set():
                 return
@@ -235,7 +210,8 @@ class WorkAgent(BaseAgent):
             i = 0
             try:
                 while not stop_evt.is_set():
-                    _rcon.print(f"  {frames[i]} [{step_num}/{total}] {name}", end="\r")
+                    _sys.stdout.write(f"  {frames[i]} [{step_num}/{total}] {name}\r")
+                    _sys.stdout.flush()
                     i = (i + 1) % len(frames)
                     await asyncio.sleep(0.15)
             except Exception:
@@ -263,7 +239,7 @@ class WorkAgent(BaseAgent):
         def _on_step_start(step):
             _counter[0] += 1
             name = getattr(step, 'name', getattr(step, 'step_id', '?'))
-            _rcon.print(f"  ◐ [{_counter[0]}/{total}] {name}")
+            print(f"  ◐ [{_counter[0]}/{total}] {name}")
             evt = asyncio.Event()
             _stop_evt[0] = evt
             asyncio.ensure_future(_spin(_counter[0], name, evt))
@@ -275,10 +251,10 @@ class WorkAgent(BaseAgent):
             name = getattr(step, 'name', getattr(step, 'step_id', '?'))
             t = getattr(step, 'execution_time', 0)
             time_str = f" ({t:.1f}s)" if t else ""
-            _rcon.print(f"  ✅ [{_counter[0]}/{total}] {name}{time_str}")
+            print(f"  ✅ [{_counter[0]}/{total}] {name}{time_str}")
             preview = _extract_preview(getattr(step, 'result', None))
             if preview:
-                _rcon.print(f"     {preview[:200]}")
+                print(f"     {preview[:200]}")
 
         def _on_step_failed(step, error=""):
             if _stop_evt[0]:
@@ -287,9 +263,9 @@ class WorkAgent(BaseAgent):
             name = getattr(step, 'name', getattr(step, 'step_id', '?'))
             t = getattr(step, 'execution_time', 0)
             time_str = f" ({t:.1f}s)" if t else ""
-            _rcon.print(f"  ❌ [{_counter[0]}/{total}] {name}{time_str}")
+            print(f"  ❌ [{_counter[0]}/{total}] {name}{time_str}")
             if error:
-                _rcon.print(f"     {error[:200]}")
+                print(f"     {error[:200]}")
 
         executor = StepExecutor(llm_router=llm)
         max_replans = 2
@@ -305,9 +281,9 @@ class WorkAgent(BaseAgent):
         )
 
         # 先打印计划概览
-        _rcon.print(f"  [{total}] steps plan:")
+        print(f"  [{total}] steps plan:")
         for i, s in enumerate(steps, 1):
-            _rcon.print(f"      {i}. {s.name}")
+            print(f"      {i}. {s.name}")
 
         while True:
             try:
@@ -369,10 +345,22 @@ class WorkAgent(BaseAgent):
         execution_time = time.time() - start_time
         success = result.success if hasattr(result, 'success') else True
         raw_steps_list = result.steps if hasattr(result, 'steps') and isinstance(result.steps, list) else []
-        output = ""  # Will be populated as a string below; raw steps go into metadata.steps
+        output = ""
 
-        # 4. 收集步骤摘要，用 LLM 汇总为人类可读的回答
-        step_summary_parts = []
+        # ── 消费中间件数据 ──────────────────────────────────────
+        # 从进度中提取中间件历史（KEPA/置信度/反思）
+        _mw_reflection = ""
+        try:
+            _pg = getattr(self, '_progress', None)
+            if _pg and hasattr(_pg, 'to_prompt'):
+                _prompt_progress = _pg.to_prompt()
+                if "⚠️" in _prompt_progress:
+                    _mw_reflection = "\n[执行反馈] 部分步骤曾失败后重试，最终恢复。"
+        except Exception:
+            pass
+
+        # 4. 收集步骤摘要，用拼接方式生成回答
+        output_parts = []
         for s in raw_steps_list:
             status_icon = "成功" if s.status == StepStatus.SUCCESS else "失败"
             result_text = ""
@@ -385,56 +373,20 @@ class WorkAgent(BaseAgent):
                             content = t.get("result", {}).get("content", [])
                             for c in content if isinstance(content, list) else [content]:
                                 if isinstance(c, dict):
-                                    texts.append(str(c.get("text", ""))[:300])
+                                    texts.append(str(c.get("text", ""))[:200])
                                 elif isinstance(c, str):
-                                    texts.append(c[:300])
+                                    texts.append(c[:200])
                     if s.result.get("text"):
-                        texts.append(str(s.result["text"])[:300])
+                        texts.append(str(s.result["text"])[:200])
+                    if s.result.get("answer"):
+                        texts.append(str(s.result["answer"])[:200])
                     result_text = "\n".join(t for t in texts if t)
                 else:
-                    result_text = str(s.result)[:500]
+                    result_text = str(s.result)[:200]
             elif s.error:
                 result_text = f"错误: {s.error[:200]}"
-            step_summary_parts.append(f"[{status_icon}] {s.name}\n  结果: {result_text[:200] if result_text else '(无)'}")
-
-        step_summary_raw = "\n---\n".join(step_summary_parts)
-
-        llm_summary = None
-        if step_summary_raw.strip():
-            try:
-                from core.engine.llm_backend import get_llm_router
-                _llm = get_llm_router()
-                _prompt = f"""你是一个智能助手。请根据下列任务执行步骤摘要，生成一段连贯、人类可读的总结回答，说明完成了什么以及各项结果如何。
-
-步骤摘要：
-{step_summary_raw}"""
-                _resp = await _llm.chat([
-                    {"role": "system", "content": "根据任务执行记录生成简短、有条理的总结回答。"},
-                    {"role": "user", "content": _prompt},
-                ], temperature=0.3, max_tokens=1000)
-                _text = str(_resp).strip() if _resp else ""
-                if _text and _text != "系统正在处理您的请求...":
-                    llm_summary = _text
-            except Exception:
-                pass
-
-        if llm_summary:
-            output = llm_summary
-        else:
-            # Fallback: simple concatenation of step results
-            lines = []
-            for s in raw_steps_list:
-                status_str = "成功" if s.status == StepStatus.SUCCESS else "失败"
-                res_preview = ""
-                if s.result:
-                    if isinstance(s.result, dict):
-                        res_preview = str(s.result)[:200]
-                    else:
-                        res_preview = str(s.result)[:200]
-                elif s.error:
-                    res_preview = f"错误: {s.error[:200]}"
-                lines.append(f"[{status_str}] {s.name}: {res_preview}")
-            output = "\n".join(lines)
+            output_parts.append(f"[{status_icon}] {s.name}: {result_text[:200] if result_text else '(无)'}")
+        output = "\n".join(output_parts)
 
         # 5. 记忆存储（供后续任务检索）
         try:
@@ -469,6 +421,12 @@ class WorkAgent(BaseAgent):
         # 保持最近的记录
         if len(self.work_history) > 100:
             self.work_history = self.work_history[-100:]
+
+        # 任务完成提示音
+        try:
+            print("\a", end="", flush=True)  # 系统 bell
+        except Exception:
+            pass
 
         success_result = ActionResult(
             success=success,

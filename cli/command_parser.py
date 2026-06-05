@@ -58,6 +58,7 @@ class CommandType(Enum):
     TEST = "test"
     TOOLS = "tools"
     SHOW = "show"
+    ORCHESTRATE = "orchestrate"
     UNKNOWN = "unknown"
 
 
@@ -107,6 +108,7 @@ class CommandParser:
         "/reset": CommandType.RESET,
         "/tools": CommandType.TOOLS,
         "/show": CommandType.SHOW,
+        "/orchestrate": CommandType.ORCHESTRATE,
     }
     
     # 命令帮助信息
@@ -137,6 +139,7 @@ class CommandParser:
         "/reset": "重置会话，如: /reset (清空历史) 或 /reset all (清空历史和记忆)",
         "/tools": "查看所有可用工具及其状态（按类型分组）",
         "/show": "展开之前折叠的详细输出，如: /show <id>",
+        "/orchestrate": "多Agent编排，如: /orchestrate parallel \"任务1\" \"任务2\"",
     }
     
     def __init__(self):

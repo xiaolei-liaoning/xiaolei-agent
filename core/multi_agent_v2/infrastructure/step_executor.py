@@ -415,8 +415,31 @@ class StepExecutor:
         task_desc = step.description
         # 注入 tool_name 到 prompt，让 LLM 第1轮直接调工具而不是重新选择
         step_tool_name = getattr(step, 'tool_name', '') or ''
-        if step_tool_name:
-            task_desc += f"\n\n[工具提示] 请使用工具「{step_tool_name}」完成此步骤。不需要选择其他工具。"
+        # 修正工具选择：写到桌面/文件用 file 工具，不用 execute_python
+        desc_lower = (step.description or '').lower()
+        if step_tool_name in ('execute_python',) and any(w in desc_lower for w in ['写', '保存', '文件', '桌面', 'desktop']):
+            step_tool_name = 'file'
+        # 关键词 → MCP 工具提示映射
+        mcp_tool_hints = {
+            '通知': '立刻调用工具「send_notification」发送通知(参数:title=标题,message=内容)',
+            'ASCII': '立刻调用工具「get_art」获取ASCII艺术(参数:name=图案名)',
+            'ascii': '立刻调用工具「get_art」获取ASCII艺术',
+            '日历': '立刻调用工具「create_calendar_event」创建日历事件',
+            '邮件': '立刻调用工具「send_email」发送邮件',
+            '猫咪': '立刻调用工具「get_art」参数name="cat"获取猫咪图案',
+            '计算': '立刻调用工具「multiply」或「add」「subtract」计算',
+        }
+        mcp_hint = ''
+        for kw, hint in mcp_tool_hints.items():
+            if kw in desc_lower:
+                mcp_hint = hint
+                break
+        if step_tool_name == 'file':
+            task_desc += f"\n\n[工具提示] 请使用工具「file」完成此步骤。必填参数：path（绝对路径如/Users/leiyuxuan/Desktop/xxx.txt），action（write/read），content（写入内容）。"
+        elif mcp_hint:
+            task_desc += f"\n\n[工具提示] 请使用{mcp_hint}完成此步骤。"
+        elif step_tool_name:
+            task_desc += f"\n\n[工具提示] 请使用工具「{step_tool_name}」完成此步骤。"
         if context_parts:
             task_desc = "### 已有上下文\n" + "\n\n".join(context_parts) + \
                         "\n\n### 当前任务\n" + task_desc
@@ -428,25 +451,6 @@ class StepExecutor:
             task_desc += ("\n\n[系统环境] macOS Darwin, home=/Users/leiyuxuan, "
                           "desktop=/Users/leiyuxuan/Desktop。请只使用 Python 标准库，"
                           "不要安装或使用第三方包。")
-
-        # RAG 知识注入（非阻塞——8 秒内拿不到就算了）
-        try:
-            import asyncio
-            async def _rag_inject():
-                from core.search.rag_search_engine import RAGSearchEngine
-                engine = RAGSearchEngine()
-                rag_result = await engine.search_and_learn(
-                    query=step.description, user_id=1, max_results=2, learn=False
-                )
-                if rag_result and rag_result.get("results"):
-                    return f"\n\n### 相关知识\n{str(rag_result['results'])[:1000]}"
-                return ""
-            rag_text = await asyncio.wait_for(_rag_inject(), timeout=8.0)
-            task_desc += rag_text
-        except asyncio.TimeoutError:
-            pass  # RAG 超时不影响执行
-        except Exception:
-            pass
 
         from core.multi_agent_v2.agents.react_core import run_react
         result = await run_react(task_desc)

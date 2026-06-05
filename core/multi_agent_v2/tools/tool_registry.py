@@ -18,7 +18,7 @@
 
 import asyncio, json, logging, os, re, time
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Optional
 from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
@@ -91,6 +91,12 @@ async def _handle_file(args: Dict) -> Dict:
     action=args.get("action",""); path=args.get("path","")
     if not path: return {"result":{"content":[{"text":"需要 path 参数"}]}}
     path = re.sub(r'%([^%]+)%', lambda m: os.environ.get(m.group(1), os.environ.get('HOME', '~')), path)
+    # 中文路径映射：LLM 可能用"桌面上/xxx.txt"代替绝对路径
+    desktop = os.path.expanduser("~/Desktop")
+    if path.startswith("桌面上/"):
+        path = desktop + path[3:]
+    elif path.startswith("桌面/"):
+        path = desktop + path[2:]
     path = os.path.expanduser(path)
     if action=="read":
         if not os.path.isfile(path): return {"result":{"content":[{"text":f"文件不存在: {path}"}]}}
@@ -141,26 +147,45 @@ async def _handle_search(args: Dict) -> Dict:
                     return {"result": {"content": [{"text": text}]}}
             except BaseException:
                 pass
+    # 所有并发搜索都为空时，等待0.5秒后重试Bing一次
+    await asyncio.sleep(0.5)
+    try:
+        text = await asyncio.wait_for(
+            _try_one(f"https://cn.bing.com/search?q={encoded}&count=10"),
+            timeout=8.0,
+        )
+        if text:
+            return {"result": {"content": [{"text": text}]}}
+    except BaseException:
+        pass
     return {"result": {"content": [{"text": "搜索暂时无法获取结果，请用 fetch_url 直接访问目标网址"}]}}
 
 
 async def _handle_execute_python(args: Dict) -> Dict:
-    """沙盒执行 Python 代码 — 安全隔离，支持网络/文件操作"""
+    """执行 Python 代码 — 通过 mode 参数指定执行模式"""
     code = args.get("code", "")
     if not code: return {"result": {"content": [{"text": "缺少 code 参数"}]}}
-    timeout = args.get("timeout", 30)
-    skip_check = args.get("skip_module_check", False)
-    try:
-        from core.tools.sandbox_executor import SandboxExecutor, ResourceLimits
-        limits = ResourceLimits(timeout=min(int(timeout), 60), max_output_size=10000)
-        ex = SandboxExecutor()
-        sr = await ex.execute_python(code, limits=limits, skip_module_check=skip_check)
-        if sr.status.value == "success":
-            out = sr.stdout or "(无输出)"
-            return {"result": {"content": [{"text": f"[沙盒] ✅ 执行成功\n{out[:8000]}"}]}}
-        return {"result": {"content": [{"text": f"[沙盒] ❌ {sr.error_message or sr.stderr or '执行失败'}"[:5000]}]}}
-    except ImportError:
-        # 降级：本地 exec()
+    mode = args.get("mode", "local")  # local(默认,可写桌面文件) | sandbox(隔离)
+    timeout = int(args.get("timeout", 30))
+
+    # sandbox 模式（失败时自动降级到 local）
+    if mode == "sandbox":
+        skip_check = args.get("skip_module_check", False)
+        sandbox_err = ""
+        try:
+            from core.tools.sandbox_executor import SandboxExecutor, ResourceLimits
+            limits = ResourceLimits(timeout=min(timeout, 60), max_output_size_kb=10000)
+            ex = SandboxExecutor()
+            sr = await ex.execute_python(code, limits=limits, skip_module_check=skip_check)
+            if sr.status.value in ("completed", "success"):
+                out = sr.stdout if sr.stdout else ("(无输出)" if sr.stderr else "")
+                err = sr.stderr if sr.stderr else ""
+                full = out[:8000] + ("\n" + err[:2000] if err else "")
+                return {"result": {"content": [{"text": f"[沙盒] ✅ 执行成功\n{full}"}]}}
+            sandbox_err = sr.error_message or sr.stderr or "执行失败"
+        except Exception as e:
+            sandbox_err = f"{type(e).__name__}: {e}"
+        # 沙盒失败 → 降级到 local（保证 LLM 生成的代码能拿到反馈）
         try:
             import io, contextlib, textwrap
             dedented = textwrap.dedent(code)
@@ -168,36 +193,54 @@ async def _handle_execute_python(args: Dict) -> Dict:
             with contextlib.redirect_stdout(f), contextlib.redirect_stderr(err):
                 exec(dedented)
             out = f.getvalue() or err.getvalue() or "(无输出)"
-            return {"result": {"content": [{"text": f"[本地] ✅ 执行成功\n{out[:5000]}"}]}}
-        except Exception as e:
-            return {"result": {"content": [{"text": f"[本地] ❌ {type(e).__name__}: {e}"[:3000]}]}}
+            return {"result": {"content": [{"text": f"[沙盒❌→本地✅] 沙盒: {sandbox_err[:100]}\n{out[:5000]}"}]}}
+        except Exception as e2:
+            return {"result": {"content": [{"text": f"[沙盒❌] {sandbox_err[:200]}\n[本地❌] {type(e2).__name__}: {e2}"[:3000]}]}}
+
+    # local 模式：本地 exec（可写桌面文件，速度快）
+    try:
+        import io, contextlib, textwrap
+        dedented = textwrap.dedent(code)
+        f = io.StringIO(); err = io.StringIO()
+        with contextlib.redirect_stdout(f), contextlib.redirect_stderr(err):
+            exec(dedented)
+        out = f.getvalue() or err.getvalue() or "(无输出)"
+        return {"result": {"content": [{"text": f"[本地] ✅ 执行成功\n{out[:5000]}"}]}}
     except Exception as e:
-        return {"result": {"content": [{"text": f"[沙盒] ❌ {type(e).__name__}: {e}"[:3000]}]}}
+        return {"result": {"content": [{"text": f"[本地] ❌ {type(e).__name__}: {e}"[:3000]}]}}
 
 
 async def _handle_execute_shell(args: Dict) -> Dict:
-    """沙盒执行 Shell 命令 — 安全限制，禁止危险命令"""
+    """执行 Shell 命令 — 通过 mode 参数指定执行模式"""
     command = args.get("command", "")
     if not command: return {"result": {"content": [{"text": "缺少 command 参数"}]}}
-    timeout = args.get("timeout", 30)
-    try:
-        from core.tools.sandbox_executor import SandboxExecutor, ResourceLimits
-        limits = ResourceLimits(timeout=min(int(timeout), 60), max_output_size=10000)
-        ex = SandboxExecutor()
-        sr = await ex.execute_shell(command, limits=limits)
-        if sr.status.value == "success":
-            out = sr.stdout or "(无输出)"
-            return {"result": {"content": [{"text": f"[沙盒] ✅ 执行成功\n{out[:8000]}"}]}}
-        return {"result": {"content": [{"text": f"[沙盒] ❌ {sr.error_message or sr.stderr or '执行失败'}"[:5000]}]}}
-    except ImportError:
-        import asyncio
+    mode = args.get("mode", "local")
+    timeout = int(args.get("timeout", 30))
+
+    if mode == "sandbox":
         try:
-            proc = await asyncio.create_subprocess_shell(command, stdout=-1, stderr=-1)
-            o, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-            return {"result": {"content": [{"text": f"[本地] 返回码 {proc.returncode}\n{o.decode()[:3000]}"}]}}
-        except asyncio.TimeoutError:
-            return {"result": {"content": [{"text": "[本地] ❌ 执行超时"}]}}
+            from core.tools.sandbox_executor import SandboxExecutor, ResourceLimits
+            limits = ResourceLimits(timeout=min(timeout, 60), max_output_size_kb=10000)
+            ex = SandboxExecutor()
+            sr = await ex.execute_shell(command, limits=limits)
+            if sr.status.value in ("completed", "success"):
+                out = sr.stdout if sr.stdout else ("(无输出)" if sr.stderr else "")
+                err = sr.stderr if sr.stderr else ""
+                full = out[:8000] + ("\n" + err[:2000] if err else "")
+                return {"result": {"content": [{"text": f"[沙盒] ✅ 执行成功\n{full}"}]}}
+            return {"result": {"content": [{"text": f"[沙盒] ❌ {sr.error_message or sr.stderr or '执行失败'}"[:5000]}]}}
         except Exception as e:
+            return {"result": {"content": [{"text": f"[沙盒] ❌ {type(e).__name__}: {e}"[:3000]}]}}
+
+    # local 模式
+    import asyncio
+    try:
+        proc = await asyncio.create_subprocess_shell(command, stdout=-1, stderr=-1)
+        o, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        return {"result": {"content": [{"text": f"[本地] 返回码 {proc.returncode}\n{o.decode()[:3000]}"}]}}
+    except asyncio.TimeoutError:
+        return {"result": {"content": [{"text": "[本地] ❌ 执行超时"}]}}
+    except Exception as e:
             return {"result": {"content": [{"text": f"[本地] ❌ {e}"[:2000]}]}}
     except Exception as e:
         return {"result": {"content": [{"text": f"[沙盒] ❌ {type(e).__name__}: {e}"[:3000]}]}}
@@ -371,6 +414,31 @@ async def _handle_self_reflect(args: Dict) -> Dict:
         return {"result": {"content": [{"text": f"复盘失败: {e}"}]}}
 
 
+async def _handle_git(args: Dict) -> Dict:
+    """Git 操作 — status/add/commit/log/diff/branch/pull"""
+    action = args.get("action", "status")
+    repo = args.get("repo", os.getcwd())
+    msg = args.get("message", "")
+    try:
+        cmds = {
+            "status": ["git", "status"],
+            "add": ["git", "add", args.get("files", ".")],
+            "commit": ["git", "commit", "-m", msg] if msg else None,
+            "log": ["git", "log", "--oneline", f"-{args.get('count', 5)}"],
+            "diff": ["git", "diff", "--stat"],
+            "branch": ["git", "branch", "-a"],
+            "pull": ["git", "pull"],
+        }
+        if action not in cmds or cmds[action] is None:
+            return {"result":{"content":[{"text":f"未知操作或缺少参数: {action}"}]}}
+        proc = await asyncio.create_subprocess_exec(*cmds[action], cwd=repo, stdout=-1, stderr=-1)
+        o, e = await asyncio.wait_for(proc.communicate(), timeout=15)
+        text = (o.decode() if o else "") or (e.decode() if e else "(无输出)")
+        return {"result":{"content":[{"text":f"git {action}\n{text[:3000]}"}]}}
+    except Exception as ex:
+        return {"result":{"content":[{"text":f"git {action} 失败: {ex}"[:500]}]}}
+
+
 async def _handle_call_api(args: Dict) -> Dict:
     """通用 HTTP 客户端 — 支持 GET/POST/PUT/DELETE"""
     method = args.get("method", "GET").upper()
@@ -427,24 +495,36 @@ _HANDLER_MAP: Dict[str, Callable] = {
     "ask_clarification": _handle_ask_clarification,
     "self_reflect": _handle_self_reflect,
     "call_api": _handle_call_api,
+    "git": _handle_git,
 }
 
 _SANDBOX_TOOL_DEFS = [
     ToolDefinition(name="execute_python", server=SERVER_BUILTIN, tags=["code", "sandbox"],
-        description="沙盒执行 Python 代码。可运行任何 Python 代码（网络/文件/数据分析/爬虫等）。安全隔离执行环境。",
+        description="执行 Python 代码。默认本地执行（可读/写/修改桌面文件）；mode=sandbox 沙盒隔离执行。",
         parameters={"type":"object","properties":{
             "code":{"type":"string","description":"Python 代码"},
+            "mode":{"type":"string","enum":["local","sandbox"],"description":"local=本地(默认,可写桌面文件) | sandbox=沙盒隔离"},
             "timeout":{"type":"integer","description":"超时秒数（默认30，最大60）"},
-            "skip_module_check":{"type":"boolean","description":"是否跳过模块安全检查"},
+            "skip_module_check":{"type":"boolean","description":"仅 sandbox 模式：是否跳过模块安全检查"},
         },"required":["code"]},
         handler=_handle_execute_python),
     ToolDefinition(name="execute_shell", server=SERVER_BUILTIN, tags=["code", "shell"],
-        description="沙盒执行 Shell 命令。安全限制环境，禁止危险命令（rm -rf / 等）。",
+        description="Shell 命令执行。默认本地执行；mode=sandbox 沙盒隔离执行。",
         parameters={"type":"object","properties":{
             "command":{"type":"string","description":"Shell 命令"},
+            "mode":{"type":"string","enum":["local","sandbox"],"description":"local=本地(默认) | sandbox=沙盒隔离"},
             "timeout":{"type":"integer","description":"超时秒数（默认30，最大60）"},
         },"required":["command"]},
         handler=_handle_execute_shell),
+    ToolDefinition(name="git", server=SERVER_BUILTIN, tags=["git", "code"],
+        description="Git 操作 — status/add/commit/log/diff/branch/pull。在当前项目目录执行。",
+        parameters={"type":"object","properties":{
+            "action":{"type":"string","enum":["status","add","commit","log","diff","branch","pull"],"description":"git 操作"},
+            "message":{"type":"string","description":"commit 时的提交信息"},
+            "files":{"type":"string","description":"add 时的文件路径（默认全部 .）"},
+            "count":{"type":"integer","description":"log 显示的提交数（默认5）"},
+        },"required":["action"]},
+        handler=_handle_git),
     ToolDefinition(name="search", server=SERVER_BUILTIN, tags=["web", "search"],
         description="联网搜索查询信息（百度/谷歌/Bing 并发搜索）。当用户要求搜索、查找、查询时使用。",
         parameters={"type":"object","properties":{"query":{"type":"string","description":"搜索关键词"}},"required":["query"]},
@@ -525,91 +605,88 @@ class ToolRegistry:
     def __init__(self):
         self._tools: Dict[str, ToolDefinition] = {}
         self._initialized = False
-        self._mcp_servers_discovered: Set[str] = set()
-
-    async def ensure_mcp_tools_loaded(self) -> None:
-        if not self._mcp_servers_discovered:
-            return
-        from core.mcp.mcp_client import mcp_client
-        servers = list(self._mcp_servers_discovered)
-        self._mcp_servers_discovered.clear()
-        for srv in servers:
-            try:
-                for tool in await asyncio.wait_for(mcp_client.list_tools(srv), timeout=3):
-                    raw = tool.get("name",""); fn = _safe(f"{srv}_{raw}")
-                    if not raw or fn in self._tools: continue
-                    t = ToolDefinition(name=fn, description=tool.get("description",""),
-                        parameters=tool.get("inputSchema",{}) or {}, server=srv,
-                        tool_name=raw, tags=["mcp"])
-                    self._tools[fn] = t
-            except Exception:
-                pass
+        # MCP 服务器已通过 discover_all() 同步加载
 
     async def discover_all(self) -> List[ToolDefinition]:
-        """发现所有工具来源，MCP 只注册配置不启动进程"""
+        """发现所有工具来源：内置工具 + MCP 服务器（连接并注册工具）"""
         all_tools = []
-        # Source 1: awesome_mcp
-        try:
-            from core.mcp.awesome_mcp_manager import awesome_mcp_manager
-            for td in await awesome_mcp_manager.get_all_tool_definitions():
-                fn = td.get("function", {}); raw = fn.get("name", ""); name = _safe(raw)
-                if name:
-                    t = ToolDefinition(name=name, description=fn.get("description",""),
-                        parameters=fn.get("parameters",{}), server="__mcp__",
-                        tool_name=td.get("_tool_name", raw), tags=["mcp"])
-                    all_tools.append(t); self._tools[name] = t
-        except: pass
-        # Source 2: builtin tools
+        # Source 1: builtin tools
         for sd in _SANDBOX_TOOL_DEFS:
             if sd.name not in self._tools:
                 self._tools[sd.name] = sd
                 all_tools.append(sd)
         self._initialized = True
-        # Source 3: mcp_client background
-        asyncio.ensure_future(self._connect_mcp_servers())
+        # Source 2: MCP 服务器 — 同步连接，注入工具到注册表
+        mcp_tools = await self._connect_mcp_servers()
+        for t in mcp_tools:
+            if t.name not in self._tools:
+                self._tools[t.name] = t
+                all_tools.append(t)
+        all_types = {"builtin": sum(1 for t in all_tools if t.server == "__builtin__"),
+                     "mcp": sum(1 for t in all_tools if t.server not in ("__builtin__",""))}
+        logger.info(f"工具注册完成: {len(all_tools)} 个 ({all_types})")
         return all_tools
 
-    async def _connect_mcp_servers(self) -> None:
-        """后台连接 MCP 服务器"""
+    async def _connect_mcp_servers(self) -> List[ToolDefinition]:
+        """发现 MCP 服务器配置，保存到 mcp_client，返回已知工具定义"""
+        mcp_tools = []
         try:
             from core.mcp.mcp_client import mcp_client
             proot = os.path.normpath(os.path.join(os.path.dirname(__file__),"..","..",".."))
-            existing = set(await mcp_client.list_servers())
-            bg_tasks = []
-            srv_names = []
+            servers = set(await mcp_client.list_servers())
+            # 从 mcp/ 目录发现
             mcp_dir = os.path.join(proot, "mcp")
             if os.path.isdir(mcp_dir):
                 for fn in sorted(os.listdir(mcp_dir)):
                     if not fn.endswith("_mcp_server.py"): continue
                     srv = fn.replace("_mcp_server.py","").replace("_","-")
-                    if srv in existing: continue
-                    srv_names.append(srv)
-                    bg_tasks.append(asyncio.wait_for(
-                        mcp_client.connect_server(name=srv, command="python3",
-                            args=[os.path.join(mcp_dir,fn)], cwd=proot,
-                            env={"PYTHONPATH": proot}), timeout=5))
+                    if srv in servers: continue
+                    await mcp_client.connect_server(name=srv, command="python3",
+                        args=[os.path.join(mcp_dir,fn)], cwd=proot,
+                        env={"PYTHONPATH": proot})
+                    servers.add(srv)
+            # 从 .mcp.json 发现
             mcj = os.path.join(proot, ".mcp.json")
             if os.path.exists(mcj):
                 try:
-                    with open(mcj) as f: cfg = json.load(f)
-                    for srv,sc in cfg.get("mcpServers",{}).items():
-                        if srv in existing: continue
-                        srv_names.append(srv)
-                        bg_tasks.append(asyncio.wait_for(
-                            mcp_client.connect_server(name=srv, command=sc["command"],
+                    with open(mcj) as f:
+                        for srv, sc in json.load(f).get("mcpServers",{}).items():
+                            if srv in servers: continue
+                            await mcp_client.connect_server(name=srv, command=sc["command"],
                                 args=sc.get("args",[]), cwd=proot,
-                                env={"PYTHONPATH": proot}), timeout=5))
+                                env={"PYTHONPATH": proot})
+                            servers.add(srv)
                 except: pass
-            if bg_tasks:
-                results = await asyncio.gather(*bg_tasks, return_exceptions=True)
-                for i, r in enumerate(results):
-                    if i < len(srv_names) and not isinstance(r, Exception):
-                        existing.add(srv_names[i])
-            known = {t.server for t in self._tools.values()
-                     if t.server not in ("__builtin__","__mcp__","")}
-            self._mcp_servers_discovered.update(existing - known)
+            # 对已保存配置的服务器，拉取工具列表（超时 5s），使用原始工具名
+            seen_names = set()
+            for srv in sorted(servers):
+                try:
+                    tools = await asyncio.wait_for(mcp_client.list_tools(srv), timeout=5.0)
+                    for tool in tools:
+                        raw = tool.get("name","")
+                        if not raw: continue
+                        # 工具名 = 原始名（LLM易读），冲突时加服务器前缀
+                        fn = _safe(raw)
+                        if fn in seen_names:
+                            fn = _safe(f"{srv}_{raw}")
+                        seen_names.add(fn)
+                        desc = tool.get("description","")
+                        if not desc:
+                            desc = f"通过 {srv} 服务器提供的工具"
+                        mcp_tools.append(ToolDefinition(name=fn,
+                            description=f"[{srv}] {desc}",
+                            parameters=tool.get("inputSchema",{}) or {},
+                            server=srv, tool_name=raw, tags=["mcp"]))
+                except asyncio.TimeoutError:
+                    logger.debug(f"MCP {srv}: 超时（进程启动慢）")
+                except Exception:
+                    logger.debug(f"MCP {srv}: 不可用")
         except Exception:
             pass
+        if mcp_tools:
+            logger.info(f"MCP: {len(mcp_tools)} 个工具来自 {len({t.server for t in mcp_tools})} 台服务器")
+        return mcp_tools
+        return mcp_tools
 
     def get_handler_map(self) -> Dict[str, Callable]:
         result = dict(_HANDLER_MAP)
@@ -623,10 +700,8 @@ class ToolRegistry:
         td = self._tools.get(name)
         return td.handler if td else None
 
-    async def get_tools_for_task(self, task: str, max_tools=25) -> List[ToolDefinition]:
+    async def get_tools_for_task(self, task: str, max_tools=30) -> List[ToolDefinition]:
         """按任务相关性排序的工具列表"""
-        if self._mcp_servers_discovered:
-            await self.ensure_mcp_tools_loaded()
         if not self._initialized:
             return list(self._tools.values())[:max_tools]
         desc = task.lower()
@@ -643,20 +718,13 @@ class ToolRegistry:
             if len(desc) > 1:
                 if any(c in dl for c in desc if len(c.strip()) > 0):
                     s += 0.5
-            if t.server == SERVER_BUILTIN:
-                s += 1.0
+            # 不设内置工具加成，MCP 工具与内置工具平等竞争
             scored.append((s, t))
         scored.sort(key=lambda x: -x[0])
         result = [t for s,t in scored if s > 0]
         core = [t for t in self._tools.values() if t.name in ("file","fetch_url","search","execute_python","execute_shell")]
         for t in core:
             if t not in result: result.append(t)
-        if len(result) < 5:
-            seen = {t.name for t in result}
-            for t in self._tools.values():
-                if t.name not in seen:
-                    result.append(t)
-                    if len(result) >= max_tools: break
         return result[:max_tools]
 
     def get_tool(self, name: str) -> Optional[ToolDefinition]:

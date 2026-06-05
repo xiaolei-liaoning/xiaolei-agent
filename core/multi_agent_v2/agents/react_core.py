@@ -29,21 +29,22 @@ class ReActCoreMiddleware(BaseMiddleware):
             if not reg._initialized:
                 await reg.discover_all()
             raw = await reg.get_tools_for_task(ctx.task_description, max_tools=100)
-            # 全部工具暴露给 LLM（内置 + MCP），由 LLM 自主选择
+            # 暴露所有工具给 LLM（内置 + 已连接的 MCP 工具）
+            # MCP 工具通过 Server 字段路由到对应的 MCP 服务器
             ctx.tool_defs = [
                 {"type":"function","function":{"name":t.name,"description":t.description,"parameters":t.parameters},
                  "_server":t.server,"_tool_name":t.tool_name}
                 for t in raw
             ]
-            builtin_n = sum(1 for t in raw if t.server == "__builtin__")
-            mcp_n = sum(1 for t in raw if t.server not in ("__builtin__","__mcp__",""))
-            logger.info(f"暴露 {len(ctx.tool_defs)} 个工具 ({builtin_n} 内置 + {mcp_n} MCP)")
+            n_builtin = sum(1 for t in raw if t.server == "__builtin__")
+            n_mcp = sum(1 for t in raw if t.server not in ("__builtin__", ""))
+            logger.info(f"暴露 {len(ctx.tool_defs)} 个工具 ({n_builtin} 内置 + {n_mcp} MCP)")
         except Exception as e:
             logger.debug("获取工具定义失败: %s", e)
             ctx.tool_defs = []
 
     async def on_think_start(self, ctx: RunContext) -> None:
-        """每轮 LLM 调用"""
+        """每轮 LLM 调用 — 通过 chain.on_wrap_model_call 走洋葱包裹"""
         if ctx.interrupted or ctx.react_depth >= _MAX_ROUNDS:
             return
 
@@ -57,34 +58,39 @@ class ReActCoreMiddleware(BaseMiddleware):
         ctx.react_depth += 1
         ctx.iteration = ctx.react_depth
 
-        messages = [
-            {"role": "system", "content": "你是多步骤计划的执行者。当前步骤已有明确任务，直接执行即可，无需重新选择工具类型。"},
+        # 构建消息，存到 ctx 供中间件读取
+        ctx._pending_messages = [
+            {"role": "system", "content": "你是多步骤计划的执行者。当前步骤已有明确任务，直接执行即可，无需重新选择工具类型。\n\n可用的工具列表中包含了大量专用工具（如 send_notification 发通知、get_art 获取ASCII艺术、multiply 计算乘法、get_forecast 查天气等），优先选用名称最匹配的专用工具，而不是自己写代码实现。"},
             {"role": "user", "content": ctx.task_description},
         ]
         if ctx.tool_results:
-            # 有前序结果时构建完整对话
             for r in ctx.tool_results:
                 tc = r.get("tool_call", {})
-                messages.append({
-                    "role": "assistant",
-                    "content": None,
-                    "tool_calls": [{
-                        "id": tc.get("id", "call_%d" % ctx.iteration),
+                ctx._pending_messages.append({
+                    "role": "assistant", "content": None,
+                    "tool_calls": [{"id": tc.get("id", "call_%d" % ctx.iteration),
                         "type": "function",
                         "function": {"name": tc.get("name", ""), "arguments": json.dumps(tc.get("arguments", {}))},
                     }]
                 })
-                messages.append({
+                ctx._pending_messages.append({
                     "role": "tool",
                     "tool_call_id": tc.get("id", "call_%d" % ctx.iteration),
                     "content": json.dumps(r.get("result", {"error": "无结果"}))[:3000],
                 })
 
-        try:
-            reply = await asyncio.wait_for(
-                router.chat(messages, temperature=0.3, max_tokens=2000, tools=ctx.tool_defs or None),
+        async def _llm_call():
+            return await asyncio.wait_for(
+                router.chat(ctx._pending_messages, temperature=0.3, max_tokens=2000,
+                           tools=ctx.tool_defs or None),
                 timeout=30,
             )
+
+        try:
+            if ctx._chain:
+                reply = await ctx._chain.on_wrap_model_call(ctx, _llm_call)
+            else:
+                reply = await _llm_call()
             ctx._last_reply = reply
         except asyncio.TimeoutError:
             ctx.interrupted = True
@@ -127,6 +133,13 @@ class ReActCoreMiddleware(BaseMiddleware):
                 "success": ok,
                 "result": result.get("result", result),
             })
+
+            # 代码错误检测：语法/运行时错误时注入修复提示
+            if not ok and ctx.react_depth < _MAX_ROUNDS:
+                err_text = str(result.get("result", {}))
+                if any(kw in err_text for kw in ["SyntaxError", "NameError", "TypeError", "IndentationError"]):
+                    ctx.task_description += f"\n[代码错误] 请修复上一轮的代码错误后重试。错误: {err_text[:200]}"
+                    logger.info("代码错误检测，注入修复提示")
 
         if ctx.react_depth >= _MAX_ROUNDS and not ctx.final_answer:
             # 检查所有轮次中是否有成功的工具调用
@@ -192,21 +205,20 @@ class ReActCoreMiddleware(BaseMiddleware):
 
 
 def build_default_chain() -> MiddlewareChain:
-    """构建默认中间件链：Profile → ReActDepth → ReActCore → Confidence → Reflection → KEPA → Branch → AskUser"""
+    """构建默认中间件链：Profile → ReActDepth → ReActCore → Confidence → Reflection → KEPA → Branch"""
     chain = MiddlewareChain()
     from .middlewares import (
         ProfileMiddleware, ReActDepthMiddleware,
         ConfidenceMiddleware, ReflectionMiddleware,
-        KEPAMiddleware, BranchMiddleware, AskUserMiddleware,
+        KEPAMiddleware, BranchMiddleware,
     )
     chain.add(ProfileMiddleware())       # 任务画像
     chain.add(ReActDepthMiddleware())    # 深度控制
     chain.add(ReActCoreMiddleware())     # ReAct 核心循环
-    chain.add(ConfidenceMiddleware())    # 置信度评估
-    chain.add(ReflectionMiddleware())    # 执行反思
-    chain.add(KEPAMiddleware())          # KEPA 闭环（执行结果→SharedBus）
-    chain.add(BranchMiddleware())        # 策略分支
-    chain.add(AskUserMiddleware())       # 用户交互
+    chain.add(ConfidenceMiddleware())    # 置信度评估（低置信度注入换策略提示）
+    chain.add(ReflectionMiddleware())    # 执行反思（全部失败时注入反馈）
+    chain.add(KEPAMiddleware())          # KEPA 闭环（发布到 SharedBus + 记录 kepa_states）
+    chain.add(BranchMiddleware())        # 策略分支（连续失败注入切换提示）
     return chain
 
 
@@ -217,8 +229,13 @@ async def run_react(task_description: str, max_rounds: int = 0) -> dict:
         max_rounds: 最大轮数，0 表示使用默认 _MAX_ROUNDS(2)，有工具提示时自动降为1
     """
     if max_rounds == 0:
-        # 有工具提示的步骤只需 1 轮（直接调工具，不需要 LLM 分析）
-        max_rounds = 1 if "[工具提示]" in task_description else _MAX_ROUNDS
+        # 有文件工具提示时 1 轮（file工具简单直接）；有MCP工具提示时 2 轮（LLM可能需要多一轮尝试）
+        if "[工具提示] 请使用工具" in task_description:
+            max_rounds = 1
+        elif "[工具提示] 立刻调用" in task_description:
+            max_rounds = 2  # MCP工具提示 — 给 LLM 两轮机会
+        else:
+            max_rounds = _MAX_ROUNDS
     ctx = RunContext(task_description)
     chain = build_default_chain()
     await chain.on_start(ctx)
@@ -231,6 +248,17 @@ async def run_react(task_description: str, max_rounds: int = 0) -> dict:
         if ctx.profile.get("reflection_feedback") and not ctx.final_answer:
             ctx.interrupted = True
             logger.warning("检测到反思反馈且无产出，提前终止空转")
+        # 消费中间件决策信号
+        while ctx.decisions:
+            d = ctx.decisions.pop(0)
+            if d.get("action") == "retry" and not ctx.interrupted:
+                ctx.task_description += f"\n[决策] {d.get('reason','')} 重试。"
+                logger.info(f"中间件决策: {d.get('reason','')}")
+            elif d.get("action") == "abort":
+                ctx.interrupted = True
+                ctx.last_error = d.get("reason", "中间件终止执行")
+                logger.warning(f"中间件终止: {d.get('reason','')}")
+
         # 检查反思历史：如果连续2轮都失败且有反思记录，将失败信息注入下一轮提示
         if ctx.reflection_history and not ctx.final_answer:
             last_ref = ctx.reflection_history[-1]

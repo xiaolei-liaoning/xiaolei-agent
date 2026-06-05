@@ -156,7 +156,7 @@ class HTTPClient:
                     url,
                     timeout=self.timeout,
                     headers=headers,
-                    **{k: v for k, v in kwargs.items() if k not in ['headers', 'data', 'json']}
+                    **{k: v for k, v in kwargs.items() if k not in ['headers', 'data', 'json', 'retry']}
                 )
 
                 return {

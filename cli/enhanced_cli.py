@@ -220,9 +220,6 @@ class EnhancedCLI:
         rc.print()
         rc.print(f"  [{soft}]📖[/]  输入 [{brand}]/help[/] 查看命令  ·  [{dim}]⎿  exit 退出[/]")
         rc.print()
-        rc.print()
-        rc.rule(style=dim)
-        rc.print()
 
     async def handle_command(self, parsed_cmd: ParsedCommand):
         """处理解析后的命令"""
@@ -311,6 +308,9 @@ class EnhancedCLI:
         elif cmd_type == CommandType.SHOW:
             self.handle_show(parsed_cmd)
 
+        elif cmd_type == CommandType.ORCHESTRATE:
+            await self.handle_orchestrate(parsed_cmd)
+
         else:
             # 非命令，作为智能任务请求
             await self.handle_smart_request(parsed_cmd.remaining)
@@ -332,7 +332,7 @@ class EnhancedCLI:
 
         # 命令分类
         categories = {
-            "📋 Core": ["/run", "/chat", "/smart"],
+            "📋 Core": ["/run", "/chat", "/smart", "/orchestrate"],
             "📊 Analysis": ["/analyze", "/review", "/scrape"],
             "🤖 Automation": ["/automate", "/wechat"],
             "⚙️ System": ["/status", "/config", "/mcp", "/tools", "/plugin"],
@@ -860,6 +860,148 @@ class EnhancedCLI:
                                      error_message=str(e))
             engine.summary(False, 0, detail=str(e))
             log_error(f"执行失败: {e}")
+
+    async def handle_orchestrate(self, parsed_cmd: ParsedCommand):
+        """多Agent编排 — 真正的多Agent并发协作"""
+        from cli.colors import CLAUDE, BOLD, SUCCESS, log_status, print_error, print_success
+        from cli.animated_spinner import print_section
+
+        action = parsed_cmd.action or ""
+        remaining = parsed_cmd.remaining or ""
+
+        # ── /orchestrate demo — 交互式示例选择 ──
+        if action == "demo":
+            print_section("🧪 多Agent编排 - 演示模式")
+            from core.multi_agent_v2.orchestration.demo import main
+            await main()
+            return
+
+        # ── /orchestrate list — 列出已注册工作流 ──
+        if action == "list":
+            from core.multi_agent_v2.orchestration.orchestrator import list_workflows, get_workflow
+            wfs = list_workflows()
+            print_section("📋 已注册工作流")
+            if not wfs:
+                log_status("暂无注册的工作流", color=CLAUDE)
+                log_status("请先运行编排示例注册：python -m core.multi_agent_v2.orchestration.demo", color=CLAUDE)
+            else:
+                for name in wfs:
+                    wf = get_workflow(name)
+                    desc = wf.meta.description if wf and hasattr(wf, 'meta') else ""
+                    phases_str = ""
+                    if wf and hasattr(wf, 'meta') and wf.meta.phases:
+                        phases_str = f"  ({' → '.join(p['title'] for p in wf.meta.phases)})"
+                    log_status(f"  • {name}: {desc}{phases_str}", color=CLAUDE)
+            return
+
+        # ── /orchestrate run <workflow_name> — 运行命名工作流 ──
+        if action == "run":
+            workflow_name = remaining
+            if not workflow_name:
+                print_error("请指定工作流名称，如: /orchestrate run 并行调研")
+                return
+            from core.multi_agent_v2.orchestration.orchestrator import run_workflow, reset
+            reset()
+            print_section(f"🚀 工作流: {workflow_name}")
+            result = await run_workflow(workflow_name)
+            if hasattr(result, 'success') and hasattr(result, 'output'):
+                if result.success:
+                    print_success(f"✅ 成功 ({result.execution_time:.1f}s)")
+                    print(result.text()[:1000])
+                else:
+                    log_status(f"⚠️ 失败: {result.error}", color="red")
+            return
+
+        # ── /orchestrate "自然语言描述" — 自动编排 ──
+        if not remaining and not action:
+            print_error("请提供任务描述或工作流名称")
+            log_status("示例: /orchestrate demo", color=CLAUDE)
+            log_status("      /orchestrate run 并行调研", color=CLAUDE)
+            log_status("      /orchestrate list", color=CLAUDE)
+            return
+
+        # 有文本 → 尝试匹配已注册的工作流
+        if action and action not in ("demo", "list", "run", "play"):
+            name = action if remaining else ""
+            task = f"{action} {remaining}" if remaining else action
+            from core.multi_agent_v2.orchestration.orchestrator import list_workflows, run_workflow as _run_wf
+            wfs = list_workflows()
+            if name in wfs:
+                reset()
+                print_section(f"🚀 工作流: {name}")
+                result = await _run_wf(name)
+                if hasattr(result, 'success') and hasattr(result, 'output'):
+                    if result.success:
+                        print_success(f"✅ 成功 ({result.execution_time:.1f}s)")
+                        print(result.text()[:1000])
+                return
+            # 无匹配工作流，用 ad-hoc 模式
+            await self._run_ad_hoc(task)
+            return
+
+        await self._run_ad_hoc(remaining)
+
+    async def _run_ad_hoc(self, task: str):
+        """ad-hoc 模式：自动拆解为多Agent并行任务"""
+        from cli.colors import CLAUDE, log_status, print_error, print_success
+        from cli.animated_spinner import print_section
+        from core.multi_agent_v2.orchestration.orchestrator import (
+            phase, log, agent, parallel, pipeline, reset, AgentResult,
+        )
+        reset()
+
+        print_section("🤖 多Agent 自动编排")
+
+        # 提取多个搜索维度或子任务
+        import re
+        import random
+        sub_tasks = re.findall(r'"([^"]*)"', task)
+        if not sub_tasks:
+            sub_tasks = [t.strip() for t in task.replace("、", "，").split("，") if t.strip()]
+
+        if len(sub_tasks) <= 1:
+            # 单任务：拆成不同维度
+            topics = ["实现方案", "核心原理", "优缺点"]
+        else:
+            topics = sub_tasks
+
+        log(f"自动拆解为 {len(topics)} 个子任务")
+
+        try:
+            phase("并行执行")
+
+            # 多个 Agent 同时执行
+            results = await parallel([
+                lambda t=t, i=i: agent(
+                    f"深入分析: {t}",
+                    {"label": f"子任务{i+1}: {t[:20]}", "timeout": 120},
+                )
+                for i, t in enumerate(topics)
+            ])
+
+            good = [r for r in results if r and r.success]
+            if not good:
+                log("所有子任务失败")
+                return
+
+            phase("综合汇总")
+
+            context = "\n\n".join(
+                f"【{r.label}】\n{r.text()[:500]}" for r in good
+            )
+            final = await agent(
+                f"综合以下对各个维度的分析结果，给出整体结论:\n\n{context}",
+                {"label": "综合汇总", "timeout": 180},
+            )
+
+            if final and final.success:
+                print_section("📋 最终结果")
+                print(final.text()[:1000])
+            else:
+                log("汇总失败")
+
+        except Exception as e:
+            print_error(f"编排执行失败: {e}")
 
     async def handle_analyze(self, parsed_cmd: ParsedCommand):
         """处理分析命令"""
@@ -2295,64 +2437,36 @@ MCP命令使用帮助:
         """运行CLI主循环"""
         self.print_welcome()
 
-        # ── 启动状态栏 ──
-        self._status_bar = None
-        try:
-            from cli.status_bar import StatusBar
-            import uuid
-            sid = getattr(self, 'session_id', uuid.uuid4().hex[:8])
-            self._status_bar = StatusBar(session_id=sid, debug_mode=self.debug_mode)
-            await self._status_bar.start()
-        except Exception:
-            pass
-
         while self.running:
             try:
-                user_input = input(f"{ansi['bold']}{ansi['cyan']}❯{ansi['end']} {ansi['bold']}{ansi['green']}xiaolei{ansi['end']} ")
+                user_input = input("❯ xiaolei ")
 
                 if not user_input.strip():
-                    # 空输入时刷新状态栏
-                    if self._status_bar:
-                        await self._status_bar.update()
                     continue
 
-                # 更新状态栏的命令信息
-                if self._status_bar:
-                    self._status_bar.set_last_command(user_input)
+                # 检测退出/帮助等常用命令（不要求/前缀）
+                if user_input.lower() in ['exit', 'quit', 'q', '退出']:
+                    self.handle_quit()
+                    break
+                if user_input.lower() in ['help', 'h', '帮助']:
+                    self.handle_help()
+                    continue
 
                 # 如果不以 / 开头，作为智能任务请求处理
                 if not user_input.startswith('/'):
                     await self.handle_smart_request(user_input)
-                    print_color("───────────────────────────────────────────────────────────", CliColors.PURPLE)
-                    print()
-                    if self._status_bar:
-                        await self._status_bar.refresh_stats()
-                        await self._status_bar.update()
+                    sys.stdout.write("─" * 60 + "\n")
+                    sys.stdout.flush()
                     continue
 
-                # 解析命令
                 parsed_cmd = self.command_parser.parse(user_input)
-
-                # 处理命令
                 await self.handle_command(parsed_cmd)
-
-                # 命令处理后刷新状态栏
-                if self._status_bar:
-                    await self._status_bar.refresh_stats()
-                    await self._status_bar.update()
 
             except KeyboardInterrupt:
                 print_color("\n👋 再见！", CliColors.BLUE)
                 self.running = False
             except Exception as e:
                 log_error(f"处理异常: {e}")
-
-        # ── 停止状态栏 ──
-        if self._status_bar:
-            try:
-                await self._status_bar.stop()
-            except Exception:
-                pass
 
 
 async def main(log_file: str = None, log_to_console: bool = True):

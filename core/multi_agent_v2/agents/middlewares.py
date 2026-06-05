@@ -63,14 +63,15 @@ class ProfileMiddleware(BaseMiddleware):
 # ════════════════════════════════════════════════════════════════
 
 class ReActDepthMiddleware(BaseMiddleware):
-    """追踪 ReAct 深度，防止无限循环"""
+    """追踪 ReAct 深度，防止无限循环（react_depth 由 ReActCoreMiddleware 递增）"""
 
-    MAX_DEPTH = 30
+    MAX_DEPTH = 10
 
     async def on_think_start(self, ctx: RunContext) -> None:
-        ctx.react_depth += 1
+        # 不递增 react_depth——ReActCoreMiddleware.on_think_start 已做
         if ctx.react_depth > self.MAX_DEPTH:
             ctx.interrupted = True
+            ctx.last_error = f"ReAct 深度超过 {self.MAX_DEPTH}，终止执行"
             logger.warning(f"ReAct 深度超过 {self.MAX_DEPTH}，终止执行")
 
     async def on_tool_end(self, ctx: RunContext) -> None:
@@ -90,7 +91,7 @@ class ReActDepthMiddleware(BaseMiddleware):
 # ════════════════════════════════════════════════════════════════
 
 class ConfidenceMiddleware(BaseMiddleware):
-    """基于工具调用成功率和结果质量计算置信度"""
+    """基于工具调用成功率和结果质量计算置信度。低置信度 → 推决策信号"""
 
     async def on_tool_end(self, ctx: RunContext) -> None:
         if not ctx.tool_results:
@@ -100,7 +101,6 @@ class ConfidenceMiddleware(BaseMiddleware):
         total = len(ctx.tool_results)
         success_rate = success_count / total if total > 0 else 0
 
-        # 是否有有效输出
         has_output = any(
             r.get("result") and str(r.get("result", "")) != "{}"
             for r in ctx.tool_results
@@ -116,14 +116,16 @@ class ConfidenceMiddleware(BaseMiddleware):
         else:
             base = 0.3
 
-        # 检查最终写入
         has_written = any(
-            r.get("tool_call", {}).get("name", "") in ("workspace_write_file", "write_file")
+            r.get("tool_call", {}).get("name", "") in ("file", "workspace_write_file", "write_file")
             and r.get("success")
             for r in ctx.tool_results
         )
         if has_written:
             base = max(base, 0.9)
+        elif base < 0.5 and total >= 2 and not ctx.interrupted:
+            ctx.decisions.append({"action": "retry", "reason": f"置信度过低({base:.1f})，建议换策略"})
+            logger.info(f"置信度{base:.1f}触发决策信号")
 
         ctx.confidence_scores.append(base)
         ctx.confidence_total = sum(ctx.confidence_scores) / len(ctx.confidence_scores)
@@ -134,9 +136,9 @@ class ConfidenceMiddleware(BaseMiddleware):
 # ════════════════════════════════════════════════════════════════
 
 class ReflectionMiddleware(BaseMiddleware):
-    """定期对执行结果进行反思，沉淀经验"""
+    """定期对执行结果进行反思。全部失败时推决策信号"""
 
-    REFLECTION_INTERVAL = 2  # 每 N 轮反思一次（ReAct最多2轮，改为2确保每步触发）
+    REFLECTION_INTERVAL = 2
 
     async def on_tool_end(self, ctx: RunContext) -> None:
         if ctx.iteration < 2:
@@ -144,22 +146,23 @@ class ReflectionMiddleware(BaseMiddleware):
         if ctx.iteration % self.REFLECTION_INTERVAL != 0:
             return
 
-        # 统计本轮执行
         recent = ctx.tool_results[-self.REFLECTION_INTERVAL:]
         success = sum(1 for r in recent if r.get("success"))
         total = len(recent)
 
         reflection = {
-            "iteration": ctx.iteration,
+            "iteration": ctx.iteration, "round": ctx.iteration,
             "success_rate": success / total if total > 0 else 0,
             "total_calls": len(ctx.tool_results),
+            "success_calls": sum(1 for r in ctx.tool_results if r.get("success")),
             "timestamp": time.time(),
         }
         ctx.reflection_history.append(reflection)
+        ctx.profile["reflection_data"] = reflection
 
-        if success == 0 and total > 0:
+        if success == 0 and total > 0 and not ctx.profile.get("reflection_feedback"):
             logger.warning(f"反思: 连续 {total} 次工具调用全部失败")
-            ctx.task_description += "\n[系统反馈] 工具调用全部失败，请换策略"
+            ctx.decisions.append({"action": "retry", "reason": "全部工具调用失败，请换方法"})
             ctx.profile["reflection_feedback"] = True
 
 
@@ -186,22 +189,18 @@ class SubtaskMiddleware(BaseMiddleware):
 # ════════════════════════════════════════════════════════════════
 
 class BranchMiddleware(BaseMiddleware):
-    """根据执行状态决定是否需要切换策略"""
-
-    def __init__(self):
-        super().__init__()
-        self._hint_added = False  # 防止重复添加
+    """根据执行状态决定是否终止或重试（推决策信号）"""
 
     async def on_think_end(self, ctx: RunContext) -> None:
         if not ctx.last_error:
-            self._hint_added = False
+            ctx.profile["branch_hint_added"] = False
             return
 
         consecutive_fails = sum(1 for r in ctx.tool_results[-3:] if not r.get("success"))
-        if consecutive_fails >= 3 and not self._hint_added:
-            logger.warning("连续 3 次失败，尝试切换策略")
-            ctx.task_description += "\n[系统] 当前策略连续失败，请换一种方法。"
-            self._hint_added = True
+        if consecutive_fails >= 3 and not ctx.profile.get("branch_hint_added"):
+            logger.warning("连续 3 次失败，推终止信号")
+            ctx.decisions.append({"action": "abort", "reason": f"连续{consecutive_fails}次失败，终止当前策略"})
+            ctx.profile["branch_hint_added"] = True
 
 
 # ════════════════════════════════════════════════════════════════
@@ -209,55 +208,26 @@ class BranchMiddleware(BaseMiddleware):
 # ════════════════════════════════════════════════════════════════
 
 class KEPAMiddleware(BaseMiddleware):
-    """将执行结果发布到 SharedBus（Knowledge → Execution → Perception → Adjustment）"""
+    """记录执行状态到 ctx.kepa_states（KEPA闭环感知），供后续中间件或上层消费"""
 
     async def on_tool_end(self, ctx: RunContext) -> None:
-        try:
-            from core.multi_agent_v2.infrastructure.shared_bus import get_shared_bus, Message, MessageType
-            bus = get_shared_bus()
-            if ctx.tool_results:
-                last = ctx.tool_results[-1]
-                agent_id = self._agent.agent_id if self._agent else "unknown"
-                msg = Message(
-                    type=MessageType.TASK_PROGRESS if last.get("success") else MessageType.TASK_FAILED,
-                    sender=agent_id,
-                    topic="kepa:tool_result",
-                    payload={
-                        "type": "tool_result",
-                        "agent_id": agent_id,
-                        "iteration": ctx.iteration,
-                        "tool_name": last.get("tool_call", {}).get("name", "?"),
-                        "success": last.get("success", False),
-                        "preview": str(last.get("result", ""))[:200],
-                        "timestamp": time.time(),
-                    },
-                )
-                await bus.publish(msg.topic, msg)
-        except Exception as e:
-            logger.debug(f"KEPA 发布失败: {e}")
+        if ctx.tool_results:
+            last = ctx.tool_results[-1]
+            state = "success" if last.get("success") else "failed"
+            ctx.kepa_states.append(state)
 
     async def on_finish(self, ctx: RunContext) -> None:
-        """发布最终执行报告"""
+        """记录最终执行摘要到 ctx.profile"""
         try:
-            from core.multi_agent_v2.infrastructure.shared_bus import get_shared_bus, Message, MessageType
-            bus = get_shared_bus()
-            agent_id = self._agent.agent_id if self._agent else "unknown"
-            msg = Message(
-                type=MessageType.TASK_COMPLETED,
-                sender=agent_id,
-                topic="agent:done",
-                payload={
-                    "success": ctx.final_answer or ctx.confidence_total > 0.5,
-                    "iterations": ctx.iteration,
-                    "total_tools": len(ctx.tool_results),
-                    "confidence": ctx.confidence_total,
-                    "final_answer": (ctx.final_answer or "")[:500],
-                    "timestamp": time.time(),
-                },
-            )
-            await bus.publish(msg.topic, msg)
-        except Exception as e:
-            logger.debug(f"KEPA 完成消息发布失败: {e}")
+            ctx.profile["kepa_summary"] = {
+                "success": bool(ctx.final_answer) or ctx.confidence_total > 0.5,
+                "iterations": ctx.iteration,
+                "total_tools": len(ctx.tool_results),
+                "confidence": ctx.confidence_total,
+                "all_failed": bool(ctx.kepa_states) and all(s == "failed" for s in ctx.kepa_states),
+            }
+        except Exception:
+            pass
 
 
 # ════════════════════════════════════════════════════════════════
