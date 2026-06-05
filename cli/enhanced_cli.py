@@ -107,6 +107,7 @@ _pre_init_logger()
 
 # 导入CLI模块
 from cli.colors import CliColors, print_color, print_chat_bubble, print_success, print_error, print_warning, ansi
+from cli.prompt import get_chat_input
 from cli.command_parser import (
     CommandParser, CommandType, ParsedCommand, get_command_parser
 )
@@ -168,6 +169,9 @@ class EnhancedCLI:
         self.current_mcp_server = None
         self.mcp_session = None
 
+        # 状态栏（延迟到 run() 中初始化）
+        self._status_bar = None
+
         # 导入核心服务
         _import_core_services()
 
@@ -179,46 +183,68 @@ class EnhancedCLI:
         log_info(f"会话已初始化: {self.session_id}")
 
     def print_welcome(self):
-        """打印欢迎界面 - 现代化风格（参考 paste 样式）"""
+        """打印欢迎界面 — 现代化风格：简洁品牌面板 + 系统统计 + 快速参考"""
         print("\033c", end="")
-        print()
         brand = "rgb(215,119,87)"
         soft = "rgb(153,153,153)"
         dim = "rgb(80,80,80)"
 
         from rich.console import Console as RichConsole
+        from rich.panel import Panel
+        from rich.table import Table
+
         rc = RichConsole()
         rc.print()
-        rc.print(f"  [{brand}]╭──────────  🦞  小雷版小龙虾  AI  Agent  ──────────╮")
-        rc.print(f"  [{brand}]│                                                     │")
-        rc.print(f"  [{brand}]│    [{dim}]██╗  ██╗██╗ █████╗  ██████╗ ██╗     ███████╗██╗  │")
-        rc.print(f"  [{brand}]│    [{dim}]╚██╗██╔╝██║██╔══██╗██╔═══██╗██║     ██╔════╝██║  │")
-        rc.print(f"  [{brand}]│    [{dim}] ╚███╔╝ ██║███████║██║   ██║██║     █████╗  ██║  │")
-        rc.print(f"  [{brand}]│    [{dim}] ██╔██╗ ██║██╔══██║██║▄▄ ██║██║     ██╔══╝  ██║  │")
-        rc.print(f"  [{brand}]│    [{dim}]██╔╝ ██╗██║██║  ██║╚██████╔╝███████╗███████╗██║  │")
-        rc.print(f"  [{brand}]│    [{dim}]╚═╝  ╚═╝╚═╝╚═╝  ╚═╝ ╚══▀▀═╝ ╚══════╝╚══════╝╚═╝  │")
-        rc.print(f"  [{brand}]│                                                     │")
-        rc.print(f"  [{brand}]╰─────────────────────────────────────────────────────╯")
-        rc.print()
 
-        # 获取工具数量
-        tool_info = ""
+        # ── 品牌面板 ──
+        rc.print(Panel(
+            "[bold rgb(215,119,87)]🦞  xiaolei AI Agent[/bold rgb(215,119,87)]\n"
+            f"[{dim}]session: {self.session_id or 'initializing'}  ·  "
+            f"version: 3.4.0[/{dim}]",
+            border_style=brand, padding=(1, 2),
+        ))
+
+        # ── 系统统计 ──
+        tool_total = 0
+        mcp_count = 0
         try:
             from core.multi_agent_v2.tools.tool_registry import get_tool_registry
             reg = get_tool_registry()
             summary = reg.get_available_tools_summary()
-            total = summary.get("total", 0)
-            mcp = summary.get("mcp_connected", 0)
-            if total > 0:
-                tool_info = f"  [{soft}]🔧 {total} 工具已就绪  ·  {mcp} MCP 已连接[/]"
+            tool_total = summary.get("total", 0)
+            mcp_count = summary.get("mcp_connected", 0)
         except Exception:
-            tool_info = f"  [{soft}]🔧 工具系统就绪[/]"
+            pass
 
-        rc.print(f"  [{soft}]⚡[/]  [{brand}]工作流[/]  ·  [{brand}]GUI自动化[/]  ·  [{brand}]爬虫[/]  ·  [{brand}]微信[/]  ·  [{brand}]分析[/]")
-        if tool_info:
-            rc.print(tool_info)
+        if tool_total > 0:
+            rc.print(f"  [{dim}]●[/]  [{bold}]Tools: {tool_total}[/]"
+                     f"  [{dim}]·[/]  [{bold}]MCP: {mcp_count}[/] connected"
+                     f"  [{dim}]·[/]  [{brand}]/tools[/] for details")
+        else:
+            rc.print(f"  [{dim}]●[/]  tools initializing…")
+
         rc.print()
-        rc.print(f"  [{soft}]📖[/]  输入 [{brand}]/help[/] 查看命令  ·  [{dim}]⎿  exit 退出[/]")
+
+        # ── 快速命令参考 ──
+        cmd_table = Table(show_header=False, box=None, padding=(0, 3, 0, 0))
+        cmd_table.add_column("Command", style=f"bold {brand}", no_wrap=True)
+        cmd_table.add_column("What it does", style="white")
+        cmd_table.add_row("/run \"task\"", "Execute a workflow")
+        cmd_table.add_row("/chat", "Conversation mode")
+        cmd_table.add_row("/smart \"task\"", "Multi-agent collaboration")
+        cmd_table.add_row("/help", "Full command reference")
+        rc.print(cmd_table)
+
+        # ── 随机小贴士 ──
+        import random
+        tips = [
+            "Type /help search <term> to search commands",
+            "Natural language requests work without / prefix",
+            "Use /mcp agency to connect MCP servers",
+            "Type /clear to clean up the terminal",
+            "Use /orchestrate to manage multi-agent workflows",
+        ]
+        rc.print(f"\n  [{dim}]💡 {random.choice(tips)}[/{dim}]")
         rc.print()
 
     async def handle_command(self, parsed_cmd: ParsedCommand):
@@ -549,9 +575,38 @@ class EnhancedCLI:
 
         return result_id
 
+    def _categorize_error(self, error_class: str, error_msg: str) -> list:
+        """根据错误类型自动生成恢复建议"""
+        suggestions = []
+        msg_lower = error_msg.lower()
+
+        network_kw = ["connection", "timeout", "network", "dns",
+                      "refused", "unreachable", "socket", "reset"]
+        if any(kw in msg_lower for kw in network_kw):
+            suggestions.append("Check your network connection and try again")
+            suggestions.append("Use /mcp status to verify MCP server connectivity")
+
+        if "ModuleNotFoundError" in error_class or "ImportError" in error_class:
+            suggestions.append("Run 'pip install -r requirements.txt' to install dependencies")
+
+        if "KeyError" in error_class or "AttributeError" in error_class:
+            suggestions.append("This may be a configuration issue. Try /config show")
+
+        json_kw = ["json.decoder.jsondecodeerror", "parse", "unexpected token"]
+        if any(kw in msg_lower for kw in json_kw):
+            suggestions.append("Check that the input is valid JSON or the expected format")
+
+        if "PermissionError" in error_class:
+            suggestions.append("You may need to grant permission via the permission service")
+
+        if "FileNotFoundError" in error_class:
+            suggestions.append("Check that the file path exists and is accessible")
+
+        return suggestions
+
     def _display_error_panel(self, error: Exception, context: str = "",
                               suggestions: list = None) -> None:
-        """显示带建议操作的错误面板"""
+        """显示带建议操作的错误面板 — 支持自动错误分类"""
         from rich.console import Console as RichConsole
         from rich.panel import Panel
         from rich.syntax import Syntax
@@ -560,21 +615,26 @@ class EnhancedCLI:
         import traceback
 
         tb = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+        error_class = type(error).__name__
+
+        # 自动分类建议
+        auto_suggestions = self._categorize_error(error_class, str(error))
+        all_suggestions = (suggestions or []) + auto_suggestions
 
         # 错误面板
         _console.print()
         _console.print(Panel(
-            f"[bold {ERROR}]⚠️  {type(error).__name__}[/]\n{str(error)}",
-            title=f"❌ {context or '执行出错'}",
+            f"[bold {ERROR}]⚠️  {error_class}[/bold {ERROR}]  {str(error)[:200]}",
+            title=f"❌ {context or 'Error'}",
             border_style=ERROR,
             padding=(0, 2),
         ))
 
         # 建议
-        if suggestions:
-            _console.print(f"  [{WARNING}]💡 建议:[/{WARNING}]")
-            for s in suggestions:
-                _console.print(f"    [{INACTIVE}]→[/{INACTIVE}] {s}")
+        if all_suggestions:
+            _console.print(f"  [{WARNING}]→ Suggestions:[/{WARNING}]")
+            for s in all_suggestions:
+                _console.print(f"    [{INACTIVE}]·[/{INACTIVE}] {s}")
 
         # 可展开的堆栈
         if len(tb) > 200:
@@ -1284,7 +1344,7 @@ class EnhancedCLI:
 
         while self.chat_mode:
             try:
-                user_input = input(f"\n{ansi['green']}{ansi['bold']}你: {ansi['end']}")
+                user_input = get_chat_input(self)
 
                 if user_input.lower() in ['quit', 'exit', 'bye', '结束']:
                     print_color("👋 退出聊天模式", CliColors.BLUE)
@@ -1317,11 +1377,18 @@ class EnhancedCLI:
             except Exception as e:
                 log_error(f"聊天处理失败: {e}")
 
+            except KeyboardInterrupt:
+                print_color("\n👋 退出聊天模式", CliColors.BLUE)
+                self.chat_mode = False
+                break
+            except Exception as e:
+                log_error(f"聊天处理失败: {e}")
+
     async def start_chat_mode_loop(self):
         """聊天模式循环（用于带初始消息的情况）"""
         while self.chat_mode:
             try:
-                user_input = input(f"\n{ansi['green']}{ansi['bold']}你: {ansi['end']}")
+                user_input = get_chat_input(self)
 
                 if user_input.lower() in ['quit', 'exit', 'bye', '结束']:
                     print_color("👋 退出聊天模式", CliColors.BLUE)
@@ -2434,39 +2501,13 @@ MCP命令使用帮助:
                 print_color("/smart status - 查看Agent状态", CliColors.WHITE)
 
     async def run(self):
-        """运行CLI主循环"""
-        self.print_welcome()
+        """运行CLI主循环 — 委托给 REPL 实现"""
+        from cli.status_bar import StatusBar
+        from cli.repl import REPL
 
-        while self.running:
-            try:
-                user_input = input("❯ xiaolei ")
-
-                if not user_input.strip():
-                    continue
-
-                # 检测退出/帮助等常用命令（不要求/前缀）
-                if user_input.lower() in ['exit', 'quit', 'q', '退出']:
-                    self.handle_quit()
-                    break
-                if user_input.lower() in ['help', 'h', '帮助']:
-                    self.handle_help()
-                    continue
-
-                # 如果不以 / 开头，作为智能任务请求处理
-                if not user_input.startswith('/'):
-                    await self.handle_smart_request(user_input)
-                    sys.stdout.write("─" * 60 + "\n")
-                    sys.stdout.flush()
-                    continue
-
-                parsed_cmd = self.command_parser.parse(user_input)
-                await self.handle_command(parsed_cmd)
-
-            except KeyboardInterrupt:
-                print_color("\n👋 再见！", CliColors.BLUE)
-                self.running = False
-            except Exception as e:
-                log_error(f"处理异常: {e}")
+        self._status_bar = StatusBar(session_id=self.session_id or "unknown")
+        repl = REPL(self)
+        await repl.run()
 
 
 async def main(log_file: str = None, log_to_console: bool = True):

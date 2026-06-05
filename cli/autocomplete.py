@@ -1,121 +1,106 @@
-"""命令自动补全模块"""
+"""命令自动补全 — 基于 readline 的 Tab 补全
 
+包装 readline，从 CommandParser 动态获取命令列表。
+在用户按 Tab 时显示匹配候选项及命令描述。
+"""
+
+import os
 import readline
-from typing import List, Dict, Callable
-from cli.colors import CliColors, ansi
+from pathlib import Path
+from typing import List, Dict, Optional, Callable
+
+from cli.colors import _console, CLAUDE, SUBTLE, INACTIVE, SUCCESS
 
 
-class AutoCompleter:
-    """命令自动补全器"""
+# ── 历史文件路径 ──────────────────────────────────────────────────────────────
+HISTORY_FILE = str(Path.home() / ".xiaolei_history")
 
-    def __init__(self):
-        self.commands = []
-        self.aliases = {}
-        self._setup_readline()
 
-    def _setup_readline(self):
-        """配置readline"""
-        readline.set_completer(self._completer)
-        readline.parse_and_bind('tab: complete')
-        readline.set_completer_delims(' \t\n;')
+class Completer:
+    """Readline Tab 补全器
 
+    用法:
+        completer = Completer(get_commands_fn, get_help_fn)
+        completer.install()
+        # ... main loop ...
+        completer.save_history()
+
+    get_commands_fn 返回命令列表 (如 ["/help", "/run"])
+    get_help_fn 返回 {命令: 描述} 字典
+    """
+
+    def __init__(
+        self,
+        get_commands_fn: Callable[[], List[str]],
+        get_help_fn: Callable[[], Dict[str, str]],
+    ):
+        self._get_commands = get_commands_fn
+        self._get_help = get_help_fn
+        self._matches: List[str] = []
+
+    # ── 公共 API ──────────────────────────────────────────────────────────
+
+    def install(self):
+        """安装到 readline（在主循环启动时调用一次）"""
+        readline.set_completer(self._complete)
+        readline.parse_and_bind("tab: complete")
+        readline.set_completer_delims(" \t\n;")
+
+        # 加载历史文件
         try:
-            readline.read_history_file('.history')
-        except FileNotFoundError:
+            readline.read_history_file(HISTORY_FILE)
+        except (FileNotFoundError, PermissionError):
             pass
 
-    def add_command(self, command: str, description: str = ""):
-        """添加命令"""
-        if command not in self.commands:
-            self.commands.append(command)
-
-    def add_commands(self, commands: List[str]):
-        """批量添加命令"""
-        for cmd in commands:
-            self.add_command(cmd)
-
-    def set_aliases(self, aliases: Dict[str, str]):
-        """设置命令别名"""
-        self.aliases.update(aliases)
-
-    def _completer(self, text: str, state: int) -> str:
-        """补全函数"""
-        matches = [cmd for cmd in self.commands if cmd.startswith(text)]
-
-        if state < len(matches):
-            return matches[state]
-        return None
-
-    def get_input(self, prompt: str = "> ") -> str:
-        """获取用户输入（带补全）"""
+        # 绑定补全显示钩子（Tab 时打印候选项）
         try:
-            return input(f"{ansi['green']}{prompt}{ansi['end']}").strip()
-        except EOFError:
-            return ""
+            readline.set_completion_display_matches_hook(self._display_matches)
+        except AttributeError:
+            # macOS libedit 不支持此钩子，忽略
+            pass
 
     def save_history(self):
-        """保存命令历史"""
+        """保存命令历史到文件"""
         try:
-            readline.write_history_file('.history')
+            readline.write_history_file(HISTORY_FILE)
         except Exception:
             pass
 
-    def show_commands(self):
-        """显示所有可用命令"""
-        print(f"\n{ansi['bold']}{ansi['cyan']}可用命令:{ansi['end']}")
-        for cmd in sorted(self.commands):
-            print(f"  {cmd}")
-        print()
+    def get_suggestions(self, text: str, n: int = 3) -> List[str]:
+        """模糊匹配：针对不认识的命令返回最接近的建议"""
+        if not text.startswith("/"):
+            return []
+        from difflib import get_close_matches
 
+        return get_close_matches(text, self._get_commands(), n=n, cutoff=0.3)
 
-class CommandRegistry:
-    """命令注册表"""
-    
-    _instance = None
-    
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance._commands = {}
-            cls._completer = AutoCompleter()
-        return cls._instance
-    
-    def register(self, command: str, handler: Callable, description: str = ""):
-        """注册命令"""
-        self._commands[command] = {
-            'handler': handler,
-            'description': description
-        }
-        self._completer.add_command(command)
-    
-    def execute(self, command: str, *args) -> bool:
-        """执行命令"""
-        if command in self._commands:
-            try:
-                self._commands[command]['handler'](*args)
-                return True
-            except Exception as e:
-                print(f"{ansi['red']}命令执行错误: {e}{ansi['end']}")
-        return False
-    
-    def get_completer(self) -> AutoCompleter:
-        """获取补全器"""
-        return self._completer
-    
-    def get_command_list(self) -> List[str]:
-        """获取命令列表"""
-        return list(self._commands.keys())
-    
-    def get_command_info(self, command: str) -> Dict:
-        """获取命令信息"""
-        return self._commands.get(command, {})
+    # ── readline 回调 ─────────────────────────────────────────────────────
 
+    def _complete(self, text: str, state: int) -> Optional[str]:
+        """readline 补全回调 — 每次按键 Tab 触发"""
+        if state == 0:
+            commands = self._get_commands()
+            self._matches = [cmd for cmd in commands if cmd.startswith(text)]
+        if state < len(self._matches):
+            return self._matches[state]
+        return None
 
-def get_command_registry() -> CommandRegistry:
-    """获取命令注册表"""
-    return CommandRegistry()
+    def _display_matches(self, substitution: str, matches: List[str],
+                         longest_match_length: int):
+        """补全候选项显示钩子 — 在提示符下方打印匹配项"""
+        help_map = self._get_help()
+        count = len(matches)
+        show = matches[:10]
 
+        lines = []
+        for cmd in show:
+            desc = help_map.get(cmd, "")
+            if desc:
+                lines.append(f"  [{CLAUDE}]{cmd:<16}[/] [{INACTIVE}]{desc}[/]")
+            else:
+                lines.append(f"  [{CLAUDE}]{cmd}[/]")
 
-def get_completer() -> AutoCompleter:
-    """获取自动补全器"""
-    return get_command_registry().get_completer()
+        if count > 10:
+            lines.append(f"  [{SUBTLE}]... 以及 {count - 10} 个更多匹配[/]")
+
+        _console.print("\n".join(lines))

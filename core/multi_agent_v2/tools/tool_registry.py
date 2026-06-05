@@ -35,6 +35,31 @@ class ToolDefinition:
 # 内置 Handlers
 # ═══════════════════════════════════════════════════════════════════
 
+def _has_readable_content(html_text: str) -> bool:
+    """判断 HTML 页面是否有可读的文本内容（不需要 JS 渲染也能用）
+
+    搜索引擎结果页、普通文档页等包含大量可读文本，
+    而纯 SPA 页面（如 React 应用）的原始 HTML 只有少量脚本标签和占位 div。
+    区分两者，避免误将搜索引擎结果页标记为"动态HTML"。
+    """
+    # 提取所有标签内的文本
+    import re
+    text_content = re.sub(r'<script[^>]*>.*?</script>', '', html_text, flags=re.DOTALL)
+    text_content = re.sub(r'<style[^>]*>.*?</style>', '', text_content, flags=re.DOTALL)
+    text_content = re.sub(r'<[^>]+>', ' ', text_content)
+    text_content = re.sub(r'\s+', ' ', text_content).strip()
+
+    # 可读文本量评估
+    text_len = len(text_content)
+    total_len = len(html_text)
+    ratio = text_len / max(total_len, 1)
+
+    # 条件：至少有足够可读文本（搜索引擎结果页虽JS多但仍有有用文本）
+    # SPA 页面原始 HTML 通常文本极少（< 200 字符）
+    # 搜索引擎结果页文本量较大（> 500 字符）但比例低（~2%）
+    return text_len > 500 or (text_len > 200 and ratio > 0.05)
+
+
 async def _handle_fetch_url(args: Dict) -> Dict:
     """HTTP GET 获取网页/API数据"""
     url = args.get("url", ""); ml = args.get("max_length", 80000)
@@ -74,15 +99,61 @@ async def _handle_fetch_url(args: Dict) -> Dict:
         m = re.search(p, text, re.DOTALL)
         if m: je = m.group(1).strip(); break
     if not je:
+        # 兜底：找第一个 { 或 [ 尝试作为 JSON
         m = re.search(r'[\{\[]', text)
-        if m: je = text[m.start():]
+        if m:
+            maybe_json = text[m.start():].strip()
+            # 严格验证：必须是真正的 JSON（CSS 会以 { 后跟字母开头）
+            is_real_json = False
+            if maybe_json.startswith("{") and maybe_json.lstrip("{").strip().startswith('"'):
+                # {"key": value} 格式 — 真 JSON
+                is_real_json = True
+            elif maybe_json.startswith("[") and maybe_json.lstrip("[").strip()[:1] in ('"', '{', '[', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 't', 'f', 'n'):
+                # [...] 数组格式
+                is_real_json = True
+            if is_real_json:
+                je = maybe_json
+            else:
+                je = None
     clean = je or text
     stripped = clean.strip()
-    if not je and (stripped.startswith("<") or "margin-top" in stripped[:500]):
-        return {"result": {"content": [{"text": "网页是动态HTML，无法直接提取数据。请用 execute_python 执行 Python 通过 requests + BeautifulSoup/正则解析来抓取数据。"}]}}
+    if not je and stripped.startswith("<") and not _has_readable_content(stripped):
+        fp = f"/tmp/agent_fetch_{int(time.time())}.html"
+        Path(fp).write_text(text, encoding="utf-8")
+        return {"result": {"content": [{"text": f"网页是动态HTML (已保存到 {fp})。请用 execute_python 执行 Python 通过 requests + BeautifulSoup/正则解析来提取数据。"}]}}
     fp = f"/tmp/agent_fetch_{int(time.time())}.json"
     Path(fp).write_text(clean, encoding="utf-8")
-    msg = "状态码:%s 原始:%d字符\n📁%s\n%s" % (resp.status, len(text), fp, clean[:300])
+
+    # 尝试解析 JSON 数据并生成可读摘要（尤其是热搜/榜单类数据）
+    preview = clean[:300]
+    try:
+        parsed = json.loads(clean) if je else None
+        if parsed:
+            # 尝试提取热搜列表
+            cards = parsed.get("data", {}).get("cards", [])
+            hot_items = []
+            for card in cards:
+                if card.get("component") == "hotList":
+                    for item in card.get("content", []):
+                        word = item.get("word", item.get("query", ""))
+                        hot_score = item.get("hotScore", item.get("heat", ""))
+                        if word:
+                            hot_items.append(f"  {word}" + (f" (热度:{hot_score})" if hot_score else ""))
+            if hot_items:
+                preview = f"获取到 {len(hot_items)} 条热搜/榜单数据：\n" + "\n".join(hot_items[:20])
+                if len(hot_items) > 20:
+                    preview += f"\n  ...共{len(hot_items)}条，完整数据见文件"
+            # 通用 JSON 格式友好展示
+            if not hot_items:
+                text_repr = json.dumps(parsed, ensure_ascii=False, indent=2)[:2000]
+                if len(text_repr) < 500:
+                    preview = text_repr
+                else:
+                    preview = text_repr[:500] + f"\n...截断 ({len(text_repr)} 字符)，完整数据见文件"
+    except (json.JSONDecodeError, AttributeError):
+        pass
+
+    msg = f"状态码:{resp.status} 原始:{len(text)}字符\n{preview}\n📁完整数据: {fp}"
     return {"result": {"content": [{"text": msg}]}}
 
 
@@ -119,18 +190,47 @@ async def _handle_search(args: Dict) -> Dict:
 
     async def _try_one(url: str) -> str:
         try:
-            result = await _handle_fetch_url({"url": url, "max_length": 10000})
+            result = await _handle_fetch_url({"url": url, "max_length": 80000})
             text = result.get("result", {}).get("content", [{}])[0].get("text", "")
-            if text and "请求失败" not in text and "动态HTML" not in text and len(text) > 80:
-                return f"搜索结果({url}):\n{text[:2000]}"
+            if not text or len(text) < 80:
+                return ""
+            if "请求失败" in text:
+                return ""
+
+            # 从 fetch_url 的结果中提取可读文本
+            import re as _re
+            # 尝试从保存的文件中提取纯文本
+            file_path = None
+            m = _re.search(r'📁完整数据:\s*(\S+)', text)
+            if not m:
+                m = _re.search(r'已保存到\s+(\S+)', text)
+            if m:
+                file_path = m.group(1)
+
+            content_text = ""
+            if file_path:
+                import os as _os
+                if _os.path.exists(file_path):
+                    raw = open(file_path, encoding='utf-8').read()
+                    # 提取纯文本
+                    content_text = _re.sub(r'<script[^>]*>.*?</script>', '', raw, flags=_re.DOTALL)
+                    content_text = _re.sub(r'<style[^>]*>.*?</style>', '', content_text, flags=_re.DOTALL)
+                    content_text = _re.sub(r'<[^>]+>', ' ', content_text)
+                    content_text = _re.sub(r'\s+', ' ', content_text).strip()
+                    # 去掉 URL 和纯数字噪声，保留有意义的文本
+                    content_text = _re.sub(r'https?://\S+', '', content_text)
+
+            if content_text and len(content_text) > 80:
+                return f"搜索结果({url}):\n{content_text[:3000]}"
+            elif content_text and len(content_text) > 5:
+                return f"搜索结果({url}):\n{content_text[:1000]}"
+            return ""
         except BaseException:
             pass
         return ""
 
     urls = [
         f"https://cn.bing.com/search?q={encoded}&count=10",
-        f"https://www.google.com/search?q={encoded}&hl=zh-CN&num=10",
-        f"https://www.baidu.com/s?wd={encoded}&rn=10",
     ]
     tasks = [asyncio.create_task(_try_one(u)) for u in urls]
     done, pending = await asyncio.wait(tasks, timeout=10.0, return_when=asyncio.FIRST_COMPLETED)
@@ -701,30 +801,68 @@ class ToolRegistry:
         return td.handler if td else None
 
     async def get_tools_for_task(self, task: str, max_tools=30) -> List[ToolDefinition]:
-        """按任务相关性排序的工具列表"""
+        """按任务相关性排序的工具列表
+
+        排序策略（修正 LLM 倾向选 MCP 工具的问题）：
+        1. 内置工具（file/fetch_url/search 等）始终加分，排在前面
+        2. MCP 工具按关键词匹配度排序，关键词冲突时内置工具优先
+        3. 确保 LLM 先看到最可靠的工具
+        """
         if not self._initialized:
             return list(self._tools.values())[:max_tools]
         desc = task.lower()
         scored = []
+
+        # 核心内置工具（始终可用，优先展示）
+        CORE_BUILTIN = {"file", "fetch_url", "search", "execute_python", "execute_shell"}
+
         for t in self._tools.values():
             s = 0.0
             dl = t.description.lower()
             nl = t.name.lower()
+            is_builtin = t.server == SERVER_BUILTIN
+
+            # 关键词匹配
             for kw in desc.split():
                 kw = kw.strip().lower()
                 if len(kw) > 1:
                     if kw in dl: s += 2.0
                     if kw in nl: s += 3.0
+
+            # 中文字符级匹配
             if len(desc) > 1:
                 if any(c in dl for c in desc if len(c.strip()) > 0):
                     s += 0.5
-            # 不设内置工具加成，MCP 工具与内置工具平等竞争
+
+            # 内置工具加成：确保核心工具始终排在 MCP 工具前面
+            if is_builtin:
+                s += 5.0  # 内置工具加分，提高排名
+
+            # 核心工具额外加分
+            if t.name in CORE_BUILTIN:
+                s += 3.0
+
             scored.append((s, t))
+
+        # 按分数降序排列（内置工具因为加分自然排在前面）
         scored.sort(key=lambda x: -x[0])
-        result = [t for s,t in scored if s > 0]
-        core = [t for t in self._tools.values() if t.name in ("file","fetch_url","search","execute_python","execute_shell")]
-        for t in core:
-            if t not in result: result.append(t)
+
+        # 取所有得分 >0 的工具，但 MCP 工具需要更高分才能入选（避免干扰）
+        result = []
+        for s, t in scored:
+            if s > 0:
+                if t.server == SERVER_BUILTIN:
+                    result.append(t)  # 内置工具只要有分就入选
+                elif s >= 3.0:
+                    result.append(t)  # MCP 工具需要 ≥3.0 分才入选（强关键词匹配）
+            else:
+                break  # 分数=0的后面不可能有正分了
+
+        # 确保核心工具一定在列表中（即使得分为 0）
+        for t in self._tools.values():
+            if t.name in CORE_BUILTIN and t not in result:
+                result.append(t)
+
         return result[:max_tools]
 
     def get_tool(self, name: str) -> Optional[ToolDefinition]:

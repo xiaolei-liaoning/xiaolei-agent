@@ -15,8 +15,10 @@ Orchestrator — 多Agent 编排引擎
 """
 
 import asyncio
+import hashlib
 import json
 import logging
+import os
 import time
 import traceback
 import uuid
@@ -24,6 +26,44 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, TypeVar
 
 logger = logging.getLogger(__name__)
+
+# ── CCW 参考特性：缓存 / 预算 / 上限 ─────────────────────────────
+
+_MAX_AGENT_CALLS = 1000  # 单个工作流最大 agent 调用数
+_CACHE_DIR = os.path.join(os.path.dirname(__file__), ".workflow_cache")
+
+
+def _ensure_cache_dir():
+    os.makedirs(_CACHE_DIR, exist_ok=True)
+
+
+def _cache_key(prompt: str, opts: Dict) -> str:
+    """生成 (prompt, opts) 的缓存 key"""
+    raw = f"{prompt}||{json.dumps(opts, sort_keys=True, ensure_ascii=False)}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:32]
+
+
+async def _cache_get(key: str) -> Optional[Dict]:
+    """从文件缓存读取结果"""
+    path = os.path.join(_CACHE_DIR, f"{key}.json")
+    try:
+        if os.path.exists(path):
+            with open(path, "r") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return None
+
+
+async def _cache_set(key: str, data: Dict):
+    """写入文件缓存"""
+    _ensure_cache_dir()
+    path = os.path.join(_CACHE_DIR, f"{key}.json")
+    try:
+        with open(path, "w") as f:
+            json.dump(data, f, ensure_ascii=False, default=str)
+    except Exception:
+        pass
 
 # ═══════════════════════════════════════════════════════════════════
 # AgentPool — WorkAgent 复用池
@@ -172,7 +212,7 @@ T = TypeVar("T")
 class RunContext:
     """一次编排运行的上下文
 
-    追踪: 阶段、Agent计数、预算、已启动的任务
+    追踪: 阶段、Agent计数、预算、已启动的任务、缓存开关
     """
 
     def __init__(self, budget: Optional[int] = None):
@@ -183,6 +223,8 @@ class RunContext:
         self._agents: List[Dict] = []
         self._start_time: float = 0.0
         self._logs: List[str] = []
+        self._cache_enabled: bool = True  # 默认开启缓存
+        self._force_recompute: bool = False
 
     @property
     def phases(self) -> List[str]:
@@ -198,9 +240,19 @@ class RunContext:
             return 999999
         return max(0, self._budget_total - self._budget_spent)
 
+    def budget_spent(self) -> int:
+        return self._budget_spent
+
+    def budget_total(self) -> Optional[int]:
+        return self._budget_total
+
+    def budget_remaining(self) -> int:
+        return self.remaining_budget
+
 
 # 当前运行上下文（线程不安全，但 asyncio 单线程 OK）
 _current_ctx: Optional[RunContext] = None
+_current_budget: Any = None
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -232,15 +284,23 @@ async def agent(
     从 AgentPool 借 WorkAgent（light_mode），执行完归还。
 
     可以在编排脚本内外使用：
-      - 脚本内：自动归入当前 RunContext（阶段追踪 / budget / 计数）
+      - 脚本内：自动归入当前 RunContext（阶段追踪 / budget / 计数 / 缓存）
       - 脚本外：独立运行，无阶段追踪
+
+    CCW 特性:
+      - Resume 缓存: 相同 (prompt, opts) 直接返回缓存
+      - Token 预算: 预算不足时自动跳过
+      - 上限保护: 达到 _MAX_AGENT_CALLS(1000) 抛异常
+      - opts.model: 指定子任务使用的模型
 
     Args:
         prompt: 子任务描述
         opts:
-            label:   显示标签
-            timeout: 超时秒数（默认 120）
-            schema:  JSON Schema dict（输出会校验为结构化数据）
+            label:     显示标签
+            timeout:   超时秒数（默认 120）
+            schema:    JSON Schema dict（输出会校验为结构化数据）
+            model:     LLM 模型名（如 "sonnet", "opus"）
+            force_recompute: True 则绕过缓存
 
     Returns:
         AgentResult
@@ -250,26 +310,66 @@ async def agent(
     label = opts.get("label", prompt[:40])
     timeout = opts.get("timeout", 120)
 
-    # 无运行上下文时（独立调用），自动创建
+    # 无运行上下文时（独立调用），不缓存不预算
     if ctx is None:
         return await _execute_agent(prompt, label, timeout, opts)
+
+    # ── 上限保护 ──
+    if ctx._agent_count >= _MAX_AGENT_CALLS:
+        raise RuntimeError(
+            f"Agent 调用数已达上限 ({_MAX_AGENT_CALLS})，"
+            f"请检查是否出现失控循环"
+        )
 
     ctx._agent_count += 1
     agent_id = f"agent_{ctx._agent_count:03d}_{uuid.uuid4().hex[:6]}"
 
-    # 预算检查
+    # ── 预算检查 ──
     est_tokens = max(len(prompt) * 2, 2000)
     if ctx.remaining_budget < est_tokens:
         _print(f"    \033[33m⚠️ 预算不足，跳过 {label}\033[0m")
         return AgentResult(success=False, error="预算不足", label=label)
 
+    # ── Resume 缓存 ──
+    use_cache = ctx._cache_enabled and not opts.get("force_recompute", False)
+    # cache key 排除 label（仅显示用）和 force_recompute
+    _cache_opts = {k: v for k, v in opts.items()
+                   if k not in ("label", "force_recompute")}
+    cache_key_str = _cache_key(prompt, _cache_opts)
+
+    if use_cache:
+        cached = await _cache_get(cache_key_str)
+        if cached:
+            _print(f"    \033[36m♻️ [{ctx._agent_count}] {label} (缓存命中)\033[0m")
+            ctx._budget_spent += est_tokens
+            return AgentResult(
+                success=cached.get("success", False),
+                output=cached.get("output"),
+                error=cached.get("error"),
+                execution_time=cached.get("execution_time", 0.0),
+                label=label,
+                agent_id=agent_id,
+                metadata={"cached": True, **cached.get("metadata", {})},
+            )
+
     ctx._agents.append({
-        "label": label, "agent_id": agent_id, "phase": ctx.phases[-1] if ctx.phases else "",
+        "label": label, "agent_id": agent_id,
+        "phase": ctx.phases[-1] if ctx.phases else "",
     })
     _print(f"    \033[34m🚀 [{ctx._agent_count}] {label}\033[0m")
 
     ar = await _execute_agent(prompt, label, timeout, opts)
     ctx._budget_spent += est_tokens
+
+    # 写入缓存（成功的结果）
+    if use_cache and ar.success:
+        await _cache_set(cache_key_str, {
+            "success": ar.success,
+            "output": ar.output,
+            "error": ar.error,
+            "execution_time": ar.execution_time,
+            "metadata": ar.metadata,
+        })
 
     return ar
 
@@ -285,9 +385,14 @@ async def _execute_agent(
     from core.multi_agent_v2.agents.base.models import Task
 
     pool_agent = await _agent_pool.acquire(label)
-    agent_id = f"ex_{uuid.uuid4().hex[:6]}"
+    agent_id = f"ex_{uuid.uuid4().hex[:8]}"
     pool_agent.agent_id = agent_id
     pool_agent.agent_name = label
+
+    # ── opts.model 支持 ──
+    model = opts.get("model", "")
+    if model:
+        pool_agent._model_override = model
 
     task = Task(
         task_id=f"task_{uuid.uuid4().hex[:8]}",
@@ -526,21 +631,48 @@ async def run_workflow(name: str, *args, **kwargs) -> Any:
     return await wf.run(*args, **kwargs)
 
 
+async def call_workflow(name: str, *args, **kwargs) -> Any:
+    """从编排脚本内部调用另一个命名工作流（嵌套工作流）
+
+    用法:
+        result = await call_workflow("并行调研", topic="AI Agent")
+    """
+    wf = _workflow_registry.get(name)
+    if wf is None:
+        raise ValueError(f"未知工作流: {name}，可用: {list_workflows()}")
+    return await wf.run(*args, **kwargs)
+
+
 async def run_workflow_script(
     script_fn: Callable,
     *args,
     budget: Optional[int] = None,
     **kwargs,
 ) -> Any:
-    """运行一个编排脚本函数"""
+    """运行一个编排脚本函数
+
+    脚本中可通过闭包访问:
+      - budget: { total, spent(), remaining() }
+    """
     global _current_ctx
     ctx = RunContext(budget=budget)
     ctx._start_time = time.time()
     prev = _current_ctx
     _current_ctx = ctx
 
+    # 暴露 budget 对象给编排脚本（脚本通过闭包访问）
+    budget_obj = type("budget", (), {
+        "total": ctx._budget_total,
+        "spent": ctx.budget_spent,
+        "remaining": ctx.budget_remaining,
+        "__repr__": lambda self: f"Budget(total={self.total}, spent={self.spent()}, remaining={self.remaining()})",
+    })()
+
+    # 使 budget 可通过全局访问（类似 _current_ctx）
+    _current_budget = budget_obj
+
     try:
-        # 执行编排脚本
+        # 执行编排脚本（不注入 budget 参数，避免不兼容）
         result = await script_fn(*args, **kwargs)
         elapsed = time.time() - ctx._start_time
 
@@ -584,10 +716,20 @@ def _validate_schema(output: Any, schema: Dict) -> Optional[Any]:
     return output
 
 
+def get_budget() -> Any:
+    """获取当前工作流的预算对象（编排脚本内使用）
+
+    返回: { total, spent(), remaining() }
+    """
+    global _current_budget
+    return _current_budget
+
+
 def reset() -> None:
     """重置全局状态"""
-    global _current_ctx
+    global _current_ctx, _current_budget
     _current_ctx = None
+    _current_budget = None
 
 
 __all__ = [
@@ -596,5 +738,6 @@ __all__ = [
     "Workflow", "workflow",
     "JSWorflow", "js_workflow",
     "get_workflow", "list_workflows", "run_workflow",
+    "call_workflow", "get_budget",
     "run_workflow_script", "reset",
 ]
