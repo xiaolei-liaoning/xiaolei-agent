@@ -995,11 +995,179 @@ class EnhancedCLI:
                         print_success(f"✅ 成功 ({result.execution_time:.1f}s)")
                         print(result.text()[:1000])
                 return
-            # 无匹配工作流，用 ad-hoc 模式
+            # 无匹配工作流，尝试用调度器自动编排
+            await self._run_with_scheduler(task)
+            return
+
+        await self._run_with_scheduler(remaining)
+
+    async def _run_with_scheduler(self, task: str):
+        """调度模式：用 IntelligentScheduler 分析任务、选模式、生成计划，然后并行执行"""
+        from cli.colors import CLAUDE, log_status, print_error, print_success, SUCCESS
+        from cli.animated_spinner import print_section, AsyncSpinner
+        from core.multi_agent_v2.orchestration.orchestrator import (
+            phase, log, agent, parallel, pipeline, reset, AgentResult,
+        )
+        from core.multi_agent_v2.orchestration.scheduler.intelligent_scheduler import (
+            IntelligentScheduler, CollaborationMode,
+        )
+        from core.multi_agent_v2.orchestration.context.global_context_center import (
+            GlobalContextCenter,
+        )
+        from core.multi_agent_v2.agents.base.base_agent import Task
+        from core.multi_agent_v2.infrastructure.agent_pool import OnDemandAgentPool
+
+        reset()
+        print_section("🤖 智能调度 - 多Agent编排")
+
+        # 创建 AgentPool（Scheduler 需要它来创建规划用的 Agent）
+        pool = OnDemandAgentPool()
+
+        # 创建调度器
+        scheduler = IntelligentScheduler(GlobalContextCenter())
+        scheduler.set_agent_pool(pool)
+
+        # 创建任务对象
+        import uuid
+        task_obj = Task(
+            task_id=f"sched_{uuid.uuid4().hex[:8]}",
+            type="general",
+            description=task,
+            keywords=task.split()[:5],
+            complexity=0.6,
+            estimated_steps=3,
+        )
+
+        # 1. 调度
+        log("正在分析任务并制定编排计划...")
+        schedule_result = await scheduler.schedule(task_obj)
+
+        if not schedule_result.success:
+            log_status(f"调度失败，回退到简单并行模式: {schedule_result.error}", color="yellow")
             await self._run_ad_hoc(task)
             return
 
-        await self._run_ad_hoc(remaining)
+        mode_name = schedule_result.collaboration_mode.value
+        plan = schedule_result.execution_plan
+        log(f"调度完成: 模式={mode_name}, 计划={len(plan)} 步")
+
+        try:
+            # 2. 根据协作模式执行
+            mode = schedule_result.collaboration_mode
+
+            if mode == CollaborationMode.PIPELINE:
+                # 流水线：顺序执行每一步，上一步输出注入下一步
+                phase("流水线执行")
+                last_output = ""
+                ars = []
+                for i, step in enumerate(plan):
+                    desc = step.get("description", step.get("subtask_id", f"步骤{i+1}"))
+                    prompt = desc
+                    if last_output:
+                        prompt = f"{desc}\n\n【前置输出】\n{last_output[:600]}"
+                    step_label = step.get("subtask_id", f"step_{i+1}")
+                    ar = await agent(prompt, {"label": step_label, "timeout": 180})
+                    ars.append(ar)
+                    if ar and ar.success:
+                        last_output = ar.text() if hasattr(ar, 'text') else str(ar.output or "")
+                    # 失败不继续
+                    if not ar or not ar.success:
+                        log_status(f"步骤 {step_label} 失败，终止流水线", color="red")
+                        break
+
+                phase("结果汇总")
+                context = "\n\n".join(
+                    f"【步骤{i+1}】\n{ar.text()[:500]}"
+                    for i, ar in enumerate(ars) if ar and ar.success
+                )
+                final = await agent(
+                    f"综合以下流水线各步骤的结果，给出最终结论。\n\n{context}",
+                    {"label": "pipeline_汇总", "timeout": 120},
+                )
+
+            elif mode == CollaborationMode.MASTER_SLAVE:
+                # 主从模式：Master 拆解，Workers 并行，Master 聚合
+                phase("任务分解")
+                master_prompt = (
+                    f"将以下任务分解为 {max(len(plan), 2)} 个独立的子任务，"
+                    f"每个子任务可并行执行。\n\n{task}"
+                )
+                master_result = await agent(master_prompt, {"label": "master_拆解", "timeout": 120})
+
+                phase("并行执行")
+                worker_prompts = [
+                    step.get("description", f"并行子任务 {i+1}")
+                    for i, step in enumerate(plan)
+                ]
+                results = await parallel([
+                    lambda p=p, i=i: agent(p, {"label": f"worker_{i+1}", "timeout": 180})
+                    for i, p in enumerate(worker_prompts)
+                ])
+
+                phase("汇总聚合")
+                good = [r for r in results if r and r.success]
+                context = "\n\n".join(
+                    f"【Worker {i+1}】\n{r.text()[:500]}" for i, r in enumerate(good)
+                )
+                final = await agent(
+                    f"综合以下并行执行的结果，给出最终结论。\n\n原始任务: {task}\n\n{context}",
+                    {"label": "master_汇总", "timeout": 120},
+                )
+
+            elif mode == CollaborationMode.REVIEW:
+                # 评审模式：并行执行 + 交叉验证
+                phase("并行执行")
+                results = await parallel([
+                    lambda step=s, i=i: agent(
+                        step.get("description", f"方案 {i+1}"),
+                        {"label": f"方案_{i+1}", "timeout": 180},
+                    )
+                    for i, s in enumerate(plan[:4])  # 最多4个并发
+                ], max_concurrent=4)
+
+                phase("交叉评审")
+                good = [r for r in results if r and r.success]
+                context = "\n\n".join(
+                    f"【方案 {i+1}】\n{r.text()[:500]}" for i, r in enumerate(good)
+                )
+                final = await agent(
+                    f"评审以下多个方案对「{task}」的结论。\n"
+                    f"请逐一评审每个方案的质量，指出共识和分歧，给出综合结论。\n\n{context}",
+                    {"label": "reviewer_评审", "timeout": 180},
+                )
+
+            else:
+                # 兜底：并行执行 + 汇总
+                phase("并行执行")
+                results = await parallel([
+                    lambda step=s, i=i: agent(
+                        step.get("description", f"子任务 {i+1}"),
+                        {"label": f"子任务_{i+1}", "timeout": 180},
+                    )
+                    for i, s in enumerate(plan[:6])
+                ], max_concurrent=4)
+
+                phase("综合汇总")
+                good = [r for r in results if r and r.success]
+                context = "\n\n".join(
+                    f"【任务 {i+1}】\n{r.text()[:500]}" for i, r in enumerate(good)
+                )
+                final = await agent(
+                    f"综合以下执行结果，给出对「{task}」的整体结论:\n\n{context}",
+                    {"label": "综合汇总", "timeout": 180},
+                )
+
+            # 输出最终结果
+            if final and final.success:
+                print_section("📋 最终结果")
+                print(final.text()[:2000])
+            else:
+                log_status("汇总失败", color="red")
+
+        except Exception as e:
+            print_error(f"编排执行失败: {e}")
+            import traceback
+            traceback.print_exc()
 
     async def _run_ad_hoc(self, task: str):
         """ad-hoc 模式：自动拆解为多Agent并行任务"""
