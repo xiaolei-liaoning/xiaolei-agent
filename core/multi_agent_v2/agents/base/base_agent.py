@@ -11,7 +11,7 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional
 
-from .models import AgentType, Task, ActionResult, Reflection, AgentMetrics
+from .models import AgentType, AgentState, Capability, Task, ActionResult, Reflection, AgentMetrics
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +34,13 @@ class BaseAgent:
         self.task_history: List[Task] = []   # 任务历史
         self.current_load: float = 0.0       # 当前负载
         self.max_load: float = 1.0           # 最大负载
+        self.state: AgentState = AgentState.IDLE  # Agent状态（Scheduler用）
+        self.health_score: float = 1.0            # 健康度（Scheduler用）
+        self.capabilities: List[Capability] = []  # 能力列表（Scheduler用）
+
+    def get_metrics(self) -> "AgentMetrics":
+        """返回性能指标（Scheduler/CapabilityMatcher 依赖）"""
+        return self.metrics
 
         logger.info(f"Agent: {self.agent_id} ({self.agent_type.value})")
 

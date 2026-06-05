@@ -35,7 +35,7 @@ class OnDemandAgentPool:
             )
             # Adapt to task — append ALL capability types, no filtering
             agent.adapt_to_task(task)
-            await agent.start()
+            # WorkAgent 初始化即就绪，不需要 start()
             self._all_agents[agent.agent_id] = agent
             agents.append(agent)
 

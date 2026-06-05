@@ -172,6 +172,12 @@ class EnhancedCLI:
         # 状态栏（延迟到 run() 中初始化）
         self._status_bar = None
 
+        # 折叠输出缓存（用于 /show 命令）
+        self._collapsed_outputs = {}
+
+        # MCP 调用历史
+        self.mcp_history = []
+
         # 导入核心服务
         _import_core_services()
 
@@ -999,175 +1005,88 @@ class EnhancedCLI:
             await self._run_with_scheduler(task)
             return
 
-        await self._run_with_scheduler(remaining)
+        await self._run_ad_hoc(remaining)
 
     async def _run_with_scheduler(self, task: str):
-        """调度模式：用 IntelligentScheduler 分析任务、选模式、生成计划，然后并行执行"""
-        from cli.colors import CLAUDE, log_status, print_error, print_success, SUCCESS
-        from cli.animated_spinner import print_section, AsyncSpinner
+        """调度模式：分析任务 -> 选模式 -> 生成 plan -> orchestrator 执行"""
+        from cli.colors import CLAUDE, log_status, print_error, print_success
+        from cli.animated_spinner import print_section
         from core.multi_agent_v2.orchestration.orchestrator import (
-            phase, log, agent, parallel, pipeline, reset, AgentResult,
+            phase, log, agent, parallel, reset,
         )
+        from core.multi_agent_v2.orchestration.scheduler.task_analyzer import TaskAnalyzer
+        from core.multi_agent_v2.orchestration.scheduler.mode_selector import ModeSelector
         from core.multi_agent_v2.orchestration.scheduler.intelligent_scheduler import (
-            IntelligentScheduler, CollaborationMode,
+            CollaborationMode,
         )
-        from core.multi_agent_v2.orchestration.context.global_context_center import (
-            GlobalContextCenter,
-        )
-        from core.multi_agent_v2.agents.base.base_agent import Task
-        from core.multi_agent_v2.infrastructure.agent_pool import OnDemandAgentPool
+        from core.multi_agent_v2.agents.base.base_agent import Task as SchedTask
 
         reset()
         print_section("🤖 智能调度 - 多Agent编排")
 
-        # 创建 AgentPool（Scheduler 需要它来创建规划用的 Agent）
-        pool = OnDemandAgentPool()
-
-        # 创建调度器
-        scheduler = IntelligentScheduler(GlobalContextCenter())
-        scheduler.set_agent_pool(pool)
-
-        # 创建任务对象
-        import uuid
-        task_obj = Task(
-            task_id=f"sched_{uuid.uuid4().hex[:8]}",
-            type="general",
-            description=task,
+        import uuid, re
+        task_obj = SchedTask(
+            task_id="sched_" + uuid.uuid4().hex[:8],
+            type="general", description=task,
             keywords=task.split()[:5],
-            complexity=0.6,
-            estimated_steps=3,
+            complexity=0.6, estimated_steps=3,
         )
 
-        # 1. 调度
-        log("正在分析任务并制定编排计划...")
-        schedule_result = await scheduler.schedule(task_obj)
+        # 1. 分析任务
+        analyzer = TaskAnalyzer()
+        analysis = analyzer.analyze(task_obj)
+        log(f"分析: type={analysis.get('task_type','?')}, "
+            f"complexity={analysis.get('complexity',0.5):.2f}, "
+            f"steps={analysis.get('estimated_steps',3)}")
 
-        if not schedule_result.success:
-            log_status(f"调度失败，回退到简单并行模式: {schedule_result.error}", color="yellow")
-            await self._run_ad_hoc(task)
-            return
+        # 2. 选模式
+        mode_selector = ModeSelector()
+        mode = await mode_selector.select(task_obj, analysis, None, None, {})
+        log(f"模式: {mode.value}")
 
-        mode_name = schedule_result.collaboration_mode.value
-        plan = schedule_result.execution_plan
-        log(f"调度完成: 模式={mode_name}, 计划={len(plan)} 步")
+        # 3. 拆子任务
+        subtasks = [t.strip() for t in re.split(r"[和与及、,，]", task) if t.strip()]
+        if len(subtasks) < 2:
+            steps = max(analysis.get("estimated_steps", 3), 2)
+            subtasks = [f"{task} - {i+1}" for i in range(min(steps, 6))]
+        log(f"{len(subtasks)} 个子任务, 模式={mode.value}")
 
-        try:
-            # 2. 根据协作模式执行
-            mode = schedule_result.collaboration_mode
+        # 4. 按模式执行
+        if mode == CollaborationMode.PIPELINE:
+            phase("流水线")
+            last_o, ars = "", []
+            for i, t in enumerate(subtasks):
+                p = t + ("\n[prev]\n" + last_o[:600]) if last_o else t
+                ar = await agent(p, {"label": f"s{i+1}", "timeout": 180})
+                ars.append(ar)
+                if ar and ar.success:
+                    last_o = ar.text() if hasattr(ar, "text") else str(ar.output or "")
+                if not ar or not ar.success:
+                    break
+            parts = [f"[s{i+1}]\n{ar.text()[:400]}" for i, ar in enumerate(ars) if ar and ar.success]
+            final = await agent("结果:\n\n" + "\n\n".join(parts), {"label": "汇总", "timeout": 120})
 
-            if mode == CollaborationMode.PIPELINE:
-                # 流水线：顺序执行每一步，上一步输出注入下一步
-                phase("流水线执行")
-                last_output = ""
-                ars = []
-                for i, step in enumerate(plan):
-                    desc = step.get("description", step.get("subtask_id", f"步骤{i+1}"))
-                    prompt = desc
-                    if last_output:
-                        prompt = f"{desc}\n\n【前置输出】\n{last_output[:600]}"
-                    step_label = step.get("subtask_id", f"step_{i+1}")
-                    ar = await agent(prompt, {"label": step_label, "timeout": 180})
-                    ars.append(ar)
-                    if ar and ar.success:
-                        last_output = ar.text() if hasattr(ar, 'text') else str(ar.output or "")
-                    # 失败不继续
-                    if not ar or not ar.success:
-                        log_status(f"步骤 {step_label} 失败，终止流水线", color="red")
-                        break
+        elif mode == CollaborationMode.REVIEW:
+            phase("并行")
+            rs = await parallel([lambda t=t: agent(t, {"timeout": 180}) for t in subtasks[:4]], max_concurrent=4)
+            phase("评审")
+            good = [r for r in rs if r and r.success]
+            parts = [f"[{i+1}]\n{r.text()[:400]}" for i, r in enumerate(good)]
+            final = await agent("评审以下方案，给出综合结论:\n\n" + "\n\n".join(parts),
+                                {"label": "评审", "timeout": 180})
+        else:
+            phase("并行")
+            rs = await parallel([lambda t=t: agent(t, {"timeout": 180}) for t in subtasks[:6]], max_concurrent=4)
+            phase("汇总")
+            good = [r for r in rs if r and r.success]
+            parts = [f"[{i+1}]\n{r.text()[:400]}" for i, r in enumerate(good)]
+            final = await agent("综合以下:\n\n" + "\n\n".join(parts), {"label": "汇总", "timeout": 180})
 
-                phase("结果汇总")
-                context = "\n\n".join(
-                    f"【步骤{i+1}】\n{ar.text()[:500]}"
-                    for i, ar in enumerate(ars) if ar and ar.success
-                )
-                final = await agent(
-                    f"综合以下流水线各步骤的结果，给出最终结论。\n\n{context}",
-                    {"label": "pipeline_汇总", "timeout": 120},
-                )
-
-            elif mode == CollaborationMode.MASTER_SLAVE:
-                # 主从模式：Master 拆解，Workers 并行，Master 聚合
-                phase("任务分解")
-                master_prompt = (
-                    f"将以下任务分解为 {max(len(plan), 2)} 个独立的子任务，"
-                    f"每个子任务可并行执行。\n\n{task}"
-                )
-                master_result = await agent(master_prompt, {"label": "master_拆解", "timeout": 120})
-
-                phase("并行执行")
-                worker_prompts = [
-                    step.get("description", f"并行子任务 {i+1}")
-                    for i, step in enumerate(plan)
-                ]
-                results = await parallel([
-                    lambda p=p, i=i: agent(p, {"label": f"worker_{i+1}", "timeout": 180})
-                    for i, p in enumerate(worker_prompts)
-                ])
-
-                phase("汇总聚合")
-                good = [r for r in results if r and r.success]
-                context = "\n\n".join(
-                    f"【Worker {i+1}】\n{r.text()[:500]}" for i, r in enumerate(good)
-                )
-                final = await agent(
-                    f"综合以下并行执行的结果，给出最终结论。\n\n原始任务: {task}\n\n{context}",
-                    {"label": "master_汇总", "timeout": 120},
-                )
-
-            elif mode == CollaborationMode.REVIEW:
-                # 评审模式：并行执行 + 交叉验证
-                phase("并行执行")
-                results = await parallel([
-                    lambda step=s, i=i: agent(
-                        step.get("description", f"方案 {i+1}"),
-                        {"label": f"方案_{i+1}", "timeout": 180},
-                    )
-                    for i, s in enumerate(plan[:4])  # 最多4个并发
-                ], max_concurrent=4)
-
-                phase("交叉评审")
-                good = [r for r in results if r and r.success]
-                context = "\n\n".join(
-                    f"【方案 {i+1}】\n{r.text()[:500]}" for i, r in enumerate(good)
-                )
-                final = await agent(
-                    f"评审以下多个方案对「{task}」的结论。\n"
-                    f"请逐一评审每个方案的质量，指出共识和分歧，给出综合结论。\n\n{context}",
-                    {"label": "reviewer_评审", "timeout": 180},
-                )
-
-            else:
-                # 兜底：并行执行 + 汇总
-                phase("并行执行")
-                results = await parallel([
-                    lambda step=s, i=i: agent(
-                        step.get("description", f"子任务 {i+1}"),
-                        {"label": f"子任务_{i+1}", "timeout": 180},
-                    )
-                    for i, s in enumerate(plan[:6])
-                ], max_concurrent=4)
-
-                phase("综合汇总")
-                good = [r for r in results if r and r.success]
-                context = "\n\n".join(
-                    f"【任务 {i+1}】\n{r.text()[:500]}" for i, r in enumerate(good)
-                )
-                final = await agent(
-                    f"综合以下执行结果，给出对「{task}」的整体结论:\n\n{context}",
-                    {"label": "综合汇总", "timeout": 180},
-                )
-
-            # 输出最终结果
-            if final and final.success:
-                print_section("📋 最终结果")
-                print(final.text()[:2000])
-            else:
-                log_status("汇总失败", color="red")
-
-        except Exception as e:
-            print_error(f"编排执行失败: {e}")
-            import traceback
-            traceback.print_exc()
+        if final and final.success:
+            print_section("结果")
+            print(final.text()[:2000])
+        else:
+            log_status("汇总失败", color="red")
 
     async def _run_ad_hoc(self, task: str):
         """ad-hoc 模式：自动拆解为多Agent并行任务"""
@@ -1509,51 +1428,14 @@ class EnhancedCLI:
         print_color(f"\n进入聊天模式 ({mode})...", CliColors.BLUE)
         print_color("输入 quit/exit/bye 退出聊天模式，/clear 清空历史", CliColors.GRAY)
         print_color(f"当前会话: {self.session_id}", CliColors.GRAY)
-
-        while self.chat_mode:
-            try:
-                user_input = get_chat_input(self)
-
-                if user_input.lower() in ['quit', 'exit', 'bye', '结束']:
-                    print_color("👋 退出聊天模式", CliColors.BLUE)
-                    self.chat_mode = False
-                    break
-
-                if not user_input.strip():
-                    continue
-
-                # 添加到聊天历史
-                self.chat_history.append({"role": "user", "content": user_input})
-
-                print_chat_bubble(user_input, is_user=True)
-
-                parsed_cmd = self.command_parser.parse(user_input)
-
-                if parsed_cmd.is_command:
-                    if parsed_cmd.command_type == CommandType.CLEAR:
-                        self.chat_history = []
-                        print_color("聊天历史已清空", CliColors.BLUE)
-                    else:
-                        await self.handle_command(parsed_cmd)
-                else:
-                    await self.handle_smart_request_with_history(user_input)
-
-            except KeyboardInterrupt:
-                print_color("\n👋 退出聊天模式", CliColors.BLUE)
-                self.chat_mode = False
-                break
-            except Exception as e:
-                log_error(f"聊天处理失败: {e}")
-
-            except KeyboardInterrupt:
-                print_color("\n👋 退出聊天模式", CliColors.BLUE)
-                self.chat_mode = False
-                break
-            except Exception as e:
-                log_error(f"聊天处理失败: {e}")
+        await self._chat_mode_loop()
 
     async def start_chat_mode_loop(self):
         """聊天模式循环（用于带初始消息的情况）"""
+        await self._chat_mode_loop()
+
+    async def _chat_mode_loop(self):
+        """聊天模式核心循环"""
         while self.chat_mode:
             try:
                 user_input = get_chat_input(self)
@@ -1619,7 +1501,7 @@ class EnhancedCLI:
             original_request: 用户原始请求
         """
         if not mcp_result.get("success"):
-            logger.warning(f"MCP推荐失败: {mcp_result.get('error')}")
+            log_warning(f"MCP推荐失败: {mcp_result.get('error')}")
             return
 
         # 显示推荐信息
@@ -1629,7 +1511,7 @@ class EnhancedCLI:
 
         # 获取用户选择
         try:
-            user_choice = input(f"\n{ansi['yellow']}{ansi['bold']}请选择: {ansi['end']}").strip().lower()
+            user_choice = _console.input(f"\n[yellow bold]请选择: [/]").strip().lower()
         except (EOFError, KeyboardInterrupt):
             user_choice = "no"
 
@@ -1698,7 +1580,7 @@ class EnhancedCLI:
             original_request: 用户原始请求
         """
         if not clarification_result.get("success"):
-            logger.warning(f"反问步骤失败: {clarification_result.get('error')}")
+            log_warning(f"反问步骤失败: {clarification_result.get('error')}")
             return
 
         # 显示反问信息
@@ -1708,7 +1590,7 @@ class EnhancedCLI:
 
         # 获取用户回答
         try:
-            user_answer = input(f"\n{ansi['yellow']}{ansi['bold']}请输入您的回答: {ansi['end']}").strip()
+            user_answer = _console.input(f"\n[yellow bold]请输入您的回答: [/]").strip()
         except (EOFError, KeyboardInterrupt):
             user_answer = ""
 
@@ -1746,16 +1628,7 @@ class EnhancedCLI:
             if llm_response:
                 print_chat_bubble(llm_response, is_user=False)
                 self.chat_history.append({"role": "assistant", "content": llm_response})
-
-            if llm_response:
-                print_chat_bubble(llm_response, is_user=False)
-                self.chat_history.append({"role": "assistant", "content": llm_response})
             return
-
-        print_success(f"✅ 成功连接到 {selected_server}")
-
-        # 智能调用MCP工具
-        await self._smart_call_mcp_tool(selected_server, original_request)
 
     async def _chat_with_llm(self, message: str) -> str:
         """直接使用LLM响应聊天消息"""
