@@ -31,7 +31,10 @@ class ReActCoreMiddleware(BaseMiddleware):
             from core.multi_agent_v2.tools.tool_registry import get_tool_registry
             reg = get_tool_registry()
             if not reg._initialized:
-                await reg.discover_all()
+                try:
+                    await asyncio.wait_for(reg.discover_all(), timeout=10)
+                except asyncio.TimeoutError:
+                    logger.warning("MCP 连接超时（10s），仅使用内置工具")
             raw = await reg.get_tools_for_task(ctx.task_description, max_tools=20)
             # 暴露所有工具给 LLM（内置 + 已连接的 MCP 工具）
             # MCP 工具通过 Server 字段路由到对应的 MCP 服务器
@@ -141,7 +144,10 @@ class ReActCoreMiddleware(BaseMiddleware):
             ctx.interrupted = True
             return
 
-        for tc in tool_calls:
+        # 并行执行所有工具调用，按原始顺序收集结果
+        results = await self._execute_tool_calls_parallel(tool_calls, ctx)
+
+        for tc, result in zip(tool_calls, results):
             name = tc.get("function", {}).get("name", "")
             try:
                 args = json.loads(tc.get("function", {}).get("arguments", "{}"))
@@ -149,7 +155,6 @@ class ReActCoreMiddleware(BaseMiddleware):
                 args = {}
 
             logger.info("第%d轮 调用: %s", ctx.iteration, name)
-            result = await self._execute(tc, ctx)
 
             ok = result.get("success", False)
             ctx.tool_results.append({
@@ -203,6 +208,17 @@ class ReActCoreMiddleware(BaseMiddleware):
             return await agent._execute_single_tool_call(tool_args)
         except Exception as e:
             return {"success": False, "result": {"error": str(e)}}
+
+    async def _execute_tool_calls_parallel(self, tool_calls: list, ctx: RunContext) -> list:
+        """并行执行多个工具调用，按原始顺序返回结果列表"""
+        async def _run_one(tc):
+            try:
+                return await self._execute(tc, ctx)
+            except Exception as e:
+                return {"success": False, "result": {"error": str(e)}}
+
+        results = await asyncio.gather(*[_run_one(tc) for tc in tool_calls])
+        return results
 
     @staticmethod
     def _lookup_server(tool_name: str, ctx: RunContext) -> str:
@@ -381,19 +397,24 @@ class PlanAwareMiddleware(BaseMiddleware):
 def build_default_chain() -> MiddlewareChain:
     """构建默认中间件链：Profile → PlanAware → ReActDepth → ReActCore → ..."""
     chain = MiddlewareChain()
+    from .middleware import DynamicStageRoutingMiddleware
     from .middlewares import (
         ProfileMiddleware, ReActDepthMiddleware,
         ConfidenceMiddleware, ReflectionMiddleware,
         KEPAMiddleware, BranchMiddleware,
+        DataPipelineMiddleware, AskUserMiddleware,
     )
     chain.add(ProfileMiddleware())       # 任务画像
+    chain.add(DynamicStageRoutingMiddleware())  # ⭐ 阶段流水线
     chain.add(PlanAwareMiddleware())     # ⭐ 计划感知 — 先列计划，追踪进度
     chain.add(ReActDepthMiddleware())    # 深度控制
     chain.add(ReActCoreMiddleware())     # ReAct 核心循环
+    chain.add(DataPipelineMiddleware())  # ⭐ 数据流水线
     chain.add(ConfidenceMiddleware())    # 置信度评估
     chain.add(ReflectionMiddleware())    # 执行反思
     chain.add(KEPAMiddleware())          # KEPA 闭环
     chain.add(BranchMiddleware())        # 策略分支
+    chain.add(AskUserMiddleware())       # ⭐ 用户交互
     return chain
 
 

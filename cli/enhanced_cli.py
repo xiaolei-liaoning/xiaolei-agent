@@ -1009,16 +1009,22 @@ class EnhancedCLI:
         await self._run_with_scheduler(remaining)
 
     async def _run_with_scheduler(self, task: str):
-        """动态编排：LLM 分析生成子任务列表 → 固定 JS 模板 → js_orchestrator 执行
+        """动态编排：LLM 自由生成 JS 编排脚本 → 后处理修复 → js_orchestrator 执行
 
-        LLM 只负责"拆子任务"（JSON），JS 模板和编排逻辑由 Python 固定生成。
-        这样既保留了 LLM 的任务理解能力，又避免了 LLM 生成非法 JS 的问题。
+        LLM 真正写 JS 编排逻辑（不固定模板），可以自由使用：
+        - parallel() 并发织网
+        - 条件分支：根据中间结果决定后续路径
+        - 阶段拆分：多阶段流水线
+        - 错误处理：超时/失败重试
+        - 动态拼接：根据子任务结果构造新的子任务
+
+        Python 做后处理修复常见 JS 语法问题，保证可执行。
         """
         from cli.colors import CLAUDE, log_status, print_error, print_success
         from cli.animated_spinner import print_section
-        import json, re
+        import re
 
-        print_section("🤖 动态编排 - JS Workflow")
+        print_section("🕸️  动态编排 - JS Workflow")
 
         try:
             from core.engine.llm_backend import get_llm_router
@@ -1027,74 +1033,121 @@ class EnhancedCLI:
                 log_status("LLM 不可用，走简单并行", color="yellow")
                 raise ValueError("LLM不可用")
 
-            # 1. LLM 生成子任务列表（JSON）
-            log("正在分析任务并拆解子任务...")
-            subtask_resp = await asyncio.wait_for(
+            # ── 1. LLM 自由生成 JS 编排脚本 ──
+            log("正在生成编排脚本...")
+            js_raw = await asyncio.wait_for(
                 router.chat([{"role": "system", "content":
-                    "分析任务，输出 JSON 格式的子任务列表。\n"
-                    "格式: {\"subtasks\": [\"子任务1\", \"子任务2\", ...]}\n"
-                    "规则: 3-6个，每个是独立可执行的分析/对比维度\n"
-                    "只输出 JSON，不要其他内容"},
-                    {"role": "user", "content": f"任务: {task}"}
-                ], temperature=0.2, max_tokens=1000),
-                timeout=30,
+                    "You are a workflow orchestration expert. Write a JavaScript orchestration script for the user's task.\n\n"
+                    "AVAILABLE API:\n"
+                    "  agent(prompt, opts) -> Promise<string>\n"
+                    "    opts: { label, timeout }\n"
+                    "    spawns a sub-agent, returns its text result\n"
+                    "  parallel(thunks) -> Promise<array>\n"
+                    "    thunks is an array of () => agent(...) functions\n"
+                    "  phase(title)  — mark a phase\n"
+                    "  log(message)  — log progress\n\n"
+                    "REQUIRED EXPORT:\n"
+                    "  export const meta = { name, description, phases: [{title}, ...] };\n"
+                    "  export default async function main() { ... }\n\n"
+                    "CRITICAL JS RULES:\n"
+                    "  - Use string CONCATENATION with +, NEVER backtick template literals\n"
+                    "  - CORRECT: \"hello \" + name + \" world\"\n"
+                    "  - WRONG: `hello ${name} world`\n"
+                    "  - WRONG: `multi\\nline`\n"
+                    "  - Use \\n for newlines inside strings\n"
+                    "  - Use () => agent(...) NOT agent(...) directly in arrays\n"
+                    "  - Always await agent() calls: const r = await agent(...)\n"
+                    "  - Always return a value from main()\n\n"
+                    "STYLE:\n"
+                    "  - For comparison/analysis tasks: parallel() 3-6 agents, then synthesize\n"
+                    "  - For multi-stage tasks: use sequential phase() calls\n"
+                    "  - Use filter/map/join to process results\n"
+                    "  - You can use if/else, loops, try/catch\n\n"
+                    "Output ONLY the script, no explanation."
+                }, {"role": "user", "content": f"Task: {task}"}
+                ], temperature=0.4, max_tokens=3000),
+                timeout=90,
             )
-            resp_text = subtask_resp if isinstance(subtask_resp, str) else str(subtask_resp)
-            json_match = re.search(r'\[.*\]|\{.*\}', resp_text, re.DOTALL)
-            parsed = json.loads(json_match.group()) if json_match else None
-            subtasks = parsed.get("subtasks", []) if isinstance(parsed, dict) else \
-                      parsed if isinstance(parsed, list) else []
+            script = js_raw if isinstance(js_raw, str) else str(js_raw)
 
-            if len(subtasks) < 2:
-                log_status(f"拆解子任务失败" + (f"({len(subtasks)}个)" if subtasks else ""), color="yellow")
-                raise ValueError("子任务太少")
+            # 去掉 markdown 代码块标记
+            code_match = re.search(r'```(?:javascript|js)?\s*\n(.*?)\n```', script, re.DOTALL)
+            if code_match:
+                script = code_match.group(1).strip()
 
-            log(f"拆解为 {len(subtasks)} 个子任务")
-            for i, s in enumerate(subtasks):
-                log(f"  [{i+1}] {s[:80]}")
+            if "export const meta" not in script or "export default" not in script:
+                log_status("LLM 未生成有效脚本，走简单并行", color="yellow")
+                raise ValueError("无效脚本")
 
-            # 2. 生成合法的 JS 编排脚本（固定模板）
-            subtask_lines = []
-            for i, s in enumerate(subtasks[:6]):
-                label_l = f"r{i+1}"
-                desc_l = s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
-                subtask_lines.append(f'    () => agent("{desc_l}", {{label: "{label_l}", timeout: 240}}),')
-            subtask_body = "\n".join(subtask_lines)
-            task_desc = task[:100].replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+            # ── 2. 后处理修复：反引号模板字符串 → + 拼接 ──
+            # 这是最常见的 JS 语法错误，LLM 总爱用 `xxx ${var}` 写法
+            fixes = []
 
-            js_script = (
-                'export const meta = {\n'
-                '  name: "dynamic",\n'
-                f'  description: "{task_desc}",\n'
-                '  phases: [{title: "Research"}, {title: "Synthesis"}],\n'
-                '};\n'
-                '\n'
-                'export default async function main() {\n'
-                '  phase("Research");\n'
-                '\n'
-                '  const results = await parallel([\n'
-                f'{subtask_body}\n'
-                '  ]);\n'
-                '\n'
-                '  phase("Synthesis");\n'
-                '\n'
-                '  const valid = results.filter(r => r !== null);\n'
-                '  const context = valid.map((r, i) => "[" + (i+1) + "]\\n" + r).join("\\n\\n");\n'
-                '\n'
-                '  return await agent(\n'
-                f'    "Synthesize the following research about: {task_desc}\\n\\n" + context,\n'
-                '    {label: "final", timeout: 300},\n'
-                '  );\n'
-                '}\n'
-            )
+            def fix_backticks(code):
+                """把反引号模板字符串 `xxx ${expr} yyy` 转成 "xxx " + expr + " yyy" """
+                result = []
+                i = 0
+                while i < len(code):
+                    if code[i] == '`' and (i == 0 or code[i-1] != '\\'):
+                        # 找到匹配的反引号
+                        j = i + 1
+                        while j < len(code):
+                            if code[j] == '`' and code[j-1] != '\\':
+                                break
+                            j += 1
+                        if j < len(code):
+                            seg = code[i+1:j]
+                            # 按 ${...} 拆分
+                            parts = re.split(r'\$\{([^}]+)\}', seg)
+                            built = []
+                            for k, p in enumerate(parts):
+                                if k % 2 == 0:
+                                    if p:
+                                        built.append('"' + p.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n') + '"')
+                                else:
+                                    built.append(p)
+                            replacement = ' + '.join(built) if built else '""'
+                            result.append(replacement)
+                            i = j + 1
+                            fixes.append("backtick")
+                        else:
+                            result.append(code[i])
+                            i += 1
+                    else:
+                        result.append(code[i])
+                        i += 1
+                return ''.join(result)
 
-            log("JS 编排脚本已生成，开始执行...")
+            script = fix_backticks(script)
 
-            # 3. 通过 js_orchestrator 执行
+            if fixes:
+                log("JS 修复: 反引号模板字符串 → + 拼接")
+
+            # 可靠修复 1: parallel([agent(... → parallel([() => agent(...
+            if re.search(r'parallel\(\[\s*agent\(', script):
+                script = re.sub(
+                    r'(parallel\(\[)\s*agent\(',
+                    r'\1() => agent(',
+                    script
+                )
+                log("JS 修复: parallel thunk 包装")
+
+            # 可靠修复 2: return agent( → return await agent(
+            if re.search(r'return\s+agent\(', script):
+                script = re.sub(r'return\s+agent\(', 'return await agent(', script)
+                log("JS 修复: await 补全")
+
+            # 打印脚本前 10 行
+            log("编排脚本:")
+            for line in script.split('\n')[:8]:
+                log("  " + line)
+            log("  ...")
+
+            # ── 3. 执行 ──
             from core.multi_agent_v2.orchestration.js_orchestrator import run_js_workflow
-            result = await run_js_workflow(template)
+            result = await run_js_workflow(script)
 
-            # 4. 输出结果
+            # ── 4. 输出 ──
             print_section("📋 最终结果")
             if result is not None:
                 text = str(result)
@@ -1104,6 +1157,8 @@ class EnhancedCLI:
 
         except (ValueError, Exception) as e:
             log_status(f"JS 编排受阻 ({str(e)[:80]})，走简单并行", color="yellow")
+            import traceback
+            traceback.print_exc()
             await self._run_ad_hoc(task)
 
     async def _run_ad_hoc(self, task: str):
