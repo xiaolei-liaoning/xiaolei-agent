@@ -36,7 +36,6 @@ class WorkAgent(BaseAgent):
         agent_id: Optional[str] = None,
         name: Optional[str] = None,
         description: str = "通用工作 Agent，根据任务动态调整",
-        light_mode: bool = False,
         personality: str = "",
         role: str = "",
     ):
@@ -49,8 +48,7 @@ class WorkAgent(BaseAgent):
             role=role,
         )
 
-        # 执行模式（保留字段以兼容旧构造调用，不再影响执行路径）
-        self._light_mode = light_mode
+        self._light_mode = None
 
         # 模型覆盖（orchestrator 动态设置）
         self._model_override: str = ""
@@ -64,7 +62,7 @@ class WorkAgent(BaseAgent):
         # SharedBus 监听
         self._bus_listener_task: Optional[asyncio.Task] = None
 
-        logger.info(f"WorkAgent {'[轻量]' if light_mode else ''} 初始化完成: {self.agent_id}")
+        logger.info(f"WorkAgent 初始化完成: {self.agent_id}")
 
     def _default_capabilities(self) -> List[Capability]:
         """提供一组通用的默认能力，具体匹配由 scheduler 动态完成"""
@@ -199,7 +197,7 @@ class WorkAgent(BaseAgent):
         print(f"\n    \033[1;36m⚡ 开始任务: {desc[:80]}\033[0m")
 
         # 启动总线监听
-        await self._start_bus_listener()
+        await self._start_bus_listener(enable=True)
 
         try:
             # ── 简单对话检测：30字以内且不含工具关键词 → 直接LLM调用 ──
@@ -227,11 +225,11 @@ class WorkAgent(BaseAgent):
                     )
 
             # ── 复杂任务：走 ReActCore 中间件链 ──
-            logger.info("WorkAgent → ReActCore (max_rounds=%d)", 2 if self._light_mode else 10)
+            logger.info("WorkAgent → ReActCore (max_rounds=10)")
             from core.multi_agent_v2.agents.react_core import run_react
             result = await run_react(
                 desc,
-                max_rounds=2 if self._light_mode else 10,
+                max_rounds=10,
                 model=task.context.get("model", ""),
                 personality_prompt=self.system_prompt_for_role(),
                 agent=self,

@@ -101,7 +101,6 @@ class AgentPool:
             agent = WorkAgent(
                 agent_id=f"pool_{i:03d}",
                 name=f"worker_{i}",
-                light_mode=True,
             )
             self._pool.put_nowait(agent)
         self._initialized = True
@@ -122,7 +121,6 @@ class AgentPool:
             tmp = WorkAgent(
                 agent_id=f"tmp_{uuid.uuid4().hex[:6]}",
                 name=label or "tmp_worker",
-                light_mode=True,
             )
             tmp._pool_original_id = tmp.agent_id
             tmp._pool_original_name = tmp.agent_name
