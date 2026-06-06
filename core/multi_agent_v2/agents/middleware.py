@@ -327,10 +327,19 @@ class MiddlewareChain:
         """
         async def _run_chain(index: int) -> Dict:
             if index >= len(self._middlewares):
-                # 执行实际工具调用
-                from core.multi_agent_v2.agents.base.base_agent import BaseAgent
-                agent = BaseAgent()
-                return await agent._execute_single_tool_call(tool_args)
+                # 执行实际工具调用（直接调用工具注册表，避免创建裸 BaseAgent）
+                from core.multi_agent_v2.tools.tool_registry import get_tool_registry
+                registry = get_tool_registry()
+                name = tool_args.get("name", "")
+                args = tool_args.get("arguments", {})
+                handler = registry.get_handler(name)
+                if handler:
+                    try:
+                        result = await handler(args)
+                        return {"success": True, "result": result, "tool_call": tool_args}
+                    except Exception as e:
+                        return {"success": False, "error": str(e), "tool_call": tool_args}
+                return {"success": False, "error": f"no handler for {name}", "tool_call": tool_args}
             mw = self._middlewares[index]
             return await mw.on_wrap_tool_call(ctx, lambda: _run_chain(index + 1))
         return await _run_chain(0)
