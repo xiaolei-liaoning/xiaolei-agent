@@ -166,6 +166,15 @@ class ReActCoreMiddleware(BaseMiddleware):
         # 并行执行所有工具调用，按原始顺序收集结果
         results = await self._execute_tool_calls_parallel(tool_calls, ctx)
 
+        # ── 实时反馈：显示工具执行结果 ──
+        for tc, result in zip(tool_calls, results):
+            name = tc.get("function", {}).get("name", "?")
+            ok = result.get("success", False)
+            icon = "✅" if ok else "⚠️"
+            err = result.get("result", {}).get("error", "") if not ok else ""
+            detail = f" {err[:60]}" if err else ""
+            print(f"    \033[2m{icon} {name}{detail}\033[0m")
+
         for tc, result in zip(tool_calls, results):
             name = tc.get("function", {}).get("name", "")
             try:
@@ -207,24 +216,24 @@ class ReActCoreMiddleware(BaseMiddleware):
             ctx.interrupted = True
 
     async def _execute(self, tc: dict, ctx: Optional[RunContext] = None) -> dict:
-        """执行单个工具调用 — 通过 chain.on_wrap_tool_call 走洋葱包裹"""
+        """执行单个工具调用 — 通过 chain.on_wrap_tool_call 走洋葱包裹（15s超时）"""
         tool_args = {
             "name": tc.get("function", {}).get("name", ""),
             "arguments": json.loads(tc.get("function", {}).get("arguments", "{}")),
             "_tool_name": tc.get("function", {}).get("name", ""),
             "_server": self._lookup_server(tc.get("function", {}).get("name", ""), ctx),
         }
-        # 如果有 chain 引用，走 wrap 链
-        if ctx and hasattr(ctx, '_chain') and ctx._chain:
-            try:
+        async def _do_execute():
+            if ctx and hasattr(ctx, '_chain') and ctx._chain:
                 return await ctx._chain.on_wrap_tool_call(ctx, tool_args)
-            except Exception as e:
-                return {"success": False, "result": {"error": str(e)}}
-        # 无 chain 引用时直接调
-        from core.multi_agent_v2.agents.base.base_agent import BaseAgent
-        agent = BaseAgent()
-        try:
+            from core.multi_agent_v2.agents.base.base_agent import BaseAgent
+            agent = BaseAgent()
             return await agent._execute_single_tool_call(tool_args)
+
+        try:
+            return await asyncio.wait_for(_do_execute(), timeout=15)
+        except asyncio.TimeoutError:
+            return {"success": False, "result": {"error": f"工具 {tool_args['name']} 执行超时(15s)"}}
         except Exception as e:
             return {"success": False, "result": {"error": str(e)}}
 
