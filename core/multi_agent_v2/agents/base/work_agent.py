@@ -193,10 +193,30 @@ class WorkAgent(BaseAgent):
         await self._start_bus_listener()
 
         try:
-            # 走 ReActCore 快路径
+            # ── 简单对话检测：30字以内且不含工具关键词 → 直接LLM调用 ──
+            desc = task.description
+            _TOOL_KW = ["搜索","查找","写","创建","生成","分析","报告","爬",
+                        "保存","文件","数据","代码","游戏","脚本","curl","fetch",
+                        "http","api","百度","谷歌","翻译"]
+            is_simple = len(desc) < 30 and not any(kw in desc for kw in _TOOL_KW)
+            if is_simple:
+                from core.engine.llm_backend import get_llm_router
+                router = get_llm_router()
+                if router and router.is_available():
+                    resp = await router.chat([{"role": "user", "content": desc}])
+                    answer = str(resp) if resp else ""
+                    elapsed = time.time() - start
+                    return ActionResult(
+                        success=bool(answer),
+                        output=answer,
+                        execution_time=elapsed,
+                        metadata={"light_mode": True, "direct_reply": True},
+                    )
+
+            # 走 ReActCore 快路径（复杂任务才走中间件链）
             from core.multi_agent_v2.agents.react_core import run_react
             result = await run_react(
-                task.description,
+                desc,
                 max_rounds=2 if self._light_mode else 10,
             )
 
