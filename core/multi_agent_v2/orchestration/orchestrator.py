@@ -111,20 +111,34 @@ class AgentPool:
         """从池中借一个 WorkAgent"""
         await self._ensure()
         try:
-            return await asyncio.wait_for(self._pool.get(), timeout=30.0)
+            agent = await asyncio.wait_for(self._pool.get(), timeout=30.0)
+            # 记录原始 identity，release() 时恢复
+            agent._pool_original_id = agent.agent_id
+            agent._pool_original_name = agent.agent_name
+            return agent
         except asyncio.TimeoutError:
             logger.warning("AgentPool 耗尽，临时创建新 Agent")
             from core.multi_agent_v2.agents.base.work_agent import WorkAgent
-            return WorkAgent(
+            tmp = WorkAgent(
                 agent_id=f"tmp_{uuid.uuid4().hex[:6]}",
                 name=label or "tmp_worker",
                 light_mode=True,
             )
+            tmp._pool_original_id = tmp.agent_id
+            tmp._pool_original_name = tmp.agent_name
+            return tmp
 
     def release(self, agent: Any) -> None:
-        """归还 WorkAgent 到池（先重置状态）"""
+        """归还 WorkAgent 到池（先重置状态，再恢复原始 identity）"""
         try:
             agent.reset()
+            # 恢复池中原始 identity
+            orig_id = getattr(agent, '_pool_original_id', None)
+            orig_name = getattr(agent, '_pool_original_name', None)
+            if orig_id:
+                agent.agent_id = orig_id
+            if orig_name:
+                agent.agent_name = orig_name
             self._pool.put_nowait(agent)
         except asyncio.QueueFull:
             pass  # 池满就丢掉

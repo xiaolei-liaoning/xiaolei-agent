@@ -7,7 +7,7 @@ WorkAgent - 统一智能体
 核心设计：
 - 不预设角色：同一个 WorkAgent 实例可以根据不同任务动态调整
 - 能力即配置：capabilities 由任务匹配动态生成，而非硬编码
-- LLM 驱动的执行：所有任务通过 think → act → reflect 循环
+- LLM 驱动的执行：所有任务通过 ReAct 快路径执行
 """
 
 import asyncio
@@ -27,10 +27,8 @@ class WorkAgent(BaseAgent):
     替代 WorkerAgent / MasterAgent / ReviewerAgent / ExpertAgent / CoordinatorAgent / MonitorAgent。
     不再预设 specialization，而是根据任务类型动态适配。
 
-    两种执行模式：
-    - 轻量模式（_execute_fast）：直通 ReAct 快路径，跳过 StepPlanner/StepExecutor 全链路
-      （orchestrator 子 Agent 默认使用）
-    - 完整模式（execute + _execute_full）：走完整 StepPlanner + StepExecutor 全链路
+    执行路径：统一走 _execute_fast 快路径（ReAct 直通），
+    跳过已废弃的 StepPlanner/StepExecutor 全链路。
     """
 
     def __init__(
@@ -51,7 +49,7 @@ class WorkAgent(BaseAgent):
             role=role,
         )
 
-        # 执行模式
+        # 执行模式（保留字段以兼容旧构造调用，不再影响执行路径）
         self._light_mode = light_mode
 
         # 模型覆盖（orchestrator 动态设置）
@@ -187,13 +185,9 @@ class WorkAgent(BaseAgent):
     async def execute(self, task: Task) -> ActionResult:
         """执行任务 - 统一的执行入口
 
-        根据 _light_mode 选择执行路径：
-        - True  → 直通 ReAct 快路径（orchestrator 子 Agent）
-        - False → 完整 think/act/reflect 全链路
+        统一走 _execute_fast 快路径（ReAct 直通）。
         """
-        if self._light_mode:
-            return await self._execute_fast(task)
-        return await self._execute_full(task)
+        return await self._execute_fast(task)
 
     async def _execute_fast(self, task: Task) -> ActionResult:
         """轻量执行 — 直通 ReAct 快路径"""
@@ -218,7 +212,7 @@ class WorkAgent(BaseAgent):
                 from core.engine.llm_backend import get_llm_router
                 router = get_llm_router()
                 if router and router.is_available():
-                    print(f"    \033[1;36m🤔 LLM直接回答...\033[0m")
+                    print(f"    \033[1;36m\U0001f914 LLM直接回答...\033[0m")
                     logger.info("WorkAgent 直接LLM提问")
                     resp = await router.chat([{"role": "user", "content": desc}])
                     answer = str(resp) if resp else ""
@@ -275,65 +269,6 @@ class WorkAgent(BaseAgent):
             logger.error(f"WorkAgent [轻量] 异常: {e}")
             return ActionResult(success=False, error=str(e), execution_time=time.time() - start)
         finally:
-            self._stop_bus_listener()
-
-    async def _execute_full(self, task: Task) -> ActionResult:
-        """完整执行 — think → act → reflect 全链路
-
-        workflow:
-        1. 启动 SharedBus 监听
-        2. 适配任务 → 调整能力配置
-        3. 思考 → think() 生成计划和工具调用
-        4. 执行 → act() 执行计划
-        5. 反思 → reflect() 总结经验
-        6. 停止 SharedBus 监听
-        """
-        logger.info(f"WorkAgent 开始执行任务: {task.task_id} ({task.type})")
-
-        # 0. 启动总线监听（在 execute 全程接收消息）
-        await self._start_bus_listener()
-
-        try:
-            # 1. 动态适配
-            self.adapt_to_task(task)
-
-            # 2. 思考
-            try:
-                thought = await self.think(task)
-            except Exception as e:
-                logger.error(f"思考失败: {e}")
-                return ActionResult(success=False, error=f"思考失败: {e}")
-
-            # 3. 执行
-            try:
-                result = await self.act(thought.plan, thought.tool_calls)
-            except Exception as e:
-                logger.error(f"执行失败: {e}")
-                return ActionResult(success=False, error=f"执行失败: {e}")
-
-            # 4. 反思
-            try:
-                reflection = await self.reflect(result)
-            except Exception as e:
-                logger.debug(f"反思异常（非致命）: {e}")
-                reflection = None
-
-            # 记录工作历史
-            self.work_history.append({
-                "task_id": task.task_id,
-                "task_type": task.type,
-                "success": result.success,
-                "execution_time": result.execution_time,
-                "timestamp": time.time(),
-            })
-
-            # 保持最近的记录
-            if len(self.work_history) > 100:
-                self.work_history = self.work_history[-100:]
-
-            return result
-        finally:
-            # 确保总线监听在 execute 结束时总是停止
             self._stop_bus_listener()
 
     def get_work_stats(self) -> Dict[str, Any]:

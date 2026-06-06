@@ -186,39 +186,10 @@ def get_agent_registry() -> List[Dict[str, Any]]:
 
 
 def register_agents_from_config() -> List[Dict[str, Any]]:
-    """从配置加载 Agent 到全局注册表，并注入到 multi_agent_v2 的 AgentPool"""
+    """从配置加载 Agent 到全局注册表"""
     global _agent_registry
     _agent_registry = load_agents_config()
-    
-    try:
-        # 从配置创建 Agent 并注册到 AgentPool
-        from core.multi_agent_v2.agents.base.base_agent import AgentFactory
-        from core.multi_agent_v2.orchestration.lifecycle.agent_pool import get_agent_pool
-        
-        pool = get_agent_pool()
-        created_agents = []
-        
-        for agent_config in _agent_registry:
-            try:
-                # 从配置创建 Agent
-                agent = AgentFactory.from_config(agent_config)
-                # 同步注册到 AgentPool
-                pool.register_sync(agent)
-                created_agents.append(agent)
-                logger.info(f"  ✅ Agent [{agent_config['name']}] 已注册到 multi_agent_v2 AgentPool")
-            except Exception as e:
-                logger.error(f"  ❌ 创建并注册 Agent [{agent_config['name']}] 失败: {e}")
-                import traceback
-                logger.error(traceback.format_exc())
-        
-        return _agent_registry
-        
-    except Exception as e:
-        logger.warning(f"multi_agent_v2 集成跳过: {e}")
-        import traceback
-        logger.debug(traceback.format_exc())
-    
-    # 如果上面失败，只返回配置
+
     if not _agent_registry:
         logger.info("  Agent 配置为空，跳过注册")
         return []
