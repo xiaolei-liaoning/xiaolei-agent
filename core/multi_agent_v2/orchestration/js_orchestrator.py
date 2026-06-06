@@ -176,7 +176,9 @@ def _prepare_script(script: str) -> str:
 
 
 async def run_js_workflow(script_content: str) -> Any:
-    """执行 JS 编排脚本。
+    """执行 JS 编排脚本 — 带自动重试
+
+    捕获 stdio 断连等异常，自动重试最多 3 次。
 
     脚本支持两种写法：
 
@@ -193,6 +195,33 @@ async def run_js_workflow(script_content: str) -> Any:
         const r = await agent('hello');
         // 顶层 return 会自动捕获
     """
+    max_retries = 3
+    last_error = None
+
+    for attempt in range(max_retries):
+        try:
+            return await _run_js_once(script_content)
+        except (BrokenPipeError, ConnectionResetError, ConnectionError) as e:
+            last_error = e
+            logger.warning(f"js_orchestrator stdio 断连 (第{attempt+1}次)，正在重试: {e}")
+            if attempt < max_retries - 1:
+                await asyncio.sleep(1)
+                continue
+        except RuntimeError as e:
+            msg = str(e)
+            if "stdio" in msg.lower() or "stdin" in msg.lower() or "pipe" in msg.lower():
+                last_error = e
+                logger.warning(f"js_orchestrator pipe 错误 (第{attempt+1}次)，正在重试: {e}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(1)
+                    continue
+            raise
+
+    raise RuntimeError(f"JS 编排重试 {max_retries} 次后仍然失败: {last_error}")
+
+
+async def _run_js_once(script_content: str) -> Any:
+    """执行 JS 编排脚本（单次，无重试）"""
     # 1. 预处理
     processed = _prepare_script(script_content)
 
@@ -332,8 +361,9 @@ async def _handle_agent_call(proc, msg: dict):
     try:
         proc.stdin.write((json.dumps(reply, ensure_ascii=False) + "\n").encode("utf-8"))
         await proc.stdin.drain()
-    except Exception as e:
-        logger.warning(f"写入 stdin 失败: {e}")
+    except (BrokenPipeError, ConnectionResetError) as e:
+        logger.warning(f"JS 编排 stdin 断连: {e}")
+        raise  # 让外层重试捕获
 
 
 def _print(text: str):
