@@ -54,11 +54,12 @@ class CommandType(Enum):
     CONFIG = "config"
     PLUGIN = "plugin"
     SMART = "smart"
+    ORCHESTRATE = "orchestrate"
     RESET = "reset"
     TEST = "test"
     TOOLS = "tools"
     SHOW = "show"
-    ORCHESTRATE = "orchestrate"
+    WORKFLOWS = "workflows"
     UNKNOWN = "unknown"
 
 
@@ -105,10 +106,11 @@ class CommandParser:
         "/config": CommandType.CONFIG,
         "/plugin": CommandType.PLUGIN,
         "/smart": CommandType.SMART,
-        "/reset": CommandType.RESET,
+        "/orchestrate": CommandType.ORCHESTRATE,
         "/tools": CommandType.TOOLS,
         "/show": CommandType.SHOW,
-        "/orchestrate": CommandType.ORCHESTRATE,
+        "/reset": CommandType.RESET,
+        "/workflows": CommandType.WORKFLOWS,
     }
     
     # 命令帮助信息
@@ -136,10 +138,11 @@ class CommandParser:
         "/config": "配置管理，如: /config show, /config set key value",
         "/plugin": "插件工具，如: /plugin list, /plugin create name",
         "/smart": "智能多Agent协作，如: /smart \"任务\", /smart demo, /smart status, /smart <模式> <任务> (模式: pipeline/master/review/auction/hybrid)",
+        "/orchestrate": "多Agent编排，如: /orchestrate \"任务\", /orchestrate demo, /orchestrate list",
         "/reset": "重置会话，如: /reset (清空历史) 或 /reset all (清空历史和记忆)",
         "/tools": "查看所有可用工具及其状态（按类型分组）",
         "/show": "展开之前折叠的详细输出，如: /show <id>",
-        "/orchestrate": "多Agent编排，如: /orchestrate parallel \"任务1\" \"任务2\"",
+        "/workflows": "查看工作流进度，如: /workflows list, /workflows status <id>",
     }
     
     def __init__(self):

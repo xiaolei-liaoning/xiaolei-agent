@@ -16,16 +16,16 @@ import time
 from typing import Any, Dict, List, Optional
 
 from .base_agent import BaseAgent
-from .models import AgentType, Capability, Task, ActionResult, Thought, StepStatus, StepType
+from .models import AgentType, Capability, Task, ActionResult, Thought
 
 logger = logging.getLogger(__name__)
 
 
 class WorkAgent(BaseAgent):
-    """统一工作 Agent — 支持两种运行模式
+    """统一工作 Agent - 根据任务动态调整行为和能力
 
-    - 完整模式（execute）：StepPlanner + StepExecutor + spinner + 记忆（默认）
-    - 轻量模式（_execute_fast）：直通 ReAct，跳过 StepPlanner 全链路（orchestrator 子 Agent）
+    替代 WorkerAgent / MasterAgent / ReviewerAgent / ExpertAgent / CoordinatorAgent / MonitorAgent。
+    不再预设 specialization，而是根据任务类型动态适配。
     """
 
     def __init__(
@@ -33,7 +33,6 @@ class WorkAgent(BaseAgent):
         agent_id: Optional[str] = None,
         name: Optional[str] = None,
         description: str = "通用工作 Agent，根据任务动态调整",
-        light_mode: bool = False,
     ):
         super().__init__(
             agent_id=agent_id,
@@ -48,19 +47,13 @@ class WorkAgent(BaseAgent):
         # 工作记录
         self.work_history: List[Dict[str, Any]] = []
 
-        # 执行进度（供 Mind 注入）
-        self._progress = None
+        # SharedBus 监听
+        self._bus_listener_task: Optional[asyncio.Task] = None
 
-        # 轻量模式：orchestrator 子 Agent 跳过 StepPlanner/记忆等重链路
-        self._light_mode = light_mode
-
-        # LLM 和 registry 缓存（子 Agent 共享）
-        self._llm = None
-        self._registry = None
-
-        logger.info(f"WorkAgent {'[轻量]' if light_mode else ''}: {self.agent_id}")
+        logger.info(f"WorkAgent 初始化完成: {self.agent_id}")
 
     def _default_capabilities(self) -> List[Capability]:
+        """提供一组通用的默认能力，具体匹配由 scheduler 动态完成"""
         return [
             Capability(
                 name="general_task",
@@ -71,377 +64,154 @@ class WorkAgent(BaseAgent):
         ]
 
     def adapt_to_task(self, task: Task) -> None:
+        """根据任务动态调整 Agent 的能力配置
+
+        每个 Agent 拥有完整能力（不做裁剪），根据任务类型追加专项能力。
+        """
         task_type = task.type or "general"
         task_keywords = task.keywords or []
+
+        # 追加全部能力类型（不做关键词过滤），每个 Agent 天然具备所有能力
         extra_capabilities = [
-            Capability(name=f"analysis_{task_type}", description=f"分析能力: {task.description[:50]}",
-                keywords=task_keywords + ["分析", "评估"], expertise_level=0.8),
-            Capability(name=f"execution_{task_type}", description=f"执行能力: {task.description[:50]}",
-                keywords=task_keywords + ["执行", "处理"], expertise_level=0.8),
-            Capability(name=f"review_{task_type}", description=f"评审能力: {task.description[:50]}",
-                keywords=task_keywords + ["评审", "质量"], expertise_level=0.85),
-            Capability(name=f"research_{task_type}", description=f"研究能力: {task.description[:50]}",
-                keywords=task_keywords + ["研究", "检索"], expertise_level=0.75),
-            Capability(name=f"integration_{task_type}", description=f"整合能力: {task.description[:50]}",
-                keywords=task_keywords + ["整合", "汇总"], expertise_level=0.8),
+            Capability(
+                name=f"analysis_{task_type}",
+                description=f"分析能力: {task.description[:50]}",
+                keywords=task_keywords + ["分析", "评估"],
+                expertise_level=0.8,
+            ),
+            Capability(
+                name=f"execution_{task_type}",
+                description=f"执行能力: {task.description[:50]}",
+                keywords=task_keywords + ["执行", "处理"],
+                expertise_level=0.8,
+            ),
+            Capability(
+                name=f"review_{task_type}",
+                description=f"评审能力: {task.description[:50]}",
+                keywords=task_keywords + ["评审", "质量"],
+                expertise_level=0.85,
+            ),
+            Capability(
+                name=f"research_{task_type}",
+                description=f"研究能力: {task.description[:50]}",
+                keywords=task_keywords + ["研究", "检索"],
+                expertise_level=0.75,
+            ),
+            Capability(
+                name=f"integration_{task_type}",
+                description=f"整合能力: {task.description[:50]}",
+                keywords=task_keywords + ["整合", "汇总"],
+                expertise_level=0.8,
+            ),
         ]
+
         self.capabilities = self._default_capabilities() + extra_capabilities
-
-    # ── 统一入口：轻量模式走快路径 ──
-
-    async def execute(self, task: Task) -> ActionResult:
-        """执行任务 — 轻量模式直接走 ReAct 快路径"""
-        if self._light_mode:
-            return await self._execute_fast(task)
-        return await self._execute_full(task)
-
-    async def _execute_fast(self, task: Task) -> ActionResult:
-        """轻量执行 — 直通 ReAct，跳过 StepPlanner/StepExecutor/spinner/记忆"""
-        start = time.time()
-        self.adapt_to_task(task)
-
-        # 走 ReActCore 快路径
-        from core.multi_agent_v2.agents.react_core import run_react
-        result = await run_react(task.description, max_rounds=2)
-
-        elapsed = time.time() - start
-        self.metrics.tasks_completed += 1
-        self.metrics.total_execution_time += elapsed
-        self.metrics.avg_execution_time = elapsed
-
-        return ActionResult(
-            success=result.get("success", False),
-            output=result.get("answer", ""),
-            execution_time=elapsed,
-            metadata={"light_mode": True, "iterations": result.get("iterations", 0)},
+        logger.info(
+            f"WorkAgent {self.agent_id} 已适配任务: {task_type} "
+            f"(完整能力: 基础+分析/执行/评审/研究/整合)"
         )
 
-    async def _execute_full(self, task: Task) -> ActionResult:
-        """执行任务 - 统一的执行入口
+    # ── SharedBus 监听 ─────────────────────────────────────────────────
 
-        workflow:
-        1. 适配任务 → 调整能力配置
-        2. 拆解 → StepPlanner 生成结构化步骤（注入工具+历史）
-        3. 执行 → StepExecutor 逐步执行（含进度追踪+失败计数）
-        4. 反思重规划 → 失败2次后触发局部重规划
+    async def _start_bus_listener(self) -> None:
+        """启动 SharedBus 监听 — 处理发送给本 Agent 的直接消息
+
+        安全处理 SharedBus 不可用的情况（不崩溃）。
         """
-        logger.info(f"WorkAgent 开始执行任务: {task.task_id} ({task.type})")
-
-        # 1. 动态适配
-        self.adapt_to_task(task)
-
-        # 2. 拆解计划
-        # 先在 try 外初始化 llm/registry，避免 except 后 llm 未定义
-        llm = registry = None
         try:
-            from core.engine.llm_backend import get_llm_router
-            llm = get_llm_router()
+            from core.multi_agent_v2.infrastructure.shared_bus import get_shared_bus, Message
+            bus = get_shared_bus()
         except Exception:
-            pass
+            logger.debug("SharedBus 不可用，跳过总线监听")
+            return
 
-        try:
-            from core.multi_agent_v2.tools.tool_registry import get_tool_registry
-            registry = get_tool_registry()
-            if not registry._initialized:
-                await registry.discover_all()  # 不阻塞，MCP连接在后台
-        except Exception:
-            pass
-
-        # ── 纯聊天快速通道（仅对明显不含行动词的聊天请求）────
-        chat_kw = ["你好", "嗨", "hello", "hi", "再见", "bye", "你是谁", "你能做什么"]
-        action_kw = ["搜索", "搜", "查找", "写", "创建", "生成", "分析", "报告",
-                     "爬", "保存", "桌面", "文件", "数据", "代码", "游戏", "脚本",
-                     "下载", "翻译", "总结"]
-        is_chat = any(kw in task.description.lower() for kw in chat_kw) and \
-                  not any(kw in task.description.lower() for kw in action_kw)
-        if is_chat and llm is not None:
-            try:
-                print(f"\n  💬 纯聊天请求，直接回答...")
-                _fast_resp = await llm.chat([
-                    {"role": "system", "content": "你是一个智能助手，请直接回答用户的问题。"},
-                    {"role": "user", "content": task.description},
-                ], temperature=0.7, max_tokens=2000)
-                output_text = str(_fast_resp).strip() if _fast_resp else ""
-                if not output_text or output_text == "系统正在处理您的请求...":
-                    output_text = "您好，请问有什么可以帮您的？"
-                self.work_history.append({
-                    "task_id": task.task_id, "task_type": task.type,
-                    "success": True, "execution_time": 0, "timestamp": time.time(), "replans": 0,
-                })
-                return ActionResult(
-                    success=True, output=output_text, execution_time=0,
-                    metadata={"fast_path": True, "needs_tool": False},
-                )
-            except Exception:
-                pass
-
-        # ── 结束快速通道，以下为完整流程 ──────────────────────────────────
-
-        try:
-            from core.multi_agent_v2.orchestration.scheduler.step_planner import StepPlanner
-            planner = StepPlanner(llm_router=llm)
-            print("  ⏳ 正在分析任务，拆解执行步骤...")
-            steps = await planner.plan(task, tool_registry=registry)
-        except Exception as e:
-            logger.warning(f"任务拆解失败，使用兜底: {e}")
-            from .models import Step
-            steps = [
-                Step(step_id="step_1", name="执行任务", description=task.description,
-                     type=StepType.LLM_TASK, expected_output="执行结果"),
-            ]
-
-        if not steps:
-            return ActionResult(success=False, error="任务拆解失败，无可执行步骤")
-
-        # 3. 执行（带进度追踪+反思重规划循环）
-        from core.multi_agent_v2.infrastructure.step_executor import StepExecutor
-        from .models import NeedsReflection, ProgressSnapshot
-
-        # 步骤指示 — 使用 sys.stdout 防止 Rich Console 干扰终端
-        import sys as _sys
-        total = len(steps)
-        _counter = [0]
-
-        async def _spin(step_num: int, name: str, stop_evt: asyncio.Event):
-            await asyncio.sleep(1.0)
-            if stop_evt.is_set():
-                return
-            frames = ["◐", "◓", "◑", "◒"]
-            i = 0
-            try:
-                while not stop_evt.is_set():
-                    _sys.stdout.write(f"  {frames[i]} [{step_num}/{total}] {name}\r")
-                    _sys.stdout.flush()
-                    i = (i + 1) % len(frames)
-                    await asyncio.sleep(0.15)
-            except Exception:
-                pass
-
-        def _extract_preview(result_obj, max_len=200) -> str:
-            if not result_obj:
-                return ""
-            if isinstance(result_obj, dict):
-                texts = []
-                for tr in result_obj.get("tool_results", []):
-                    t = tr.get("result", {})
-                    if isinstance(t, dict):
-                        content = t.get("result", {}).get("content", [])
-                        for c in content if isinstance(content, list) else [content]:
-                            if isinstance(c, dict):
-                                texts.append(str(c.get("text", ""))[:200])
-                if result_obj.get("text"):
-                    texts.append(str(result_obj["text"])[:200])
-                return "\n".join(t for t in texts if t)
-            return str(result_obj)[:max_len]
-
-        _stop_evt = [None]
-
-        def _on_step_start(step):
-            _counter[0] += 1
-            name = getattr(step, 'name', getattr(step, 'step_id', '?'))
-            print(f"  ◐ [{_counter[0]}/{total}] {name}")
-            evt = asyncio.Event()
-            _stop_evt[0] = evt
-            asyncio.ensure_future(_spin(_counter[0], name, evt))
-
-        def _on_step_complete(step):
-            if _stop_evt[0]:
-                _stop_evt[0].set()
-                _stop_evt[0] = None
-            name = getattr(step, 'name', getattr(step, 'step_id', '?'))
-            t = getattr(step, 'execution_time', 0)
-            time_str = f" ({t:.1f}s)" if t else ""
-            print(f"  ✅ [{_counter[0]}/{total}] {name}{time_str}")
-            preview = _extract_preview(getattr(step, 'result', None))
-            if preview:
-                print(f"     {preview[:200]}")
-
-        def _on_step_failed(step, error=""):
-            if _stop_evt[0]:
-                _stop_evt[0].set()
-                _stop_evt[0] = None
-            name = getattr(step, 'name', getattr(step, 'step_id', '?'))
-            t = getattr(step, 'execution_time', 0)
-            time_str = f" ({t:.1f}s)" if t else ""
-            print(f"  ❌ [{_counter[0]}/{total}] {name}{time_str}")
-            if error:
-                print(f"     {error[:200]}")
-
-        executor = StepExecutor(llm_router=llm)
-        max_replans = 2
-        replan_count = 0
-        original_steps = steps
-        start_time = time.time()
-
-        # 设置初始进度（供 Mind 读取）
-        self._progress = ProgressSnapshot(
-            remaining=[{"step_id": s.step_id, "name": s.name,
-                        "type": s.type.value if hasattr(s.type, 'value') else str(s.type)}
-                       for s in steps]
-        )
-
-        # 先打印计划概览
-        print(f"  [{total}] steps plan:")
-        for i, s in enumerate(steps, 1):
-            print(f"      {i}. {s.name}")
-
-        while True:
-            try:
-                result = await executor.execute(
-                    steps,
-                    on_step_start=_on_step_start,
-                    on_step_complete=_on_step_complete,
-                    on_step_failed=_on_step_failed,
-                )
-                break  # 全部成功
-            except NeedsReflection as e:
-                if replan_count >= max_replans:
-                    logger.warning(f"已达到最大重规划次数 ({max_replans})，任务失败")
-                    return ActionResult(
-                        success=False,
-                        error=f"多次重规划仍失败: {e.reason}",
-                        execution_time=time.time() - start_time,
-                    )
-
-                # 反思：判断是工具问题还是计划问题
+        async def _listen_loop():
+            """持续监听直接消息"""
+            while True:
                 try:
-                    await self.reflect(ActionResult(
-                        success=False,
-                        error=e.reason,
-                        output={"failed_step": e.failed_step, "progress": e.progress.to_prompt()},
-                    ))
+                    msg = await bus.receive_direct(self.agent_id, timeout=2.0)
+                    if msg is None:
+                        continue
+                    self._on_bus_message(msg)
+                except asyncio.CancelledError:
+                    break
                 except Exception:
                     pass
 
-                # 统一尝试局部重规划
-                replan_count += 1
-                logger.info(f"第 {replan_count} 次重规划，失败步骤: {e.step_id}")
+        self._bus_listener_task = asyncio.create_task(_listen_loop())
+        logger.debug(f"SharedBus 监听已启动: {self.agent_id}")
 
-                try:
-                    new_steps = await planner.replan(
-                        original_steps=original_steps,
-                        completed_ids=[s["step_id"] for s in e.progress.completed],
-                        failed_step_id=e.step_id,
-                        failed_reason=e.reason,
-                    )
-                    steps = new_steps
-                    # 更新进度
-                    self._progress = e.progress
-                    self._progress.remaining = [
-                        {"step_id": s.step_id, "name": s.name,
-                         "type": s.type.value if hasattr(s.type, 'value') else str(s.type)}
-                        for s in new_steps
-                        if s.step_id not in [c["step_id"] for c in e.progress.completed]
-                    ]
-                    logger.info(f"重规划完成: {len(steps)} 个步骤 (已完成 {len(e.progress.completed)})")
-                except Exception as replan_err:
-                    logger.error(f"重规划失败: {replan_err}")
-                    return ActionResult(
-                        success=False,
-                        error=f"重规划失败: {replan_err}",
-                        execution_time=time.time() - start_time,
-                    )
+    def _stop_bus_listener(self) -> None:
+        """停止 SharedBus 监听"""
+        if self._bus_listener_task is not None and not self._bus_listener_task.done():
+            self._bus_listener_task.cancel()
+            self._bus_listener_task = None
+            logger.debug(f"SharedBus 监听已停止: {self.agent_id}")
 
-        execution_time = time.time() - start_time
-        success = result.success if hasattr(result, 'success') else True
-        raw_steps_list = result.steps if hasattr(result, 'steps') and isinstance(result.steps, list) else []
-        output = ""
+    def _on_bus_message(self, msg: "Message") -> None:
+        """处理收到的总线消息 — 子类可覆盖"""
+        logger.debug(f"收到总线消息: {msg.type} 来自 {msg.sender}")
 
-        # ── 消费中间件数据 ──────────────────────────────────────
-        # 从进度中提取中间件历史（KEPA/置信度/反思）
-        _mw_reflection = ""
+    # ── 执行入口 ───────────────────────────────────────────────────────
+
+    async def execute(self, task: Task) -> ActionResult:
+        """执行任务 - 统一的执行入口
+
+        workflow:
+        1. 启动 SharedBus 监听
+        2. 适配任务 → 调整能力配置
+        3. 思考 → think() 生成计划和工具调用
+        4. 执行 → act() 执行计划
+        5. 反思 → reflect() 总结经验
+        6. 停止 SharedBus 监听
+        """
+        logger.info(f"WorkAgent 开始执行任务: {task.task_id} ({task.type})")
+
+        # 0. 启动总线监听（在 execute 全程接收消息）
+        await self._start_bus_listener()
+
         try:
-            _pg = getattr(self, '_progress', None)
-            if _pg and hasattr(_pg, 'to_prompt'):
-                _prompt_progress = _pg.to_prompt()
-                if "⚠️" in _prompt_progress:
-                    _mw_reflection = "\n[执行反馈] 部分步骤曾失败后重试，最终恢复。"
-        except Exception:
-            pass
+            # 1. 动态适配
+            self.adapt_to_task(task)
 
-        # 4. 收集步骤摘要，用拼接方式生成回答
-        output_parts = []
-        for s in raw_steps_list:
-            status_icon = "成功" if s.status == StepStatus.SUCCESS else "失败"
-            result_text = ""
-            if s.result:
-                if isinstance(s.result, dict):
-                    texts = []
-                    for tr in s.result.get("tool_results", []):
-                        t = tr.get("result", {})
-                        if isinstance(t, dict):
-                            content = t.get("result", {}).get("content", [])
-                            for c in content if isinstance(content, list) else [content]:
-                                if isinstance(c, dict):
-                                    texts.append(str(c.get("text", ""))[:200])
-                                elif isinstance(c, str):
-                                    texts.append(c[:200])
-                    if s.result.get("text"):
-                        texts.append(str(s.result["text"])[:200])
-                    if s.result.get("answer"):
-                        texts.append(str(s.result["answer"])[:200])
-                    result_text = "\n".join(t for t in texts if t)
-                else:
-                    result_text = str(s.result)[:200]
-            elif s.error:
-                result_text = f"错误: {s.error[:200]}"
-            output_parts.append(f"[{status_icon}] {s.name}: {result_text[:200] if result_text else '(无)'}")
-        output = "\n".join(output_parts)
+            # 2. 思考
+            try:
+                thought = await self.think(task)
+            except Exception as e:
+                logger.error(f"思考失败: {e}")
+                return ActionResult(success=False, error=f"思考失败: {e}")
 
-        # 5. 记忆存储（供后续任务检索）
-        try:
-            from core.multi_agent_v2.agents.memory import get_task_memory, MemoryEntry
-            tools_used = []
-            for s in raw_steps_list:
-                if hasattr(s, 'result') and isinstance(s.result, dict):
-                    for tr in s.result.get("tool_results", []):
-                        t = tr.get("tool_call", {})
-                        if isinstance(t, dict):
-                            tools_used.append(t.get("name", ""))
-            get_task_memory().remember(MemoryEntry(
-                task_id=task.task_id,
-                description=task.description,
-                result=str(output)[:300] if output else str(success),
-                success=success,
-                tools_used=tools_used,
-            ))
-        except Exception:
-            pass
+            # 3. 执行
+            try:
+                result = await self.act(thought.plan, thought.tool_calls, getattr(thought, 'structured_plan', None))
+            except Exception as e:
+                logger.error(f"执行失败: {e}")
+                return ActionResult(success=False, error=f"执行失败: {e}")
 
-        # 6. 记录工作历史
-        self.work_history.append({
-            "task_id": task.task_id,
-            "task_type": task.type,
-            "success": success,
-            "execution_time": execution_time,
-            "timestamp": time.time(),
-            "replans": replan_count,
-        })
+            # 4. 反思
+            try:
+                reflection = await self.reflect(result)
+            except Exception as e:
+                logger.debug(f"反思异常（非致命）: {e}")
+                reflection = None
 
-        # 保持最近的记录
-        if len(self.work_history) > 100:
-            self.work_history = self.work_history[-100:]
+            # 记录工作历史
+            self.work_history.append({
+                "task_id": task.task_id,
+                "task_type": task.type,
+                "success": result.success,
+                "execution_time": result.execution_time,
+                "timestamp": time.time(),
+            })
 
-        # 任务完成提示音
-        try:
-            print("\a", end="", flush=True)  # 系统 bell
-        except Exception:
-            pass
+            # 保持最近的记录
+            if len(self.work_history) > 100:
+                self.work_history = self.work_history[-100:]
 
-        success_result = ActionResult(
-            success=success,
-            output=output,
-            execution_time=execution_time,
-            metadata={
-                "replans": replan_count,
-                "total_steps": len(steps) if hasattr(result, 'total_steps') else 0,
-                "steps": [
-                    {"step_id": s.step_id, "name": s.name, "status": s.status.value if hasattr(s.status, 'value') else str(s.status)}
-                    for s in raw_steps_list
-                ],
-            },
-        )
-        return success_result
+            return result
+        finally:
+            # 确保总线监听在 execute 结束时总是停止
+            self._stop_bus_listener()
 
     def get_work_stats(self) -> Dict[str, Any]:
         """获取工作统计"""

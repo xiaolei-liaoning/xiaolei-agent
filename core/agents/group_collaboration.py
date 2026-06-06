@@ -780,13 +780,95 @@ class GroupCoordinator:
             # 新：动态组队
             return await self._team_coordinator.execute(message)
         else:
-            # IntelligentScheduler 已移除
+            # 旧兼容：委托给 IntelligentScheduler
             return await self._legacy_execute(message, strategy)
 
     async def _legacy_execute(self, message: str, strategy: str) -> Dict[str, Any]:
-        """旧兼容执行路径 — IntelligentScheduler 已移除"""
-        logger.warning("IntelligentScheduler 已移除，旧兼容路径不可用")
-        return {"success": False, "error": "IntelligentScheduler has been removed", "fallback": True}
+        """使用编排引擎并行执行多 Agent 任务"""
+        try:
+            from core.multi_agent_v2.orchestration import orchestrator as orch
+            from core.multi_agent_v2.orchestration.collaboration.strategies.base import (
+                CollaborationResult, CollaborationMode as BaseCollaborationMode,
+            )
+            from core.multi_agent_v2.agents.base.models import Task, ActionResult
+
+            # 1. 创建多个 Agent 子任务
+            agents_count = self._estimate_agent_count(message, strategy)
+            member_prompts = self._generate_member_prompts(message, strategy, agents_count)
+
+            # 2. 并行执行所有 Agent
+            orch.phase(f"协作执行 ({strategy})")
+            thunks = [
+                lambda p=p, i=i: orch.agent(
+                    p,
+                    {"label": f"member_{i+1}", "timeout": 180},
+                )
+                for i, p in enumerate(member_prompts)
+            ]
+
+            results = await orch.parallel(thunks, max_concurrent=agents_count)
+
+            # 3. 构造 CollaborationResult
+            success_count = sum(1 for r in results if r.success)
+            agent_results = {}
+            for i, r in enumerate(results):
+                ar = ActionResult(
+                    success=r.success,
+                    output=r.output,
+                    error=r.error,
+                    execution_time=r.execution_time,
+                )
+                agent_results[f"member_{i+1}"] = ar
+
+            # 4. 汇总结果
+            all_outputs = [r.text()[:500] for r in results if r.success]
+            final_result = "\n---\n".join(all_outputs) if all_outputs else None
+
+            return {
+                "success": success_count == len(results),
+                "reply": f"[{strategy}] 协作完成" if success_count > 0 else f"[{strategy}] 执行失败",
+                "results": [
+                    {
+                        "agent_id": f"member_{i+1}",
+                        "success": r.success,
+                        "output": r.text()[:500],
+                        "execution_time": r.execution_time,
+                    }
+                    for i, r in enumerate(results)
+                ],
+                "errors": [r.error for r in results if not r.success and r.error],
+                "strategy": strategy,
+            }
+
+        except Exception as e:
+            logger.error(f"编排引擎执行失败: {e}")
+            return {"success": False, "error": str(e), "strategy": strategy}
+
+    def _estimate_agent_count(self, message: str, strategy: str) -> int:
+        """根据任务和策略估算需要的 Agent 数量"""
+        # 关键词检测
+        complex_keywords = ["分析", "报告", "详细", "全面", "复杂", "多步骤"]
+        count = sum(1 for kw in complex_keywords if kw in message)
+        base = max(count, 2)
+
+        # 策略调整
+        if strategy in ("review", "auction", "consensus"):
+            return min(base + 2, 6)
+        elif strategy in ("master_slave", "pipeline"):
+            return min(base + 1, 5)
+        return min(base, 4)
+
+    def _generate_member_prompts(self, message: str, strategy: str, count: int) -> list:
+        """为每个 Agent 成员生成不同的子任务提示"""
+        roles = [
+            ("调研", f"从不同角度调研分析：{message}"),
+            ("执行", f"实际执行任务：{message}"),
+            ("验证", f"验证和检查执行结果：{message}"),
+            ("优化", f"优化和完善现有方案：{message}"),
+            ("整合", f"整合各方面输出，生成完整报告：{message}"),
+            ("评审", f"对结果进行质量评审：{message}"),
+        ]
+        return [roles[i % len(roles)][1] for i in range(count)]
 
     def recommend_agent_groups(self, task_example: str) -> AgentRecommendation:
         """推荐 Agent 小组 — 用 AgentFactory 按任务特征创建"""

@@ -343,6 +343,9 @@ class EnhancedCLI:
         elif cmd_type == CommandType.ORCHESTRATE:
             await self.handle_orchestrate(parsed_cmd)
 
+        elif cmd_type == CommandType.WORKFLOWS:
+            await self.handle_workflows(parsed_cmd)
+
         else:
             # 非命令，作为智能任务请求
             await self.handle_smart_request(parsed_cmd.remaining)
@@ -2751,6 +2754,54 @@ MCP命令使用帮助:
                 print_color("/smart \"任务描述\" - 使用多Agent协作执行任务", CliColors.WHITE)
                 print_color("/smart demo - 演示多Agent协作", CliColors.WHITE)
                 print_color("/smart status - 查看Agent状态", CliColors.WHITE)
+
+    async def handle_workflows(self, parsed_cmd):
+        """处理工作流进度查看命令
+
+        /workflows list       - 列出已注册的工作流
+        /workflows status     - 查看当前活动显示状态
+        /workflows            - 默认显示摘要
+        """
+        action = parsed_cmd.action.lower() if parsed_cmd.action else ""
+        remaining = parsed_cmd.remaining.strip()
+
+        from cli.colors import CLAUDE, SUCCESS, print_color, CliColors
+        from core.multi_agent_v2.orchestration.orchestrator import (
+            list_workflows, _current_display,
+        )
+
+        print_color("\n📋 工作流概览", CliColors.BOLD)
+        print_color("─" * 50, CliColors.GRAY)
+
+        if action == "list":
+            names = list_workflows()
+            if names:
+                print_color(f"已注册工作流 ({len(names)}):", CliColors.CYAN)
+                for name in names:
+                    print_color(f"  • {name}", CliColors.WHITE)
+            else:
+                print_color("暂无注册的工作流", CliColors.GRAY)
+                print_color("使用 /orchestrate \"任务\" 动态编排", CliColors.GRAY)
+
+        elif action == "status":
+            active = _current_display
+            if active:
+                print_color("状态: 🟢 活跃", CliColors.GREEN)
+                print_color(f"显示实例: {active}", CliColors.CYAN)
+            else:
+                print_color("状态: ⚪ 无活跃显示", CliColors.GRAY)
+                print_color("运行 /orchestrate \"任务\" 查看实时进度", CliColors.GRAY)
+
+        else:
+            names = list_workflows()
+            active = _current_display
+            print_color(f"注册工作流: {len(names)}", CLAUDE)
+            print_color(f"活动编排:   {'🟢 运行中' if active else '⚪ 无'}", CliColors.GREEN if active else CliColors.GRAY)
+            print_color("", CliColors.WHITE)
+            print_color("子命令:", CliColors.WHITE)
+            print_color("  /workflows list           - 列出所有工作流", CliColors.GRAY)
+            print_color("  /workflows status         - 查看活动编排状态", CliColors.GRAY)
+            print_color("  /orchestrate \"任务\"       - 启动新编排", CliColors.GRAY)
 
     async def run(self):
         """运行CLI主循环 — 委托给 REPL 实现"""

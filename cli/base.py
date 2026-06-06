@@ -211,34 +211,94 @@ class WorkflowEngineWrapper:
 
     async def _execute_collaborate(self, user_request: str,
                                     engine) -> Dict[str, Any]:
-        """多 Agent 协作执行 — 增强显示"""
-        think_log("启动多 Agent 协作模式...")
+        """多 Agent 协作执行 — 使用编排引擎"""
+        think_log("启动多 Agent 协作模式（编排引擎）...")
 
-        # IntelligentScheduler 已移除，协作模式降级为单Agent执行
-        logger.warning("IntelligentScheduler 已移除，协作模式降级为单Agent")
+        from core.multi_agent_v2.orchestration import orchestrator as orch
+
+        # 动态决定 Agent 数量
+        agent_count = self._estimate_collab_agents(user_request)
+
+        # 显示协作计划
+        collab_plan = [
+            {"title": "组建 Agent 团队", "description": f"创建 {agent_count} 个协作 Agent", "tag": "准备"},
+            {"title": "并行执行", "description": f"多 Agent 并行执行各自任务", "tag": "执行"},
+            {"title": "结果汇总", "description": "收集并整合各 Agent 执行结果", "tag": "汇总"},
+        ]
+        engine.plan_steps(collab_plan)
 
         try:
-            from core.multi_agent_v2.agents import WorkAgent
-
+            # Step 1: 组建团队 + 分配子任务
             step_num = 1
-            engine.start_step(step_num, "单Agent执行（协作模式不可用）")
-            agent = WorkAgent(agent_id="single-agent")
-            result = await agent.run(user_request, max_iterations=3)
-            engine.complete_step(step_num, success=result.get("success", False))
+            engine.start_step(step_num, f"组建 {agent_count} 个 Agent 团队")
+
+            orch.phase("多Agent协作")
+
+            # 生成不同的子任务维度
+            dimensions = self._generate_collab_dimensions(user_request, agent_count)
+            engine.complete_step(step_num, success=True,
+                                detail=f"{agent_count} 个 Agent 已就绪")
+
+            # Step 2: 并行执行
+            step_num = 2
+            engine.start_step(step_num, "并行执行")
+
+            async with AsyncSpinner(f"正在并行执行 {agent_count} 个 Agent...", color=CLAUDE):
+                thunks = [
+                    lambda d=d, i=i: orch.agent(
+                        d,
+                        {"label": f"Agent_{i+1}", "timeout": 180},
+                    )
+                    for i, d in enumerate(dimensions)
+                ]
+                results = await orch.parallel(thunks, max_concurrent=agent_count)
+
+            success_count = sum(1 for r in results if r.success)
+            engine.complete_step(
+                step_num,
+                success=success_count > 0,
+                detail=f"{success_count}/{agent_count} 成功",
+            )
+
+            # Step 3: 结果汇总
+            step_num = 3
+            engine.start_step(step_num, "结果汇总")
+
+            # 取最后一个成功的结果作为主结果
+            main_result = next((r for r in reversed(results) if r.success), None)
+            if main_result:
+                success = True
+                output = main_result.text()[:500]
+            else:
+                success = False
+                output = ""
+
+            engine.complete_step(step_num, success=success)
 
             result_data = {
-                "success": result.get("success", False),
-                "result": str(result.get("result", ""))[:500],
-                "iterations": 1,
+                "success": success,
+                "result": output,
+                "iterations": len(results),
                 "confidence": 0.8,
-                "total_time": 0,
-                "results": [],
-                "agent_result": result,
-                "mode": "collaborate (fallback to single)",
+                "total_time": sum(r.execution_time for r in results if hasattr(r, 'execution_time')),
+                "results": [
+                    {
+                        "agent_id": f"Agent_{i+1}",
+                        "success": r.success,
+                        "output": r.text()[:300] if r.success else "",
+                        "error": r.error if not r.success else None,
+                        "execution_time": r.execution_time,
+                    }
+                    for i, r in enumerate(results)
+                ],
+                "agent_result": {"output": output} if main_result else {},
+                "mode": "collaborate",
             }
 
             engine.progress_summary()
-            engine.summary(result.get("success", False), 0)
+            engine.summary(success,
+                          result_data["total_time"])
+
             return result_data
 
         except Exception as e:
@@ -251,6 +311,52 @@ class WorkflowEngineWrapper:
             engine.summary(False, detail=str(e))
 
             return {"success": False, "error": str(e), "mode": "collaborate"}
+
+    def _estimate_collab_agents(self, user_request: str) -> int:
+        """根据任务描述估算需要的协作 Agent 数量"""
+        # 关键词检测
+        complex_kw = ["分析", "报告", "深入", "全面", "详细", "复杂",
+                      "research", "analyze", "report"]
+        medium_kw = ["搜索", "查找", "对比", "评估", "创建",
+                     "search", "compare", "evaluate"]
+
+        score = 0
+        for kw in complex_kw:
+            if kw in user_request.lower():
+                score += 2
+        for kw in medium_kw:
+            if kw in user_request.lower():
+                score += 1
+
+        length_bonus = min(len(user_request) // 50, 2)
+
+        total = score + length_bonus
+        if total >= 6:
+            return 5
+        elif total >= 4:
+            return 3
+        elif total >= 2:
+            return 2
+        return 1
+
+    def _generate_collab_dimensions(self, user_request: str, count: int) -> list:
+        """根据任务生成多个协作维度的子任务"""
+        base_prompt = user_request
+        if count == 1:
+            return [base_prompt]
+
+        dimensions = [
+            f"搜索调研：{base_prompt}\n请搜索并收集相关信息。",
+            f"分析处理：{base_prompt}\n请分析数据并提取关键信息。",
+            f"生成输出：{base_prompt}\n请生成最终结果或报告。",
+        ]
+
+        if count >= 4:
+            dimensions.append(f"质量审查：{base_prompt}\n请审查并优化输出质量。")
+        if count >= 5:
+            dimensions.append(f"综合整合：{base_prompt}\n请整合所有输出为一篇完整回答。")
+
+        return dimensions[:count]
 
     async def execute_workflow_file(self, file_path: str) -> Dict[str, Any]:
         """从文件执行工作流（增强显示）"""
