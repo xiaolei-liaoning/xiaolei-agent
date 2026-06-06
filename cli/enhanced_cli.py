@@ -1064,70 +1064,197 @@ class EnhancedCLI:
             await self._run_ad_hoc(task)
 
     async def _mode_free_js(self, router, task: str) -> str:
-        """模式1: LLM 自由生成 JS 编排脚本"""
+        """模式1: 用示例教 LLM 写 JS 编排脚本
+
+        给一个完美示例（含 agent/parallel/filter/map/join），
+        要求 LLM 为当前任务写同样的编排脚本，只改字符串内容不改逻辑。
+        """
         import re
 
-        log("正在生成编排脚本(自由模式)...")
+        log("正在用示例教学LLM写编排脚本...")
         try:
+            example = (
+                'export const meta = {\n'
+                '  name: "City Travel Guide",\n'
+                '  description: "Research and recommend travel destinations",\n'
+                '  phases: [{title: "Research"}, {title: "Synthesis"}],\n'
+                '};\n'
+                '\n'
+                'export default async function main() {\n'
+                '  phase("Research");\n'
+                '\n'
+                '  const results = await parallel([\n'
+                '    () => agent("Weather and best season to visit Tokyo", {label: "weather", timeout: 240}),\n'
+                '    () => agent("Top attractions and food in Tokyo", {label: "attractions", timeout: 240}),\n'
+                '    () => agent("Budget and transportation tips for Tokyo", {label: "budget", timeout: 240}),\n'
+                '  ]);\n'
+                '\n'
+                '  const valid = results.filter(r => r !== null);\n'
+                '  const combined = valid.map((r, i) => "[" + (i+1) + "]\\n" + r).join("\\n\\n");\n'
+                '\n'
+                '  phase("Synthesis");\n'
+                '  return await agent(\n'
+                '    "Write a travel guide based on the research:\\n\\n" + combined,\n'
+                '    {label: "final", timeout: 300},\n'
+                '  );\n'
+                '}\n'
+            )
+
+            prompt = (
+                "Example JS workflow (task: Tokyo travel guide):\n"
+                + example +
+                "\n---\n"
+                "Now write the SAME STRUCTURE for this DIFFERENT task:\n"
+                "Task: " + task + "\n\n"
+                "CHANGE: name, description, subtasks, labels.\n"
+                "KEEP: export/phase/parallel/filter/map/return structure.\n"
+                "NO backticks. Output ONLY JS."
+            )
+
             js_raw = await asyncio.wait_for(
-                router.chat([{"role": "user", "content":
-                    "Output ONLY a JS workflow script. Do NOT write anything else.\n\n"
-                    "API: agent(prompt,{label,timeout})->string; "
-                    "parallel([()=>agent(...),...])->array; phase(title)\n\n"
-                    "TEMPLATE:\n"
-                    "export const meta = {name:\"...\", description:\"...\", phases:[{title:\"Research\"},{title:\"Synthesis\"}]};\n"
-                    "export default async function main() {\n"
-                    "  phase(\"Research\");\n"
-                    "  const r = await parallel([()=>agent(\"...\",{label:\"a\",timeout:240}),()=>agent(\"...\",{label:\"b\",timeout:240})]);\n"
-                    "  phase(\"Synthesis\");\n"
-                    "  return await agent(\"Synthesize:\"+r,{label:\"f\",timeout:300});\n"
-                    "}\n\n"
-                    "Task: " + task
-                }], temperature=0.3, max_tokens=3000),
+                router.chat([{"role": "user", "content": prompt}],
+                           temperature=0.3, max_tokens=3000),
                 timeout=90,
             )
             script = js_raw if isinstance(js_raw, str) else str(js_raw)
 
-            # 去掉 markdown 代码块标记
+            # 去掉 markdown 代码块
             m = re.search(r'```(?:javascript|js)?\s*\n(.*?)\n```', script, re.DOTALL)
             if m: script = m.group(1).strip()
 
-            # 修复 export
-            if 'export const meta' not in script and 'const meta' in script:
-                script = script.replace('const meta', 'export const meta', 1)
-            if 'export default async function main' not in script and 'async function main' in script:
-                script = script.replace('async function main', 'export default async function main', 1)
-
-            if "export const meta" not in script or "export default" not in script:
-                return ""
-
-            # 反引号修复
+            # 修复反引号（如果有的话）
             if '`' in script:
                 n = script.count('`')
                 script = re.sub(r'`([^`]*?)`', lambda m: '"' + m.group(1).replace('"', '\\"') + '"', script)
-                log(f"自由JS 反引号修复: {n}处")
+                log(f"  [修复] 反引号 {n}处")
 
-            # thunk 修复
-            if re.search(r'parallel\(\[\s*agent\(', script):
-                script = re.sub(r'(parallel\(\[)\s*agent\(', r'\1() => agent(', script)
-                log("自由JS thunk修复")
+            # 验证基本结构
+            if "export const meta" not in script or "export default" not in script:
+                return ""
 
-            # await 补全
-            _lines = script.split('\n')
-            for _li, _line in enumerate(_lines):
-                _s = _line.strip()
-                if re.search(r'[^a-zA-Z0-9_.]agent\(', _s) and 'await' not in _s and '=>' not in _s:
-                    _lines[_li] = _line.replace('agent(', 'await agent(', 1)
-            script = '\n'.join(_lines)
+            has_parallel = 'parallel(' in script
+            has_agent = 'agent(' in script
+            has_thunk = '() => agent' in script
+            has_await = 'await agent' in script
+            has_filter = 'filter(' in script
+            missing = []
+            if not has_parallel: missing.append("parallel")
+            if not has_agent: missing.append("agent")
+            if not has_thunk: missing.append("thunk")
+            if not has_await: missing.append("await")
 
-            log("自由模式: 编排脚本:")
+            if missing:
+                log(f"  结构不完整（缺 {missing}），退回模式2")
+                return ""
+
+            # 后处理：清理 meta 中多余字段（LLM 可能加了 subtasks/labels 等）
+            # 只保留 name, description, phases
+            script = re.sub(
+                r'(export const meta = \{)(.*?)(\n\};)',
+                lambda m: _clean_meta(m.group(0)),
+                script,
+                flags=re.DOTALL,
+            )
+
+            log(f"  ✅ 正确的 JS 编排脚本 ({len(script)} chars)")
             for line in script.split('\n')[:6]:
-                log("  " + line)
+                log(f"    {line}")
+            log("    ...")
 
             return script
         except Exception as e:
-            log(f"自由JS失败: {str(e)[:60]}")
+            log(f"  教学失败: {str(e)[:60]}")
             return ""
+
+
+def _clean_meta(meta_block: str) -> str:
+    """清理 meta 对象，只保留 name/description/phases，去掉 LLM 自由发挥的字段"""
+    import re
+    allowed = {"name", "description", "phases"}
+    # 找到大括号内的内容
+    m = re.search(r'export const meta = \{(.*?)\};', meta_block, re.DOTALL)
+    if not m:
+        return meta_block
+    inner = m.group(1)
+    # 收集所有 key-value 对
+    cleaned = []
+    i = 0
+    while i < len(inner):
+        # 跳过空白
+        while i < len(inner) and inner[i] in ' \n\r\t':
+            i += 1
+        if i >= len(inner):
+            break
+        # 找 key 名（引号或裸）
+        if inner[i] in '"\'':
+            # 引号 key
+            quote = inner[i]
+            i += 1
+            key_start = i
+            while i < len(inner) and inner[i] != quote:
+                i += 1
+            key = inner[key_start:i]
+            i += 1  # skip closing quote
+        else:
+            # 裸 key
+            key_start = i
+            while i < len(inner) and inner[i] not in ': \n\r\t,}':
+                i += 1
+            key = inner[key_start:i]
+        # 跳到冒号
+        while i < len(inner) and inner[i] in ' \n\r\t':
+            i += 1
+        if i < len(inner) and inner[i] == ':':
+            i += 1
+        # 跳到值（按大括号/方括号/引号/其他匹配）
+        while i < len(inner) and inner[i] in ' \n\r\t':
+            i += 1
+        if i >= len(inner):
+            break
+        # 确定值的结束
+        if inner[i] == '{':
+            depth = 1
+            val_start = i
+            i += 1
+            while i < len(inner) and depth > 0:
+                if inner[i] == '{': depth += 1
+                elif inner[i] == '}': depth -= 1
+                i += 1
+            raw_val = inner[val_start:i]
+        elif inner[i] == '[':
+            depth = 1
+            val_start = i
+            i += 1
+            while i < len(inner) and depth > 0:
+                if inner[i] == '[': depth += 1
+                elif inner[i] == ']': depth -= 1
+                i += 1
+            raw_val = inner[val_start:i]
+        elif inner[i] in '"\'':
+            quote = inner[i]
+            val_start = i
+            i += 1
+            while i < len(inner) and inner[i] != quote:
+                i += 1
+            i += 1
+            raw_val = inner[val_start:i]
+        else:
+            val_start = i
+            while i < len(inner) and inner[i] not in ',\n\r}':
+                i += 1
+            raw_val = inner[val_start:i]
+        # 逗号跳过
+        while i < len(inner) and inner[i] in ' \n\r\t':
+            i += 1
+        if i < len(inner) and inner[i] == ',':
+            i += 1
+
+        if key in allowed:
+            if cleaned:
+                cleaned.append(',')
+            cleaned.append(key + ':' + raw_val)
+
+    return 'export const meta = {' + ''.join(cleaned) + '};'
 
     async def _mode_json_template(self, router, task: str) -> str:
         """模式2: LLM 输出 JSON 子任务列表 → 固定 JS 模板 → js_orchestrator 执行"""
