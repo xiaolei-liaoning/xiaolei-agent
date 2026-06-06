@@ -1170,91 +1170,46 @@ class EnhancedCLI:
 def _clean_meta(meta_block: str) -> str:
     """清理 meta 对象，只保留 name/description/phases，去掉 LLM 自由发挥的字段"""
     import re
-    allowed = {"name", "description", "phases"}
-    # 找到大括号内的内容
-    m = re.search(r'export const meta = \{(.*?)\};', meta_block, re.DOTALL)
-    if not m:
-        return meta_block
-    inner = m.group(1)
-    # 收集所有 key-value 对
-    cleaned = []
-    i = 0
-    while i < len(inner):
-        # 跳过空白
-        while i < len(inner) and inner[i] in ' \n\r\t':
-            i += 1
-        if i >= len(inner):
-            break
-        # 找 key 名（引号或裸）
-        if inner[i] in '"\'':
-            # 引号 key
-            quote = inner[i]
-            i += 1
-            key_start = i
-            while i < len(inner) and inner[i] != quote:
-                i += 1
-            key = inner[key_start:i]
-            i += 1  # skip closing quote
-        else:
-            # 裸 key
-            key_start = i
-            while i < len(inner) and inner[i] not in ': \n\r\t,}':
-                i += 1
-            key = inner[key_start:i]
-        # 跳到冒号
-        while i < len(inner) and inner[i] in ' \n\r\t':
-            i += 1
-        if i < len(inner) and inner[i] == ':':
-            i += 1
-        # 跳到值（按大括号/方括号/引号/其他匹配）
-        while i < len(inner) and inner[i] in ' \n\r\t':
-            i += 1
-        if i >= len(inner):
-            break
-        # 确定值的结束
-        if inner[i] == '{':
-            depth = 1
-            val_start = i
-            i += 1
-            while i < len(inner) and depth > 0:
-                if inner[i] == '{': depth += 1
-                elif inner[i] == '}': depth -= 1
-                i += 1
-            raw_val = inner[val_start:i]
-        elif inner[i] == '[':
-            depth = 1
-            val_start = i
-            i += 1
-            while i < len(inner) and depth > 0:
-                if inner[i] == '[': depth += 1
-                elif inner[i] == ']': depth -= 1
-                i += 1
-            raw_val = inner[val_start:i]
-        elif inner[i] in '"\'':
-            quote = inner[i]
-            val_start = i
-            i += 1
-            while i < len(inner) and inner[i] != quote:
-                i += 1
-            i += 1
-            raw_val = inner[val_start:i]
-        else:
-            val_start = i
-            while i < len(inner) and inner[i] not in ',\n\r}':
-                i += 1
-            raw_val = inner[val_start:i]
-        # 逗号跳过
-        while i < len(inner) and inner[i] in ' \n\r\t':
-            i += 1
-        if i < len(inner) and inner[i] == ',':
-            i += 1
+    allowed = ("name", "description", "phases")
+    lines = meta_block.split('\n')
+    new_lines = []
+    inside_phases_value = False
+    done = False  # phases 和所有允许字段处理完毕
+    for line in lines:
+        stripped = line.strip()
+        if done:
+            if stripped == '};':
+                new_lines.append(line)
+            continue
+        # 保留 meta 声明和结构行（只保留到 phases 结束）
+        if stripped.startswith('export const meta'):
+            new_lines.append(line)
+            continue
+        key_match = re.match(r'"?(\w+)"?\s*:', stripped)
+        if key_match:
+            key = key_match.group(1)
+            if key in allowed:
+                new_lines.append(line)
+                if key == 'phases':
+                    inside_phases_value = ']' not in stripped
+                    if not inside_phases_value:
+                        done = True
+            else:
+                done = True  # 遇到非允许的 key，停止一切
+            continue
+        # 非 key 行
+        if inside_phases_value:
+            new_lines.append(line)
+            if ']' in stripped:
+                inside_phases_value = False
+                done = True
+        # done=True 时跳过所有后续行直到 };，已在上面处理
 
-        if key in allowed:
-            if cleaned:
-                cleaned.append(',')
-            cleaned.append(key + ':' + raw_val)
-
-    return 'export const meta = {' + ''.join(cleaned) + '};'
+    # 确保有 }; 结尾
+    result = '\n'.join(new_lines)
+    if not result.strip().endswith('};'):
+        result = result.rstrip() + '\n};'
+    return result
 
     async def _mode_json_template(self, router, task: str) -> str:
         """模式2: LLM 输出 JSON 子任务列表 → 固定 JS 模板 → js_orchestrator 执行"""
