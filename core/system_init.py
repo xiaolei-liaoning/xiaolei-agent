@@ -132,26 +132,10 @@ class SystemInitializer:
             from core.handlers import handle_multi_step, handle_single_step
 
             class _TextAnalyzerAgent:
-                """文本分析Agent — 委托给 multi_agent_v2 调度器"""
+                """文本分析Agent — IntelligentScheduler 已移除，使用 LLM 动态编排"""
                 async def execute(self, message: str, user_id: int) -> dict:
-                    from core.multi_agent_v2.orchestration.scheduler.intelligent_scheduler import IntelligentScheduler
-                    from core.multi_agent_v2.agents.base.base_agent import Task, AgentFactory
-                    from core.multi_agent_v2.infrastructure.task_executor import TaskExecutor
-                    from core.multi_agent_v2.infrastructure.agent_pool import SimpleAgentPool
-                    from core.multi_agent_v2.orchestration.context.global_context_center import GlobalContextCenter
-                    pool = SimpleAgentPool()
-                    agents = AgentFactory.create_agents_for_task(message.split(), 2, 2)
-                    for a in agents:
-                        pool.add_agent(a)
-                    scheduler = IntelligentScheduler(GlobalContextCenter())
-                    scheduler.agent_pool = pool
-                    t = Task(task_id=f"legacy_{id(self)}", type="analysis", description=message, keywords=[])
-                    schedule_result = await scheduler.schedule(t)
-                    if not schedule_result.success:
-                        return {"success": False, "reply": f"处理失败: {schedule_result.error}", "fallback": True}
-                    executor = TaskExecutor(agent_pool=pool)
-                    exec_result = await executor.execute(schedule_result, t, timeout=60)
-                    return {"success": exec_result.get("success", False), "reply": str(exec_result.get("results", []))[:200], "fallback": False}
+                    logger.warning("IntelligentScheduler 已移除，降级返回")
+                    return {"success": False, "reply": "智能调度已移除，请使用新编排引擎", "fallback": True}
 
             set_task_handlers(_TextAnalyzerAgent(), handle_multi_step, handle_single_step)
             logger.info("任务执行接口引用注入完成")

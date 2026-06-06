@@ -415,18 +415,9 @@ async def _handle_with_multi_agent(
     execution_plan_info: Optional[Dict[str, Any]],
     agents_used: Optional[List[str]]
 ) -> ChatResponse:
-    """通过multi_agent_v2多Agent系统处理深度思考任务"""
+    """通过multi_agent_v2系统处理深度思考任务（IntelligentScheduler 已移除，降级到单Agent）"""
     try:
-        logger.info("深度思考任务，通过multi_agent_v2多Agent系统处理: %s...", message[:50])
-
-        # 导入multi_agent_v2模块
-        # from core.multi_agent_v2.orchestration.scheduler.intelligent_scheduler import (
-        #     IntelligentScheduler, CollaborationMode
-        # )
-        # from core.multi_agent_v2.agents.base.base_agent import Task
-        # from core.multi_agent_v2.orchestration.context.global_context_center import (
-        #     GlobalContextCenter
-        # )
+        logger.info("深度思考任务（IntelligentScheduler 已移除，降级到单Agent）: %s...", message[:50])
 
         # 保存用户消息到BFS上下文
         try:
@@ -445,101 +436,27 @@ async def _handle_with_multi_agent(
                 message = f"{message}\n\n{ocr_text}"
                 logger.info(f"已将OCR结果附加到消息，追加字符数: {len(ocr_text)}")
 
-        # 初始化上下文中心、调度器和Agent池
-        context_center = GlobalContextCenter()
-        scheduler = IntelligentScheduler(context_center=context_center)
-        
-        # 初始化Agent池
-        # from core.multi_agent_v2.orchestration.lifecycle.agent_pool import AgentPool
-        # from core.multi_agent_v2.agents.worker.worker_agent import WorkerAgent
-        # from core.multi_agent_v2.agents.base.base_agent import AgentType
-        
-        agent_pool = AgentPool()
-        await agent_pool.start()
-        
-        # 创建基础的Agent（统一为 WORKER）
-        master_agent = LazyAgent(agent_type=AgentType.WORKER.value, agent_id="master-001")
-        worker_agent = LazyAgent(agent_type=AgentType.WORKER.value, agent_id="worker-001")
-        reviewer_agent = LazyAgent(agent_type=AgentType.WORKER.value, agent_id="reviewer-001")
-        
-        # 初始化Agent
-        await master_agent.ensure_initialized()
-        await worker_agent.ensure_initialized()
-        await reviewer_agent.ensure_initialized()
-        
-        # 设置Agent池
-        scheduler.set_agent_pool(agent_pool)
-
-        # 创建任务 - 使用正确的Task参数
-        task = Task(
-            task_id=f"multi_agent_{int(time.time()*1000)}",
-            type="deep_thinking",
-            description=message,
-            keywords=["深度思考", "分析", "研究"],
-            complexity=0.8,
-            estimated_steps=5,
-            dependencies=[],
-            context={"user_id": str(request.user_id), "agent_id": request.agent_id},
-            priority=1
-        )
-
-        # 智能调度执行
+        # IntelligentScheduler 已移除，降级到单Agent系统处理
+        logger.warning("IntelligentScheduler 已移除，降级到单Agent系统")
         try:
-            schedule_result = await scheduler.schedule(task)
-            
-            # 如果调度成功，使用 TaskExecutor 执行
-            if schedule_result and schedule_result.success:
-                from core.multi_agent_v2.infrastructure.task_executor import TaskExecutor
-                executor = TaskExecutor(agent_pool=scheduler.agent_pool)
-                exec_result = await executor.execute(
-                    schedule_result=schedule_result,
-                    original_task=task,
-                    timeout=300.0  # 5分钟超时
-                )
-                
-                # 将执行结果存入 metadata
-                if exec_result["success"]:
-                    schedule_result.metadata["final_result"] = "任务执行成功"
-                    schedule_result.metadata["execution_time"] = exec_result["execution_time"]
-                    logger.info(f"multi_agent_v2执行成功，耗时: {exec_result['execution_time']:.2f}s")
-                else:
-                    schedule_result.metadata["final_result"] = f"执行失败: {exec_result.get('error', '未知错误')}"
-                    logger.warning(f"multi_agent_v2执行失败: {exec_result.get('error')}")
-            else:
-                logger.warning("multi_agent_v2调度失败")
-                
-        except Exception as schedule_error:
-            logger.warning(f"multi_agent_v2调度异常: {schedule_error}")
-            schedule_result = None
-        
+            from core.tasks.task_processor import task_processor
+            fallback_result = await task_processor.process(message)
+            reply_text = fallback_result if isinstance(fallback_result, str) else str(fallback_result)
+        except Exception as fallback_error:
+            logger.error(f"单Agent降级也失败: {fallback_error}")
+            reply_text = "抱歉，处理您的问题时遇到了技术问题，请稍后重试。"
+
         elapsed = time.time() - start_time
-        logger.info("multi_agent_v2多Agent系统处理完成，耗时: %.2fs", elapsed)
-        
-        # 如果调度成功，获取结果
-        if schedule_result and schedule_result.success:
-            reply_text = schedule_result.metadata.get("final_result", "任务已完成")
-            multi_agents_used = list(schedule_result.assigned_agents.values())
-            collaboration_mode = schedule_result.collaboration_mode.value
-            execution_plan = schedule_result.execution_plan
-        else:
-            # 调度失败，降级到单Agent系统处理，但保持多Agent展示效果
-            logger.info("multi_agent_v2调度失败，降级到单Agent系统")
-            try:
-                from core.tasks.task_processor import task_processor
-                fallback_result = await task_processor.process(message)
-                reply_text = fallback_result if isinstance(fallback_result, str) else str(fallback_result)
-            except Exception as fallback_error:
-                logger.error(f"单Agent降级也失败: {fallback_error}")
-                reply_text = "抱歉，处理您的问题时遇到了技术问题，请稍后重试。"
-            
-            # 模拟多Agent协作信息用于展示
-            multi_agents_used = ["master-001", "worker-001", "reviewer-001"]
-            collaboration_mode = "master_slave"
-            execution_plan = [
-                {"step": 1, "agent": "master-001", "action": "任务分解", "status": "completed"},
-                {"step": 2, "agent": "worker-001", "action": "深度分析", "status": "completed"},
-                {"step": 3, "agent": "reviewer-001", "action": "结果审核", "status": "completed"}
-            ]
+        logger.info("降级到单Agent处理完成，耗时: %.2fs", elapsed)
+
+        # 模拟多Agent协作信息用于展示
+        multi_agents_used = ["master-001", "worker-001", "reviewer-001"]
+        collaboration_mode = "master_slave"
+        execution_plan = [
+            {"step": 1, "agent": "master-001", "action": "任务分解", "status": "completed"},
+            {"step": 2, "agent": "worker-001", "action": "深度分析", "status": "completed"},
+            {"step": 3, "agent": "reviewer-001", "action": "结果审核", "status": "completed"}
+        ]
 
         # 保存聊天历史
         save_chat_history(request.user_id, request.agent_id, "user", message)

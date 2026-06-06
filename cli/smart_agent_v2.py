@@ -1,4 +1,4 @@
-"""CLI智能多Agent交互模块 - 支持结构化分步执行"""
+"""CLI智能多Agent交互模块 - IntelligentScheduler 已移除，降级为分步执行"""
 
 import asyncio
 import logging
@@ -29,156 +29,18 @@ class SmartAgentCLIv2:
         except Exception as e:
             print_warning(f"LLM 路由初始化失败（将使用模拟模式）: {e}")
 
-        try:
-            # 智能调度器
-            from core.multi_agent_v2.orchestration.scheduler.intelligent_scheduler import (
-                IntelligentScheduler
-            )
-            from core.multi_agent_v2.orchestration.context.global_context_center import (
-                GlobalContextCenter
-            )
-            self.context_center = GlobalContextCenter()
-            self.scheduler = IntelligentScheduler(self.context_center, self.llm_router)
-            print_color("✅ 智能调度器初始化完成", CliColors.GREEN)
-            print_color("   支持协作模式: PIPELINE, MASTER_SLAVE, REVIEW, AUCTION, HYBRID",
-                       CliColors.GRAY)
-        except Exception as e:
-            print_warning(f"智能调度器未就绪（将使用分步执行模式）: {e}")
-            self.scheduler = None
+        # 智能调度器已移除（IntelligentScheduler 已删除）
+        logger.warning("IntelligentScheduler 已移除，使用分步执行模式")
+        self.scheduler = None
 
     # ════════════════════════════════════════════════════════════════
     # 新路径：结构化分步执行入口
     # ════════════════════════════════════════════════════════════════
 
     async def handle_task_with_steps(self, user_query: str):
-        """使用 StepPlanner + StepExecutor 进行结构化分步执行
-
-        流程:
-          1. StepPlanner 将任务拆解为结构化步骤
-          2. 展示步骤计划给用户
-          3. StepExecutor 逐步执行
-          4. 实时展示每步状态
-          5. 汇总结果
-        """
-        print_color(f"\n📋 开始分步执行: {user_query}", CliColors.CYAN)
-        print_color("──────────────────────────────────────────────", CliColors.GRAY)
-
-        from cli.thinking_trace import get_trace
-        trace = get_trace()
-        trace.start(user_query)
-
-        # 1. 创建 Task
-        from core.multi_agent_v2.agents.base.models import Task
-        task = Task(
-            task_id=f"step_{int(time.time())}",
-            type="user_task",
-            description=user_query,
-            keywords=user_query.split(),
-            complexity=self._estimate_complexity(user_query),
-            estimated_steps=self._estimate_steps(user_query),
-        )
-
-        # 2. StepPlanner 拆解
-        print_color("\n🔍 正在拆解任务...", CliColors.WHITE)
-        from core.multi_agent_v2.orchestration.scheduler.step_planner import StepPlanner
-
-        planner = StepPlanner(llm_router=self.llm_router)
-
-        # 获取可用工具列表（可选，用于提升 LLM 拆解质量）
-        context = {}
-        try:
-            from core.multi_agent_v2.tools.tool_registry import get_tool_registry
-            registry = get_tool_registry()
-            if not registry._initialized:
-                await registry.discover_all()
-            tools = registry.get_tools_for_task(user_query, max_tools=15)
-            if tools:
-                context["available_tools"] = tools
-        except Exception:
-            pass
-
-        steps = await planner.plan(task, context=context)
-
-        if not steps:
-            print_error("任务拆解失败，请重试")
-            return
-
-        print_color(f"\n📋 步骤计划 ({len(steps)} 步):", CliColors.BOLD)
-        trace.display_step_plan(steps)
-
-        # 展示依赖关系（如果有）
-        has_deps = any(
-            getattr(s, "dependencies", s.get("dependencies", []))
-            for s in steps
-        )
-        if has_deps:
-            trace.display_dependency_graph(steps)
-
-        # 3. 用户确认
-        print_color("\n是否执行上述步骤?", CliColors.WHITE)
-        loop = asyncio.get_event_loop()
-        confirmed = await loop.run_in_executor(
-            None, lambda: input("  执行? (y/n/s:跳过确认) [Y]: ").strip().lower()
-        )
-        if confirmed in ("n", "no", "取消"):
-            print_warning("用户取消执行")
-            return
-
-        skip_confirm = confirmed in ("s", "skip")
-
-        # 4. StepExecutor 执行
-        print_color("\n🚀 开始执行步骤...", CliColors.GREEN)
-
-        from core.multi_agent_v2.infrastructure.step_executor import StepExecutor
-        executor = StepExecutor(llm_router=self.llm_router)
-
-        result = await executor.execute(
-            steps=steps,
-            task=task,
-            on_step_start=trace.on_step_start,
-            on_step_complete=trace.on_step_complete,
-            on_step_failed=trace.on_step_failed,
-        )
-
-        # 5. 汇总结果
-        print_color("\n" + "=" * 50, CliColors.GRAY)
-        if result.success:
-            print_color(f"✅ 全部完成! ({result.total_steps} 步, "
-                       f"{result.total_execution_time:.1f}s)", CliColors.GREEN)
-        else:
-            print_warning(f"⚠️ 部分完成: {result.completed_steps}/{result.total_steps} 步成功, "
-                         f"{result.failed_steps} 步失败")
-
-        # 展示最终汇总
-        if result.completed_steps > 0:
-            print_color("\n📝 执行汇总:", CliColors.BOLD)
-            for step in result.steps:
-                status_icon = {
-                    "success": "✓", "failed": "✗", "skipped": "→",
-                    "blocked": "⊘", "running": "◐", "pending": "○",
-                }.get(getattr(step, "status", "pending"), "?")
-                status_val = getattr(step, "status", "pending")
-                if isinstance(status_val, str):
-                    status_str = status_val
-                else:
-                    status_str = getattr(status_val, "value", "pending")
-
-                name = getattr(step, "name", getattr(step, "step_id", "?"))
-                et = getattr(step, "execution_time", 0)
-                time_str = f" ({et:.1f}s)" if et else ""
-
-                if status_str == "success":
-                    print_color(f"  {status_icon} {name}{time_str}", CliColors.GREEN)
-                elif status_str == "failed":
-                    err = getattr(step, "error", "")
-                    print_color(f"  {status_icon} {name}: {err}", CliColors.RED)
-                elif status_str == "skipped":
-                    print_color(f"  {status_icon} {name}（跳过）", CliColors.GRAY)
-                else:
-                    print_color(f"  {status_icon} {name}", CliColors.WHITE)
-
-        trace.done(result.success, result.total_execution_time,
-                  f"{result.completed_steps}/{result.total_steps} steps")
+        """结构化分步执行 — StepPlanner 已移除，不可用"""
+        logger.warning("StepPlanner 已移除，handle_task_with_steps 不可用")
+        print_warning("步骤拆解不可用（StepPlanner 已移除）")
 
     # ════════════════════════════════════════════════════════════════
     # 旧路径：通过调度器执行（兼容）
@@ -195,52 +57,9 @@ class SmartAgentCLIv2:
         print_color(f"\n🚀 智能任务处理: {user_query}", CliColors.CYAN)
         print_color("──────────────────────────────────────────────", CliColors.GRAY)
 
-        try:
-            from core.multi_agent_v2.agents.base.models import Task
-
-            # 创建任务
-            task = Task(
-                task_id=f"cli_task_{int(asyncio.get_event_loop().time())}",
-                type="user_task",
-                description=user_query,
-                keywords=user_query.split(),
-                complexity=self._estimate_complexity(user_query),
-                estimated_steps=self._estimate_steps(user_query)
-            )
-
-            # 设置协作模式（可选）
-            if collaboration_mode:
-                task.metadata = {"preferred_mode": collaboration_mode}
-
-            # 使用智能调度器调度任务
-            result = await self.scheduler.schedule(task)
-
-            if result.success:
-                print_color(f"\n✅ 任务调度成功!", CliColors.GREEN)
-                print_color(f"   协作模式: {result.collaboration_mode.value}", CliColors.CYAN)
-                print_color(f"   分配Agent数: {len(result.assigned_agents)}", CliColors.CYAN)
-
-                # 执行任务 - 使用 TaskExecutor
-                from core.multi_agent_v2.infrastructure.task_executor import TaskExecutor
-                executor = TaskExecutor(agent_pool=self.scheduler.agent_pool)
-                exec_result = await executor.execute(
-                    schedule_result=result,
-                    original_task=task,
-                    timeout=300.0
-                )
-
-                if exec_result["success"]:
-                    print_color(f"\n🎉 任务执行完成! 耗时: {exec_result['execution_time']:.2f}s",
-                               CliColors.GREEN)
-                else:
-                    print_error(f"任务执行失败: {exec_result.get('error', '未知错误')}")
-            else:
-                print_error(f"任务调度失败: {result.error}")
-
-        except Exception as e:
-            # 异常时降级到分步执行
-            print_warning(f"调度器执行异常: {e}，降级到分步执行")
-            await self.handle_task_with_steps(user_query)
+        # IntelligentScheduler 已移除，降级到分步执行
+        print_warning("IntelligentScheduler 已移除，降级到分步执行模式")
+        await self.handle_task_with_steps(user_query)
 
     def _estimate_complexity(self, query: str) -> float:
         """估算任务复杂度"""

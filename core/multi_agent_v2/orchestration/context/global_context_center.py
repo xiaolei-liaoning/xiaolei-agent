@@ -4,18 +4,15 @@
 负责：
 1. 任务状态追踪
 2. 共享上下文管理
-3. 消息总线
-4. 事件系统
-5. 状态广播与同步
+3. 状态广播与同步
 """
 
 import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 from collections import defaultdict
 import uuid
 
@@ -43,19 +40,7 @@ class TaskState(Enum):
     CANCELLED = "cancelled"       # 已取消
 
 
-class EventType(Enum):
-    """事件类型"""
-    TASK_CREATED = "task_created"
-    TASK_ASSIGNED = "task_assigned"
-    TASK_STARTED = "task_started"
-    TASK_PROGRESS = "task_progress"
-    TASK_COMPLETED = "task_completed"
-    TASK_FAILED = "task_failed"
-    CONTEXT_UPDATED = "context_updated"
-    AGENT_REGISTERED = "agent_registered"
-    AGENT_STATE_CHANGED = "agent_state_changed"
-    CONFLICT_DETECTED = "conflict_detected"
-    SYNC_REQUEST = "sync_request"
+# EventType/Event/EventSystem 已移除 —— 通知改用 SharedBus
 
 
 @dataclass
@@ -96,59 +81,7 @@ class SharedContext:
         return self.global_data.copy()
 
 
-@dataclass
-class Event:
-    """事件"""
-    event_id: str
-    event_type: EventType
-    source_id: str
-    target_id: Optional[str]  # None表示广播
-    data: Dict[str, Any]
-    timestamp: float = field(default_factory=time.time)
-    trace_id: Optional[str] = None
-
-
-# MessageBus 已迁移至 SharedBus (core.multi_agent_v2.infrastructure.shared_bus)
-# 旧代码中不再有 MessageBus / Message 类 —— 所有消息通信均通过 SharedBus 进行
-
-
-class EventSystem:
-    """事件系统 - 发布/订阅模式"""
-
-    def __init__(self):
-        self.handlers: Dict[EventType, List[Callable]] = defaultdict(list)
-        self.event_history: List[Event] = []
-
-    def subscribe(self, event_type: EventType, handler: Callable) -> None:
-        """订阅事件"""
-        self.handlers[event_type].append(handler)
-
-    def unsubscribe(self, event_type: EventType, handler: Callable) -> None:
-        """取消订阅"""
-        if handler in self.handlers[event_type]:
-            self.handlers[event_type].remove(handler)
-
-    async def publish(self, event: Event) -> None:
-        """发布事件"""
-        self.event_history.append(event)
-
-        handlers = self.handlers.get(event.event_type, [])
-        for handler in handlers:
-            try:
-                if asyncio.iscoroutinefunction(handler):
-                    await handler(event)
-                else:
-                    handler(event)
-            except Exception as e:
-                logger.error(f"事件处理器执行失败: {e}")
-
-        logger.debug(f"事件发布: {event.event_type.value} from {event.source_id}")
-
-    async def get_history(self, event_type: Optional[EventType] = None, limit: int = 100) -> List[Event]:
-        """获取事件历史"""
-        if event_type:
-            return [e for e in self.event_history[-limit:] if e.event_type == event_type]
-        return self.event_history[-limit:]
+# Event/EventSystem 已移除 —— 通知改用 SharedBus
 
 
 class GlobalContextCenter:
@@ -179,8 +112,7 @@ class GlobalContextCenter:
         self.shared_contexts: Dict[str, SharedContext] = {}
 
         # 消息总线 — 使用 SharedBus（全局单例）
-        # 事件系统
-        self.event_system = EventSystem()
+        # 事件系统已移除 -- 通知改用 SharedBus
 
         # Agent注册表
         self.agent_registry: Dict[str, Dict[str, Any]] = {}
@@ -227,15 +159,7 @@ class GlobalContextCenter:
             self.task_contexts[task_id] = context
             self.shared_contexts[task_id] = SharedContext(task_id=task_id)
 
-        # 发布任务创建事件
-        await self.event_system.publish(Event(
-            event_id=f"evt_{uuid.uuid4().hex[:8]}",
-            event_type=EventType.TASK_CREATED,
-            source_id="context_center",
-            target_id=None,
-            data={"task_id": task_id, "request": request},
-            trace_id=trace_id
-        ))
+
 
         self._mark_dirty(task_id)
         logger.info(f"创建任务上下文: {task_id}")
@@ -256,24 +180,7 @@ class GlobalContextCenter:
 
         self._mark_dirty(task_id)
 
-        # 发布状态变更事件
-        event_type_map = {
-            TaskState.SCHEDULED: EventType.TASK_ASSIGNED,
-            TaskState.RUNNING: EventType.TASK_STARTED,
-            TaskState.COMPLETED: EventType.TASK_COMPLETED,
-            TaskState.FAILED: EventType.TASK_FAILED,
-        }
 
-        event_type = event_type_map.get(state, EventType.TASK_PROGRESS)
-
-        await self.event_system.publish(Event(
-            event_id=f"evt_{uuid.uuid4().hex[:8]}",
-            event_type=event_type,
-            source_id="context_center",
-            target_id=None,
-            data={"task_id": task_id, "state": state.value},
-            trace_id=context.metadata.get("trace_id")
-        ))
 
         logger.info(f"任务状态更新: {task_id} -> {state.value}")
 
@@ -285,16 +192,6 @@ class GlobalContextCenter:
 
             shared_context = self.shared_contexts[task_id]
             shared_context.update(agent_id, key, value)
-
-        # 发布上下文更新事件
-        await self.event_system.publish(Event(
-            event_id=f"evt_{uuid.uuid4().hex[:8]}",
-            event_type=EventType.CONTEXT_UPDATED,
-            source_id=agent_id,
-            target_id=None,
-            data={"task_id": task_id, "key": key},
-            trace_id=self.task_contexts[task_id].metadata.get("trace_id")
-        ))
 
         # 检查 token 预算，超限则剪枝
         self._check_and_prune(task_id)
@@ -317,14 +214,6 @@ class GlobalContextCenter:
                 "state": "active"
             }
 
-        # 发布注册事件
-        await self.event_system.publish(Event(
-            event_id=f"evt_{uuid.uuid4().hex[:8]}",
-            event_type=EventType.AGENT_REGISTERED,
-            source_id=agent_id,
-            target_id=None,
-            data={"agent_id": agent_id, "info": agent_info}
-        ))
 
         logger.info(f"Agent注册: {agent_id}")
 
@@ -340,13 +229,6 @@ class GlobalContextCenter:
                 self.agent_registry[agent_id]["last_update"] = time.time()
 
         # 发布状态变更事件
-        await self.event_system.publish(Event(
-            event_id=f"evt_{uuid.uuid4().hex[:8]}",
-            event_type=EventType.AGENT_STATE_CHANGED,
-            source_id=agent_id,
-            target_id=None,
-            data={"agent_id": agent_id, "state": state}
-        ))
 
         self._mark_dirty("agent_registry")
 
@@ -423,13 +305,6 @@ class GlobalContextCenter:
             context.assigned_agents[subtask_id] = agent_id
 
         # 发布任务分配事件
-        await self.event_system.publish(Event(
-            event_id=f"evt_{uuid.uuid4().hex[:8]}",
-            event_type=EventType.TASK_ASSIGNED,
-            source_id="context_center",
-            target_id=agent_id,
-            data={"task_id": task_id, "subtask_id": subtask_id, "agent_id": agent_id}
-        ))
 
         logger.info(f"子任务分配: {subtask_id} -> Agent {agent_id}")
         self._mark_dirty(task_id)
@@ -471,19 +346,6 @@ class GlobalContextCenter:
 
         logger.info(f"任务完成: {task_id}")
         self._mark_dirty(task_id)
-
-    async def subscribe(self, agent_id: str, events: List[EventType]) -> None:
-        """订阅事件"""
-        for event_type in events:
-            handler = self._create_event_handler(agent_id)
-            self.event_system.subscribe(event_type, handler)
-
-    def _create_event_handler(self, agent_id: str) -> Callable:
-        """创建事件处理器"""
-        async def handler(event: Event):
-            # 这里可以添加消息队列逻辑
-            logger.debug(f"Agent {agent_id} 收到事件: {event.event_type.value}")
-        return handler
 
     async def broadcast_state(self, task_id: str) -> None:
         """广播任务状态"""
@@ -560,8 +422,6 @@ class GlobalContextCenter:
                 pruned = True
 
         # Level 2: 折叠连续的事件记录（仅保留最近 20 条）
-        if len(self.event_system.event_history) > 50:
-            self.event_system.event_history = self.event_system.event_history[-20:]
             pruned = True
 
         # Level 3: 如果仍然超限，从 shared_contexts 中移除最旧的 key

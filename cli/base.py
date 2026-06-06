@@ -214,86 +214,31 @@ class WorkflowEngineWrapper:
         """多 Agent 协作执行 — 增强显示"""
         think_log("启动多 Agent 协作模式...")
 
-        from core.multi_agent_v2.agents import WorkAgent
-        from core.multi_agent_v2.orchestration.scheduler.intelligent_scheduler import IntelligentScheduler
-        from core.multi_agent_v2.infrastructure.shared_bus import get_shared_bus
-        from core.multi_agent_v2.agents.base.base_agent import Task
-
-        # 显示协作计划
-        collab_plan = [
-            {"title": "组建 Agent 团队", "description": "创建 Master/Worker/Reviewer Agent", "tag": "准备"},
-            {"title": "任务分配与调度", "description": "智能调度器分析任务并分配", "tag": "调度"},
-            {"title": "协作执行", "description": "多 Agent 并行执行各自任务", "tag": "执行"},
-            {"title": "结果汇总", "description": "收集并整合各 Agent 执行结果", "tag": "汇总"},
-        ]
-        engine.plan_steps(collab_plan)
+        # IntelligentScheduler 已移除，协作模式降级为单Agent执行
+        logger.warning("IntelligentScheduler 已移除，协作模式降级为单Agent")
 
         try:
-            # Step 1: 组建团队
+            from core.multi_agent_v2.agents import WorkAgent
+
             step_num = 1
-            engine.start_step(step_num, "组建 Agent 团队")
-            master = WorkAgent(agent_id="master")
-            worker = WorkAgent(agent_id="worker-1")
-            reviewer = WorkAgent(agent_id="reviewer")
-
-            from cli.thinking_trace import get_trace
-            trace = get_trace()
-
-            for a in [master, worker, reviewer]:
-                a.set_trace(trace)
-                await a.register()
-                await a.start()
-
-            async with AsyncSpinner("等待 Agent 就绪...", color=CLAUDE):
-                await asyncio.sleep(0.3)
-            engine.complete_step(step_num, success=True,
-                                detail=f"3 个 Agent 已就绪")
-
-            # Step 2: 任务分配
-            step_num = 2
-            engine.start_step(step_num, "任务分配与调度")
-            task = Task(
-                task_id=f"collab_{uuid.uuid4().hex[:8]}",
-                type="general", description=user_request,
-                keywords=user_request.split(),
-                complexity=0.6, estimated_steps=5,
-            )
-
-            scheduler = IntelligentScheduler(get_shared_bus())
-            async with AsyncSpinner("智能调度器正在分析任务...", color=CLAUDE):
-                plan = await scheduler.schedule(task)
-            engine.complete_step(step_num, success=True,
-                                detail=f"计划: {len(plan.steps) if plan else 0} 步")
-
-            # Step 3: 协作执行
-            step_num = 3
-            engine.start_step(step_num, "协作执行")
-            think_log(f"协作计划完成: {len(plan.steps) if plan else 0} 步")
-            master_result = await master.execute(task)
-            engine.complete_step(step_num, success=master_result.success,
-                                detail=f"执行耗时: {master_result.execution_time:.1f}s"
-                                if master_result.execution_time else "")
-
-            # Step 4: 结果汇总
-            step_num = 4
-            engine.start_step(step_num, "结果汇总")
-            engine.complete_step(step_num, success=master_result.success)
+            engine.start_step(step_num, "单Agent执行（协作模式不可用）")
+            agent = WorkAgent(agent_id="single-agent")
+            result = await agent.run(user_request, max_iterations=3)
+            engine.complete_step(step_num, success=result.get("success", False))
 
             result_data = {
-                "success": master_result.success,
-                "result": str(master_result.output)[:500] if master_result.output else "",
+                "success": result.get("success", False),
+                "result": str(result.get("result", ""))[:500],
                 "iterations": 1,
                 "confidence": 0.8,
-                "total_time": master_result.execution_time,
+                "total_time": 0,
                 "results": [],
-                "agent_result": {"output": str(master_result.output)[:500]},
-                "mode": "collaborate",
+                "agent_result": result,
+                "mode": "collaborate (fallback to single)",
             }
 
             engine.progress_summary()
-            engine.summary(master_result.success,
-                          master_result.execution_time or 0)
-
+            engine.summary(result.get("success", False), 0)
             return result_data
 
         except Exception as e:

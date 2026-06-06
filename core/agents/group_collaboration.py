@@ -780,48 +780,13 @@ class GroupCoordinator:
             # 新：动态组队
             return await self._team_coordinator.execute(message)
         else:
-            # 旧兼容：委托给 IntelligentScheduler
+            # IntelligentScheduler 已移除
             return await self._legacy_execute(message, strategy)
 
     async def _legacy_execute(self, message: str, strategy: str) -> Dict[str, Any]:
-        """旧兼容执行路径"""
-        try:
-            from core.multi_agent_v2.orchestration.scheduler.intelligent_scheduler import (
-                IntelligentScheduler, CollaborationMode
-            )
-            from core.multi_agent_v2.agents.base.base_agent import Task, AgentFactory
-            from core.multi_agent_v2.infrastructure.task_executor import TaskExecutor
-            from core.multi_agent_v2.infrastructure.agent_pool import SimpleAgentPool
-            from core.multi_agent_v2.orchestration.context.global_context_center import (
-                GlobalContextCenter
-            )
-
-            pool = SimpleAgentPool()
-            agents = AgentFactory.create_agents_for_task(message.split(), 3, 3)
-            for a in agents:
-                pool.add_agent(a)
-
-            scheduler = IntelligentScheduler(GlobalContextCenter())
-            scheduler.agent_pool = pool
-
-            task = Task(task_id=f"group_{uuid.uuid4().hex[:6]}", type=strategy,
-                        description=message, keywords=[])
-            schedule_result = await scheduler.schedule(task)
-
-            if not schedule_result.success:
-                return {"success": False, "error": "调度失败: " + (schedule_result.error or "")}
-
-            executor = TaskExecutor(agent_pool=pool)
-            exec_result = await executor.execute(schedule_result, task, timeout=60)
-
-            return {
-                "success": exec_result.get("success", False),
-                "reply": f"[{strategy}] 执行完成" if exec_result.get("success") else "执行失败",
-                "results": exec_result.get("results", []),
-            }
-        except Exception as e:
-            logger.error(f"旧兼容执行失败: {e}")
-            return {"success": False, "error": str(e)}
+        """旧兼容执行路径 — IntelligentScheduler 已移除"""
+        logger.warning("IntelligentScheduler 已移除，旧兼容路径不可用")
+        return {"success": False, "error": "IntelligentScheduler has been removed", "fallback": True}
 
     def recommend_agent_groups(self, task_example: str) -> AgentRecommendation:
         """推荐 Agent 小组 — 用 AgentFactory 按任务特征创建"""

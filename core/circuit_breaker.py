@@ -99,7 +99,7 @@ class CircuitBreaker:
             return True
         return True
 
-    # ── 接口B: is_open() — concurrent_processor / intelligent_scheduler ──
+    # ── 接口B: is_open() — concurrent_processor ──
 
     @property
     def is_open(self) -> bool:
