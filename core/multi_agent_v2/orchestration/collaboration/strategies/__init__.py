@@ -7,6 +7,11 @@
 子模块:
     base          - 基础数据类、基类、共享工具
     pipeline      - 流水线策略、递归分解、LLM反思
+
+注意：以下类已废弃（[DEPRECATED]），仅保留向后兼容：
+  - BaseCollaborationStrategy  -> 请使用具体策略类
+  - PipelineStrategy          -> 请使用 AdaptivePipelineWithReflection
+  - HybridStrategy            -> 动态策略选择由 select_strategy_with_llm 接管
 """
 
 from .base import (
@@ -14,7 +19,7 @@ from .base import (
     CollaborationResult,
     CollaborationMode,
     # 策略基类
-    BaseCollaborationStrategy,
+    BaseCollaborationStrategy,  # [DEPRECATED]
     # 知识共享
     KnowledgeSharing,
     # 结果聚合
@@ -29,13 +34,13 @@ from .base import (
     ResultAggregator,
     MasterAgentAggregator,
     # 混合策略
-    HybridStrategy,
+    HybridStrategy,             # [DEPRECATED]
     # LLM动态策略选择
     select_strategy_with_llm,
 )
 
 from .pipeline import (
-    PipelineStrategy,
+    PipelineStrategy,           # [DEPRECATED]
     RecursiveTaskDecomposer,
     ReflectionDecision,
     StepResult,
@@ -51,7 +56,7 @@ __all__ = [
     # base
     "CollaborationResult",
     "CollaborationMode",
-    "BaseCollaborationStrategy",
+    "BaseCollaborationStrategy",  # [DEPRECATED]
     "KnowledgeSharing",
     "AggregationStrategy",
     "PartialResult",
@@ -63,10 +68,10 @@ __all__ = [
     "LLMAggregator",
     "ResultAggregator",
     "MasterAgentAggregator",
-    "HybridStrategy",
+    "HybridStrategy",             # [DEPRECATED]
     "select_strategy_with_llm",
     # pipeline
-    "PipelineStrategy",
+    "PipelineStrategy",            # [DEPRECATED]
     "RecursiveTaskDecomposer",
     "ReflectionDecision",
     "StepResult",
