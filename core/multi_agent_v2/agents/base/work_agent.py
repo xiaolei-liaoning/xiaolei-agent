@@ -26,6 +26,11 @@ class WorkAgent(BaseAgent):
 
     替代 WorkerAgent / MasterAgent / ReviewerAgent / ExpertAgent / CoordinatorAgent / MonitorAgent。
     不再预设 specialization，而是根据任务类型动态适配。
+
+    两种执行模式：
+    - 轻量模式（_execute_fast）：直通 ReAct 快路径，跳过 StepPlanner/StepExecutor 全链路
+      （orchestrator 子 Agent 默认使用）
+    - 完整模式（execute + _execute_full）：走完整 StepPlanner + StepExecutor 全链路
     """
 
     def __init__(
@@ -33,6 +38,7 @@ class WorkAgent(BaseAgent):
         agent_id: Optional[str] = None,
         name: Optional[str] = None,
         description: str = "通用工作 Agent，根据任务动态调整",
+        light_mode: bool = False,
     ):
         super().__init__(
             agent_id=agent_id,
@@ -40,6 +46,9 @@ class WorkAgent(BaseAgent):
             name=name,
             description=description,
         )
+
+        # 执行模式
+        self._light_mode = light_mode
 
         # 能力列表 - 非硬编码，根据任务动态生成
         self.capabilities: List[Capability] = self._default_capabilities()
@@ -50,7 +59,7 @@ class WorkAgent(BaseAgent):
         # SharedBus 监听
         self._bus_listener_task: Optional[asyncio.Task] = None
 
-        logger.info(f"WorkAgent 初始化完成: {self.agent_id}")
+        logger.info(f"WorkAgent {'[轻量]' if light_mode else ''} 初始化完成: {self.agent_id}")
 
     def _default_capabilities(self) -> List[Capability]:
         """提供一组通用的默认能力，具体匹配由 scheduler 动态完成"""
@@ -157,6 +166,75 @@ class WorkAgent(BaseAgent):
     async def execute(self, task: Task) -> ActionResult:
         """执行任务 - 统一的执行入口
 
+        根据 _light_mode 选择执行路径：
+        - True  → 直通 ReAct 快路径（orchestrator 子 Agent）
+        - False → 完整 think/act/reflect 全链路
+        """
+        if self._light_mode:
+            return await self._execute_fast(task)
+        return await self._execute_full(task)
+
+    async def _execute_fast(self, task: Task) -> ActionResult:
+        """轻量执行 — 直通 ReAct 快路径
+
+        跳过 StepPlanner/StepExecutor/记忆全链路，直接通过 react_core.run_react
+        走 MiddlewareChain，获得工具调用和 LLM 交互能力。
+
+        Args:
+            task: 要执行的任务
+
+        Returns:
+            ActionResult
+        """
+        logger.info(f"WorkAgent [轻量] 执行任务: {task.task_id} ({task.type})")
+        start = time.time()
+
+        # 启动总线监听
+        await self._start_bus_listener()
+
+        try:
+            # 走 ReActCore 快路径
+            from core.multi_agent_v2.agents.react_core import run_react
+            result = await run_react(
+                task.description,
+                max_rounds=2 if self._light_mode else 10,
+                task_id=task.task_id,
+            )
+
+            elapsed = time.time() - start
+            success = result.get("success", False)
+            output = result.get("output", "")
+            error = result.get("error", "")
+
+            ar = ActionResult(
+                success=success,
+                output=str(output) if output else None,
+                error=error,
+                execution_time=elapsed,
+                metadata={"light_mode": True, "iterations": result.get("iterations", 0)},
+            )
+
+            # 记录工作历史
+            self.work_history.append({
+                "task_id": task.task_id,
+                "task_type": task.type,
+                "success": success,
+                "execution_time": elapsed,
+                "timestamp": time.time(),
+            })
+
+            logger.info(f"WorkAgent [轻量] 完成: success={success} {elapsed:.1f}s")
+            return ar
+
+        except Exception as e:
+            logger.error(f"WorkAgent [轻量] 异常: {e}")
+            return ActionResult(success=False, error=str(e), execution_time=time.time() - start)
+        finally:
+            self._stop_bus_listener()
+
+    async def _execute_full(self, task: Task) -> ActionResult:
+        """完整执行 — think → act → reflect 全链路
+
         workflow:
         1. 启动 SharedBus 监听
         2. 适配任务 → 调整能力配置
@@ -183,7 +261,7 @@ class WorkAgent(BaseAgent):
 
             # 3. 执行
             try:
-                result = await self.act(thought.plan, thought.tool_calls, getattr(thought, 'structured_plan', None))
+                result = await self.act(thought.plan, thought.tool_calls)
             except Exception as e:
                 logger.error(f"执行失败: {e}")
                 return ActionResult(success=False, error=f"执行失败: {e}")
