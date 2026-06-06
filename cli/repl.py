@@ -30,16 +30,8 @@ class REPL:
         """运行主输入循环（替代 EnhancedCLI.run() 中的裸循环）"""
         self.cli.print_welcome()
 
-        # 启动状态栏
-        if self.cli._status_bar:
-            await self.cli._status_bar.start()
-
         while self.cli.running:
             try:
-                # 定期刷新状态栏统计
-                if self.cli._status_bar:
-                    await self.cli._status_bar.update()
-
                 user_input = get_styled_input(self.cli)
 
                 if not user_input:
@@ -77,8 +69,6 @@ class REPL:
 
         # 清理
         self.completer.save_history()
-        if self.cli._status_bar:
-            await self.cli._status_bar.stop()
 
     # ── 内部方法 ───────────────────────────────────────────────────────────
 

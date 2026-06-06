@@ -2732,10 +2732,8 @@ MCP命令使用帮助:
 
     async def run(self):
         """运行CLI主循环 — 委托给 REPL 实现"""
-        from cli.status_bar import StatusBar
         from cli.repl import REPL
 
-        self._status_bar = StatusBar(session_id=self.session_id or "unknown")
         repl = REPL(self)
         await repl.run()
 

@@ -108,42 +108,6 @@ class PluginLoader:
         self.sub_plugin_registrations = discovered
         return discovered
 
-def extract_keywords_from_skill_md(md_path: str) -> List[str]:
-    """从SKILL.md中提取触发关键词
-
-    解析"## 🔑 触发关键词"部分，提取所有关键词。
-
-    这是一个模块级工具函数，PluginLoader 和 main.py watcher 共用。
-    """
-    try:
-        with open(md_path, 'r', encoding='utf-8') as f:
-            content = f.read()
-
-        import re
-        pattern = r'##\s*🔑\s*触发关键词\s*\n(.*?)(?=\n##|\Z)'
-        match = re.search(pattern, content, re.DOTALL)
-
-        if not match:
-            return []
-
-        keywords_section = match.group(1)
-        keywords = []
-
-        # 提取所有关键词（支持中文和英文）
-        for line in keywords_section.split('\n'):
-            line = line.strip()
-            if line.startswith('-'):
-                if ':' in line or '：' in line:
-                    kw_part = line.split(':')[-1] if ':' in line else line.split('：')[-1]
-                    kws = [kw.strip() for kw in re.split(r'[、,，]', kw_part)]
-                    keywords.extend([kw for kw in kws if kw])
-
-        return keywords
-    except Exception as e:
-        logger.warning(f"提取SKILL.md关键词失败 {md_path}: {e}")
-        return []
-
-
     # ── 统一入口 ────────────────────────────────────────────────────
 
     async def load_all(self) -> Dict[str, Any]:
@@ -582,6 +546,42 @@ def extract_keywords_from_skill_md(md_path: str) -> List[str]:
         for name in list(awesome_mcp_manager.get_connected_servers()):
             await awesome_mcp_manager.disconnect_server(name)
         logger.info("🛑 Plugin 已关闭")
+
+
+def extract_keywords_from_skill_md(md_path: str) -> List[str]:
+    """从SKILL.md中提取触发关键词
+
+    解析"## 🔑 触发关键词"部分，提取所有关键词。
+
+    这是一个模块级工具函数，PluginLoader 和 main.py watcher 共用。
+    """
+    try:
+        with open(md_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+
+        import re
+        pattern = r'##\s*🔑\s*触发关键词\s*\n(.*?)(?=\n##|\Z)'
+        match = re.search(pattern, content, re.DOTALL)
+
+        if not match:
+            return []
+
+        keywords_section = match.group(1)
+        keywords = []
+
+        # 提取所有关键词（支持中文和英文）
+        for line in keywords_section.split('\n'):
+            line = line.strip()
+            if line.startswith('-'):
+                if ':' in line or '：' in line:
+                    kw_part = line.split(':')[-1] if ':' in line else line.split('：')[-1]
+                    kws = [kw.strip() for kw in re.split(r'[、,，]', kw_part)]
+                    keywords.extend([kw for kw in kws if kw])
+
+        return keywords
+    except Exception as e:
+        logger.warning(f"提取SKILL.md关键词失败 {md_path}: {e}")
+        return []
 
 
 # ═══════════════════════════════════════════════════════════════════════

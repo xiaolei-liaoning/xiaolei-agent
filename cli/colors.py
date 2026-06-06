@@ -23,12 +23,6 @@ from rich.console import Group
 _console = Console()
 
 # ── 全局禁用 Rich Panel 边框（去掉 ╭╰─ 等字符） ──
-import rich.panel as _rich_panel
-_original_panel_init = _rich_panel.Panel.__init__
-def _no_border_panel(self, renderable, **kwargs):
-    kwargs.setdefault('box', MINIMAL)
-    _original_panel_init(self, renderable, **kwargs)
-_rich_panel.Panel.__init__ = _no_border_panel
 CLAUDE = "rgb(215,119,87)"       # 品牌橙 — 主强调色
 TEXT = "rgb(255,255,255)"        # 正文白
 INACTIVE = "rgb(153,153,153)"    # 禁用灰
