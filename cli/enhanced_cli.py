@@ -2730,30 +2730,24 @@ MCP命令使用帮助:
             print_color("/plugin create <name> - 创建新插件", CliColors.WHITE)
 
     async def handle_smart(self, parsed_cmd):
-        """处理智能多Agent命令"""
+        """处理智能多Agent命令 — 委托 WorkAgent 新路径执行"""
         action = parsed_cmd.action.lower() if parsed_cmd.action else ""
         remaining = parsed_cmd.remaining.strip()
 
-        from cli.smart_agent import get_smart_agent_cli
+        if action == "demo" or action == "status":
+            print_color(f"ℹ️  /smart demo/status 已不再支持，直接使用 /smart \"任务\" 执行", CliColors.YELLOW)
+            return
 
-        smart_cli = get_smart_agent_cli()
-
-        if action == "demo":
-            await smart_cli.handle_agent_collaboration_demo()
-        elif action == "status":
-            await smart_cli.handle_agent_status()
+        # 作为智能任务请求，走 WorkAgent 新路径
+        user_query = (action + " " + remaining).strip() if action else remaining
+        if user_query:
+            await self.handle_smart_request(user_query)
         else:
-            # 作为智能任务请求
-            user_query = (action + " " + remaining).strip() if action else remaining
-            if user_query:
-                await smart_cli.handle_smart_task(user_query)
-            else:
-                print_error("请提供任务描述，如: /smart \"爬取微博热搜并分析\"")
-                print_color("\n💡 智能多Agent命令用法:", CliColors.CYAN)
-                print_color("────────────────────────", CliColors.GRAY)
-                print_color("/smart \"任务描述\" - 使用多Agent协作执行任务", CliColors.WHITE)
-                print_color("/smart demo - 演示多Agent协作", CliColors.WHITE)
-                print_color("/smart status - 查看Agent状态", CliColors.WHITE)
+            print_error("请提供任务描述，如: /smart \"爬取微博热搜并分析\"")
+            print_color("\n💡 智能多Agent命令用法:", CliColors.CYAN)
+            print_color("────────────────────────", CliColors.GRAY)
+            print_color("/smart \"任务描述\" - 使用智能Agent执行任务", CliColors.WHITE)
+            print_color("直接输入自然语言 - 自动识别处理（无需前缀）", CliColors.WHITE)
 
     async def handle_workflows(self, parsed_cmd):
         """处理工作流进度查看命令
