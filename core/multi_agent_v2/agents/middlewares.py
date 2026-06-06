@@ -167,6 +167,14 @@ class ReflectionMiddleware(BaseMiddleware):
 
         if success == 0 and total > 0:
             logger.warning(f"反思: 连续 {total} 次工具调用全部失败")
+            # 写入 Agent 临时记忆
+            if self.agent:
+                self.agent.temp_memory["reflection"] = {
+                    "problem": f"连续 {total} 次工具调用全部失败",
+                    "tools_used": [r.get("tool_call", {}).get("name", "?") for r in recent],
+                    "suggestion": "换工具或直接回答",
+                    "iteration": ctx.iteration,
+                }
 
 
 # ════════════════════════════════════════════════════════════════
@@ -333,6 +341,14 @@ class KEPAMiddleware(BaseMiddleware):
                 await bus.store_knowledge(key, {"result": summary, "tool": name},
                                           tags=tags, source=source, summary=summary)
                 logger.debug(f"KEPA 知识已沉淀: {key} (tags={tags})")
+                # 写入 Agent 临时记忆
+                if self.agent:
+                    self.agent.temp_memory["kepa_summary"] = {
+                        "tool": name,
+                        "summary": summary[:100],
+                        "iteration": ctx.iteration,
+                        "tags": list(tags),
+                    }
                 break  # 每轮只存一条
         except Exception as e:
             logger.debug(f"KEPA 知识沉淀失败: {e}")

@@ -68,6 +68,7 @@ class RunContext:
     tool_defs: Optional[List[Dict]] = None
     is_code_task: bool = False
     model_override: Optional[str] = None
+    personality_prompt: str = ""
     profile: Dict[str, Any] = field(default_factory=lambda: {
         "use_shared_bus": True, "use_memory_store": False, "use_rag": False,
         "use_mcp_fallback": True, "use_workspace": True, "use_sandbox": True,
@@ -243,6 +244,11 @@ class MiddlewareChain:
             if isinstance(m, middleware_class):
                 return m
         return None
+
+    def bind_agent(self, agent: Any) -> None:
+        """将所有中间件绑定到指定 Agent（中间件可通过 self.agent 访问 Agent）"""
+        for mw in self._middlewares:
+            mw._agent = agent
 
     async def on_start(self, ctx: RunContext) -> HookResult:
         for mw in self._middlewares:

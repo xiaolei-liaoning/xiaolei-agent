@@ -11,7 +11,7 @@ ReActCore - V2 单 Agent 核心执行器
 import asyncio
 import json
 import logging
-from typing import Optional
+from typing import Any, Optional
 
 from .middleware import RunContext, BaseMiddleware, MiddlewareChain
 from .plan_tracker import PlanState, StepRecord, parse_plan_from_llm, PLAN_CREATION_PROMPT
@@ -87,8 +87,11 @@ class ReActCoreMiddleware(BaseMiddleware):
         logger.info("第%d轮 start | 工具数=%d | 可用工具: %s", ctx.react_depth, len(ctx.tool_defs or []), tool_names[:5])
 
         # 构建消息，存到 ctx 供中间件读取
+        system_content = '你是AI助手，通过调用可用工具来完成任务。\n\n【关键规则】\n- 搜索资讯 → 调用 search 工具\n- 百度热搜 → 调用 execute_shell 工具，command参数="python3 scripts/fetch_baidu_hotsearch.py"\n- 读写文件 → 调用 file 工具，action参数=write/read\n- 查看目录 → 调用 execute_shell 工具\n- 执行代码 → 调用 execute_python 工具\n- 生成大文件 → 调用 execute_python 工具，用open().write()写入\n\n【注意】\n- 必须调用工具函数来执行操作，不要只输出命令文本\n- 写文件必须一次性写入完整内容，不要分多次\n- 拿到数据立刻分析使用\n- 部分数据获取失败时，用已有数据继续\n- 最终用文本输出结果\n- 出分析报告以【分析报告】开头'
+        if ctx.personality_prompt:
+            system_content = f'{ctx.personality_prompt}\n\n{system_content}'
         ctx._pending_messages = [
-            {"role": "system", "content": '你是AI助手，通过调用可用工具来完成任务。\n\n【关键规则】\n- 搜索资讯 → 调用 search 工具\n- 百度热搜 → 调用 execute_shell 工具，command参数="python3 scripts/fetch_baidu_hotsearch.py"\n- 读写文件 → 调用 file 工具，action参数=write/read\n- 查看目录 → 调用 execute_shell 工具\n- 执行代码 → 调用 execute_python 工具\n- 生成大文件 → 调用 execute_python 工具，用open().write()写入\n\n【注意】\n- 必须调用工具函数来执行操作，不要只输出命令文本\n- 写文件必须一次性写入完整内容，不要分多次\n- 拿到数据立刻分析使用\n- 部分数据获取失败时，用已有数据继续\n- 最终用文本输出结果\n- 出分析报告以【分析报告】开头'},
+            {"role": "system", "content": system_content},
             {"role": "user", "content": ctx.task_description},
         ]
         if ctx.tool_results:
@@ -542,12 +545,16 @@ def build_default_chain() -> MiddlewareChain:
     return chain
 
 
-async def run_react(task_description: str, max_rounds: int = 0, model: str = "") -> dict:
+async def run_react(task_description: str, max_rounds: int = 0,
+                    model: str = "", personality_prompt: str = "",
+                    agent: Any = None) -> dict:
     """快捷入口：直接用 ReActCore 处理任务
     Args:
         task_description: 任务描述
         max_rounds: 最大轮数，0 表示自动判断（有计划模式→_PLAN_ROUNDS, 否则→默认）
         model: 指定使用的 LLM 模型名（空字符串表示使用默认模型）
+        personality_prompt: Agent 个性/角色提示（如"你是一个数据分析专家"）
+        agent: 关联的 WorkAgent 实例（中间件可通过 self.agent 访问它）
     """
     if max_rounds == 0:
         # 计划模式由 PlanAwareMiddleware 在 on_start 中动态设置 ctx.max_iterations
@@ -562,7 +569,11 @@ async def run_react(task_description: str, max_rounds: int = 0, model: str = "")
     ctx.max_iterations = max_rounds  # 初始值，PlanAwareMiddleware.on_start 可能改写
     if model:
         ctx.model_override = model
+    if personality_prompt:
+        ctx.personality_prompt = personality_prompt
     chain = build_default_chain()
+    if agent:
+        chain.bind_agent(agent)
 
     await chain.on_start(ctx)
     ctx._chain = chain  # 让 ReActCoreMiddleware 能调 chain.on_wrap_tool_call

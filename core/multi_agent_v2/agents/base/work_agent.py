@@ -239,6 +239,8 @@ class WorkAgent(BaseAgent):
                 desc,
                 max_rounds=2 if self._light_mode else 10,
                 model=task.context.get("model", ""),
+                personality_prompt=self.system_prompt_for_role(),
+                agent=self,
             )
 
             elapsed = time.time() - start
