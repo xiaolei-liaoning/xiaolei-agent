@@ -1692,7 +1692,7 @@ class EnhancedCLI:
         from core.multi_agent_v2.agents.base.work_agent import WorkAgent
         from core.multi_agent_v2.agents.base.models import Task
 
-        agent = WorkAgent()
+        agent = WorkAgent(light_mode=True)
         task = Task(task_id=uuid.uuid4().hex[:8], type="general", description=request)
 
         try:
