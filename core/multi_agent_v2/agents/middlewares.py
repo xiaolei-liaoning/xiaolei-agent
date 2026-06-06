@@ -72,7 +72,8 @@ class ReActDepthMiddleware(BaseMiddleware):
     MAX_DEPTH = 30
 
     async def on_think_start(self, ctx: RunContext) -> None:
-        ctx.react_depth += 1
+        # 注意：react_depth 由 ReActCoreMiddleware.on_think_start 自增
+        # 这里只做深度检查，不自增（否则 ReActCore 读到的是未调用前的值）
         if ctx.react_depth > self.MAX_DEPTH:
             ctx.interrupted = True
             logger.warning(f"ReAct 深度超过 {self.MAX_DEPTH}，终止执行")
