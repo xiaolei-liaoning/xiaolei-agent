@@ -437,8 +437,6 @@ async def run_react(task_description: str, max_rounds: int = 0) -> dict:
     ctx.max_iterations = max_rounds  # 初始值，PlanAwareMiddleware.on_start 可能改写
     chain = build_default_chain()
 
-    # ── 显示工具发现进度（可能 10s 超时） ──
-    print(f"    \033[2m⏳ 发现可用工具中...(最多10s)\033[0m")
     await chain.on_start(ctx)
     ctx._chain = chain  # 让 ReActCoreMiddleware 能调 chain.on_wrap_tool_call
 
