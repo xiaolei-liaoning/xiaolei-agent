@@ -1075,67 +1075,43 @@ class EnhancedCLI:
             if code_match:
                 script = code_match.group(1).strip()
 
+            # ── 2. 语法层面修复 ──
+            # 修复缺失的 export 关键字
+            if 'export const meta' not in script and 'const meta' in script:
+                script = script.replace('const meta', 'export const meta', 1)
+            if 'export default async function main' not in script and 'async function main' in script:
+                script = script.replace('async function main', 'export default async function main', 1)
+
             if "export const meta" not in script or "export default" not in script:
                 log_status("LLM 未生成有效脚本，走简单并行", color="yellow")
                 raise ValueError("无效脚本")
 
-            # ── 2. 后处理修复：反引号模板字符串 → + 拼接 ──
-            # 这是最常见的 JS 语法错误，LLM 总爱用 `xxx ${var}` 写法
-            fixes = []
+            # 修复 phases 格式: phases: ["a","b"] -> phases: [{title:"a"},{title:"b"}]
+            if 'phases: [' in script and 'title' not in script[script.index('phases: ['):script.index('phases: [')+200]:
+                script = re.sub(r'phases:\s*\[([^\]]+)\]',
+                    lambda m: 'phases: [' + re.sub(r'"([^"]+)"', r'{title:"\1"}', m.group(1)) + ']', script)
 
-            def fix_backticks(code):
-                """把反引号模板字符串 `xxx ${expr} yyy` 转成 "xxx " + expr + " yyy" """
-                result = []
-                i = 0
-                while i < len(code):
-                    if code[i] == '`' and (i == 0 or code[i-1] != '\\'):
-                        # 找到匹配的反引号
-                        j = i + 1
-                        while j < len(code):
-                            if code[j] == '`' and code[j-1] != '\\':
-                                break
-                            j += 1
-                        if j < len(code):
-                            seg = code[i+1:j]
-                            # 按 ${...} 拆分
-                            parts = re.split(r'\$\{([^}]+)\}', seg)
-                            built = []
-                            for k, p in enumerate(parts):
-                                if k % 2 == 0:
-                                    if p:
-                                        built.append('"' + p.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n') + '"')
-                                else:
-                                    built.append(p)
-                            replacement = ' + '.join(built) if built else '""'
-                            result.append(replacement)
-                            i = j + 1
-                            fixes.append("backtick")
-                        else:
-                            result.append(code[i])
-                            i += 1
-                    else:
-                        result.append(code[i])
-                        i += 1
-                return ''.join(result)
+            # 反引号模板字符串 -> + 拼接
+            if '`' in script:
+                n = script.count('`')
+                script = re.sub(r'`([^`]*?)`',
+                    lambda m: '"' + m.group(1).replace('"', '\\"') + '"', script)
+                log(f"JS 修复: 反引号 {n}处")
 
-            script = fix_backticks(script)
-
-            if fixes:
-                log("JS 修复: 反引号模板字符串 → + 拼接")
-
-            # 可靠修复 1: parallel([agent(... → parallel([() => agent(...
+            # parallel([agent( -> parallel([() => agent(
             if re.search(r'parallel\(\[\s*agent\(', script):
-                script = re.sub(
-                    r'(parallel\(\[)\s*agent\(',
-                    r'\1() => agent(',
-                    script
-                )
-                log("JS 修复: parallel thunk 包装")
+                script = re.sub(r'(parallel\(\[)\s*agent\(', r'\1() => agent(', script)
+                log("JS 修复: thunk 包装")
 
-            # 可靠修复 2: return agent( → return await agent(
-            if re.search(r'return\s+agent\(', script):
-                script = re.sub(r'return\s+agent\(', 'return await agent(', script)
-                log("JS 修复: await 补全")
+            # await 补全：逐行处理，箭头函数内不加 await
+            _lines = script.split('\n')
+            for _li, _line in enumerate(_lines):
+                _s = _line.strip()
+                if re.search(r'[^a-zA-Z0-9_.]agent\(', _s) and 'await' not in _s \
+                   and '=>' not in _s and 'return await' not in _s:
+                    _lines[_li] = _line.replace('agent(', 'await agent(', 1)
+                    log(f"JS 修复: await 补全")
+            script = '\n'.join(_lines)
 
             # 打印脚本前 10 行
             log("编排脚本:")
