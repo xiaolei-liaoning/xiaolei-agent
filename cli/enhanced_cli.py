@@ -1009,134 +1009,102 @@ class EnhancedCLI:
         await self._run_with_scheduler(remaining)
 
     async def _run_with_scheduler(self, task: str):
-        """动态编排：LLM 分析任务 → 生成编排方案 → orchestrator 执行
+        """动态编排：LLM 生成 JS 编排脚本 → js_orchestrator 执行
 
-        类似 Claude Code CLI Workflow：Claude 动态写编排脚本，
-        这里用 LLM 分析生成子任务列表和编排模式，然后 orchestrator 执行。
+        类似 Claude Code CLI Workflow：
+        1. LLM 分析任务，用 agent()/parallel()/phase() API 写出编排脚本
+        2. js_orchestrator.run_js_workflow() 执行脚本
+        3. JS 中 agent() 通过 stdio 与 Python AgentPool 通信
         """
         from cli.colors import CLAUDE, log_status, print_error, print_success
-        from cli.animated_spinner import print_section, AsyncSpinner
-        from core.multi_agent_v2.orchestration.orchestrator import (
-            phase, log, agent, parallel, reset, AgentResult,
-        )
-        import json
+        from cli.animated_spinner import print_section
 
-        reset()
-        print_section("🤖 动态编排 - 多Agent协作")
+        print_section("🤖 动态编排 - JS Workflow")
 
         try:
-            # 1. LLM 分析任务，生成编排方案
-            log("正在分析任务并制定多Agent编排方案...")
-            plan_result = await agent(
-                f"分析以下任务，制定一个多Agent协作执行方案。\n\n"
-                f"任务: {task}\n\n"
-                f"请输出 JSON 格式（不要其他内容）：\n"
-                f"{{\n"
-                f'  "subtasks": ["子任务1描述", "子任务2描述", ...],\n'
-                f'  "pattern": "parallel",  // parallel=并行, pipeline=流水线, review=评审\n'
-                f'  "reason": "为什么选这个模式"'
-                f"}}\n\n"
-                f"要求：\n"
-                f"- subtasks 至少3个，最多6个\n"
-                f"- 每个子任务是独立的、可并行执行的搜索或分析场景\n"
-                f"- 涉及对比类任务，子任务覆盖多个维度\n"
-                f"- 涉及代码或实现类，子任务覆盖不同方案\n"
-                f"- pattern 选最适合的编排模式",
-                {"label": "编排分析", "timeout": 60, "force_recompute": True},
+            from core.engine.llm_backend import get_llm_router
+            router = get_llm_router()
+            if not router.is_available():
+                log_status("LLM 不可用，走简单并行", color="yellow")
+                raise ValueError("LLM不可用")
+
+            # 1. LLM 生成 JS 编排脚本（直接 chat，无工具干扰）
+            log("正在分析任务并生成 JS 编排脚本...")
+            js_script = await asyncio.wait_for(
+                router.chat([{"role": "system", "content": """你是一个工作流编排专家。根据用户任务，生成一个 JavaScript 编排脚本。
+
+可用的 API:
+- agent(prompt, opts) → string  — 启动一个子Agent，返回字符串结果
+  opts: { label, timeout, model }
+- parallel(thunks) → array       — 并发执行多个 agent() 调用
+- phase(title)                    — 标记阶段
+- log(message)                    — 输出进度
+
+脚本格式:
+```
+export const meta = {
+  name: "...",
+  description: "...",
+  phases: [{title: "阶段1"}, {title: "阶段2"}],
+};
+
+export default async function main() {
+  phase("阶段1");
+
+  // 并行执行多个子任务
+  const results = await parallel([
+    () => agent("子任务1描述", { label: "方向1", timeout: 180 }),
+    () => agent("子任务2描述", { label: "方向2", timeout: 180 }),
+  ]);
+
+  phase("阶段2");
+
+  // 汇总
+  const valid = results.filter(r => r !== null);
+  const context = valid.map((r, i) => `【${i+1}】\\n${r}`).join("\\n\\n");
+  return await agent("综合以下:\\n\\n" + context, { label: "汇总", timeout: 180 });
+}
+```
+
+规则：
+- 用 parallel() 并发执行 3-6 个子任务
+- 每个子任务是独立可执行的维度（搜索/分析/对比）
+- 最后用一个 agent() 汇总所有结果
+- 对比类任务：每个维度覆盖不同方案
+- 只输出脚本，不要其他内容"""},
+                    {"role": "user", "content": f"任务: {task}"}
+                ], temperature=0.3, max_tokens=2000),
+                timeout=60,
             )
+            script_content = js_script if isinstance(js_script, str) else str(js_script)
 
-            if not plan_result or not plan_result.success:
-                log_status("LLM 编排分析失败，走默认并行模式", color="yellow")
-                raise ValueError("LLM编排分析失败")
+            # 提取 JS 脚本（去掉可能的 markdown 代码块标记）
+            import re
+            code_match = re.search(r'```(?:javascript|js)?\s*\n(.*?)\n```', script_content, re.DOTALL)
+            if code_match:
+                script_content = code_match.group(1).strip()
 
-            # 2. 解析 LLM 生成的编排方案
-            plan_text = plan_result.text()
-            plan = None
-            try:
-                # 尝试提取 JSON
-                import re
-                json_match = re.search(r'\{.*\}', plan_text, re.DOTALL)
-                if json_match:
-                    plan = json.loads(json_match.group())
-            except Exception:
-                pass
+            # 确认有 meta 和 main
+            if "export const meta" not in script_content or "export default" not in script_content:
+                log_status("LLM 未生成有效脚本，走简单并行", color="yellow")
+                raise ValueError("无效脚本")
 
-            if not plan or "subtasks" not in plan:
-                log_status("编排方案解析失败，走默认并行模式", color="yellow")
-                raise ValueError("编排方案解析失败")
+            log("JS 编排脚本生成成功，开始执行...")
 
-            subtasks = plan["subtasks"][:6]
-            pattern = plan.get("pattern", "parallel")
-            log(f"编排方案: {pattern} 模式, {len(subtasks)} 个子任务")
-            for i, s in enumerate(subtasks):
-                log(f"  [{i+1}] {s[:80]}")
+            # 2. 通过 js_orchestrator 执行
+            from core.multi_agent_v2.orchestration.js_orchestrator import run_js_workflow
+            result = await run_js_workflow(script_content)
 
-            # 3. 按模式执行
-            if pattern == "pipeline":
-                # 流水线：顺序执行，上一步输出注入下一步
-                phase("流水线执行")
-                last_output, ars = "", []
-                for i, s in enumerate(subtasks):
-                    prompt = s
-                    if last_output:
-                        prompt = f"{s}\n\n【上一步结果】\n{last_output[:600]}"
-                    ar = await agent(prompt, {"label": f"step_{i+1}", "timeout": 240})
-                    ars.append(ar)
-                    if ar and ar.success:
-                        last_output = ar.text() if hasattr(ar, "text") else str(ar.output or "")
-                    if not ar or not ar.success:
-                        log_status(f"步骤{i+1}失败，终止流水线", color="yellow")
-                        break
-
-                phase("综合汇总")
-                parts = [f"[步骤{i+1}]\n{ar.text()[:400]}" for i, ar in enumerate(ars) if ar and ar.success]
-                final = await agent(
-                    f"综合以下流水线各步骤的结果，给出关于「{task}」的最终结论:\n\n" + "\n\n".join(parts),
-                    {"label": "汇总", "timeout": 180},
-                )
-
-            elif pattern == "review":
-                # 评审模式：并行执行后交叉验证
-                phase("并行调研")
-                results = await parallel([
-                    lambda s=s, i=i: agent(s, {"label": f"方案_{i+1}", "timeout": 240})
-                    for i, s in enumerate(subtasks[:4])
-                ], max_concurrent=4)
-
-                phase("交叉评审与汇总")
-                good = [r for r in results if r and r.success]
-                parts = [f"[方案{i+1}]\n{r.text()[:400]}" for i, r in enumerate(good)]
-                final = await agent(
-                    f"评审以下对「{task}」的多个分析方案的结论。\n"
-                    f"逐一评审每个方案的质量和准确性，指出共识点和分歧点，给出综合结论:\n\n" + "\n\n".join(parts),
-                    {"label": "评审汇总", "timeout": 240},
-                )
-
+            # 3. 输出结果
+            print_section("📋 最终结果")
+            if result is not None:
+                text = str(result)
+                print(text[:2000] if len(text) > 2000 else text)
             else:
-                # 并行模式（默认）：同时执行所有子任务后汇总
-                phase("并行调研")
-                results = await parallel([
-                    lambda s=s, i=i: agent(s, {"label": f"调研_{i+1}", "timeout": 240})
-                    for i, s in enumerate(subtasks[:6])
-                ], max_concurrent=4)
-
-                phase("综合汇总")
-                good = [r for r in results if r and r.success]
-                parts = [f"[调研{i+1}]\n{r.text()[:400]}" for i, r in enumerate(good)]
-                final = await agent(
-                    f"综合以下对「{task}」的多维度调研结果，给出完整的分析结论:\n\n" + "\n\n".join(parts),
-                    {"label": "综合汇总", "timeout": 240},
-                )
-
-            # 4. 输出结果
-            if final and final.success:
-                print_section("📋 最终结果")
-                print(final.text()[:2000])
-            else:
-                log_status("汇总失败", color="red")
+                log_status("无返回结果", color="red")
 
         except (ValueError, Exception) as e:
-            log_status(f"LLM编排受阻 ({str(e)[:60]})，走简单并行", color="yellow")
+            log_status(f"JS 编排受阻 ({str(e)[:80]})，走简单并行", color="yellow")
             await self._run_ad_hoc(task)
 
     async def _run_ad_hoc(self, task: str):
