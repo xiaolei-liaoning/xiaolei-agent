@@ -220,7 +220,20 @@ class GLMBackend:
         if not await self._init_free_client():
             return None
         try:
+            # 根据 endpoint 自动添加鉴权头
             headers = {"Content-Type": "application/json", "User-Agent": "xiaolei-agent/1.0"}
+            if "openrouter" in url:
+                api_key = os.getenv("OPENROUTER_API_KEY", "")
+                if api_key:
+                    headers["Authorization"] = f"Bearer {api_key}"
+            elif "groq" in url:
+                api_key = os.getenv("GROQ_API_KEY", "")
+                if api_key:
+                    headers["Authorization"] = f"Bearer {api_key}"
+            elif "together" in url:
+                api_key = os.getenv("TOGETHER_API_KEY", "")
+                if api_key:
+                    headers["Authorization"] = f"Bearer {api_key}"
             payload = {"model": model, "messages": messages,
                        "temperature": temperature, "max_tokens": max_tokens, "stream": stream}
             import aiohttp
@@ -267,7 +280,7 @@ class GLMBackend:
 
         # 2. 免费 API fallback
         if await self._init_free_client() and not self.api_key:
-            for free_model in ["llama-3.1-8b-instant", "gemma2-9b-it", "groq-llama3"]:
+            for free_model in ["openrouter-qwen", "openrouter-llama", "llama-3.1-8b-instant", "gemma2-9b-it"]:
                 data = await self._call_free_api(messages, free_model, temperature, max_tokens)
                 if data and "choices" in data and data["choices"]:
                     content = data["choices"][0]["message"]["content"]

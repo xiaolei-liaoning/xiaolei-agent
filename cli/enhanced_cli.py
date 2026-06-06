@@ -1033,84 +1033,19 @@ class EnhancedCLI:
                 log_status("LLM 不可用，走简单并行", color="yellow")
                 raise ValueError("LLM不可用")
 
-            # ── 1. LLM 自由生成 JS 编排脚本 ──
-            log("正在生成编排脚本...")
-            js_raw = await asyncio.wait_for(
-                router.chat([{"role": "system", "content":
-                    "You are a workflow orchestration expert. Generate a JavaScript orchestration script.\n\n"
-                    "AVAILABLE API:\n"
-                    "  agent(prompt, opts) -> Promise<string>   opts: { label, timeout }\n"
-                    "  parallel(thunks) -> Promise<array>       thunks = [() => agent(...), ...]\n"
-                    "  phase(title), log(message)\n\n"
-                    "MANDATORY STRUCTURE:\n"
-                    "  export const meta = { name, description, phases };\n"
-                    "  export default async function main() { ... }\n\n"
-                    "MANDATORY: USE parallel() FOR ALL RESEARCH.\n"
-                    "  - Call parallel() ONCE with 3-6 agents, then synthesize with ONE agent().\n"
-                    "  - DO NOT write sequential phase(A) + agent + phase(B) + agent.\n"
-                    "  - CORRECT: one parallel() for research, one agent() for synthesis.\n"
-                    "  - WRONG: phase-by-phase sequential execution.\n\n"
-                    "SYNTAX RULES:\n"
-                    "  - Use + for string concat, NEVER backtick\n"
-                    "  - Use () => agent(...) in arrays, NOT agent(...) directly\n"
-                    "  - Always await agent(): const r = await agent(...)\n"
-                    "  - Return a value from main()\n"
-                    "  - You can use filter/map/join, if/else, try/catch freely\n\n"
-                    "Output ONLY the JS script."
-                }, {"role": "user", "content": f"Task: {task}"}
-                ], temperature=0.4, max_tokens=3000),
-                timeout=90,
-            )
-            script = js_raw if isinstance(js_raw, str) else str(js_raw)
+            # ── 模式1: LLM 自由生成 JS 编排脚本 ──
+            script = await self._mode_free_js(router, task)
 
-            # 去掉 markdown 代码块标记
-            code_match = re.search(r'```(?:javascript|js)?\s*\n(.*?)\n```', script, re.DOTALL)
-            if code_match:
-                script = code_match.group(1).strip()
+            # ── 模式1 失败 → 模式2: JSON 子任务 + 固定 JS 模板 ──
+            if not script:
+                log("自由JS失败，走JSON子任务+JS模板模式...")
+                script = await self._mode_json_template(router, task)
 
-            # ── 2. 语法层面修复 ──
-            # 修复缺失的 export 关键字
-            if 'export const meta' not in script and 'const meta' in script:
-                script = script.replace('const meta', 'export const meta', 1)
-            if 'export default async function main' not in script and 'async function main' in script:
-                script = script.replace('async function main', 'export default async function main', 1)
+            if not script:
+                log_status("JS 编排全失败，走简单并行", color="yellow")
+                raise ValueError("JS编排失败")
 
-            if "export const meta" not in script or "export default" not in script:
-                log_status("LLM 未生成有效脚本，走简单并行", color="yellow")
-                raise ValueError("无效脚本")
-
-            # 修复 phases 格式: phases: ["a","b"] -> phases: [{title:"a"},{title:"b"}]
-            if 'phases: [' in script and 'title' not in script[script.index('phases: ['):script.index('phases: [')+200]:
-                script = re.sub(r'phases:\s*\[([^\]]+)\]',
-                    lambda m: 'phases: [' + re.sub(r'"([^"]+)"', r'{title:"\1"}', m.group(1)) + ']', script)
-
-            # 反引号模板字符串 -> + 拼接
-            if '`' in script:
-                n = script.count('`')
-                script = re.sub(r'`([^`]*?)`',
-                    lambda m: '"' + m.group(1).replace('"', '\\"') + '"', script)
-                log(f"JS 修复: 反引号 {n}处")
-
-            # parallel([agent( -> parallel([() => agent(
-            if re.search(r'parallel\(\[\s*agent\(', script):
-                script = re.sub(r'(parallel\(\[)\s*agent\(', r'\1() => agent(', script)
-                log("JS 修复: thunk 包装")
-
-            # await 补全：逐行处理，箭头函数内不加 await
-            _lines = script.split('\n')
-            for _li, _line in enumerate(_lines):
-                _s = _line.strip()
-                if re.search(r'[^a-zA-Z0-9_.]agent\(', _s) and 'await' not in _s \
-                   and '=>' not in _s and 'return await' not in _s:
-                    _lines[_li] = _line.replace('agent(', 'await agent(', 1)
-                    log(f"JS 修复: await 补全")
-            script = '\n'.join(_lines)
-
-            # 打印脚本前 10 行
-            log("编排脚本:")
-            for line in script.split('\n')[:8]:
-                log("  " + line)
-            log("  ...")
+            log("JS 编排脚本已生成，开始执行...")
 
             # ── 3. 执行 ──
             from core.multi_agent_v2.orchestration.js_orchestrator import run_js_workflow
@@ -1126,9 +1061,138 @@ class EnhancedCLI:
 
         except (ValueError, Exception) as e:
             log_status(f"JS 编排受阻 ({str(e)[:80]})，走简单并行", color="yellow")
-            import traceback
-            traceback.print_exc()
             await self._run_ad_hoc(task)
+
+    async def _mode_free_js(self, router, task: str) -> str:
+        """模式1: LLM 自由生成 JS 编排脚本"""
+        import re
+
+        log("正在生成编排脚本(自由模式)...")
+        try:
+            js_raw = await asyncio.wait_for(
+                router.chat([{"role": "user", "content":
+                    "Output ONLY a JS workflow script. Do NOT write anything else.\n\n"
+                    "API: agent(prompt,{label,timeout})->string; "
+                    "parallel([()=>agent(...),...])->array; phase(title)\n\n"
+                    "TEMPLATE:\n"
+                    "export const meta = {name:\"...\", description:\"...\", phases:[{title:\"Research\"},{title:\"Synthesis\"}]};\n"
+                    "export default async function main() {\n"
+                    "  phase(\"Research\");\n"
+                    "  const r = await parallel([()=>agent(\"...\",{label:\"a\",timeout:240}),()=>agent(\"...\",{label:\"b\",timeout:240})]);\n"
+                    "  phase(\"Synthesis\");\n"
+                    "  return await agent(\"Synthesize:\"+r,{label:\"f\",timeout:300});\n"
+                    "}\n\n"
+                    "Task: " + task
+                }], temperature=0.3, max_tokens=3000),
+                timeout=90,
+            )
+            script = js_raw if isinstance(js_raw, str) else str(js_raw)
+
+            # 去掉 markdown 代码块标记
+            m = re.search(r'```(?:javascript|js)?\s*\n(.*?)\n```', script, re.DOTALL)
+            if m: script = m.group(1).strip()
+
+            # 修复 export
+            if 'export const meta' not in script and 'const meta' in script:
+                script = script.replace('const meta', 'export const meta', 1)
+            if 'export default async function main' not in script and 'async function main' in script:
+                script = script.replace('async function main', 'export default async function main', 1)
+
+            if "export const meta" not in script or "export default" not in script:
+                return ""
+
+            # 反引号修复
+            if '`' in script:
+                n = script.count('`')
+                script = re.sub(r'`([^`]*?)`', lambda m: '"' + m.group(1).replace('"', '\\"') + '"', script)
+                log(f"自由JS 反引号修复: {n}处")
+
+            # thunk 修复
+            if re.search(r'parallel\(\[\s*agent\(', script):
+                script = re.sub(r'(parallel\(\[)\s*agent\(', r'\1() => agent(', script)
+                log("自由JS thunk修复")
+
+            # await 补全
+            _lines = script.split('\n')
+            for _li, _line in enumerate(_lines):
+                _s = _line.strip()
+                if re.search(r'[^a-zA-Z0-9_.]agent\(', _s) and 'await' not in _s and '=>' not in _s:
+                    _lines[_li] = _line.replace('agent(', 'await agent(', 1)
+            script = '\n'.join(_lines)
+
+            log("自由模式: 编排脚本:")
+            for line in script.split('\n')[:6]:
+                log("  " + line)
+
+            return script
+        except Exception as e:
+            log(f"自由JS失败: {str(e)[:60]}")
+            return ""
+
+    async def _mode_json_template(self, router, task: str) -> str:
+        """模式2: LLM 输出 JSON 子任务列表 → 固定 JS 模板 → js_orchestrator 执行"""
+        import json, re
+
+        log("正在拆解子任务...")
+        try:
+            resp = await asyncio.wait_for(
+                router.chat([{"role": "user", "content":
+                    "Output ONLY JSON, no other text.\n"
+                    '{"subtasks": ["独立子任务1", "独立子任务2", "独立子任务3", ...]}\n'
+                    "3-6个，每个是独立可执行的分析/对比维度。\n"
+                    "Task: " + task
+                }], temperature=0.2, max_tokens=1000),
+                timeout=30,
+            )
+            text = resp if isinstance(resp, str) else str(resp)
+            m = re.search(r'\{.*\}', text, re.DOTALL)
+            parsed = json.loads(m.group()) if m else None
+            subtasks = parsed.get("subtasks", []) if isinstance(parsed, dict) else []
+
+            if len(subtasks) < 2:
+                return ""
+
+            log(f"JSON模式: {len(subtasks)}个子任务")
+            for i, s in enumerate(subtasks[:6]):
+                log(f"  [{i+1}] {s[:80]}")
+
+            # 生成 JS 模板
+            lines = []
+            for i, s in enumerate(subtasks[:6]):
+                sl = s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+                lines.append(f'    () => agent("{sl}", {{label: "r{i+1}", timeout: 240}}),')
+            body = "\n".join(lines)
+            td = task[:100].replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+
+            script = (
+                'export const meta = {\n'
+                '  name: "dynamic",\n'
+                f'  description: "{td}",\n'
+                '  phases: [{title: "Research"}, {title: "Synthesis"}],\n'
+                '};\n'
+                '\n'
+                'export default async function main() {\n'
+                '  phase("Research");\n'
+                '\n'
+                '  const results = await parallel([\n'
+                f'{body}\n'
+                '  ]);\n'
+                '\n'
+                '  phase("Synthesis");\n'
+                '\n'
+                '  const valid = results.filter(r => r !== null);\n'
+                '  const context = valid.map((r, i) => "[" + (i+1) + "]\\n" + r).join("\\n\\n");\n'
+                '\n'
+                '  return await agent(\n'
+                f'    "Synthesize the following research about: {td}\\n\\n" + context,\n'
+                '    {label: "final", timeout: 300},\n'
+                '  );\n'
+                '}\n'
+            )
+            return script
+        except Exception as e:
+            log(f"JSON模式失败: {str(e)[:60]}")
+            return ""
 
     async def _run_ad_hoc(self, task: str):
         """ad-hoc 模式：自动拆解为多Agent并行任务"""

@@ -25,11 +25,261 @@ logger = logging.getLogger(__name__)
 
 SERVER_BUILTIN = "__builtin__"
 
+# ═══════════════════════════════════════════════════════════════════
+# 工具领域分类系统
+# ═══════════════════════════════════════════════════════════════════
+
+class ToolDomain:
+    """工具功能领域 — 用于按域分类、按域筛选"""
+    SEARCH = "search"          # 搜索/查询
+    FILE = "file"              # 文件读写
+    CODE = "code"              # 代码执行/编写
+    ANALYSIS = "analysis"      # 数据分析/图表
+    SYSTEM = "system"          # 系统信息/监控
+    TEXT = "text"              # 文本处理
+    TRANSLATE = "translate"    # 翻译
+    WEB = "web"                # 网页抓取
+    GUI = "gui"                # GUI自动化
+    AUTOMATION = "automation"  # 工作流/自动化
+    REFLECT = "reflect"        # 反思/复盘
+    API = "api"                # HTTP API 调用
+    GIT = "git"                # Git 操作
+    FUN = "fun"                # 趣味
+    GAME = "game"              # 游戏
+    WEATHER = "weather"        # 天气
+    ART = "art"                # ASCII 艺术
+    WORKFLOW = "workflow"      # 工作流引擎
+    DATA_SOURCE = "data_source" # 内置数据源
+    SKILL = "skill"            # 技能执行
+    MISC = "misc"              # 杂项
+
+
+# 任务→领域分类关键词表
+# 每个领域包含一组触发词，任务描述命中任一触发词即匹配该领域
+DOMAIN_CLASSIFIER = {
+    ToolDomain.SEARCH: [
+        "搜索", "查找", "查询", "搜", "寻找", "找一下", "查一下", "搜一下",
+        "百度", "谷歌", "bing", "search", "find", "lookup", "query",
+        "搜索一下", "查查",
+    ],
+    ToolDomain.FILE: [
+        "文件", "保存", "写入", "读取", "打开文件", "创建文件", "读写",
+        "写文件", "读文件", "path", "路径", "file", "save", "write", "read",
+        "存储", "另存为", "导出到",
+    ],
+    ToolDomain.CODE: [
+        "代码", "编写", "编程", "写代码", "写程序", "debug", "debugging",
+        "code", "program", "脚本", "script", "执行", "运行代码", "编译",
+        "实现", "编写一个", "写一个",
+    ],
+    ToolDomain.ANALYSIS: [
+        "分析", "统计", "图表", "plot", "分析数据", "analyze", "csv",
+        "数据", "datasets", "dataset", "绘图", "可视化", "画图",
+        "报告", "报表", "汇总",
+    ],
+    ToolDomain.SYSTEM: [
+        "系统", "cpu", "内存", "磁盘", "进程", "system", "info",
+        "资源", "监控", "监测", "网络", "ip",
+    ],
+    ToolDomain.WEB: [
+        "网页", "抓取", "爬取", "scrape", "fetch", "热搜", "trending",
+        "爬虫", "网站", "页面", "文章",
+    ],
+    ToolDomain.TRANSLATE: [
+        "翻译", "translate", "英文", "中文", "语言", "双语",
+        "译成", "转换语言",
+    ],
+    ToolDomain.REFLECT: [
+        "反思", "复盘", "总结", "review", "reflect", "回顾",
+        "评估", "改进", "优化建议",
+    ],
+    ToolDomain.API: [
+        "api", "接口", "请求", "http", "调用接口", "rest", "post请求",
+        "get请求", "curl",
+    ],
+    ToolDomain.GIT: [
+        "git", "提交", "commit", "push", "pull", "branch", "版本控制",
+    ],
+    ToolDomain.GUI: [
+        "打开应用", "打开软件", "启动", "截图", "screenshot",
+        "音量", "亮度", "自动化操作",
+    ],
+    ToolDomain.AUTOMATION: [
+        "工作流", "自动化", "发送邮件", "邮件", "通知", "日历",
+        "workflow", "automation", "email",
+    ],
+    ToolDomain.WEATHER: [
+        "天气", "weather", "温度", "下雨", "下雪", "预报", "气温",
+    ],
+    ToolDomain.FUN: [
+        "笑话", "谜语", "星座", "运势", "趣闻", "joke", "fun",
+        "冷知识", "娱乐",
+    ],
+    ToolDomain.GAME: [
+        "游戏", "猜数字", "猜拳", "骰子", "game", "play",
+    ],
+    ToolDomain.ART: [
+        "ascii", "艺术", "图案", "打印图案", "画一个", "字符画",
+    ],
+    ToolDomain.WORKFLOW: [
+        "工作流", "工作流引擎", "创建工作流", "执行工作流", "流程编排",
+    ],
+}
+
+# 为每个内置工具预分配领域（一个工具可属多个领域）
+_BUILTIN_DOMAINS = {
+    "execute_python": {ToolDomain.CODE},
+    "execute_shell": {ToolDomain.CODE, ToolDomain.SYSTEM, ToolDomain.FILE},
+    "git": {ToolDomain.GIT},
+    "search": {ToolDomain.SEARCH, ToolDomain.WEB},
+    "rag_search": {ToolDomain.SEARCH, ToolDomain.ANALYSIS},
+    "skill_execute": {ToolDomain.SKILL},
+    "kepa_reflect": {ToolDomain.REFLECT},
+    "ask_clarification": {ToolDomain.MISC},
+    "self_reflect": {ToolDomain.REFLECT},
+    "call_api": {ToolDomain.API, ToolDomain.WEB},
+    "fetch_url": {ToolDomain.WEB, ToolDomain.SEARCH, ToolDomain.API},
+    "file": {ToolDomain.FILE},
+}
+
+# MCP 工具的领域映射（通过服务器名匹配）
+_MCP_SERVER_DOMAINS = {
+    "search-engine-mcp": {ToolDomain.SEARCH, ToolDomain.WEB},
+    "web-scraper-mcp": {ToolDomain.WEB, ToolDomain.SEARCH},
+    "calculator-mcp": {ToolDomain.ANALYSIS},
+    "data-analysis-mcp": {ToolDomain.ANALYSIS},
+    "file-ops-mcp": {ToolDomain.FILE},
+    "text-processing-mcp": {ToolDomain.TEXT},
+    "text-analyzer-mcp": {ToolDomain.TEXT, ToolDomain.ANALYSIS},
+    "translator-mcp": {ToolDomain.TRANSLATE},
+    "weather-mcp": {ToolDomain.WEATHER},
+    "fun-mcp": {ToolDomain.FUN},
+    "game-mcp": {ToolDomain.GAME},
+    "art-mcp": {ToolDomain.ART},
+    "gui-automation-mcp": {ToolDomain.GUI, ToolDomain.AUTOMATION},
+    "system-toolbox-mcp": {ToolDomain.SYSTEM},
+    "sandbox-tools-mcp": {ToolDomain.CODE, ToolDomain.FILE, ToolDomain.SYSTEM},
+    "advanced-automation-mcp": {ToolDomain.AUTOMATION},
+    "openclaw-mcp": {ToolDomain.WORKFLOW},
+    "deep-thinking-mcp": {ToolDomain.REFLECT, ToolDomain.MISC},
+    "awesome-mcp-servers-mcp": {ToolDomain.MISC},
+    "third-party-mcp": {ToolDomain.API, ToolDomain.AUTOMATION},
+}
+
+
+def classify_domains(task: str) -> set:
+    """将任务描述分类到 1-N 个领域，返回匹配的领域集合"""
+    desc = task.lower()
+    matched = set()
+    for domain, keywords in DOMAIN_CLASSIFIER.items():
+        for kw in keywords:
+            if kw.lower() in desc:
+                matched.add(domain)
+                break  # 一个领域命中一个关键词即可
+    return matched
+
+
+# ═══════════════════════════════════════════════════════════════════
+# LLM 辅助领域分类 — 用 glm-4-flash 快速语义分类，弥补静态关键词的不足
+# ═══════════════════════════════════════════════════════════════════
+
+_domain_cache: Dict[str, tuple] = {}  # task_hash -> (domains_set, timestamp)
+_DOMAIN_CACHE_TTL = 300  # 5分钟缓存
+
+# 领域→中文名映射（给 LLM prompt 用）
+_DOMAIN_ITEMS = [
+    (1, ToolDomain.SEARCH, "搜索/查询"),
+    (2, ToolDomain.FILE, "文件读写"),
+    (3, ToolDomain.CODE, "代码编写/执行"),
+    (4, ToolDomain.ANALYSIS, "数据分析/图表"),
+    (5, ToolDomain.SYSTEM, "系统信息/监控"),
+    (6, ToolDomain.TEXT, "文本处理"),
+    (7, ToolDomain.TRANSLATE, "翻译"),
+    (8, ToolDomain.WEB, "网页抓取"),
+    (9, ToolDomain.GUI, "GUI自动化"),
+    (10, ToolDomain.AUTOMATION, "自动化/工作流"),
+    (11, ToolDomain.REFLECT, "反思/复盘"),
+    (12, ToolDomain.API, "HTTP请求"),
+    (13, ToolDomain.GIT, "Git操作"),
+    (14, ToolDomain.FUN, "趣味/娱乐"),
+    (15, ToolDomain.GAME, "游戏"),
+    (16, ToolDomain.WEATHER, "天气"),
+    (17, ToolDomain.ART, "ASCII艺术"),
+    (18, ToolDomain.WORKFLOW, "工作流引擎"),
+]
+_DOMAIN_IDX_MAP = {idx: domain for idx, domain, _ in _DOMAIN_ITEMS}
+
+
+async def llm_classify_domains(task: str) -> Optional[set]:
+    """用 GLM-4-Flash 对任务做快速领域分类
+
+    调用一次 LLM（温度0.05，最多20个token输出），根据语义判断任务领域。
+    失败/超时返回 None → 调用方回退到静态关键词分类。
+    同类任务缓存5分钟，避免重复调用。
+    """
+    if len(task) < 8:
+        return None  # 太短的任务不需要 LLM
+
+    task_hash = str(hash(task))
+    now = time.time()
+    cached = _domain_cache.get(task_hash)
+    if cached and now - cached[1] < _DOMAIN_CACHE_TTL:
+        return cached[0]
+
+    domain_lines = "\n".join(f"{idx}={name}" for idx, _, name in _DOMAIN_ITEMS)
+    prompt = (
+        f"对任务做领域分类。从以下列表中选择1-3个最匹配的编号：\n{domain_lines}"
+        f"\n\n任务：{task[:150]}"
+        f"\n\n只返回数字，逗号分隔。例如：1,3"
+    )
+
+    try:
+        from core.engine.llm_backend import get_llm_router
+        router = get_llm_router()
+
+        resp = await asyncio.wait_for(
+            router.chat([{"role": "user", "content": prompt}],
+                       temperature=0.05, max_tokens=20),
+            timeout=3.0,
+        )
+        if not resp or "系统正在处理" in resp:
+            return None
+
+        import re as _re
+        numbers = _re.findall(r'\d+', resp.strip())
+        domains = set()
+        for n in numbers:
+            n_int = int(n)
+            if n_int in _DOMAIN_IDX_MAP:
+                domains.add(_DOMAIN_IDX_MAP[n_int])
+
+        if domains:
+            _domain_cache[task_hash] = (domains, time.time())
+            logger.info(f"LLM分类: \"{task[:40]}…\" → {domains}")
+            return domains
+    except asyncio.TimeoutError:
+        logger.debug(f"LLM分类超时: {task[:40]}")
+    except Exception as e:
+        logger.debug(f"LLM分类异常: {e}")
+
+    return None
+
+
+def estimate_tool_token_count(tool_def: "ToolDefinition") -> int:
+    """估算一个工具定义消耗的 token 数（name + description + 参数名）"""
+    base = len(tool_def.name) + len(tool_def.description)
+    if tool_def.parameters:
+        props = tool_def.parameters.get("properties", {})
+        base += sum(len(k) for k in props)
+    return base // 2 + 80  # 中英文混估 + 固定开销
+
+
 @dataclass
 class ToolDefinition:
     name: str; description: str; parameters: Dict[str, Any]
     server: str = ""; tool_name: str = ""; tags: List[str] = field(default_factory=list)
     handler: Optional[Callable] = None
+    domains: set = field(default_factory=set)  # 工具所属领域集合
 
 # ═══════════════════════════════════════════════════════════════════
 # 内置 Handlers
@@ -600,6 +850,7 @@ _HANDLER_MAP: Dict[str, Callable] = {
 
 _SANDBOX_TOOL_DEFS = [
     ToolDefinition(name="execute_python", server=SERVER_BUILTIN, tags=["code", "sandbox"],
+        domains={ToolDomain.CODE},
         description="执行 Python 代码。默认本地执行（可读/写/修改桌面文件）；mode=sandbox 沙盒隔离执行。",
         parameters={"type":"object","properties":{
             "code":{"type":"string","description":"Python 代码"},
@@ -609,6 +860,7 @@ _SANDBOX_TOOL_DEFS = [
         },"required":["code"]},
         handler=_handle_execute_python),
     ToolDefinition(name="execute_shell", server=SERVER_BUILTIN, tags=["code", "shell"],
+        domains={ToolDomain.CODE, ToolDomain.SYSTEM, ToolDomain.FILE},
         description="Shell 命令执行。默认本地执行；mode=sandbox 沙盒隔离执行。",
         parameters={"type":"object","properties":{
             "command":{"type":"string","description":"Shell 命令"},
@@ -617,6 +869,7 @@ _SANDBOX_TOOL_DEFS = [
         },"required":["command"]},
         handler=_handle_execute_shell),
     ToolDefinition(name="git", server=SERVER_BUILTIN, tags=["git", "code"],
+        domains={ToolDomain.GIT},
         description="Git 操作 — status/add/commit/log/diff/branch/pull。在当前项目目录执行。",
         parameters={"type":"object","properties":{
             "action":{"type":"string","enum":["status","add","commit","log","diff","branch","pull"],"description":"git 操作"},
@@ -626,10 +879,12 @@ _SANDBOX_TOOL_DEFS = [
         },"required":["action"]},
         handler=_handle_git),
     ToolDefinition(name="search", server=SERVER_BUILTIN, tags=["web", "search"],
-        description="联网搜索查询信息（百度/谷歌/Bing 并发搜索）。当用户要求搜索、查找、查询时使用。",
+        domains={ToolDomain.SEARCH, ToolDomain.WEB},
+        description="联网搜索查询信息。用百度/Bing 并发搜索网页，适合查最新资讯、找网页内容。",
         parameters={"type":"object","properties":{"query":{"type":"string","description":"搜索关键词"}},"required":["query"]},
         handler=_handle_search),
     ToolDefinition(name="rag_search", server=SERVER_BUILTIN, tags=["rag", "search", "knowledge"],
+        domains={ToolDomain.SEARCH, ToolDomain.ANALYSIS},
         description="RAG 增强搜索 — 向量库检索 + 知识提取 + 联网搜索。比 search 更深度，适合研究型问题。",
         parameters={"type":"object","properties":{
             "query":{"type":"string","description":"搜索查询"},
@@ -638,6 +893,7 @@ _SANDBOX_TOOL_DEFS = [
         },"required":["query"]},
         handler=_handle_rag_search),
     ToolDefinition(name="skill_execute", server=SERVER_BUILTIN, tags=["skill"],
+        domains={ToolDomain.SKILL},
         description="执行已注册的技能。技能是预定义的功能模块（天气/翻译/自动化等）。",
         parameters={"type":"object","properties":{
             "skill_name":{"type":"string","description":"技能名称"},
@@ -645,6 +901,7 @@ _SANDBOX_TOOL_DEFS = [
         },"required":["skill_name"]},
         handler=_handle_skill_execute),
     ToolDefinition(name="kepa_reflect", server=SERVER_BUILTIN, tags=["kepa", "reflect"],
+        domains={ToolDomain.REFLECT},
         description="KEPA 反思循环：Knowledge→Execution→Perception→Adjustment。对当前状态进行深度思考和自我调整。action=think(仅思考)|act(仅行动)|reflect(仅反思)|full(完整循环)",
         parameters={"type":"object","properties":{
             "action":{"type":"string","enum":["think","act","reflect","full"],"description":"反思阶段"},
@@ -652,6 +909,7 @@ _SANDBOX_TOOL_DEFS = [
         },"required":["action"]},
         handler=_handle_kepa_reflect),
     ToolDefinition(name="ask_clarification", server=SERVER_BUILTIN, tags=["clarification"],
+        domains={ToolDomain.MISC},
         description="反问澄清 — 当用户输入模糊或执行失败时，生成追问来明确需求。",
         parameters={"type":"object","properties":{
             "message":{"type":"string","description":"需要澄清的消息"},
@@ -659,6 +917,7 @@ _SANDBOX_TOOL_DEFS = [
         },"required":["message"]},
         handler=_handle_ask_clarification),
     ToolDefinition(name="self_reflect", server=SERVER_BUILTIN, tags=["reflect"],
+        domains={ToolDomain.REFLECT},
         description="自动复盘反思 — 分析执行过程，生成改进建议和教训总结。适合在任务完成后调用。",
         parameters={"type":"object","properties":{
             "task_description":{"type":"string","description":"任务描述"},
@@ -667,6 +926,7 @@ _SANDBOX_TOOL_DEFS = [
         },"required":["task_description","execution_logs"]},
         handler=_handle_self_reflect),
     ToolDefinition(name="call_api", server=SERVER_BUILTIN, tags=["api", "http"],
+        domains={ToolDomain.API, ToolDomain.WEB},
         description="通用 HTTP 客户端 — 支持 GET/POST/PUT/DELETE 请求。用于调用外部 REST API 接口。",
         parameters={"type":"object","properties":{
             "method":{"type":"string","enum":["GET","POST","PUT","DELETE"],"description":"HTTP 方法"},
@@ -678,6 +938,7 @@ _SANDBOX_TOOL_DEFS = [
         },"required":["url"]},
         handler=_handle_call_api),
     ToolDefinition(name="fetch_url", server=SERVER_BUILTIN, tags=["web", "fetch"],
+        domains={ToolDomain.WEB, ToolDomain.SEARCH, ToolDomain.API},
         description="HTTP GET 获取网页/API数据。用于抓取网页内容、调用简单 API 接口。",
         parameters={"type":"object","properties":{
             "url":{"type":"string","description":"目标URL"},
@@ -685,6 +946,7 @@ _SANDBOX_TOOL_DEFS = [
         },"required":["url"]},
         handler=_handle_fetch_url),
     ToolDefinition(name="file", server=SERVER_BUILTIN, tags=["file", "storage"],
+        domains={ToolDomain.FILE},
         description="直接读写文件。action=read 读取文件内容；action=write 写入文件内容。",
         parameters={"type":"object","properties":{
             "action":{"type":"string","enum":["read","write"]},
@@ -762,6 +1024,7 @@ class ToolRegistry:
             for srv in sorted(servers):
                 try:
                     tools = await asyncio.wait_for(mcp_client.list_tools(srv), timeout=5.0)
+                    srv_domains = _MCP_SERVER_DOMAINS.get(srv, set())
                     for tool in tools:
                         raw = tool.get("name","")
                         if not raw: continue
@@ -776,7 +1039,8 @@ class ToolRegistry:
                         mcp_tools.append(ToolDefinition(name=fn,
                             description=f"[{srv}] {desc}",
                             parameters=tool.get("inputSchema",{}) or {},
-                            server=srv, tool_name=raw, tags=["mcp"]))
+                            server=srv, tool_name=raw, tags=["mcp"],
+                            domains=srv_domains))  # <-- 注入服务器级领域
                 except asyncio.TimeoutError:
                     logger.debug(f"MCP {srv}: 超时（进程启动慢）")
                 except Exception:
@@ -800,70 +1064,128 @@ class ToolRegistry:
         td = self._tools.get(name)
         return td.handler if td else None
 
-    async def get_tools_for_task(self, task: str, max_tools=30) -> List[ToolDefinition]:
+    async def get_tools_for_task(self, task: str, max_tools=20) -> List[ToolDefinition]:
         """按任务相关性排序的工具列表
 
-        排序策略（修正 LLM 倾向选 MCP 工具的问题）：
-        1. 内置工具（file/fetch_url/search 等）始终加分，排在前面
-        2. MCP 工具按关键词匹配度排序，关键词冲突时内置工具优先
-        3. 确保 LLM 先看到最可靠的工具
+        领域驱动选择：
+        1. LLM 语义分类（优先）→ 静态关键词分类（兜底）
+        2. 领域内工具优先（内置/MCP 公平竞争），跨领域工具靠关键词补充
+        3. 核心工具条件保留（任务描述含关键词才强制入选）
+        4. 动态 max_tools：根据工具描述长度估算 token 消耗
         """
         if not self._initialized:
             return list(self._tools.values())[:max_tools]
+
         desc = task.lower()
+
+        # ═══ 第一步：LLM 语义分类（优先）+ 静态关键词分类（兜底）═══
+        task_domains = classify_domains(desc)  # 静态保底
+        llm_ok = False
+        try:
+            llm_domains = await llm_classify_domains(task)
+            if llm_domains is not None:
+                task_domains = llm_domains
+                llm_ok = True
+        except Exception:
+            pass  # LLM 失败就用静态结果
+        if llm_ok:
+            logger.info(f"工具筛选: LLM分类+静态→{task_domains}")
+        else:
+            logger.debug(f"工具筛选: 静态分类→{task_domains}")
+
+        # ═══ 第二步：遍历工具，计算相关性评分 ═══
         scored = []
-
-        # 核心内置工具（始终可用，优先展示）
-        CORE_BUILTIN = {"file", "fetch_url", "search", "execute_python", "execute_shell"}
-
         for t in self._tools.values():
-            s = 0.0
             dl = t.description.lower()
             nl = t.name.lower()
-            is_builtin = t.server == SERVER_BUILTIN
 
-            # 关键词匹配
+            # --- 领域匹配（核心信号）---
+            domain_score = 0.0
+            if t.domains and task_domains:
+                overlap = task_domains & t.domains
+                if overlap:
+                    domain_score = 6.0 + 4.0 * (len(overlap) - 1)
+
+            # --- 关键词匹配（辅助信号）--
+            kw_score = 0.0
             for kw in desc.split():
                 kw = kw.strip().lower()
                 if len(kw) > 1:
-                    if kw in dl: s += 2.0
-                    if kw in nl: s += 3.0
+                    if kw in nl:
+                        kw_score += 3.0
+                    elif kw in dl:
+                        kw_score += 2.0
 
-            # 中文字符级匹配
-            if len(desc) > 1:
-                if any(c in dl for c in desc if len(c.strip()) > 0):
-                    s += 0.5
+            if len(desc) > 1 and any(c in dl for c in desc if len(c.strip()) > 0):
+                kw_score += 0.5
 
-            # 内置工具加成：确保核心工具始终排在 MCP 工具前面
-            if is_builtin:
-                s += 5.0  # 内置工具加分，提高排名
+            # --- 工具名精确匹配（LLM 在计划阶段已指名时最强信号）--
+            exact_match = 8.0 if nl in desc else 0.0
 
-            # 核心工具额外加分
-            if t.name in CORE_BUILTIN:
-                s += 3.0
+            scored.append((domain_score + kw_score + exact_match, domain_score, kw_score, t))
 
-            scored.append((s, t))
-
-        # 按分数降序排列（内置工具因为加分自然排在前面）
+        # ═══ 第三步：按总分降序 ═══
         scored.sort(key=lambda x: -x[0])
 
-        # 取所有得分 >0 的工具，但 MCP 工具需要更高分才能入选（避免干扰）
-        result = []
-        for s, t in scored:
+        # ═══ 第四步：分类筛选 ═══
+        domain_matched = []
+        keyword_fallback = []
+
+        for s, domain_s, kw_s, t in scored:
             if s > 0:
-                if t.server == SERVER_BUILTIN:
-                    result.append(t)  # 内置工具只要有分就入选
-                elif s >= 3.0:
-                    result.append(t)  # MCP 工具需要 ≥3.0 分才入选（强关键词匹配）
-            else:
-                break  # 分数=0的后面不可能有正分了
+                if domain_s >= 6.0:
+                    domain_matched.append((s, t))
+                else:
+                    keyword_fallback.append((s, t))
 
-        # 确保核心工具一定在列表中（即使得分为 0）
-        for t in self._tools.values():
-            if t.name in CORE_BUILTIN and t not in result:
+        # ═══ 第五步：构建最终列表 ═══
+        result = []
+        seen = set()
+
+        for s, t in domain_matched:
+            if t.name not in seen:
                 result.append(t)
+                seen.add(t.name)
 
-        return result[:max_tools]
+        for s, t in keyword_fallback:
+            if t.name not in seen:
+                result.append(t)
+                seen.add(t.name)
+
+        # ═══ 第六步：动态估算 max_tools ═══
+        if result:
+            sample = result[:max_tools]
+            avg_tokens = sum(estimate_tool_token_count(t) for t in sample) / len(sample)
+            budget = 3000
+            dynamic_max = min(max_tools, max(8, int(budget / max(avg_tokens, 80))))
+        else:
+            dynamic_max = max_tools
+
+        # ═══ 第七步：条件化核心工具保留 ═══
+        # 只在任务描述暗示会用到时才强制保留，避免浪费名额
+        CONDITIONAL_CORE = {
+            "search": ["搜索", "查找", "查询", "搜", "找", "查", "search", "find", "query", "看看"],
+            "file": ["文件", "保存", "写入", "读取", "写", "桌面", "file", "write", "read", "路径"],
+            "execute_python": ["代码", "python", "脚本", "执行", "运行", "程序", "写一个"],
+            "execute_shell": ["命令", "shell", "终端", "执行", "运行"],
+            "fetch_url": ["网页", "url", "http", "网站", "api", "接口", "请求", "fetch"],
+        }
+        for tool_name, keywords in CONDITIONAL_CORE.items():
+            if any(kw.lower() in desc for kw in keywords):
+                t = self._tools.get(tool_name)
+                if t and t.name not in seen:
+                    result.append(t)
+                    seen.add(t.name)
+                    if len(result) > dynamic_max:
+                        # 超出预算，从末尾弹一个非核心 MCP 工具
+                        for i in range(len(result) - 1, -1, -1):
+                            n = result[i].name
+                            if n not in ("search", "file", "execute_python", "execute_shell", "fetch_url") \
+                               and result[i].server != SERVER_BUILTIN:
+                                result.pop(i)
+                                break
+
+        return result[:dynamic_max]
 
     def get_tool(self, name: str) -> Optional[ToolDefinition]:
         return self._tools.get(name)

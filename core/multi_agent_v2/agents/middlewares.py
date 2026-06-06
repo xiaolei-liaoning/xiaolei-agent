@@ -11,7 +11,7 @@ import logging
 import time
 from typing import Any, Callable, Dict, List, Optional
 
-from .middleware import BaseMiddleware, RunContext, DynamicStageRoutingMiddleware
+from .middleware import BaseMiddleware, RunContext, DynamicStageRoutingMiddleware, HookResult
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 class ProfileMiddleware(BaseMiddleware):
     """根据任务描述决定执行画像（是否用 workspace / sandbox / RAG 等）"""
+    HOOKS = ("on_start",)
 
     async def on_start(self, ctx: RunContext) -> None:
         profile = ctx.profile
@@ -64,6 +65,7 @@ class ProfileMiddleware(BaseMiddleware):
 
 class ReActDepthMiddleware(BaseMiddleware):
     """追踪 ReAct 深度，防止无限循环（react_depth 由 ReActCoreMiddleware 递增）"""
+    HOOKS = ("on_think_start", "on_tool_end")
 
     MAX_DEPTH = 10
     ADAPTIVE_MAX_DEPTH = 15
@@ -86,6 +88,7 @@ class ReActDepthMiddleware(BaseMiddleware):
             ctx.interrupted = True
             ctx.last_error = f"ReAct 深度超过 {max_depth}，终止执行"
             logger.warning(f"ReAct 深度超过 {max_depth}，终止执行")
+            return HookResult(jump_to="end", reason=f"ReAct 深度超过 {max_depth}")
 
     async def on_tool_end(self, ctx: RunContext) -> None:
         """检测连续失败的工具调用 + 工具重复检测 + 旋转检测"""
@@ -109,11 +112,8 @@ class ReActDepthMiddleware(BaseMiddleware):
                         sig = str(sorted(args.items())[:3]) if isinstance(args, dict) else str(args)[:100]
                         args_sigs.append(sig)
                     if len(set(args_sigs)) == 1:
-                        ctx.decisions.append({
-                            "action": "retry",
-                            "reason": f"连续 3 次调用相同工具 {names[0]} 且参数完全一致，建议换策略"
-                        })
                         logger.warning(f"工具重复检测: {names[0]} 连续调用 3 次参数一致")
+                        return HookResult(jump_to="retry", reason=f"连续 3 次调用相同工具 {names[0]} 且参数完全一致，建议换策略")
 
             # —— 旋转检测（无进展轮次） ——
             if len(ctx.tool_results) >= 4:
@@ -125,11 +125,8 @@ class ReActDepthMiddleware(BaseMiddleware):
                     prev_count = len(prev_two)
                     last_count = len(last_two)
                     if prev_len == last_len and prev_count == last_count:
-                        ctx.decisions.append({
-                            "action": "retry",
-                            "reason": "连续 2 轮无进展（结果数量和长度均未变化），旋转检测触发"
-                        })
                         logger.warning("旋转检测: 连续 2 轮无进展")
+                        return HookResult(jump_to="retry", reason="旋转检测: 连续 2 轮无进展")
 
 
 # ════════════════════════════════════════════════════════════════
@@ -138,6 +135,7 @@ class ReActDepthMiddleware(BaseMiddleware):
 
 class ConfidenceMiddleware(BaseMiddleware):
     """基于工具调用成功率和结果质量计算置信度。低置信度 → 推决策信号"""
+    HOOKS = ("on_tool_end",)
 
     # 工具类型权重映射
     TOOL_WEIGHTS = {
@@ -243,8 +241,8 @@ class ConfidenceMiddleware(BaseMiddleware):
         ctx.confidence_total = sum(ctx.confidence_scores) / len(ctx.confidence_scores)
 
         if final_confidence < 0.5 and len(recent) >= 2 and not ctx.interrupted:
-            ctx.decisions.append({"action": "retry", "reason": f"置信度过低({final_confidence:.1f})，建议换策略"})
             logger.info(f"置信度{final_confidence:.1f}触发决策信号")
+            return HookResult(jump_to="retry", reason=f"置信度过低({final_confidence:.1f})")
 
 
 # ════════════════════════════════════════════════════════════════
@@ -253,6 +251,7 @@ class ConfidenceMiddleware(BaseMiddleware):
 
 class ReflectionMiddleware(BaseMiddleware):
     """定期对执行结果进行反思。全部失败时推决策信号"""
+    HOOKS = ("on_tool_end",)
 
     REFLECTION_INTERVAL = 2
 
@@ -278,8 +277,8 @@ class ReflectionMiddleware(BaseMiddleware):
 
         if success == 0 and total > 0 and not ctx.profile.get("reflection_feedback"):
             logger.warning(f"反思: 连续 {total} 次工具调用全部失败")
-            ctx.decisions.append({"action": "retry", "reason": "全部工具调用失败，请换方法"})
             ctx.profile["reflection_feedback"] = True
+            return HookResult(jump_to="retry", reason="全部工具调用失败，请换方法")
 
         # —— 方法耗尽检测 ——
         if len(ctx.tool_results) >= 3:
@@ -287,11 +286,8 @@ class ReflectionMiddleware(BaseMiddleware):
             names = list(set(r.get("tool_call", {}).get("name", "") for r in last_3))
             all_failed = all(not r.get("success") for r in last_3)
             if len(names) >= 2 and all_failed:
-                ctx.decisions.append({
-                    "action": "output",
-                    "reason": f"方法耗尽：尝试了 {', '.join(names)} 均失败，建议输出当前已有结果"
-                })
                 logger.warning(f"方法耗尽检测: {names} 全部失败")
+                return HookResult(jump_to="output", reason=f"方法耗尽：尝试了 {', '.join(names)} 均失败，建议输出当前已有结果")
 
         # —— 结构化反思输出 ——
         structured_reflection = {
@@ -311,19 +307,45 @@ class ReflectionMiddleware(BaseMiddleware):
                 for g in groups
             )
             if all_groups_failed and fail_count >= 3:
-                ctx.decisions.append({
-                    "action": "abort",
-                    "reason": f"跨轮模式：连续 3 组失败率均 > 50%，建议终止避免无限重试"
-                })
                 logger.warning("跨轮模式: 连续 3 组失败率 > 50%，触发 abort")
+                return HookResult(jump_to="end", reason=f"跨轮模式：连续 3 组失败率均 > 50%，建议终止避免无限重试")
 
 
 # ════════════════════════════════════════════════════════════════
 # SubtaskMiddleware — 子任务分解
 # ════════════════════════════════════════════════════════════════
+# ReflectionCheckMiddleware — 反思检查
+# ════════════════════════════════════════════════════════════════
+
+class ReflectionCheckMiddleware(BaseMiddleware):
+    """把主循环里的两段硬编码反思逻辑塞进中间件链。
+
+    on_think_start: 检测反思反馈 → 终止执行
+    on_tool_end: 检查反思历史 → 注入换方法提示
+    """
+    HOOKS = ("on_think_start", "on_tool_end")
+
+    async def on_think_start(self, ctx: RunContext) -> None:
+        """反思反馈 → 终止"""
+        if ctx.profile.get("reflection_feedback") and not ctx.final_answer:
+            ctx.interrupted = True
+            logger.warning("检测到反思反馈且无产出，提前终止空转")
+
+    async def on_tool_end(self, ctx: RunContext) -> None:
+        """反思历史 → 注入换方法提示"""
+        if ctx.reflection_history and not ctx.final_answer:
+            last_ref = ctx.reflection_history[-1]
+            if last_ref.get("success_rate", 1) == 0 and last_ref.get("total_calls", 0) > 0:
+                if not ctx.task_description.endswith("[反思]"):
+                    ctx.task_description += "\n[反思] 上一轮全部失败，请换一种方法（换工具或直接回答）。"
+                    logger.info("已注入反思提示到下一轮")
+
+
+# ════════════════════════════════════════════════════════════════
 
 class SubtaskMiddleware(BaseMiddleware):
     """处理复杂任务的子任务分解和追踪"""
+    HOOKS = ("on_think_start",)
 
     async def on_think_start(self, ctx: RunContext) -> None:
         """在收集阶段后触发子任务分解"""
@@ -349,6 +371,7 @@ class BranchMiddleware(BaseMiddleware):
     - LLM 卡住：最后 2 轮 LLM 回复内容相同且不调工具
     - 兜底：final_answer 已设置但 interrupted 没设 → 推 end
     """
+    HOOKS = ("on_think_end",)
 
     async def on_think_end(self, ctx: RunContext) -> None:
         if not ctx.last_error:
@@ -366,11 +389,8 @@ class BranchMiddleware(BaseMiddleware):
             if len(names_depths) == 1:
                 result_sigs = set(str(r.get("result", ""))[:200] for r in last_3)
                 if len(result_sigs) == 1:
-                    ctx.decisions.append({
-                        "action": "abort",
-                        "reason": f"空转检测：连续 3 轮工具({last_3[-1].get('tool_call',{}).get('name','?')})结果无变化"
-                    })
                     logger.warning("空转检测触发")
+                    return HookResult(jump_to="end", reason=f"空转检测：连续 3 轮工具({last_3[-1].get('tool_call',{}).get('name','?')})结果无变化")
 
         # —— 相同错误重复 ——
         if len(ctx.tool_results) >= 3:
@@ -385,25 +405,19 @@ class BranchMiddleware(BaseMiddleware):
                             common_kw = kw
                             break
                 if common_kw:
-                    ctx.decisions.append({
-                        "action": "abort",
-                        "reason": f"相同错误重复：最后 3 个工具均失败且均包含关键词 '{common_kw}'"
-                    })
                     logger.warning(f"相同错误重复: {common_kw}")
+                    return HookResult(jump_to="end", reason=f"相同错误重复：最后 3 个工具均失败且均包含关键词 '{common_kw}'")
 
         # —— 兜底：final_answer 已设置但 interrupted 没设 ——
         if ctx.final_answer and not ctx.interrupted:
-            ctx.decisions.append({
-                "action": "end",
-                "reason": f"final_answer 已设置({ctx.final_answer[:60]}...)，标记结束"
-            })
+            return HookResult(jump_to="end", reason=f"final_answer 已设置({ctx.final_answer[:60]}...)，标记结束")
 
         # —— 连续失败 abort（原有逻辑增强） ——
         consecutive_fails = sum(1 for r in ctx.tool_results[-3:] if not r.get("success"))
         if consecutive_fails >= 3 and not ctx.profile.get("branch_hint_added"):
             logger.warning("连续 3 次失败，推终止信号")
-            ctx.decisions.append({"action": "abort", "reason": f"连续{consecutive_fails}次失败，终止当前策略"})
             ctx.profile["branch_hint_added"] = True
+            return HookResult(jump_to="end", reason=f"连续{consecutive_fails}次失败，终止当前策略")
 
 
 # ════════════════════════════════════════════════════════════════
@@ -419,6 +433,7 @@ class KEPAMiddleware(BaseMiddleware):
     - Planning: 生成下一步建议
     - Action: 将 plan 注入到 ctx.task_description
     """
+    HOOKS = ("on_tool_end", "on_finish")
 
     async def on_tool_end(self, ctx: RunContext) -> None:
         if ctx.tool_results:
@@ -500,6 +515,7 @@ class AskUserMiddleware(BaseMiddleware):
     所有注入提示格式为 "\\n[用户确认] XXX"，前缀标记方便后续调试。
     超时自动跳过：本身不做 input() 阻塞，只注入提示让 LLM 自行决定。
     """
+    HOOKS = ("on_think_start", "on_think_end", "on_tool_end", "on_wrap_tool_call")
 
     DESTRUCTIVE_KEYWORDS = ["rm ", "del ", "remove ", "drop ", "truncate "]
 
@@ -633,6 +649,7 @@ class DataPipelineMiddleware(BaseMiddleware):
     - 按工具类型提取不同字段
     - 多步上下文累积
     """
+    HOOKS = ("on_think_start",)
 
     MAX_DATA_LENGTH = 1500
 
@@ -788,3 +805,144 @@ class DataPipelineMiddleware(BaseMiddleware):
         summary = ctx.get_latest_observation()[:200] if last.get("success") else last.get("error", "")
         if summary:
             logger.debug(f"数据流: [{name}] → {summary[:80]}...")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# ToolCorrectionMiddleware — 工具选错纠正
+# ═══════════════════════════════════════════════════════════════════
+
+class ToolCorrectionMiddleware(BaseMiddleware):
+    """工具选择纠错中间件
+
+    检测 LLM 选错工具的场景，注入换工具建议。
+    区分三种情况：
+    - 空结果：工具本身正确但结果为空（如搜索无结果）→ 建议换关键词或改搜索源
+    - 持续空结果：同一工具多次返回空 → 建议完全换工具类型
+    - 错误或空转：工具返回错误/无实际内容 → 建议换策略
+
+    与 ReActDepthMiddleware 的区别：
+    - ReActDepth 检测的是"连续相同工具+相同参数"的重复调用
+    - 本中间件检测的是"工具返回空/无意义结果"的无效选择
+    """
+    HOOKS = ("on_tool_end", "on_think_start")
+
+    # 空结果检测特征集（结果文本中出现以下内容 = 工具可能选错了）
+    EMPTY_RESULT_PATTERNS = [
+        "没有找到", "未找到", "找不到", "无结果", "暂无", "暂时没有",
+        "not found", "no results", "no result", "nothing found",
+        "返回为空", "搜索结果为空",
+        "请求失败", "failed",
+    ]
+
+    # 空结果工具计数器（记录每个工具连续返回空结果的次数）
+    # key = tool_name, value = {
+    #   "empty_count": 连续空结果次数,
+    #   "total_calls": 总共被调次数,
+    #   "empty_results": [摘要],  # 最近空结果摘要
+    # }
+
+    async def on_tool_end(self, ctx: RunContext) -> None:
+        """检测工具返回空结果 → 计数 + 触发换工具提示"""
+        if not ctx.tool_results:
+            return
+
+        last = ctx.tool_results[-1]
+        tc = last.get("tool_call", {})
+        name = tc.get("name", "")
+        if not name:
+            return
+
+        if not last.get("success"):
+            return  # 失败由其他中间件处理
+
+        result_str = str(last.get("result", {}))
+        is_empty = self._is_empty_result(result_str)
+
+        # 初始化工具空结果追踪器
+        if not hasattr(ctx, "_tool_empty_tracker"):
+            ctx._tool_empty_tracker = {}
+        tracker = ctx._tool_empty_tracker
+
+        if name not in tracker:
+            tracker[name] = {"empty_count": 0, "total_calls": 0, "empty_results": []}
+        tracker[name]["total_calls"] += 1
+
+        if is_empty:
+            tracker[name]["empty_count"] += 1
+            # 保留最近 3 条空结果摘要
+            summary = result_str[:100].replace("\n", " ")
+            tracker[name]["empty_results"].append(summary)
+            tracker[name]["empty_results"] = tracker[name]["empty_results"][-3:]
+
+            logger.info(f"工具 [{name}] 返回空结果 (连续{tracker[name]['empty_count']}次)")
+
+            # —— 检测策略 A：同一工具连续 2 次返回空 → 可能是工具选错了 ——
+            if tracker[name]["empty_count"] >= 2:
+                # 检查 LLM 是否已经得到过提示
+                if "[换工具]" not in ctx.task_description:
+                    ctx.task_description += (
+                        f"\n[换工具] 工具「{name}」连续 2 次返回空结果，"
+                        "说明这个工具不适合当前任务。请换一个不同类型的工具，"
+                        "或者直接基于已有信息回答问题。不要重复调同一个工具。"
+                    )
+                    logger.info(f"工具 [{name}] 连续空结果，已注入换工具提示")
+            elif tracker[name]["empty_count"] >= 1:
+                # 首次空结果：温和提醒
+                pass  # LLM 自己可能意识到，先不动
+        else:
+            # 工具返回了有效结果 → 重置计数器
+            tracker[name]["empty_count"] = 0
+            tracker[name]["empty_results"] = []
+
+    async def on_think_start(self, ctx: RunContext) -> None:
+        """检测工具选择模式：多种工具都返回空 → 全局换策略"""
+        tracker = getattr(ctx, "_tool_empty_tracker", None)
+        if not tracker:
+            return
+
+        # 统计有多少工具空转
+        empty_tools = {n: d for n, d in tracker.items() if d["empty_count"] >= 2}
+        if len(empty_tools) >= 2:
+            # 超过 2 种不同工具都返回空 → 可能是方向性问题
+            tool_list = ", ".join(empty_tools.keys())
+            if "[全局换策略]" not in ctx.task_description:
+                ctx.task_description += (
+                    f"\n[全局换策略] 多个工具（{tool_list}）都返回空结果，"
+                    "当前搜索/查询方向可能有问题。请换个思路："
+                    "1) 换搜索引擎或换关键词  "
+                    "2) 直接基于已有信息回答  "
+                    "3) 如果任务是获取最新信息，换个完全不同的角度"
+                )
+                logger.info(f"多工具空转检测: {tool_list} → 已注入全局换策略提示")
+
+        # 检查是否有工具本来有结果、后来变空了（退化检测）
+        for name, d in tracker.items():
+            if d["total_calls"] >= 3 and d["empty_count"] >= 1:
+                ratio = d["empty_count"] / d["total_calls"]
+                if ratio > 0.6:
+                    logger.info(f"工具 [{name}] 退化检测: 空结果率 {ratio:.0%}")
+
+    @staticmethod
+    def _is_empty_result(result_str: str) -> bool:
+        """判断工具结果是否为空/无意义"""
+        if not result_str or result_str == "{}" or result_str == '{"content": [{"text": ""}]}':
+            return True
+
+        result_lower = result_str.lower()
+
+        # 检测空结果关键词
+        for pattern in ToolCorrectionMiddleware.EMPTY_RESULT_PATTERNS:
+            if pattern in result_lower:
+                return True
+
+        # 搜索结果的特殊检测：content 数组全空
+        import re
+        # 匹配 content: [{"text": ""}] 或 {'text': ''} 风格（JSON/Python dict 双兼容）
+        has_content_key = re.search(r'["\']content["\']\s*:\s*\[', result_lower)
+        if has_content_key:
+            # 提取所有 text 字段的值
+            texts = re.findall(r'["\']text["\']\s*:\s*["\']([^"\']*)["\']', result_lower)
+            if texts and all(t.strip() == "" for t in texts):
+                return True
+
+        return False
