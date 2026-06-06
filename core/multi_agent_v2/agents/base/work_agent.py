@@ -190,6 +190,9 @@ class WorkAgent(BaseAgent):
         start = time.time()
         desc = task.description
 
+        # ── 初始状态提示 ──
+        print(f"    \033[2m⚡ 正在分析你的请求...\033[0m")
+
         # 启动总线监听
         await self._start_bus_listener()
 
@@ -215,7 +218,6 @@ class WorkAgent(BaseAgent):
                     )
 
             # ── 复杂任务：走 ReActCore 中间件链 ──
-            print(f"    \033[2m⏳ 加载工具中...\033[0m")
             from core.multi_agent_v2.agents.react_core import run_react
             result = await run_react(
                 desc,
