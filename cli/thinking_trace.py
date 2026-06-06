@@ -59,7 +59,7 @@ class ThinkingTrace:
         self._start_time = time.time()
         self._iteration = 0
         self._plan = []
-        _console.rule(style=SUBTLE)
+        _console.print()
         _console.print(f"  [bold]Request:[/bold] {task_desc}")
 
     def done(self, success: bool, elapsed: float = 0, detail: str = ""):
@@ -204,7 +204,7 @@ class ThinkingTrace:
     def divider(self):
         """分隔线"""
         if self.enabled:
-            _console.rule(style=SUBTLE)
+            _console.print()
 
     # ── 结构化步骤展示 ────────────────────────────────────────────
     _STEP_ICONS = {

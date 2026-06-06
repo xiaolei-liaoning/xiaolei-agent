@@ -22,7 +22,13 @@ from rich.console import Group
 
 _console = Console()
 
-# ── Claude Code 品牌色（暗色主题 RGB 值） ───────────────────────────────────
+# ── 全局禁用 Rich Panel 边框（去掉 ╭╰─ 等字符） ──
+import rich.panel as _rich_panel
+_original_panel_init = _rich_panel.Panel.__init__
+def _no_border_panel(self, renderable, **kwargs):
+    kwargs.setdefault('box', MINIMAL)
+    _original_panel_init(self, renderable, **kwargs)
+_rich_panel.Panel.__init__ = _no_border_panel
 CLAUDE = "rgb(215,119,87)"       # 品牌橙 — 主强调色
 TEXT = "rgb(255,255,255)"        # 正文白
 INACTIVE = "rgb(153,153,153)"    # 禁用灰
@@ -113,7 +119,7 @@ def print_dim(message: str) -> None:
 
 def print_header(title: str) -> None:
     _console.print()
-    _console.rule(f"[bold {CLAUDE}]{title}[/bold {CLAUDE}]", style=CLAUDE)
+    _console.print(f"  [{CLAUDE}]■ {title}[/{CLAUDE}]")
 
 
 def print_section(title: str) -> None:
@@ -121,7 +127,7 @@ def print_section(title: str) -> None:
 
 
 def print_divider(char: str = "─", length: int = None, color: str = None) -> None:
-    _console.rule(style=color or SUBTLE)
+    _console.print()
 
 
 def print_section_end() -> None:

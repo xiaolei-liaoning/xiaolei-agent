@@ -1150,8 +1150,8 @@ class EnhancedCLI:
             # 后处理：清理 meta 中多余字段（LLM 可能加了 subtasks/labels 等）
             # 只保留 name, description, phases
             script = re.sub(
-                r'(export const meta = \{)(.*?)(\n\};)',
-                lambda m: _clean_meta(m.group(0)),
+                r'export const meta = \{.*?\n\};',
+                lambda m: EnhancedCLI._clean_meta(m.group(0)),
                 script,
                 flags=re.DOTALL,
             )
@@ -1167,49 +1167,50 @@ class EnhancedCLI:
             return ""
 
 
-def _clean_meta(meta_block: str) -> str:
-    """清理 meta 对象，只保留 name/description/phases，去掉 LLM 自由发挥的字段"""
-    import re
-    allowed = ("name", "description", "phases")
-    lines = meta_block.split('\n')
-    new_lines = []
-    inside_phases_value = False
-    done = False  # phases 和所有允许字段处理完毕
-    for line in lines:
-        stripped = line.strip()
-        if done:
-            if stripped == '};':
+    @staticmethod
+    def _clean_meta(meta_block: str) -> str:
+        """清理 meta 对象，只保留 name/description/phases，去掉 LLM 自由发挥的字段"""
+        import re
+        allowed = ("name", "description", "phases")
+        lines = meta_block.split('\n')
+        new_lines = []
+        inside_phases_value = False
+        done = False  # phases 和所有允许字段处理完毕
+        for line in lines:
+            stripped = line.strip()
+            if done:
+                if stripped == '};':
+                    new_lines.append(line)
+                continue
+            # 保留 meta 声明和结构行（只保留到 phases 结束）
+            if stripped.startswith('export const meta'):
                 new_lines.append(line)
-            continue
-        # 保留 meta 声明和结构行（只保留到 phases 结束）
-        if stripped.startswith('export const meta'):
-            new_lines.append(line)
-            continue
-        key_match = re.match(r'"?(\w+)"?\s*:', stripped)
-        if key_match:
-            key = key_match.group(1)
-            if key in allowed:
+                continue
+            key_match = re.match(r'"?(\w+)"?\s*:', stripped)
+            if key_match:
+                key = key_match.group(1)
+                if key in allowed:
+                    new_lines.append(line)
+                    if key == 'phases':
+                        inside_phases_value = ']' not in stripped
+                        if not inside_phases_value:
+                            done = True
+                else:
+                    done = True  # 遇到非允许的 key，停止一切
+                continue
+            # 非 key 行
+            if inside_phases_value:
                 new_lines.append(line)
-                if key == 'phases':
-                    inside_phases_value = ']' not in stripped
-                    if not inside_phases_value:
-                        done = True
-            else:
-                done = True  # 遇到非允许的 key，停止一切
-            continue
-        # 非 key 行
-        if inside_phases_value:
-            new_lines.append(line)
-            if ']' in stripped:
-                inside_phases_value = False
-                done = True
-        # done=True 时跳过所有后续行直到 };，已在上面处理
+                if ']' in stripped:
+                    inside_phases_value = False
+                    done = True
+            # done=True 时跳过所有后续行直到 };，已在上面处理
 
-    # 确保有 }; 结尾
-    result = '\n'.join(new_lines)
-    if not result.strip().endswith('};'):
-        result = result.rstrip() + '\n};'
-    return result
+        # 确保有 }; 结尾
+        result = '\n'.join(new_lines)
+        if not result.strip().endswith('};'):
+            result = result.rstrip() + '\n};'
+        return result
 
     async def _mode_json_template(self, router, task: str) -> str:
         """模式2: LLM 输出 JSON 子任务列表 → 固定 JS 模板 → js_orchestrator 执行"""

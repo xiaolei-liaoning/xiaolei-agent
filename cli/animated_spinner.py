@@ -385,13 +385,13 @@ def print_step(step_num: int, total: int, message: str,
 
 def print_divider(color: str = SUBTLE):
     """打印分隔线"""
-    _console.rule(style=color)
+    _console.print()
 
 
 def print_section(title: str, color: str = CLAUDE):
     """打印区域标题"""
     _console.print()
-    _console.rule(f"[bold {color}]{title}[/bold {color}]", style=color)
+    _console.print(f"  [{color}]■ {title}[/{color}]")
 
 
 def print_status_line(icon: str, message: str, color: str = CLAUDE,

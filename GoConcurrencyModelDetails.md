@@ -1,0 +1,9 @@
+Go并发模型概述
+
+Go并发模型的关键组件包括goroutine、channel和sync包等。
+
+goroutine是Go语言中用于并发执行的轻量级线程，它的工作原理涉及到调度器和上下文切换等概念。
+
+channel是用于goroutine之间通信的机制，它允许goroutine通过发送和接收消息进行通信。
+
+综合以上信息，Go并发模型的特点和优势包括轻量级线程、高效的goroutine调度、灵活的channel通信机制等，这些特点使得Go并发编程更加简单、高效和可扩展。
