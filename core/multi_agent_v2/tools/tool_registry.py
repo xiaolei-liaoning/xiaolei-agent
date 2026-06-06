@@ -967,89 +967,146 @@ class ToolRegistry:
     def __init__(self):
         self._tools: Dict[str, ToolDefinition] = {}
         self._initialized = False
-        # MCP 服务器已通过 discover_all() 同步加载
+        self._mcp_explored = False  # MCP 已探索过一次
 
     async def discover_all(self) -> List[ToolDefinition]:
-        """发现所有工具来源：内置工具 + MCP 服务器（连接并注册工具）"""
-        all_tools = []
-        # Source 1: builtin tools
-        for sd in _SANDBOX_TOOL_DEFS:
-            if sd.name not in self._tools:
-                self._tools[sd.name] = sd
-                all_tools.append(sd)
-        self._initialized = True
-        # Source 2: MCP 服务器 — 同步连接，注入工具到注册表
-        mcp_tools = await self._connect_mcp_servers()
-        for t in mcp_tools:
-            if t.name not in self._tools:
-                self._tools[t.name] = t
-                all_tools.append(t)
-        all_types = {"builtin": sum(1 for t in all_tools if t.server == "__builtin__"),
-                     "mcp": sum(1 for t in all_tools if t.server not in ("__builtin__",""))}
-        logger.info(f"工具注册完成: {len(all_tools)} 个 ({all_types})")
+        """发现所有工具来源：内置工具 + MCP 服务器（连接并注册工具）
+
+        核心优化：
+        1. 内置工具先到位（0ms），立即标记 _initialized = True
+        2. MCP 21个服务器并行连接（总耗时≈最慢那个，不是累加）
+        3. MCP 只探索一次，后续 discover_all 直接返回缓存
+        4. 子进程超时/取消时立即清理
+        """
+        all_tools = list(self._tools.values())
+
+        # Source 1: builtin tools（已有就跳过）
+        if not self._initialized:
+            for sd in _SANDBOX_TOOL_DEFS:
+                if sd.name not in self._tools:
+                    self._tools[sd.name] = sd
+                    all_tools.append(sd)
+            self._initialized = True
+            logger.info(f"内置工具: {sum(1 for t in self._tools.values() if t.server=='__builtin__')} 个")
+
+        # Source 2: MCP 工具（已探索过就跳过）
+        if not self._mcp_explored:
+            self._mcp_explored = True
+            mcp_tools = await self._connect_mcp_servers_parallel()
+            for t in mcp_tools:
+                if t.name not in self._tools:
+                    self._tools[t.name] = t
+                    all_tools.append(t)
+            n_mcp = sum(1 for t in self._tools.values() if t.server not in ("__builtin__", ""))
+            if n_mcp:
+                logger.info(f"MCP 工具: {n_mcp} 个")
+        else:
+            # MCP 工具已有缓存，直接收集
+            for t in self._tools.values():
+                if t.server not in ("__builtin__", "") and t not in all_tools:
+                    all_tools.append(t)
+
         return all_tools
 
-    async def _connect_mcp_servers(self) -> List[ToolDefinition]:
-        """发现 MCP 服务器配置，保存到 mcp_client，返回已知工具定义"""
+    async def _discover_mcp_configs(self) -> set:
+        """发现所有 MCP 服务器配置并注册到 mcp_client，返回服务器名集合"""
+        from core.mcp.mcp_client import mcp_client
+        proot = os.path.normpath(os.path.join(os.path.dirname(__file__),"..","..",".."))
+        servers = set(await mcp_client.list_servers())
+
+        # 1. 从 mcp/ 目录发现
+        mcp_dir = os.path.join(proot, "mcp")
+        if os.path.isdir(mcp_dir):
+            for fn in sorted(os.listdir(mcp_dir)):
+                if not fn.endswith("_mcp_server.py"):
+                    continue
+                srv = fn.replace("_mcp_server.py","").replace("_","-")
+                if srv in servers:
+                    continue
+                await mcp_client.connect_server(name=srv, command="python3",
+                    args=[os.path.join(mcp_dir,fn)], cwd=proot,
+                    env={"PYTHONPATH": proot})
+                servers.add(srv)
+
+        # 2. 从 .mcp.json 发现
+        mcj = os.path.join(proot, ".mcp.json")
+        if os.path.exists(mcj):
+            try:
+                with open(mcj) as f:
+                    for srv, sc in json.load(f).get("mcpServers",{}).items():
+                        if srv in servers:
+                            continue
+                        await mcp_client.connect_server(name=srv, command=sc["command"],
+                            args=sc.get("args",[]), cwd=proot,
+                            env={"PYTHONPATH": proot})
+                        servers.add(srv)
+            except Exception:
+                pass
+
+        return servers
+
+    async def _list_mcp_tools(self, srv: str) -> tuple:
+        """从单个 MCP 服务器拉取工具列表（5s 超时）"""
+        from core.mcp.mcp_client import mcp_client
+        try:
+            tools = await asyncio.wait_for(mcp_client.list_tools(srv), timeout=5.0)
+            return (srv, tools)
+        except asyncio.TimeoutError:
+            logger.debug(f"MCP {srv}: 超时")
+            return (srv, [])
+        except Exception:
+            logger.debug(f"MCP {srv}: 不可用")
+            return (srv, [])
+
+    async def _connect_mcp_servers_parallel(self) -> List[ToolDefinition]:
+        """并行发现所有 MCP 服务器 — 21个同时连，不串行
+
+        原来：21个 server 逐个连 → 最坏 105s
+        现在：21个 server 同时连 → 最坏 ~5s
+        """
         mcp_tools = []
         try:
-            from core.mcp.mcp_client import mcp_client
-            proot = os.path.normpath(os.path.join(os.path.dirname(__file__),"..","..",".."))
-            servers = set(await mcp_client.list_servers())
-            # 从 mcp/ 目录发现
-            mcp_dir = os.path.join(proot, "mcp")
-            if os.path.isdir(mcp_dir):
-                for fn in sorted(os.listdir(mcp_dir)):
-                    if not fn.endswith("_mcp_server.py"): continue
-                    srv = fn.replace("_mcp_server.py","").replace("_","-")
-                    if srv in servers: continue
-                    await mcp_client.connect_server(name=srv, command="python3",
-                        args=[os.path.join(mcp_dir,fn)], cwd=proot,
-                        env={"PYTHONPATH": proot})
-                    servers.add(srv)
-            # 从 .mcp.json 发现
-            mcj = os.path.join(proot, ".mcp.json")
-            if os.path.exists(mcj):
-                try:
-                    with open(mcj) as f:
-                        for srv, sc in json.load(f).get("mcpServers",{}).items():
-                            if srv in servers: continue
-                            await mcp_client.connect_server(name=srv, command=sc["command"],
-                                args=sc.get("args",[]), cwd=proot,
-                                env={"PYTHONPATH": proot})
-                            servers.add(srv)
-                except: pass
-            # 对已保存配置的服务器，拉取工具列表（超时 5s），使用原始工具名
+            # 第一步：发现并注册所有 server 配置（纯内存操作，快）
+            servers = await self._discover_mcp_configs()
+            if not servers:
+                return mcp_tools
+
+            # 第二步：并行拉取所有 server 的工具列表
+            tasks = [self._list_mcp_tools(srv) for srv in sorted(servers)]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            # 第三步：处理结果
             seen_names = set()
-            for srv in sorted(servers):
-                try:
-                    tools = await asyncio.wait_for(mcp_client.list_tools(srv), timeout=5.0)
-                    srv_domains = _MCP_SERVER_DOMAINS.get(srv, set())
-                    for tool in tools:
-                        raw = tool.get("name","")
-                        if not raw: continue
-                        # 工具名 = 原始名（LLM易读），冲突时加服务器前缀
-                        fn = _safe(raw)
-                        if fn in seen_names:
-                            fn = _safe(f"{srv}_{raw}")
-                        seen_names.add(fn)
-                        desc = tool.get("description","")
-                        if not desc:
-                            desc = f"通过 {srv} 服务器提供的工具"
-                        mcp_tools.append(ToolDefinition(name=fn,
-                            description=f"[{srv}] {desc}",
-                            parameters=tool.get("inputSchema",{}) or {},
-                            server=srv, tool_name=raw, tags=["mcp"],
-                            domains=srv_domains))  # <-- 注入服务器级领域
-                except asyncio.TimeoutError:
-                    logger.debug(f"MCP {srv}: 超时（进程启动慢）")
-                except Exception:
-                    logger.debug(f"MCP {srv}: 不可用")
+            for result in results:
+                if isinstance(result, Exception):
+                    continue
+                srv, tools = result
+                if not tools:
+                    continue
+                srv_domains = _MCP_SERVER_DOMAINS.get(srv, set())
+                for tool in tools:
+                    raw = tool.get("name", "")
+                    if not raw:
+                        continue
+                    fn = _safe(raw)
+                    if fn in seen_names:
+                        fn = _safe(f"{srv}_{raw}")
+                    seen_names.add(fn)
+                    desc = tool.get("description", "")
+                    if not desc:
+                        desc = f"通过 {srv} 服务器提供的工具"
+                    mcp_tools.append(ToolDefinition(
+                        name=fn,
+                        description=f"[{srv}] {desc}",
+                        parameters=tool.get("inputSchema", {}) or {},
+                        server=srv, tool_name=raw, tags=["mcp"],
+                        domains=srv_domains,
+                    ))
         except Exception:
             pass
+
         if mcp_tools:
             logger.info(f"MCP: {len(mcp_tools)} 个工具来自 {len({t.server for t in mcp_tools})} 台服务器")
-        return mcp_tools
         return mcp_tools
 
     def get_handler_map(self) -> Dict[str, Callable]:

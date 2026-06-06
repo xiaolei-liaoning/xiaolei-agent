@@ -26,21 +26,40 @@ class ReActCoreMiddleware(BaseMiddleware):
     """ReAct 核心循环：LLM 自主决定调工具还是直接回答"""
 
     async def on_start(self, ctx: RunContext) -> None:
-        """on_start 时获取工具定义 — 只加载内置工具，跳过MCP子进程
+        """on_start 时获取工具定义
 
-        MCP 服务器有21个，每个要启动子进程+5s超时。
-        不在热路径中连接MCP，只使用内置工具（search, execute_python等）。
+        discover_all 优化后:
+        - 首次调用: 内置工具 0ms + MCP 21个并行(~5s)
+        - 后续调用: 0ms（缓存命中）
+        - `asyncio.wait_for(timeout=10)` 兜底保护
         """
+        from core.multi_agent_v2.tools.tool_registry import get_tool_registry
+        reg = get_tool_registry()
         try:
-            from core.multi_agent_v2.tools.tool_registry import _SANDBOX_TOOL_DEFS
+            await asyncio.wait_for(reg.discover_all(), timeout=10)
+            raw = list(reg._tools.values()) if reg._tools else []
             ctx.tool_defs = [
                 {"type":"function","function":{"name":t.name,"description":t.description,"parameters":t.parameters},
-                 "_server":"__builtin__","_tool_name":t.name}
-                for t in _SANDBOX_TOOL_DEFS
+                 "_server":t.server,"_tool_name":t.tool_name}
+                for t in raw[:20]
             ]
-            logger.info(f"暴露 {len(ctx.tool_defs)} 个内置工具")
+            n_builtin = sum(1 for t in raw if t.server == "__builtin__")
+            n_mcp = len(raw) - n_builtin
+            logger.info(f"暴露 {len(ctx.tool_defs)} 个工具 ({n_builtin} 内置 + {n_mcp} MCP)")
+        except asyncio.TimeoutError:
+            logger.warning("工具发现超时（10s），仅用内置工具")
+            # 兜底：至少加载内置工具
+            try:
+                from core.multi_agent_v2.tools.tool_registry import _SANDBOX_TOOL_DEFS
+                ctx.tool_defs = [
+                    {"type":"function","function":{"name":t.name,"description":t.description,"parameters":t.parameters},
+                     "_server":"__builtin__","_tool_name":t.name}
+                    for t in _SANDBOX_TOOL_DEFS
+                ]
+            except Exception:
+                ctx.tool_defs = []
         except Exception as e:
-            logger.debug("获取内置工具失败: %s", e)
+            logger.debug("工具发现失败: %s", e)
             ctx.tool_defs = []
 
     async def on_think_start(self, ctx: RunContext) -> None:
