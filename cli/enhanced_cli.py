@@ -1009,15 +1009,14 @@ class EnhancedCLI:
         await self._run_with_scheduler(remaining)
 
     async def _run_with_scheduler(self, task: str):
-        """动态编排：LLM 生成 JS 编排脚本 → js_orchestrator 执行
+        """动态编排：LLM 分析生成子任务列表 → 固定 JS 模板 → js_orchestrator 执行
 
-        类似 Claude Code CLI Workflow：
-        1. LLM 分析任务，用 agent()/parallel()/phase() API 写出编排脚本
-        2. js_orchestrator.run_js_workflow() 执行脚本
-        3. JS 中 agent() 通过 stdio 与 Python AgentPool 通信
+        LLM 只负责"拆子任务"（JSON），JS 模板和编排逻辑由 Python 固定生成。
+        这样既保留了 LLM 的任务理解能力，又避免了 LLM 生成非法 JS 的问题。
         """
         from cli.colors import CLAUDE, log_status, print_error, print_success
         from cli.animated_spinner import print_section
+        import json, re
 
         print_section("🤖 动态编排 - JS Workflow")
 
@@ -1028,74 +1027,74 @@ class EnhancedCLI:
                 log_status("LLM 不可用，走简单并行", color="yellow")
                 raise ValueError("LLM不可用")
 
-            # 1. LLM 生成 JS 编排脚本（直接 chat，无工具干扰）
-            log("正在分析任务并生成 JS 编排脚本...")
-            js_script = await asyncio.wait_for(
-                router.chat([{"role": "system", "content": """你是一个工作流编排专家。根据用户任务，生成一个 JavaScript 编排脚本。
-
-可用的 API:
-- agent(prompt, opts) → string  — 启动一个子Agent，返回字符串结果
-  opts: { label, timeout, model }
-- parallel(thunks) → array       — 并发执行多个 agent() 调用
-- phase(title)                    — 标记阶段
-- log(message)                    — 输出进度
-
-脚本格式:
-```
-export const meta = {
-  name: "...",
-  description: "...",
-  phases: [{title: "阶段1"}, {title: "阶段2"}],
-};
-
-export default async function main() {
-  phase("阶段1");
-
-  // 并行执行多个子任务
-  const results = await parallel([
-    () => agent("子任务1描述", { label: "方向1", timeout: 180 }),
-    () => agent("子任务2描述", { label: "方向2", timeout: 180 }),
-  ]);
-
-  phase("阶段2");
-
-  // 汇总
-  const valid = results.filter(r => r !== null);
-  const context = valid.map((r, i) => `【${i+1}】\\n${r}`).join("\\n\\n");
-  return await agent("综合以下:\\n\\n" + context, { label: "汇总", timeout: 180 });
-}
-```
-
-规则：
-- 用 parallel() 并发执行 3-6 个子任务
-- 每个子任务是独立可执行的维度（搜索/分析/对比）
-- 最后用一个 agent() 汇总所有结果
-- 对比类任务：每个维度覆盖不同方案
-- 只输出脚本，不要其他内容"""},
+            # 1. LLM 生成子任务列表（JSON）
+            log("正在分析任务并拆解子任务...")
+            subtask_resp = await asyncio.wait_for(
+                router.chat([{"role": "system", "content":
+                    "分析任务，输出 JSON 格式的子任务列表。\n"
+                    "格式: {\"subtasks\": [\"子任务1\", \"子任务2\", ...]}\n"
+                    "规则: 3-6个，每个是独立可执行的分析/对比维度\n"
+                    "只输出 JSON，不要其他内容"},
                     {"role": "user", "content": f"任务: {task}"}
-                ], temperature=0.3, max_tokens=2000),
-                timeout=60,
+                ], temperature=0.2, max_tokens=1000),
+                timeout=30,
             )
-            script_content = js_script if isinstance(js_script, str) else str(js_script)
+            resp_text = subtask_resp if isinstance(subtask_resp, str) else str(subtask_resp)
+            json_match = re.search(r'\[.*\]|\{.*\}', resp_text, re.DOTALL)
+            parsed = json.loads(json_match.group()) if json_match else None
+            subtasks = parsed.get("subtasks", []) if isinstance(parsed, dict) else \
+                      parsed if isinstance(parsed, list) else []
 
-            # 提取 JS 脚本（去掉可能的 markdown 代码块标记）
-            import re
-            code_match = re.search(r'```(?:javascript|js)?\s*\n(.*?)\n```', script_content, re.DOTALL)
-            if code_match:
-                script_content = code_match.group(1).strip()
+            if len(subtasks) < 2:
+                log_status(f"拆解子任务失败" + (f"({len(subtasks)}个)" if subtasks else ""), color="yellow")
+                raise ValueError("子任务太少")
 
-            # 确认有 meta 和 main
-            if "export const meta" not in script_content or "export default" not in script_content:
-                log_status("LLM 未生成有效脚本，走简单并行", color="yellow")
-                raise ValueError("无效脚本")
+            log(f"拆解为 {len(subtasks)} 个子任务")
+            for i, s in enumerate(subtasks):
+                log(f"  [{i+1}] {s[:80]}")
 
-            log("JS 编排脚本生成成功，开始执行...")
+            # 2. 生成合法的 JS 编排脚本（固定模板）
+            subtask_lines = []
+            for i, s in enumerate(subtasks[:6]):
+                label_l = f"r{i+1}"
+                desc_l = s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+                subtask_lines.append(f'    () => agent("{desc_l}", {{label: "{label_l}", timeout: 240}}),')
+            subtask_body = "\n".join(subtask_lines)
+            task_desc = task[:100].replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
 
-            # 2. 通过 js_orchestrator 执行
+            js_script = (
+                'export const meta = {\n'
+                '  name: "dynamic",\n'
+                f'  description: "{task_desc}",\n'
+                '  phases: [{title: "Research"}, {title: "Synthesis"}],\n'
+                '};\n'
+                '\n'
+                'export default async function main() {\n'
+                '  phase("Research");\n'
+                '\n'
+                '  const results = await parallel([\n'
+                f'{subtask_body}\n'
+                '  ]);\n'
+                '\n'
+                '  phase("Synthesis");\n'
+                '\n'
+                '  const valid = results.filter(r => r !== null);\n'
+                '  const context = valid.map((r, i) => "[" + (i+1) + "]\\n" + r).join("\\n\\n");\n'
+                '\n'
+                '  return await agent(\n'
+                f'    "Synthesize the following research about: {task_desc}\\n\\n" + context,\n'
+                '    {label: "final", timeout: 300},\n'
+                '  );\n'
+                '}\n'
+            )
+
+            log("JS 编排脚本已生成，开始执行...")
+
+            # 3. 通过 js_orchestrator 执行
             from core.multi_agent_v2.orchestration.js_orchestrator import run_js_workflow
-            result = await run_js_workflow(script_content)
+            result = await run_js_workflow(template)
 
-            # 3. 输出结果
+            # 4. 输出结果
             print_section("📋 最终结果")
             if result is not None:
                 text = str(result)
