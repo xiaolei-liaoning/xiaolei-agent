@@ -310,11 +310,75 @@ def _has_readable_content(html_text: str) -> bool:
     return text_len > 500 or (text_len > 200 and ratio > 0.05)
 
 
+# ── 纯 asyncio HTTP GET（不创建线程，可安全取消） ───────────────────
+
+async def _http_get(url: str, timeout: int = 10) -> str:
+    """纯 asyncio HTTP GET（使用 asyncio.open_connection, 无 run_in_executor）
+
+    asyncio.wait_for 取消此协程时，socket 立即关闭，不留僵尸线程。
+    """
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    host = parsed.hostname or "localhost"
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    path = parsed.path or "/"
+    if parsed.query:
+        path = f"{path}?{parsed.query}"
+
+    reader, writer = None, None
+    try:
+        if parsed.scheme == "https":
+            import ssl
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(host, port, ssl=ctx), timeout=timeout)
+        else:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(host, port), timeout=timeout)
+
+        request = (
+            f"GET {path} HTTP/1.1\r\n"
+            f"Host: {host}\r\n"
+            f"User-Agent: Mozilla/5.0\r\n"
+            f"Accept: text/html,application/json\r\n"
+            f"Connection: close\r\n"
+            f"\r\n"
+        )
+        writer.write(request.encode())
+        await writer.drain()
+
+        # 读取响应（按块读取，不过量）
+        chunks = []
+        while True:
+            chunk = await asyncio.wait_for(reader.read(65536), timeout=timeout)
+            if not chunk:
+                break
+            chunks.append(chunk)
+
+        data = b"".join(chunks)
+        # 尝试从响应头分离body
+        try:
+            header_end = data.index(b"\r\n\r\n") + 4
+            body = data[header_end:]
+        except ValueError:
+            body = data
+        return body.decode("utf-8", errors="replace")
+    finally:
+        if writer:
+            try:
+                writer.close()
+                await writer.wait_closed()
+            except Exception:
+                pass
+
+
 async def _handle_fetch_url(args: Dict) -> Dict:
-    """HTTP GET 获取网页/API数据"""
+    """HTTP GET 获取网页/API数据（纯asyncio，不创建线程）"""
     url = args.get("url", ""); ml = args.get("max_length", 80000)
     if not url: return {"result": {"content": [{"text": "需要 url 参数"}]}}
-    import asyncio, ssl, urllib.request
+    import ssl
     from urllib.parse import urlparse, urlunparse, quote
     try:
         url.encode("ascii")
@@ -335,12 +399,12 @@ async def _handle_fetch_url(args: Dict) -> Dict:
                     else: parts.append(part)
                 q = "&".join(parts)
         url = urlunparse((parsed.scheme, parsed.netloc, path, parsed.params, q, parsed.fragment))
-    loop = asyncio.get_running_loop()
-    ctx = ssl.create_default_context(); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+
+    # 使用 asyncio 原生 HTTP 请求（不创建线程）
     try:
-        resp = await loop.run_in_executor(None, lambda: urllib.request.urlopen(req, context=ctx, timeout=15))
-        data = resp.read().decode("utf-8", errors="replace"); text = data[:ml]
+        text = await _http_get(url, timeout=10)
+    except asyncio.TimeoutError:
+        return {"result": {"content": [{"text": "请求超时(10s)"}]}}
     except Exception as e:
         return {"result": {"content": [{"text": f"请求失败: {e}"}]}}
     je = None
@@ -483,21 +547,13 @@ async def _handle_search(args: Dict) -> Dict:
         f"https://cn.bing.com/search?q={encoded}&count=10",
     ]
     tasks = [asyncio.create_task(_try_one(u)) for u in urls]
-    done, pending = await asyncio.wait(tasks, timeout=10.0, return_when=asyncio.FIRST_COMPLETED)
+    done, pending = await asyncio.wait(tasks, timeout=8.0, return_when=asyncio.FIRST_COMPLETED)
     for p in pending: p.cancel()
     for task in done:
         text = task.result()
         if text:
             return {"result": {"content": [{"text": text}]}}
-    for task in tasks:
-        if task not in done:
-            try:
-                text = await asyncio.wait_for(task, timeout=5.0)
-                if text:
-                    return {"result": {"content": [{"text": text}]}}
-            except BaseException:
-                pass
-    # 所有并发搜索都为空时，等待0.5秒后重试Bing一次
+    # 所有并发搜索都为空时
     await asyncio.sleep(0.5)
     try:
         text = await asyncio.wait_for(
