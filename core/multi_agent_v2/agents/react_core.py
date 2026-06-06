@@ -26,29 +26,32 @@ class ReActCoreMiddleware(BaseMiddleware):
     """ReAct 核心循环：LLM 自主决定调工具还是直接回答"""
 
     async def on_start(self, ctx: RunContext) -> None:
-        """on_start 时获取工具定义"""
+        """on_start 时获取工具定义
+
+        内置工具：无耗时，立刻可用。
+        MCP 工具：20+ 子进程逐个连(每5s超时)，独立超时控制。
+        超时不影响 LLM 对话（无工具也能正常回答）。
+        """
+        from core.multi_agent_v2.tools.tool_registry import get_tool_registry
+        reg = get_tool_registry()
         try:
-            from core.multi_agent_v2.tools.tool_registry import get_tool_registry
-            reg = get_tool_registry()
-            if not reg._initialized:
-                try:
-                    await asyncio.wait_for(reg.discover_all(), timeout=10)
-                except asyncio.TimeoutError:
-                    logger.warning("MCP 连接超时（10s），仅使用内置工具")
-            raw = await reg.get_tools_for_task(ctx.task_description, max_tools=20)
-            # 暴露所有工具给 LLM（内置 + 已连接的 MCP 工具）
-            # MCP 工具通过 Server 字段路由到对应的 MCP 服务器
+            # 内置工具立即到位（无网络/子进程）
+            await asyncio.wait_for(reg.discover_all(), timeout=1)
+        except asyncio.TimeoutError:
+            logger.warning("工具发现超时")
+        except Exception as e:
+            logger.debug("工具发现失败: %s", e)
+        try:
+            raw = list(reg._tools.values()) if reg._tools else []
             ctx.tool_defs = [
                 {"type":"function","function":{"name":t.name,"description":t.description,"parameters":t.parameters},
                  "_server":t.server,"_tool_name":t.tool_name}
-                for t in raw
+                for t in raw[:20]
             ]
             n_builtin = sum(1 for t in raw if t.server == "__builtin__")
-            n_mcp = sum(1 for t in raw if t.server not in ("__builtin__", ""))
-            logger.info(f"暴露 {len(ctx.tool_defs)} 个工具 ({n_builtin} 内置 + {n_mcp} MCP)")
+            logger.info(f"暴露 {len(ctx.tool_defs)} 个工具 ({n_builtin} 内置 + {len(raw)-n_builtin} MCP)")
         except Exception as e:
-            logger.debug("获取工具定义失败: %s", e)
-            ctx.tool_defs = []
+            logger.debug("获取工具列表失败: %s", e)
 
     async def on_think_start(self, ctx: RunContext) -> None:
         """每轮 LLM 调用 — 通过 chain.on_wrap_model_call 走洋葱包裹"""
