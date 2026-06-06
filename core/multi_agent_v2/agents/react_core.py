@@ -88,6 +88,9 @@ class ReActCoreMiddleware(BaseMiddleware):
                     "content": json.dumps(r.get("result", {"error": "无结果"}))[:3000],
                 })
 
+        # ── 实时反馈：显示 LLM 正在思考 ──
+        print(f"    \033[2m🤔 LLM 思考中 ({ctx.react_depth}/{effective_max})...\033[0m")
+
         async def _llm_call():
             return await asyncio.wait_for(
                 router.chat(ctx._pending_messages, temperature=0.3, max_tokens=2000,
@@ -143,6 +146,10 @@ class ReActCoreMiddleware(BaseMiddleware):
             ctx.final_answer = text
             ctx.interrupted = True
             return
+
+        # ── 实时反馈：显示正在调用的工具 ──
+        tool_names = [tc.get("function", {}).get("name", "?") for tc in tool_calls]
+        print(f"    \033[2m🔧 调用工具: {', '.join(tool_names)}\033[0m")
 
         # 并行执行所有工具调用，按原始顺序收集结果
         results = await self._execute_tool_calls_parallel(tool_calls, ctx)
@@ -447,6 +454,8 @@ async def run_react(task_description: str, max_rounds: int = 0) -> dict:
         logger.info(f"🔄 计划模式启动: {len(plan_state.steps)} 步, 上限 {effective_max} 轮")
 
     while not ctx.interrupted and ctx.react_depth < effective_max:
+        # ── 实时进度显示 ──
+        print(f"    \033[2m⏳ 第 {ctx.react_depth + 1}/{effective_max} 轮...\033[0m")
         await chain.on_think_start(ctx)
         await chain.on_think_end(ctx)
         await chain.on_tool_end(ctx)  # 触发 KEPA/反思/置信度中间件

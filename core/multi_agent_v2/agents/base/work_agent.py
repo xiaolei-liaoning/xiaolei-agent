@@ -188,13 +188,13 @@ class WorkAgent(BaseAgent):
         """
         logger.info(f"WorkAgent [轻量] 执行任务: {task.task_id} ({task.type})")
         start = time.time()
+        desc = task.description
 
         # 启动总线监听
         await self._start_bus_listener()
 
         try:
             # ── 简单对话检测：30字以内且不含工具关键词 → 直接LLM调用 ──
-            desc = task.description
             _TOOL_KW = ["搜索","查找","写","创建","生成","分析","报告","爬",
                         "保存","文件","数据","代码","游戏","脚本","curl","fetch",
                         "http","api","百度","谷歌","翻译"]
@@ -203,6 +203,7 @@ class WorkAgent(BaseAgent):
                 from core.engine.llm_backend import get_llm_router
                 router = get_llm_router()
                 if router and router.is_available():
+                    print(f"    \033[2m🤔 思考中...\033[0m")
                     resp = await router.chat([{"role": "user", "content": desc}])
                     answer = str(resp) if resp else ""
                     elapsed = time.time() - start
@@ -213,7 +214,8 @@ class WorkAgent(BaseAgent):
                         metadata={"light_mode": True, "direct_reply": True},
                     )
 
-            # 走 ReActCore 快路径（复杂任务才走中间件链）
+            # ── 复杂任务：走 ReActCore 中间件链 ──
+            print(f"    \033[2m⏳ 加载工具中...\033[0m")
             from core.multi_agent_v2.agents.react_core import run_react
             result = await run_react(
                 desc,
