@@ -137,6 +137,15 @@ class ReActCoreMiddleware(BaseMiddleware):
         if not tool_calls:
             text = reply.strip()
 
+            # 检测 LLM mock/fallback 响应，不当作最终答案
+            _MOCK_SIGNATURES = ["系统正在处理您的请求", "系统已就绪", "已收到请求：", "[LLM_MOCK]"]
+            is_mock = any(sig in text for sig in _MOCK_SIGNATURES)
+            if is_mock:
+                logger.warning("检测到LLM mock/fallback响应，跳过此轮")
+                # 注入重试提示
+                ctx.task_description += "\n[注意] 上轮LLM返回了空响应，请重新尝试。注意不要调用不存在的工具。"
+                return
+
             # 计划模式检测：如果 LLM 只输出计划文本但没有工具调用，
             # 不要当最终答案处理 — 将文本作为 assistant 消息继续
             plan_state = getattr(ctx, "plan_state", None)
@@ -477,6 +486,9 @@ async def run_react(task_description: str, max_rounds: int = 0) -> dict:
     while not ctx.interrupted and ctx.react_depth < effective_max:
         # ── 实时进度显示 ──
         print(f"    \033[2m⏳ 第 {ctx.react_depth + 1}/{effective_max} 轮...\033[0m")
+        # 最后一轮：告诉LLM直接输出答案
+        if ctx.react_depth == effective_max - 1:
+            ctx.task_description += "\n\n[最后轮次] 这是最后一轮。请直接输出最终答案，不要再调用工具。如果已通过工具获取到数据，直接总结输出。"
         await chain.on_think_start(ctx)
         await chain.on_think_end(ctx)
         await chain.on_tool_end(ctx)  # 触发 KEPA/反思/置信度中间件

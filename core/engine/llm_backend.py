@@ -288,7 +288,7 @@ class GLMBackend:
                     return content or ""
 
         logger.warning("所有 LLM API 不可用，使用模拟响应")
-        return "系统正在处理您的请求..."
+        return "[LLM_MOCK] 系统正在处理您的请求..."
 
     async def chat_stream(self, messages, temperature=0.7, max_tokens=2000,
                           model=None) -> AsyncIterator[str]:

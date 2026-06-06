@@ -495,12 +495,134 @@ async def _handle_file(args: Dict) -> Dict:
     return {"result":{"content":[{"text":"file 需要 action=read|write"}]}}
 
 
+async def _handle_hot_search(query: str) -> Optional[Dict]:
+    """处理热榜/热搜查询 — 调用多个公开数据源
+
+    不依赖搜索引擎结果页（SPA问题），直接调用公开API。
+    """
+    from urllib.parse import quote
+
+    async def _try_json(url: str, parser=None) -> Optional[str]:
+        """获取JSON数据并用parser提取文本"""
+        try:
+            text = await _http_get(url, timeout=8)
+            if not text:
+                return None
+            if parser:
+                return parser(text)
+            # 默认：返回JSON的格式化文本
+            try:
+                data = json.loads(text)
+                formatted = json.dumps(data, ensure_ascii=False, indent=2)
+                if len(formatted) > 300:
+                    return formatted[:5000]
+                return formatted
+            except json.JSONDecodeError:
+                return text[:3000]
+        except Exception:
+            return None
+
+    sources = []
+
+    # 1. Zhihu hot list (public API, no auth needed)
+    async def _zhihu():
+        data = await _try_json("https://www.zhihu.com/api/v3/feed/topstory/hot-lists?limit=10",
+            parser=lambda t: _format_hot_list(t, "知乎热搜"))
+        if data:
+            sources.append(data)
+    asyncio.create_task(_zhihu())
+
+    # 2. Weibo hot search (public mirror API)
+    async def _weibo():
+        data = await _try_json("https://tenapi.cn/v2/weibohot",
+            parser=lambda t: _format_hot_list(t, "微博热搜"))
+        if data:
+            sources.append(data)
+    asyncio.create_task(_weibo())
+
+    # 3. Douyin hot (public mirror API)
+    async def _douyin():
+        data = await _try_json("https://tenapi.cn/v2/douyinhot",
+            parser=lambda t: _format_hot_list(t, "抖音热榜"))
+        if data:
+            sources.append(data)
+    asyncio.create_task(_douyin())
+
+    # 4. Baidu hot search (via alternative API)
+    async def _baidu():
+        data = await _try_json("https://top.baidu.com/api/board?tab=realtime",
+            parser=lambda t: _format_hot_list(t, "百度热搜"))
+        if data:
+            sources.append(data)
+    asyncio.create_task(_baidu())
+
+    # 等待至少一个源返回（5s超时）
+    await asyncio.sleep(1.5)
+
+    if sources:
+        combined = "\n\n".join(sources[:3])
+        return {"result": {"content": [{"text": f"获取到热门数据：\n\n{combined}"}]}}
+    return None
+
+
+def _format_hot_list(json_text: str, source_name: str) -> Optional[str]:
+    """从可能的JSON格式中提取热榜列表"""
+    try:
+        data = json.loads(json_text)
+        items = []
+
+        # 尝试多种JSON结构
+        # 格式1: {data: {list: [{title:..., ...}]}}
+        for d in [data]:
+            entries = []
+            # 递归搜索list/items/data数组
+            def _find_list(obj, depth=0):
+                if depth > 3: return []
+                if isinstance(obj, dict):
+                    if 'list' in obj and isinstance(obj['list'], list):
+                        return obj['list']
+                    for v in obj.values():
+                        r = _find_list(v, depth+1)
+                        if r: return r
+                if isinstance(obj, list):
+                    return obj
+                return []
+            entries = _find_list(data)
+
+            if not entries and isinstance(data, list):
+                entries = data
+
+            for e in entries[:15]:
+                if isinstance(e, dict):
+                    title = e.get('title', e.get('name', e.get('word', e.get('content', ''))))
+                    hot = e.get('hot', e.get('hotScore', e.get('heat', e.get('count', ''))))
+                    desc = e.get('desc', e.get('description', ''))
+                    if isinstance(title, str) and title:
+                        line = title[:60]
+                        if hot: line += f" (热度:{hot})"
+                        if desc and isinstance(desc, str): line += f" — {desc[:50]}"
+                        items.append(line)
+
+        if items:
+            return f"【{source_name}】\n" + "\n".join(items[:10])
+        return None
+    except Exception:
+        return None
+
+
 async def _handle_search(args: Dict) -> Dict:
-    """联网搜索 — 并发尝试多个搜索引擎"""
+    """联网搜索 — 并发尝试多个搜索引擎 + 热门数据直连"""
     query = args.get("query", "")
     if not query: return {"result": {"content": [{"text": "需要 query 参数"}]}}
     from urllib.parse import quote
     encoded = quote(query)
+
+    # ── 热榜/热搜检测：直接调用公开数据源 ──
+    is_hot = '热搜' in query or '热榜' in query or 'trending' in query.lower()
+    if is_hot:
+        hot_results = await _handle_hot_search(query)
+        if hot_results:
+            return hot_results
 
     async def _try_one(url: str) -> str:
         try:
@@ -545,6 +667,7 @@ async def _handle_search(args: Dict) -> Dict:
 
     urls = [
         f"https://cn.bing.com/search?q={encoded}&count=10",
+        f"https://www.google.com/search?q={encoded}&num=10",
     ]
     tasks = [asyncio.create_task(_try_one(u)) for u in urls]
     done, pending = await asyncio.wait(tasks, timeout=8.0, return_when=asyncio.FIRST_COMPLETED)
@@ -553,7 +676,7 @@ async def _handle_search(args: Dict) -> Dict:
         text = task.result()
         if text:
             return {"result": {"content": [{"text": text}]}}
-    # 所有并发搜索都为空时
+    # 都失败时用重试
     await asyncio.sleep(0.5)
     try:
         text = await asyncio.wait_for(
