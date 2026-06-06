@@ -13,7 +13,7 @@ import json
 import logging
 from typing import Optional
 
-from .middleware import HookResult, RunContext, BaseMiddleware, MiddlewareChain
+from .middleware import RunContext, BaseMiddleware, MiddlewareChain
 from .plan_tracker import PlanState, StepRecord, parse_plan_from_llm, PLAN_CREATION_PROMPT
 
 logger = logging.getLogger(__name__)
@@ -403,16 +403,12 @@ def build_default_chain() -> MiddlewareChain:
         ConfidenceMiddleware, ReflectionMiddleware,
         KEPAMiddleware, BranchMiddleware,
         DataPipelineMiddleware, AskUserMiddleware,
-        ReflectionCheckMiddleware,
-        ToolCorrectionMiddleware,
     )
     chain.add(ProfileMiddleware())       # 任务画像
     chain.add(DynamicStageRoutingMiddleware())  # ⭐ 阶段流水线
     chain.add(PlanAwareMiddleware())     # ⭐ 计划感知 — 先列计划，追踪进度
     chain.add(ReActDepthMiddleware())    # 深度控制
-    chain.add(ToolCorrectionMiddleware())# ⭐ 工具纠错 — 检测空结果，建议换工具
     chain.add(ReActCoreMiddleware())     # ReAct 核心循环
-    chain.add(ReflectionCheckMiddleware())  # ⭐ 反思检查 — 替代主循环硬编码
     chain.add(DataPipelineMiddleware())  # ⭐ 数据流水线
     chain.add(ConfidenceMiddleware())    # 置信度评估
     chain.add(ReflectionMiddleware())    # 执行反思
@@ -451,48 +447,32 @@ async def run_react(task_description: str, max_rounds: int = 0) -> dict:
         logger.info(f"🔄 计划模式启动: {len(plan_state.steps)} 步, 上限 {effective_max} 轮")
 
     while not ctx.interrupted and ctx.react_depth < effective_max:
-        # on_think_start: 跳转处理
-        hr_start = await chain.on_think_start(ctx)
-        if hr_start.jump_to == "end":
-            if hr_start.reason:
-                ctx.last_error = hr_start.reason
-                logger.warning(f"中间件终止: {hr_start.reason}")
+        await chain.on_think_start(ctx)
+        await chain.on_think_end(ctx)
+        await chain.on_tool_end(ctx)  # 触发 KEPA/反思/置信度中间件
+        # 检测反思反馈：工具全部失败且无产出时提前中断，防止空转
+        if ctx.profile.get("reflection_feedback") and not ctx.final_answer:
             ctx.interrupted = True
-            break
-        elif hr_start.jump_to == "retry":
-            ctx.task_description += f"\n[决策] {hr_start.reason} 重试。"
-            logger.info(f"中间件决策: {hr_start.reason}")
-            # 不让它空转，继续执行
+            logger.warning("检测到反思反馈且无产出，提前终止空转")
+        # 消费中间件决策信号
+        while ctx.decisions:
+            d = ctx.decisions.pop(0)
+            if d.get("action") == "retry" and not ctx.interrupted:
+                ctx.task_description += f"\n[决策] {d.get('reason','')} 重试。"
+                logger.info(f"中间件决策: {d.get('reason','')}")
+            elif d.get("action") == "abort":
+                ctx.interrupted = True
+                ctx.last_error = d.get("reason", "中间件终止执行")
+                logger.warning(f"中间件终止: {d.get('reason','')}")
 
-        if ctx.interrupted:
-            break
-
-        hr_end = await chain.on_think_end(ctx)
-        if hr_end.jump_to == "end":
-            if hr_end.reason:
-                ctx.last_error = hr_end.reason
-                logger.warning(f"中间件终止: {hr_end.reason}")
-            ctx.interrupted = True
-            break
-        elif hr_end.jump_to == "retry":
-            ctx.task_description += f"\n[决策] {hr_end.reason} 重试。"
-            logger.info(f"中间件决策: {hr_end.reason}")
-
-        if ctx.interrupted:
-            break
-
-        # on_tool_end: 跳转处理
-        hr_tool = await chain.on_tool_end(ctx)
-        if hr_tool.jump_to == "end":
-            if hr_tool.reason:
-                ctx.last_error = hr_tool.reason
-                logger.warning(f"中间件终止: {hr_tool.reason}")
-            ctx.interrupted = True
-            break
-        elif hr_tool.jump_to == "retry":
-            ctx.task_description += f"\n[决策] {hr_tool.reason} 重试。"
-            logger.info(f"中间件决策: {hr_tool.reason}")
-
+        # 检查反思历史：如果连续2轮都失败且有反思记录，将失败信息注入下一轮提示
+        if ctx.reflection_history and not ctx.final_answer:
+            last_ref = ctx.reflection_history[-1]
+            if last_ref.get("success_rate", 1) == 0 and last_ref.get("total_calls", 0) > 0:
+                # 在下一轮 task_description 注入提示
+                if not ctx.task_description.endswith("[反思]"):
+                    ctx.task_description += "\n[反思] 上一轮全部失败，请换一种方法（换工具或直接回答）。"
+                    logger.info("已注入反思提示到下一轮")
     await chain.on_finish(ctx)
     # 如果没设 final_answer 但有成功工具调用，用最后工具结果当 answer
     if not ctx.final_answer and ctx.tool_results:

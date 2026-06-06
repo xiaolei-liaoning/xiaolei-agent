@@ -1619,7 +1619,7 @@ class EnhancedCLI:
         trace.enabled = True
         trace.start(request[:80])
 
-        agent = WorkAgent()
+        agent = WorkAgent(light_mode=True)
         task = Task(task_id=uuid.uuid4().hex[:8], type="general", description=request)
 
         try:

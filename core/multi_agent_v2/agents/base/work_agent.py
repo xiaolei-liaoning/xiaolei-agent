@@ -198,12 +198,11 @@ class WorkAgent(BaseAgent):
             result = await run_react(
                 task.description,
                 max_rounds=2 if self._light_mode else 10,
-                task_id=task.task_id,
             )
 
             elapsed = time.time() - start
             success = result.get("success", False)
-            output = result.get("output", "")
+            output = result.get("answer", "")
             error = result.get("error", "")
 
             ar = ActionResult(
