@@ -1022,9 +1022,29 @@ class EnhancedCLI:
         """
         from cli.colors import CLAUDE, log_status, print_error, print_success
         from cli.animated_spinner import print_section
+        from cli.orch_progress import OrchestrationProgressDisplay
         import re
 
         print_section("🕸️  动态编排 - JS Workflow")
+
+        # ── 编排进度显示 ──
+        display = OrchestrationProgressDisplay()
+        display.set_workflow_name(task[:60])
+        display.set_phases(["Research", "Synthesis"])
+
+        from cli.colors import _console
+        from rich.panel import Panel
+        _console.print()
+        _console.print(Panel(
+            "[bold]Phase Plan:[/bold]\n"
+            "  [dim]1.[/dim] Research  — 并行执行子任务分析\n"
+            "  [dim]2.[/dim] Synthesis — 汇总各子任务结果\n"
+            f"\n[dim]Workflow: {task[:100]}[/dim]",
+            title="📋 编排计划",
+            border_style="rgb(215,119,87)",
+            padding=(1, 2),
+        ))
+        _console.print()
 
         try:
             from core.engine.llm_backend import get_llm_router
@@ -1058,6 +1078,8 @@ class EnhancedCLI:
                 print(text[:2000] if len(text) > 2000 else text)
             else:
                 log_status("无返回结果", color="red")
+
+            display.finish()
 
         except (ValueError, Exception) as e:
             log_status(f"JS 编排受阻 ({str(e)[:80]})，走简单并行", color="yellow")

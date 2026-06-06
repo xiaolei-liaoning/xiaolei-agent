@@ -19,7 +19,7 @@ import logging
 import os
 import re
 import tempfile
-from typing import Any
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -342,10 +342,23 @@ async def _handle_agent_call(proc, msg: dict):
     label = opts.get("label", prompt[:40])
     timeout = opts.get("timeout", 120)
 
-    from core.multi_agent_v2.orchestration.orchestrator import _execute_agent
+    from core.multi_agent_v2.orchestration.orchestrator import _execute_agent, _current_display
+
+    # ── Display: 注册 Agent 到 TUI ──
+    display_aid: Optional[str] = None
+    if _current_display is not None:
+        display_aid = _current_display.add_agent("", label, timeout=timeout)
+        _current_display.start_agent(display_aid)
 
     try:
         ar = await _execute_agent(prompt, label, timeout, opts)
+
+        if _current_display is not None and display_aid is not None:
+            if ar.success:
+                _current_display.complete_agent(display_aid, ar)
+            else:
+                _current_display.fail_agent(display_aid, ar.error or "")
+
         reply = {
             "type": "agent_result",
             "id": call_id,
@@ -356,6 +369,8 @@ async def _handle_agent_call(proc, msg: dict):
             "label": ar.label,
         }
     except Exception as e:
+        if _current_display is not None and display_aid is not None:
+            _current_display.fail_agent(display_aid, str(e)[:30])
         reply = {"type": "agent_result", "id": call_id, "success": False, "error": str(e)}
 
     try:

@@ -27,5 +27,5 @@ asyncio_default_test_loop_scope = "function"
 profile = "black"
 multi_line_output = 3
 line_length = 88
-known_first_party = ["core", "skills", "tools"]
+known_first_party = ["core", "skills", "tools", "infrastructure"]
 skip = [".venv", "__pycache__", "build", "dist"]

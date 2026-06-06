@@ -15,6 +15,7 @@ Orchestrator — 多Agent 编排引擎
 """
 
 import asyncio
+import contextvars
 import hashlib
 import json
 import logging
@@ -24,6 +25,14 @@ import traceback
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, TypeVar
+
+# ── Worktree 隔离依赖 ──────────────────────────────────────────────
+from infrastructure.worktree_manager import WorktreeManager
+
+_worktree_manager: Optional[WorktreeManager] = None
+_isolation_mode: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "orchestrator_isolation", default="none"
+)
 
 logger = logging.getLogger(__name__)
 
@@ -254,6 +263,9 @@ class RunContext:
 _current_ctx: Optional[RunContext] = None
 _current_budget: Any = None
 
+# 编排进度 TUI 显示（可选，None = 无 TUI 静默执行）
+_current_display: Any = None
+
 
 # ═══════════════════════════════════════════════════════════════════
 # 编排 API
@@ -278,6 +290,7 @@ def log(message: str) -> None:
 async def agent(
     prompt: str,
     opts: Optional[Dict] = None,
+    isolation: str = "none",
 ) -> AgentResult:
     """启动一个子 Agent 执行子任务。
 
@@ -301,6 +314,9 @@ async def agent(
             schema:    JSON Schema dict（输出会校验为结构化数据）
             model:     LLM 模型名（如 "sonnet", "opus"）
             force_recompute: True 则绕过缓存
+        isolation: 工作目录隔离模式。可选值:
+            - "none"   : 无隔离（默认），Agent 在主仓库中运行
+            - "worktree" : 每个 Agent 在独立的 git worktree 中运行
 
     Returns:
         AgentResult
@@ -310,12 +326,36 @@ async def agent(
     label = opts.get("label", prompt[:40])
     timeout = opts.get("timeout", 120)
 
+    # 解析 isolation: 显式参数 > opts 内 > 上下文变量
+    actual_isolation = isolation
+    if actual_isolation == "none" and "isolation" in opts:
+        actual_isolation = opts["isolation"]
+    if actual_isolation == "none":
+        actual_isolation = _isolation_mode.get()
+
+    # ── Display: 注册 Agent 到 TUI ──
+    display = _current_display
+    display_aid: Optional[str] = None
+    if display is not None:
+        phase_name = ctx.phases[-1] if ctx and ctx.phases else ""
+        display_aid = display.add_agent(phase_name, label, timeout=timeout)
+        display.start_agent(display_aid)
+
     # 无运行上下文时（独立调用），不缓存不预算
     if ctx is None:
-        return await _execute_agent(prompt, label, timeout, opts)
+        ar = await _execute_agent(prompt, label, timeout, opts,
+                                   isolation=actual_isolation)
+        if display is not None and display_aid is not None:
+            if ar.success:
+                display.complete_agent(display_aid, ar)
+            else:
+                display.fail_agent(display_aid, ar.error or "")
+        return ar
 
     # ── 上限保护 ──
     if ctx._agent_count >= _MAX_AGENT_CALLS:
+        if display is not None and display_aid is not None:
+            display.fail_agent(display_aid, "超上限")
         raise RuntimeError(
             f"Agent 调用数已达上限 ({_MAX_AGENT_CALLS})，"
             f"请检查是否出现失控循环"
@@ -328,6 +368,8 @@ async def agent(
     est_tokens = max(len(prompt) * 2, 2000)
     if ctx.remaining_budget < est_tokens:
         _print(f"    \033[33m⚠️ 预算不足，跳过 {label}\033[0m")
+        if display is not None and display_aid is not None:
+            display.fail_agent(display_aid, "预算不足")
         return AgentResult(success=False, error="预算不足", label=label)
 
     # ── Resume 缓存 ──
@@ -342,6 +384,8 @@ async def agent(
         if cached:
             _print(f"    \033[36m♻️ [{ctx._agent_count}] {label} (缓存命中)\033[0m")
             ctx._budget_spent += est_tokens
+            if display is not None and display_aid is not None:
+                display.complete_agent(display_aid, cached)
             return AgentResult(
                 success=cached.get("success", False),
                 output=cached.get("output"),
@@ -358,7 +402,16 @@ async def agent(
     })
     _print(f"    \033[34m🚀 [{ctx._agent_count}] {label}\033[0m")
 
-    ar = await _execute_agent(prompt, label, timeout, opts)
+    ar = await _execute_agent(prompt, label, timeout, opts,
+                              isolation=actual_isolation)
+
+    # ── Display: 标记完成/失败 ──
+    if display is not None and display_aid is not None:
+        if ar.success:
+            display.complete_agent(display_aid, ar)
+        else:
+            display.fail_agent(display_aid, ar.error or "")
+
     ctx._budget_spent += est_tokens
 
     # 写入缓存（成功的结果）
@@ -379,8 +432,13 @@ async def _execute_agent(
     label: str,
     timeout: int,
     opts: Dict,
+    isolation: str = "none",
 ) -> AgentResult:
-    """核心：从池借 Agent → 执行 → 归还"""
+    """核心：从池借 Agent → 执行 → 归还
+
+    Args:
+        isolation: "none" (默认) 或 "worktree"
+    """
     from core.multi_agent_v2.agents.base.work_agent import WorkAgent as _WA
     from core.multi_agent_v2.agents.base.models import Task
 
@@ -402,7 +460,15 @@ async def _execute_agent(
 
     try:
         start = time.time()
-        result = await asyncio.wait_for(pool_agent.execute(task), timeout=timeout)
+
+        # ── Worktree 隔离执行 ────────────────────────────────────────
+        if isolation == "worktree":
+            result = await _execute_in_worktree(pool_agent, task, timeout, label)
+        else:
+            result = await asyncio.wait_for(
+                pool_agent.execute(task), timeout=timeout
+            )
+
         elapsed = time.time() - start
 
         ar = AgentResult(
@@ -439,15 +505,54 @@ async def _execute_agent(
         _agent_pool.release(pool_agent)
 
 
+async def _execute_in_worktree(
+    agent: Any,
+    task: Any,
+    timeout: int,
+    label: str,
+) -> Any:
+    """在隔离的 git worktree 中执行 agent。
+
+    1. 分配 worktree（自动 stash 未提交变更）
+    2. cd 进 worktree
+    3. 执行 agent
+    4. cd 回原目录
+    5. 释放 worktree（即使异常也释放）
+    """
+    global _worktree_manager
+    if _worktree_manager is None:
+        _worktree_manager = WorktreeManager()
+
+    wt_agent_id = f"wt_{label[:8]}_{uuid.uuid4().hex[:8]}"
+    path = await _worktree_manager.allocate(wt_agent_id)
+    old_cwd = os.getcwd()
+
+    try:
+        os.chdir(path)
+        _print(f"    \033[2m📂 Worktree: {path}\033[0m")
+        return await asyncio.wait_for(agent.execute(task), timeout=timeout)
+    except Exception:
+        # 让外层 _execute_agent 的 except 处理
+        raise
+    finally:
+        os.chdir(old_cwd)
+        await _worktree_manager.release(wt_agent_id)
+
+
 async def parallel(
     thunks: List[Callable[[], Any]],
     max_concurrent: int = 4,
+    isolation: str = "none",
 ) -> List[AgentResult]:
     """并发执行多个子 Agent。
+
+    支持 isolation 传播：所有在此 parallel 块内的 agent()
+    调用继承 isolation 模式，除非显式覆盖。
 
     Args:
         thunks: 异步函数列表，每个应调 agent(...) 返回 AgentResult
         max_concurrent: 最大并发数
+        isolation: 工作目录隔离模式，传播给内部 agent() 调用
 
     Returns:
         所有 AgentResult 列表
@@ -455,6 +560,13 @@ async def parallel(
     n = len(thunks)
     if n == 0:
         return []
+
+    if isolation != "none":
+        tok = _isolation_mode.set(isolation)
+        try:
+            return await _run_parallel(thunks, max_concurrent)
+        finally:
+            _isolation_mode.reset(tok)
 
     if max_concurrent > 0 and max_concurrent < n:
         log(f"并行 {n} 个 Agent (并发 {max_concurrent})")
@@ -466,6 +578,22 @@ async def parallel(
         return results
 
     log(f"并行 {n} 个 Agent")
+    return await _run_parallel_batch(thunks)
+
+
+async def _run_parallel(
+    thunks: List[Callable[[], Any]],
+    max_concurrent: int,
+) -> List[AgentResult]:
+    """带 isolation 上下文运行的并行执行"""
+    n = len(thunks)
+    if max_concurrent > 0 and max_concurrent < n:
+        results = []
+        for i in range(0, n, max_concurrent):
+            batch = thunks[i:i + max_concurrent]
+            batch_rs = await _run_parallel_batch(batch)
+            results.extend(batch_rs)
+        return results
     return await _run_parallel_batch(thunks)
 
 
@@ -494,34 +622,43 @@ async def _run_safe(thunk: Callable) -> Any:
 async def pipeline(
     items: List[Any],
     *stages: Callable,
+    isolation: str = "none",
 ) -> List[Any]:
     """流水线：每个 item 独立流经所有 stage，无等待屏障。
 
     stage 签名: (prevResult, originalItem, index) -> newResult
+
+    支持 isolation 传播：在此 pipeline 内的 agent()
+    调用继承 isolation 模式，除非显式覆盖。
     """
     n_items = len(items)
     n_stages = len(stages)
     if n_items == 0 or n_stages == 0:
         return list(items)
 
-    log(f"流水线: {n_items} 个 × {n_stages} 个阶段")
+    tok = _isolation_mode.set(isolation) if isolation != "none" else None
+    try:
+        log(f"流水线: {n_items} 个 × {n_stages} 个阶段")
 
-    async def process_one(item, index):
-        current = item
-        for si, stage in enumerate(stages):
-            try:
-                r = stage(current, item, index)
-                current = await r if asyncio.iscoroutine(r) else r
-            except Exception as e:
-                logger.warning(f"pipeline #{index} stage {si}: {e}")
-                return None
-        return current
+        async def process_one(item, index):
+            current = item
+            for si, stage in enumerate(stages):
+                try:
+                    r = stage(current, item, index)
+                    current = await r if asyncio.iscoroutine(r) else r
+                except Exception as e:
+                    logger.warning(f"pipeline #{index} stage {si}: {e}")
+                    return None
+            return current
 
-    raw = await asyncio.gather(
-        *[process_one(item, i) for i, item in enumerate(items)],
-        return_exceptions=True,
-    )
-    return [r for r in raw if not isinstance(r, Exception)]
+        raw = await asyncio.gather(
+            *[process_one(item, i) for i, item in enumerate(items)],
+            return_exceptions=True,
+        )
+        return [r for r in raw if not isinstance(r, Exception)]
+    finally:
+        if tok is not None:
+            _isolation_mode.reset(tok)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -647,18 +784,25 @@ async def run_workflow_script(
     script_fn: Callable,
     *args,
     budget: Optional[int] = None,
+    _display=None,
     **kwargs,
 ) -> Any:
     """运行一个编排脚本函数
 
     脚本中可通过闭包访问:
       - budget: { total, spent(), remaining() }
+      - _display: 可选的编排进度 TUI 显示
     """
-    global _current_ctx
+    global _current_ctx, _current_display
     ctx = RunContext(budget=budget)
     ctx._start_time = time.time()
     prev = _current_ctx
     _current_ctx = ctx
+
+    # 保存/注入 display
+    prev_display = _current_display
+    if _display is not None:
+        _current_display = _display
 
     # 暴露 budget 对象给编排脚本（脚本通过闭包访问）
     budget_obj = type("budget", (), {
@@ -688,6 +832,7 @@ async def run_workflow_script(
         raise
     finally:
         _current_ctx = prev
+        _current_display = prev_display
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -725,11 +870,18 @@ def get_budget() -> Any:
     return _current_budget
 
 
+def set_display(display) -> None:
+    """设置编排进度 TUI 显示实例（enhanced_cli.py 入口调用）"""
+    global _current_display
+    _current_display = display
+
+
 def reset() -> None:
     """重置全局状态"""
-    global _current_ctx, _current_budget
+    global _current_ctx, _current_budget, _current_display
     _current_ctx = None
     _current_budget = None
+    _current_display = None
 
 
 __all__ = [
@@ -740,4 +892,5 @@ __all__ = [
     "get_workflow", "list_workflows", "run_workflow",
     "call_workflow", "get_budget",
     "run_workflow_script", "reset",
+    "set_display",
 ]

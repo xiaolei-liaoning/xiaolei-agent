@@ -19,8 +19,6 @@ from typing import Any, Callable, Dict, List, Optional, Set
 from collections import defaultdict
 import uuid
 
-import asyncio
-
 logger = logging.getLogger(__name__)
 
 # ── 持久化快照存储（MySQL 同步） ─────────────────────────────
@@ -29,6 +27,8 @@ try:
     _snapshot_store = get_snapshot_store()
 except Exception:
     _snapshot_store = None
+
+from ...infrastructure.shared_bus import get_shared_bus, Message as SharedMessage, MessageType as SharedMessageType
 
 
 class TaskState(Enum):
@@ -108,65 +108,8 @@ class Event:
     trace_id: Optional[str] = None
 
 
-@dataclass
-class Message:
-    """消息"""
-    message_id: str
-    from_agent: str
-    to_agent: Optional[str]  # None表示广播
-    content: Any
-    message_type: str
-    timestamp: float = field(default_factory=time.time)
-    reply_to: Optional[str] = None
-
-
-class MessageBus:
-    """消息总线 - Agent间通信"""
-
-    def __init__(self):
-        self.queues: Dict[str, asyncio.Queue] = defaultdict(asyncio.Queue)
-        self.subscriptions: Dict[str, Set[str]] = defaultdict(set)
-        self.message_history: List[Message] = []
-
-    async def publish(self, message: Message) -> None:
-        """发布消息"""
-        self.message_history.append(message)
-
-        if message.to_agent:
-            # 点对点消息
-            queue = self.queues[message.to_agent]
-            await queue.put(message)
-        else:
-            # 广播消息
-            for agent_id in self.subscriptions.get(message.from_agent, set()):
-                queue = self.queues[agent_id]
-                await queue.put(message)
-
-        logger.debug(f"消息发布: {message.message_type} from {message.from_agent} to {message.to_agent or 'broadcast'}")
-
-    async def subscribe(self, agent_id: str, channels: Set[str]) -> None:
-        """订阅频道"""
-        for channel in channels:
-            self.subscriptions[channel].add(agent_id)
-
-    async def unsubscribe(self, agent_id: str, channels: Set[str]) -> None:
-        """取消订阅"""
-        for channel in channels:
-            self.subscriptions[channel].discard(agent_id)
-
-    async def receive(self, agent_id: str, timeout: Optional[float] = None) -> Optional[Message]:
-        """接收消息"""
-        queue = self.queues[agent_id]
-        try:
-            return await asyncio.wait_for(queue.get(), timeout)
-        except asyncio.TimeoutError:
-            return None
-
-    async def get_history(self, agent_id: Optional[str] = None, limit: int = 100) -> List[Message]:
-        """获取消息历史"""
-        if agent_id:
-            return [m for m in self.message_history[-limit:] if m.from_agent == agent_id or m.to_agent == agent_id]
-        return self.message_history[-limit:]
+# MessageBus 已迁移至 SharedBus (core.multi_agent_v2.infrastructure.shared_bus)
+# 旧代码中不再有 MessageBus / Message 类 —— 所有消息通信均通过 SharedBus 进行
 
 
 class EventSystem:
@@ -235,9 +178,7 @@ class GlobalContextCenter:
         # 共享上下文
         self.shared_contexts: Dict[str, SharedContext] = {}
 
-        # 消息总线
-        self.message_bus = MessageBus()
-
+        # 消息总线 — 使用 SharedBus（全局单例）
         # 事件系统
         self.event_system = EventSystem()
 
@@ -419,39 +360,58 @@ class GlobalContextCenter:
             return [a for a in self.agent_registry.values() if a.get("state") == state]
         return list(self.agent_registry.values())
 
-    async def publish_message(self, message: Message) -> None:
-        """发布消息"""
-        await self.message_bus.publish(message)
+    async def publish_message(self, message: object) -> None:
+        """发布消息 — 委托到 SharedBus"""
+        bus = get_shared_bus()
+        sm = SharedMessage(
+            type=SharedMessageType.AGENT_MESSAGE,
+            sender=getattr(message, "from_agent", "unknown"),
+            receiver=getattr(message, "to_agent", ""),
+            topic="agent:message",
+            payload={
+                "content": getattr(message, "content", ""),
+                "message_type": getattr(message, "message_type", "direct"),
+                "message_id": getattr(message, "message_id", ""),
+            },
+        )
+        to_agent = getattr(message, "to_agent", None)
+        if to_agent:
+            await bus.send_direct(to_agent, sm)
+        else:
+            await bus.publish(sm.topic, sm)
 
     async def send_message(self, from_agent: str, to_agent: str, content: Any, message_type: str = "direct") -> None:
-        """发送点对点消息"""
-        message = Message(
-            message_id=f"msg_{uuid.uuid4().hex[:8]}",
-            from_agent=from_agent,
-            to_agent=to_agent,
-            content=content,
-            message_type=message_type
+        """发送点对点消息 — 通过 SharedBus"""
+        bus = get_shared_bus()
+        sm = SharedMessage(
+            type=SharedMessageType.AGENT_MESSAGE,
+            sender=from_agent,
+            receiver=to_agent,
+            topic=f"agent:{to_agent}",
+            payload={"content": content, "message_type": message_type},
         )
-        await self.message_bus.publish(message)
+        await bus.send_direct(to_agent, sm)
 
     async def broadcast_message(self, from_agent: str, content: Any, message_type: str = "broadcast") -> None:
-        """广播消息"""
-        message = Message(
-            message_id=f"msg_{uuid.uuid4().hex[:8]}",
-            from_agent=from_agent,
-            to_agent=None,
-            content=content,
-            message_type=message_type
+        """广播消息 — 通过 SharedBus"""
+        bus = get_shared_bus()
+        sm = SharedMessage(
+            type=SharedMessageType.AGENT_MESSAGE,
+            sender=from_agent,
+            receiver="",
+            topic="broadcast",
+            payload={"content": content, "message_type": message_type},
         )
-        await self.message_bus.publish(message)
+        await bus.publish(sm.topic, sm)
 
     async def subscribe_to_messages(self, agent_id: str) -> None:
-        """订阅消息"""
-        await self.message_bus.subscribe(agent_id, {agent_id})
+        """订阅消息 — SharedBus 按需使用，无需在此注册"""
+        pass
 
-    async def receive_message(self, agent_id: str, timeout: Optional[float] = None) -> Optional[Message]:
-        """接收消息"""
-        return await self.message_bus.receive(agent_id, timeout)
+    async def receive_message(self, agent_id: str, timeout: Optional[float] = None) -> Optional[object]:
+        """接收消息 — 通过 SharedBus"""
+        bus = get_shared_bus()
+        return await bus.receive_direct(agent_id, timeout=timeout or 5.0)
 
     async def assign_subtask(self, task_id: str, subtask_id: str, agent_id: str) -> None:
         """分配子任务"""

@@ -14,10 +14,8 @@ from core.multi_agent_v2.orchestration.context.global_context_center import (
     TaskState,
     EventType,
     Event,
-    Message,
     TaskContext,
     SharedContext,
-    MessageBus,
     EventSystem,
 )
 
@@ -26,9 +24,10 @@ __all__ = [
     "TaskState",
     "EventType",
     "Event",
-    "Message",
     "TaskContext",
     "SharedContext",
-    "MessageBus",
     "EventSystem",
 ]
+
+# NOTE: MessageBus 和 Message 已迁移至 SharedBus
+# (core.multi_agent_v2.infrastructure.shared_bus)
