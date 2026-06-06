@@ -19,7 +19,7 @@ from .plan_tracker import PlanState, StepRecord, parse_plan_from_llm, PLAN_CREAT
 logger = logging.getLogger(__name__)
 
 _MAX_ROUNDS = 2
-_PLAN_ROUNDS = 12  # 计划模式下允许更多轮次
+_PLAN_ROUNDS = 5  # 计划模式下最多 5 轮（留1轮给最终文本输出）
 
 
 class ReActCoreMiddleware(BaseMiddleware):
@@ -303,7 +303,8 @@ class PlanAwareMiddleware(BaseMiddleware):
         plan_state = PlanState()
         ctx.plan_state = plan_state
 
-        # 调用 LLM 创建计划
+        # 调用 LLM 创建计划（可能耗时，先打提示）
+        print(f"    \033[2m📋 正在制定执行计划...\033[0m")
         try:
             from core.engine.llm_backend import get_llm_router
             router = get_llm_router()
@@ -505,12 +506,63 @@ async def run_react(task_description: str, max_rounds: int = 0) -> dict:
                     ctx.task_description += "\n[反思] 上一轮全部失败，请换一种方法（换工具或直接回答）。"
                     logger.info("已注入反思提示到下一轮")
     await chain.on_finish(ctx)
-    # 如果没设 final_answer 但有成功工具调用，用最后工具结果当 answer
+    # 如果没设 final_answer 但有成功的工具结果，让LLM总结
     if not ctx.final_answer and ctx.tool_results:
-        last = ctx.tool_results[-1]
-        text = str(last.get("result", last.get("error", "")))
-        if text and text != "None":
-            ctx.final_answer = text[:500]
+        # 提取所有工具输出的文本
+        outputs = []
+        for tr in ctx.tool_results:
+            tc = tr.get("tool_call", {})
+            name = tc.get("name", "?")
+            ok = tr.get("success", False)
+            raw = tr.get("result", "")
+            # 提取文本：支持嵌套 result.content[0].text 格式
+            txt = ""
+            if isinstance(raw, dict):
+                c = raw.get("content")
+                if isinstance(c, list) and c:
+                    txt = str(c[0].get("text", "")) if isinstance(c[0], dict) else str(c[0])
+                else:
+                    txt = str(raw)
+            else:
+                txt = str(raw)
+            txt = txt.strip()
+            if ok and txt and txt != "None" and txt != "(无输出)":
+                outputs.append(f"[{name}] {txt[:300]}")
+        if outputs:
+            summary = "\n\n".join(outputs[:3])
+            from core.engine.llm_backend import get_llm_router
+            router = get_llm_router()
+            try:
+                final_resp = await asyncio.wait_for(
+                    router.chat([{
+                        "role": "system",
+                        "content": "你是一个数据总结助手。基于工具执行结果，用简洁的中文给出总结回答。直接输出结果，不要输出JSON。"
+                    }, {
+                        "role": "user",
+                        "content": f"原始任务: {task_description}\n\n工具执行结果:\n{summary}\n\n请基于以上信息给出最终的总结回答。"
+                    }], temperature=0.3, max_tokens=2000),
+                    timeout=30
+                )
+                text = str(final_resp) if final_resp else ""
+                if text and text != "None" and len(text) > 20:
+                    ctx.final_answer = text
+            except Exception:
+                pass
+        # 兜底：取最后一个工具结果的文本
+        if not ctx.final_answer:
+            last = ctx.tool_results[-1]
+            raw = last.get("result", last.get("error", ""))
+            if isinstance(raw, dict):
+                c = raw.get("content")
+                if isinstance(c, list) and c:
+                    txt = str(c[0].get("text", "")) if isinstance(c[0], dict) else str(c[0])
+                    txt = txt.strip()
+                    if txt and txt != "None":
+                        ctx.final_answer = txt[:1000]
+            if not ctx.final_answer:
+                txt = str(raw)
+                if txt and txt != "None":
+                    ctx.final_answer = txt[:500]
     return {
         "success": bool(ctx.final_answer),
         "answer": ctx.final_answer,
