@@ -1,10 +1,9 @@
 """
-SharedBus — 统一消息总线 + 共享内存
+SharedBus — 统一消息总线
 
 职责：
 1. 消息通信：publish/subscribe/direct 三种模式
-2. 共享内存（只读）：任务上下文、最终结果
-3. Agent 间协调：任务完成通知、结果协商
+2. Agent 间协调：任务完成通知、结果协商
 
 合并了原有的 GlobalContextCenter（只保留数据）和 communication_center。
 """
@@ -16,7 +15,7 @@ import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, Optional, Set
 
 logger = logging.getLogger(__name__)
 
@@ -46,35 +45,26 @@ class Message:
     timestamp: float = field(default_factory=time.time)
 
 
-@dataclass
-class TaskSnapshot:
-    """任务快照 — 持久化用"""
-    task_id: str
-    original_request: str
-    status: str = "pending"
-    collaboration_mode: str = ""
-    assigned_agents: Dict[str, str] = field(default_factory=dict)
-    partial_results: Dict[str, Any] = field(default_factory=dict)
-    final_result: Optional[Any] = None
-    decision_log: List[Dict[str, Any]] = field(default_factory=list)
-    created_at: float = field(default_factory=time.time)
-    updated_at: float = field(default_factory=time.time)
-
-
 class SharedBus:
-    """共享总线 — 全局单例"""
+    """共享总线 — 全局单例
+
+    三大能力：
+    1. 消息通信（publish/subscribe/direct）
+    2. Agent 协调（任务通知）
+    3. 共享知识存储（跨 Agent 知识沉淀）
+    """
 
     def __init__(self):
         # 订阅表: topic -> set of callback refs
         self._subscriptions: Dict[str, Set[Callable]] = defaultdict(set)
         # 直接消息队列: receiver_id -> list of Message
         self._direct_queues: Dict[str, asyncio.Queue] = {}
-        # 共享内存（只读）
-        self._shared_context: Dict[str, Any] = {}
-        # 任务快照
-        self._task_snapshots: Dict[str, TaskSnapshot] = {}
         # 锁
         self._lock = asyncio.Lock()
+        # ── 共享知识存储（跨 Agent 知识沉淀）──
+        self._knowledge_store: Dict[str, Any] = {}
+        self._knowledge_tags: Dict[str, Set[str]] = defaultdict(set)
+        self._knowledge_meta: Dict[str, Dict] = {}
 
     # ─── 消息通信 ───────────────────────────────────────────
 
@@ -141,50 +131,72 @@ class SharedBus:
         except asyncio.TimeoutError:
             return None
 
-    # ─── 共享内存（只读） ──────────────────────────────────
+    # ─── 共享知识存储 ──────────────────────────────────────────
 
-    async def update_context(self, key: str, value: Any) -> None:
-        """更新共享上下文"""
+    async def store_knowledge(self, key: str, data: Any,
+                              tags: Optional[Set[str]] = None,
+                              source: str = "",
+                              summary: str = "") -> None:
+        """存储共享知识 — 供其他 Agent 查询使用
+
+        Args:
+            key: 知识键名（如 "search:百度热搜"、"analysis:数据摘要"）
+            data: 知识数据
+            tags: 标签集合，用于分类检索（如 {"search", "hot"}）
+            source: 来源 Agent ID
+            summary: 知识摘要（用于快速预览）
+        """
         async with self._lock:
-            self._shared_context[key] = value
+            self._knowledge_store[key] = data
+            if tags:
+                self._knowledge_tags[key] = tags
+            self._knowledge_meta[key] = {
+                "source": source,
+                "summary": summary or str(data)[:200],
+                "timestamp": time.time(),
+                "updated_at": time.time(),
+            }
+        logger.debug(f"SharedBus 知识已存储: {key} (tags={tags or 'none'})")
 
-    async def get_context(self, key: str, default: Any = None) -> Any:
-        """读取共享上下文"""
-        return self._shared_context.get(key, default)
-
-    async def get_all_context(self) -> Dict[str, Any]:
-        """读取全部共享上下文"""
-        return dict(self._shared_context)
-
-    # ─── 任务快照 ──────────────────────────────────────────
-
-    async def save_snapshot(self, snapshot: TaskSnapshot) -> None:
-        """保存任务快照"""
-        snapshot.updated_at = time.time()
+    async def get_knowledge(self, key: str) -> Optional[Any]:
+        """获取指定键名的共享知识"""
         async with self._lock:
-            self._task_snapshots[snapshot.task_id] = snapshot
+            return self._knowledge_store.get(key)
 
-    async def get_snapshot(self, task_id: str) -> Optional[TaskSnapshot]:
-        """获取任务快照"""
-        return self._task_snapshots.get(task_id)
-
-    async def append_decision(self, task_id: str, decision: Dict[str, Any]) -> None:
-        """追加决策日志"""
+    async def search_knowledge(self, tag: str) -> Dict[str, Any]:
+        """按标签搜索共享知识 — 返回所有匹配的知识"""
+        result = {}
         async with self._lock:
-            snap = self._task_snapshots.get(task_id)
-            if snap:
-                snap.decision_log.append({**decision, "timestamp": time.time()})
-                snap.updated_at = time.time()
+            for key, tags in self._knowledge_tags.items():
+                if tag in tags:
+                    result[key] = {
+                        "data": self._knowledge_store.get(key),
+                        "meta": self._knowledge_meta.get(key, {}),
+                    }
+        return result
 
-    async def list_active_tasks(self) -> List[str]:
-        """列出活跃任务ID"""
-        return [
-            tid for tid, snap in self._task_snapshots.items()
-            if snap.status in ("running", "scheduled")
-        ]
+    async def list_knowledge(self) -> Dict[str, Dict]:
+        """列出所有共享知识及元信息"""
+        async with self._lock:
+            return {
+                k: {
+                    "summary": self._knowledge_meta.get(k, {}).get("summary", ""),
+                    "tags": list(self._knowledge_tags.get(k, set())),
+                    "source": self._knowledge_meta.get(k, {}).get("source", ""),
+                    "updated_at": self._knowledge_meta.get(k, {}).get("updated_at", 0),
+                }
+                for k in self._knowledge_store
+            }
 
+    async def clear_knowledge(self) -> None:
+        """清空所有共享知识（任务完成后调用）"""
+        async with self._lock:
+            self._knowledge_store.clear()
+            self._knowledge_tags.clear()
+            self._knowledge_meta.clear()
+        logger.info("SharedBus 共享知识已清空")
 
-# 全局单例
+    # 全局单例
 _shared_bus: Optional[SharedBus] = None
 
 

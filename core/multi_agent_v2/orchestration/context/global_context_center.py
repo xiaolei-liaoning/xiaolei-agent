@@ -18,14 +18,8 @@ import uuid
 
 logger = logging.getLogger(__name__)
 
-# ── 持久化快照存储（MySQL 同步） ─────────────────────────────
-try:
-    from ...infrastructure.persistence import get_snapshot_store
-    _snapshot_store = get_snapshot_store()
-except Exception:
-    _snapshot_store = None
-
-from ...infrastructure.shared_bus import get_shared_bus, Message as SharedMessage, MessageType as SharedMessageType
+# ── 持久化快照存储（已移除，保留方法体为空操作） ──
+_snapshot_store = None
 
 
 class TaskState(Enum):
@@ -242,59 +236,6 @@ class GlobalContextCenter:
             return [a for a in self.agent_registry.values() if a.get("state") == state]
         return list(self.agent_registry.values())
 
-    async def publish_message(self, message: object) -> None:
-        """发布消息 — 委托到 SharedBus"""
-        bus = get_shared_bus()
-        sm = SharedMessage(
-            type=SharedMessageType.AGENT_MESSAGE,
-            sender=getattr(message, "from_agent", "unknown"),
-            receiver=getattr(message, "to_agent", ""),
-            topic="agent:message",
-            payload={
-                "content": getattr(message, "content", ""),
-                "message_type": getattr(message, "message_type", "direct"),
-                "message_id": getattr(message, "message_id", ""),
-            },
-        )
-        to_agent = getattr(message, "to_agent", None)
-        if to_agent:
-            await bus.send_direct(to_agent, sm)
-        else:
-            await bus.publish(sm.topic, sm)
-
-    async def send_message(self, from_agent: str, to_agent: str, content: Any, message_type: str = "direct") -> None:
-        """发送点对点消息 — 通过 SharedBus"""
-        bus = get_shared_bus()
-        sm = SharedMessage(
-            type=SharedMessageType.AGENT_MESSAGE,
-            sender=from_agent,
-            receiver=to_agent,
-            topic=f"agent:{to_agent}",
-            payload={"content": content, "message_type": message_type},
-        )
-        await bus.send_direct(to_agent, sm)
-
-    async def broadcast_message(self, from_agent: str, content: Any, message_type: str = "broadcast") -> None:
-        """广播消息 — 通过 SharedBus"""
-        bus = get_shared_bus()
-        sm = SharedMessage(
-            type=SharedMessageType.AGENT_MESSAGE,
-            sender=from_agent,
-            receiver="",
-            topic="broadcast",
-            payload={"content": content, "message_type": message_type},
-        )
-        await bus.publish(sm.topic, sm)
-
-    async def subscribe_to_messages(self, agent_id: str) -> None:
-        """订阅消息 — SharedBus 按需使用，无需在此注册"""
-        pass
-
-    async def receive_message(self, agent_id: str, timeout: Optional[float] = None) -> Optional[object]:
-        """接收消息 — 通过 SharedBus"""
-        bus = get_shared_bus()
-        return await bus.receive_direct(agent_id, timeout=timeout or 5.0)
-
     async def assign_subtask(self, task_id: str, subtask_id: str, agent_id: str) -> None:
         """分配子任务"""
         async with self._lock:
@@ -346,23 +287,6 @@ class GlobalContextCenter:
 
         logger.info(f"任务完成: {task_id}")
         self._mark_dirty(task_id)
-
-    async def broadcast_state(self, task_id: str) -> None:
-        """广播任务状态"""
-        if task_id not in self.task_contexts:
-            raise ValueError(f"任务 {task_id} 不存在")
-
-        context = self.task_contexts[task_id]
-
-        await self.broadcast_message(
-            from_agent="context_center",
-            content={
-                "task_id": task_id,
-                "state": context.state.value,
-                "partial_results": context.partial_results
-            },
-            message_type="state_sync"
-        )
 
     async def get_task_context(self, task_id: str) -> Optional[TaskContext]:
         """获取任务上下文"""

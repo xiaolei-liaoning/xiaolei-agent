@@ -7,9 +7,6 @@
 子模块:
     base          - 基础数据类、基类、共享工具
     pipeline      - 流水线策略、递归分解、LLM反思
-    master_worker - 主从策略
-    review        - 评审策略、共识机制
-    auction       - 拍卖策略、团队组建、复杂协作引擎
 """
 
 from .base import (
@@ -50,26 +47,6 @@ from .pipeline import (
     AdaptivePipelineWithReflection,
 )
 
-from .master_worker import (
-    MasterSlaveStrategy,
-)
-
-from .review import (
-    ReviewStrategy,
-    ConsensusMechanism,
-)
-
-from .auction import (
-    AuctionStrategy,
-    TeamMember,
-    Team,
-    Bid,
-    AuctionResult,
-    DynamicTeamForming,
-    TaskAuction,
-    ComplexCollaborationEngine,
-)
-
 __all__ = [
     # base
     "CollaborationResult",
@@ -99,18 +76,4 @@ __all__ = [
     "ReflectionTrigger",
     "LLMReflection",
     "AdaptivePipelineWithReflection",
-    # master_worker
-    "MasterSlaveStrategy",
-    # review
-    "ReviewStrategy",
-    "ConsensusMechanism",
-    # auction
-    "AuctionStrategy",
-    "TeamMember",
-    "Team",
-    "Bid",
-    "AuctionResult",
-    "DynamicTeamForming",
-    "TaskAuction",
-    "ComplexCollaborationEngine",
 ]

@@ -122,8 +122,9 @@ class AgentPool:
             )
 
     def release(self, agent: Any) -> None:
-        """归还 WorkAgent 到池"""
+        """归还 WorkAgent 到池（先重置状态）"""
         try:
+            agent.reset()
             self._pool.put_nowait(agent)
         except asyncio.QueueFull:
             pass  # 池满就丢掉
@@ -456,6 +457,7 @@ async def _execute_agent(
         task_id=f"task_{uuid.uuid4().hex[:8]}",
         type="general",
         description=prompt,
+        context={"model": model} if model else {},
     )
 
     try:
@@ -502,6 +504,9 @@ async def _execute_agent(
         logger.warning(f"Agent [{label}] 异常: {traceback.format_exc()}")
         return AgentResult(success=False, error=str(e), label=label)
     finally:
+        # 异常/取消情况下确保总线监听停止
+        pool_agent._stop_bus_listener()
+        pool_agent.reset()
         _agent_pool.release(pool_agent)
 
 

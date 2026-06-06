@@ -39,16 +39,23 @@ class WorkAgent(BaseAgent):
         name: Optional[str] = None,
         description: str = "通用工作 Agent，根据任务动态调整",
         light_mode: bool = False,
+        personality: str = "",
+        role: str = "",
     ):
         super().__init__(
             agent_id=agent_id,
             agent_type=AgentType.WORKER,
             name=name,
             description=description,
+            personality=personality,
+            role=role,
         )
 
         # 执行模式
         self._light_mode = light_mode
+
+        # 模型覆盖（orchestrator 动态设置）
+        self._model_override: str = ""
 
         # 能力列表 - 非硬编码，根据任务动态生成
         self.capabilities: List[Capability] = self._default_capabilities()
@@ -71,6 +78,16 @@ class WorkAgent(BaseAgent):
                 expertise_level=0.7,
             ),
         ]
+
+    def reset(self) -> None:
+        """重置 Agent 状态，为下次复用做准备"""
+        self.work_history = []
+        self._model_override = ""
+        self.reset_temp_memory()  # 清空临时记忆
+        self.personality = ""
+        self.role = ""
+        self.capabilities = self._default_capabilities()
+        logger.debug(f"WorkAgent {self.agent_id} 状态已重置")
 
     def adapt_to_task(self, task: Task) -> None:
         """根据任务动态调整 Agent 的能力配置
@@ -122,11 +139,13 @@ class WorkAgent(BaseAgent):
 
     # ── SharedBus 监听 ─────────────────────────────────────────────────
 
-    async def _start_bus_listener(self) -> None:
+    async def _start_bus_listener(self, enable: bool = False) -> None:
         """启动 SharedBus 监听 — 处理发送给本 Agent 的直接消息
 
         安全处理 SharedBus 不可用的情况（不崩溃）。
         """
+        if not enable:
+            return
         try:
             from core.multi_agent_v2.infrastructure.shared_bus import get_shared_bus, Message
             bus = get_shared_bus()
@@ -135,16 +154,18 @@ class WorkAgent(BaseAgent):
             return
 
         async def _listen_loop():
-            """持续监听直接消息"""
+            """持续监听直接消息 — 带休眠防忙循环"""
             while True:
                 try:
                     msg = await bus.receive_direct(self.agent_id, timeout=2.0)
                     if msg is None:
+                        await asyncio.sleep(0.5)  # 避免空队列忙循环
                         continue
                     self._on_bus_message(msg)
                 except asyncio.CancelledError:
                     break
                 except Exception:
+                    await asyncio.sleep(0.5)
                     pass
 
         self._bus_listener_task = asyncio.create_task(_listen_loop())
@@ -175,23 +196,13 @@ class WorkAgent(BaseAgent):
         return await self._execute_full(task)
 
     async def _execute_fast(self, task: Task) -> ActionResult:
-        """轻量执行 — 直通 ReAct 快路径
-
-        跳过 StepPlanner/StepExecutor/记忆全链路，直接通过 react_core.run_react
-        走 MiddlewareChain，获得工具调用和 LLM 交互能力。
-
-        Args:
-            task: 要执行的任务
-
-        Returns:
-            ActionResult
-        """
+        """轻量执行 — 直通 ReAct 快路径"""
         logger.info(f"WorkAgent [轻量] 执行任务: {task.task_id} ({task.type})")
         start = time.time()
         desc = task.description
 
         # ── 初始状态提示 ──
-        print(f"    \033[2m⚡ 正在分析你的请求...\033[0m")
+        print(f"\n    \033[1;36m⚡ 开始任务: {desc[:80]}\033[0m")
 
         # 启动总线监听
         await self._start_bus_listener()
@@ -202,26 +213,32 @@ class WorkAgent(BaseAgent):
                         "保存","文件","数据","代码","游戏","脚本","curl","fetch",
                         "http","api","百度","谷歌","翻译"]
             is_simple = len(desc) < 30 and not any(kw in desc for kw in _TOOL_KW)
+            logger.info("WorkAgent 分析 desc=%d is_simple=%s", len(desc), is_simple)
             if is_simple:
                 from core.engine.llm_backend import get_llm_router
                 router = get_llm_router()
                 if router and router.is_available():
-                    print(f"    \033[2m🤔 思考中...\033[0m")
+                    print(f"    \033[1;36m🤔 LLM直接回答...\033[0m")
+                    logger.info("WorkAgent 直接LLM提问")
                     resp = await router.chat([{"role": "user", "content": desc}])
                     answer = str(resp) if resp else ""
                     elapsed = time.time() - start
+                    is_mock = "[LLM_MOCK]" in answer
+                    logger.info("WorkAgent 直接回复 mock=%s len=%d: %s", is_mock, len(answer), answer[:100])
                     return ActionResult(
-                        success=bool(answer),
-                        output=answer,
+                        success=bool(answer) and not is_mock,
+                        output=answer if not is_mock else "LLM暂不可用，请稍后重试",
                         execution_time=elapsed,
-                        metadata={"light_mode": True, "direct_reply": True},
+                        metadata={"light_mode": True, "direct_reply": True, "mock": is_mock},
                     )
 
             # ── 复杂任务：走 ReActCore 中间件链 ──
+            logger.info("WorkAgent → ReActCore (max_rounds=%d)", 2 if self._light_mode else 10)
             from core.multi_agent_v2.agents.react_core import run_react
             result = await run_react(
                 desc,
                 max_rounds=2 if self._light_mode else 10,
+                model=task.context.get("model", ""),
             )
 
             elapsed = time.time() - start
@@ -245,6 +262,9 @@ class WorkAgent(BaseAgent):
                 "execution_time": elapsed,
                 "timestamp": time.time(),
             })
+            # 保持最近的记录
+            if len(self.work_history) > 100:
+                self.work_history = self.work_history[-100:]
 
             logger.info(f"WorkAgent [轻量] 完成: success={success} {elapsed:.1f}s")
             return ar

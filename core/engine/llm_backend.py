@@ -251,6 +251,8 @@ class GLMBackend:
             return "请求过于频繁，请稍后再试"
 
         # 1. GLM 官方 API
+        logger.info("LLM.chat: api_key=%s client=%s tools=%s",
+                     bool(self.api_key), bool(self.client), bool(tools))
         if self.client and self.api_key:
             try:
                 kwargs = dict(model="glm-4-flash", messages=messages,
@@ -260,11 +262,13 @@ class GLMBackend:
                     kwargs["tools"] = tools
                     kwargs["tool_choice"] = "auto"
 
+                logger.info("LLM → GLM API (glm-4-flash, tools=%s)", bool(tools))
                 response = self.client.chat.completions.create(**kwargs)
                 self._record_usage(response)
                 message = response.choices[0].message
                 content = message.content or ""
                 tc = getattr(message, 'tool_calls', None)
+                logger.info("LLM GLM返回: content_len=%d tool_calls=%s", len(content), bool(tc))
                 if tc:
                     tc_list = [{"id": getattr(t, 'id', ''),
                                 "type": getattr(t, 'type', 'function'),
@@ -276,18 +280,24 @@ class GLMBackend:
                                       ensure_ascii=False)
                 return content or ""
             except Exception as e:
-                logger.warning(f"GLM API 失败: {e}")
+                logger.error(f"GLM API 调用异常: {e}（将尝试fallback）")
 
-        # 2. 免费 API fallback
-        if await self._init_free_client() and not self.api_key:
+        # 2. 免费 API fallback（仅当没有主API key时）
+        can_use_free = await self._init_free_client()
+        logger.info("LLM fallback检查: free_client=%s api_key=%s", can_use_free, bool(self.api_key))
+        if can_use_free and not self.api_key:
             for free_model in ["openrouter-qwen", "openrouter-llama", "llama-3.1-8b-instant", "gemma2-9b-it"]:
+                logger.info("LLM → 免费API: %s", free_model)
                 data = await self._call_free_api(messages, free_model, temperature, max_tokens)
                 if data and "choices" in data and data["choices"]:
                     content = data["choices"][0]["message"]["content"]
+                    logger.info("LLM freeAPI成功: %s len=%d", free_model, len(content))
                     self._record_usage_from_response(data, free_model)
                     return content or ""
+                logger.warning("LLM freeAPI失败: %s", free_model)
 
-        logger.warning("所有 LLM API 不可用，使用模拟响应")
+        logger.warning("所有 LLM API 不可用，使用模拟响应 (client=%s, free_client=%s, api_key=%s)",
+                       bool(self.client), can_use_free, bool(self.api_key))
         return "[LLM_MOCK] 系统正在处理您的请求..."
 
     async def chat_stream(self, messages, temperature=0.7, max_tokens=2000,

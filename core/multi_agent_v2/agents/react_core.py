@@ -72,6 +72,9 @@ class ReActCoreMiddleware(BaseMiddleware):
         from core.engine.llm_backend import get_llm_router
         router = get_llm_router()
         if not router.is_available():
+            logger.error("❌ LLM 不可用: client=%s free_client=%s",
+                         getattr(router.backend, 'client', None),
+                         getattr(router.backend, 'free_client', None))
             ctx.interrupted = True
             ctx.last_error = "LLM 不可用"
             return
@@ -79,9 +82,13 @@ class ReActCoreMiddleware(BaseMiddleware):
         ctx.react_depth += 1
         ctx.iteration = ctx.react_depth
 
+        # ── 日志：当前状态 ──
+        tool_names = [td.get("function", {}).get("name", "?") for td in (ctx.tool_defs or [])]
+        logger.info("第%d轮 start | 工具数=%d | 可用工具: %s", ctx.react_depth, len(ctx.tool_defs or []), tool_names[:5])
+
         # 构建消息，存到 ctx 供中间件读取
         ctx._pending_messages = [
-            {"role": "system", "content": "你是多步骤计划的执行者。请按以下规则工作：\n\n【工具选择】\n1. 数据获取：优先用 search（搜索）或 fetch_url（抓取网页）\n2. 文件操作：优先用 file（action=write 写入，action=read 读取）\n3. 代码执行：用 execute_python\n4. 先看内置工具，不够再用专用工具\n\n【数据使用】\n5. 拿到数据后立刻分析使用，不要只获取不分析\n6. 如果已经获取到足够数据，直接处理并保存结果，不要继续搜索新URL\n7. 即使部分数据获取失败，用已有的数据继续完成任务\n\n【文件保存】\n8. 如果任务要求[保存到桌面/保存报告]，务必在最后调用 file(action=write) 保存结果\n9. 全部完成后总结输出\n\n可用工具列表中同时包含内置工具和专用工具。"},
+            {"role": "system", "content": '你是AI助手，通过调用可用工具来完成任务。\n\n【关键规则】\n- 搜索资讯 → 调用 search 工具\n- 百度热搜 → 调用 execute_shell 工具，command参数="python3 scripts/fetch_baidu_hotsearch.py"\n- 读写文件 → 调用 file 工具，action参数=write/read\n- 查看目录 → 调用 execute_shell 工具\n- 执行代码 → 调用 execute_python 工具\n- 生成大文件 → 调用 execute_python 工具，用open().write()写入\n\n【注意】\n- 必须调用工具函数来执行操作，不要只输出命令文本\n- 写文件必须一次性写入完整内容，不要分多次\n- 拿到数据立刻分析使用\n- 部分数据获取失败时，用已有数据继续\n- 最终用文本输出结果\n- 出分析报告以【分析报告】开头'},
             {"role": "user", "content": ctx.task_description},
         ]
         if ctx.tool_results:
@@ -101,14 +108,33 @@ class ReActCoreMiddleware(BaseMiddleware):
                 })
 
         # ── 实时反馈：显示 LLM 正在思考 ──
-        print(f"    \033[2m🤔 LLM 思考中 ({ctx.react_depth}/{effective_max})...\033[0m")
+        plan_progress = ""
+        plan_state = getattr(ctx, "plan_state", None)
+        if plan_state and plan_state.created:
+            p = plan_state.progress()
+            cur = plan_state.current()
+            cur_name = cur.name if cur else "?"
+            plan_progress = f" [计划 {p}]"
+        print(f"    \033[1;36m🤔 LLM思考第{ctx.react_depth}/{effective_max}轮{plan_progress}...\033[0m")
+
+        # ── 日志：LLM 请求摘要 ──
+        logger.info("第%d轮 LLM请求 | msgs=%d | tools=%d | 最后用户消息: %s",
+                     ctx.react_depth, len(ctx._pending_messages), len(ctx.tool_defs or []),
+                     ctx.task_description[:80])
 
         async def _llm_call():
-            return await asyncio.wait_for(
-                router.chat(ctx._pending_messages, temperature=0.3, max_tokens=2000,
-                           tools=ctx.tool_defs or None),
-                timeout=30,
-            )
+            try:
+                llm_timeout = 60 if ctx.react_depth <= 2 else 30
+                llm_max_tokens = 4000 if ctx.react_depth <= 2 else 2000
+                _model = ctx.model_override or None
+                return await asyncio.wait_for(
+                    router.chat(ctx._pending_messages, temperature=0.3, max_tokens=llm_max_tokens,
+                               tools=ctx.tool_defs or None, model=_model),
+                    timeout=llm_timeout,
+                )
+            except asyncio.TimeoutError:
+                logger.error("❌ 第%d轮 LLM调用超时(%ds)", ctx.react_depth, llm_timeout)
+                raise
 
         try:
             if ctx._chain:
@@ -116,6 +142,11 @@ class ReActCoreMiddleware(BaseMiddleware):
             else:
                 reply = await _llm_call()
             ctx._last_reply = reply
+            # ── 日志：LLM 回复摘要 ──
+            reply_preview = str(reply)[:200] if reply else "None"
+            is_mock_detected = any(sig in reply_preview for sig in ["[LLM_MOCK]", "系统正在处理您的请求"])
+            logger.info("第%d轮 LLM回复 | len=%d | mock=%s | 预览: %s",
+                         ctx.react_depth, len(str(reply or "")), is_mock_detected, reply_preview)
         except asyncio.TimeoutError:
             ctx.interrupted = True
             ctx.last_error = "LLM 超时"
@@ -130,6 +161,14 @@ class ReActCoreMiddleware(BaseMiddleware):
 
         reply = getattr(ctx, "_last_reply", "")
         if not reply:
+            logger.warning(f"第{ctx.react_depth}轮 LLM返回空响应，标记中断")
+            print(f"    \033[33m⚠️ LLM返回空，提前结束\033[0m")
+            # 如果有工具已成功，用已有结果；否则报错
+            if any(r.get("success") for r in ctx.tool_results):
+                ctx.final_answer = "已通过工具获取到结果。（LLM最终汇总阶段跳过）"
+            else:
+                ctx.last_error = "LLM返回空响应"
+            ctx.interrupted = True
             return
 
         tool_calls = self._parse_tool_calls(reply)
@@ -142,35 +181,56 @@ class ReActCoreMiddleware(BaseMiddleware):
             is_mock = any(sig in text for sig in _MOCK_SIGNATURES)
             if is_mock:
                 logger.warning("检测到LLM mock/fallback响应，跳过此轮")
-                # 注入重试提示
                 ctx.task_description += "\n[注意] 上轮LLM返回了空响应，请重新尝试。注意不要调用不存在的工具。"
                 return
 
-            # 计划模式检测：如果 LLM 只输出计划文本但没有工具调用，
-            # 不要当最终答案处理 — 将文本作为 assistant 消息继续
+            # ── 判断：是"计划文本"还是"最终答案"？ ──
+            # 最终答案特征：有总结性语言、URL、已经完成声明
+            is_final_answer = (
+                "完成" in text[:50] or
+                "总结" in text[:50] or
+                "http" in text or
+                "结果如下" in text or
+                "以下是" in text[:20] or
+                text.startswith("根据") or
+                text.startswith("DeerFlow") or
+                len(text) > 100  # 长文本直接当答案
+            )
             plan_state = getattr(ctx, "plan_state", None)
-            if plan_state and plan_state.created:
-                # 检测是否是计划文本（有编号步骤）
+            if plan_state and plan_state.created and not is_final_answer:
                 import re as _re
                 plan_like = bool(_re.search(r'[1-5]\s*[.、）\)]', text)) and len(text) > 60
-                # 或者是明确的步骤声明
                 step_decl = any(kw in text for kw in ["步骤1", "第一步", "第1步", "step 1", "Step 1"])
                 if plan_like or step_decl:
                     logger.info("检测到计划文本（无工具调用），继续下一轮执行")
-                    # 把计划文本作为 assistant 消息加入，继续循环
                     if hasattr(ctx, '_pending_messages') and ctx._pending_messages:
                         ctx._pending_messages.append({"role": "assistant", "content": text})
-                    # 不中断，让 LLM 下一轮执行动作
                     return
 
-            # 纯文本 = 最终答案
+            # ── 纯文本 = 最终答案 ──
+            print(f"    \033[32m✅ LLM输出最终答案\033[0m")
             ctx.final_answer = text
             ctx.interrupted = True
             return
 
         # ── 实时反馈：显示正在调用的工具 ──
         tool_names = [tc.get("function", {}).get("name", "?") for tc in tool_calls]
-        print(f"    \033[2m🔧 调用工具: {', '.join(tool_names)}\033[0m")
+        tool_args_preview = []
+        for tc in tool_calls:
+            try:
+                args = json.loads(tc.get("function", {}).get("arguments", "{}"))
+                if "url" in args:
+                    tool_args_preview.append(f"url={str(args['url'])[:40]}")
+                elif "query" in args:
+                    tool_args_preview.append(f"query={str(args['query'])[:30]}")
+                elif "path" in args:
+                    tool_args_preview.append(f"path={str(args['path'])[:30]}")
+                elif "action" in args:
+                    tool_args_preview.append(f"action={args['action']}")
+            except json.JSONDecodeError:
+                pass
+        args_str = f" ({'; '.join(tool_args_preview)})" if tool_args_preview else ""
+        print(f"    \033[1;33m🔧 调用: {', '.join(tool_names)}{args_str}\033[0m")
 
         # 并行执行所有工具调用，按原始顺序收集结果
         results = await self._execute_tool_calls_parallel(tool_calls, ctx)
@@ -181,8 +241,11 @@ class ReActCoreMiddleware(BaseMiddleware):
             ok = result.get("success", False)
             icon = "✅" if ok else "⚠️"
             err = result.get("result", {}).get("error", "") if not ok else ""
+            result_preview = str(result.get("result", ""))[:80] if ok else ""
             detail = f" {err[:60]}" if err else ""
-            print(f"    \033[2m{icon} {name}{detail}\033[0m")
+            if ok and result_preview and name not in ("file", "execute_python"):
+                detail = f" → {result_preview[:60]}"
+            print(f"    \033[1;32m{icon} {name}{detail}\033[0m")
 
         for tc, result in zip(tool_calls, results):
             name = tc.get("function", {}).get("name", "")
@@ -224,14 +287,27 @@ class ReActCoreMiddleware(BaseMiddleware):
                 ctx.last_error = "步骤未实际执行任何工具调用"
             ctx.interrupted = True
 
+    _TOOL_TIMEOUTS = {
+        "search": 45,        # 联网搜索：多引擎并发，给足时间
+        "fetch_url": 30,     # 网页抓取：大页面需要时间
+        "execute_python": 20, # 代码执行
+        "execute_shell": 15,  # Shell命令
+        "file": 10,           # 文件操作
+        "rag_search": 20,    # RAG搜索
+    }
+    _DEFAULT_TIMEOUT = 15
+
     async def _execute(self, tc: dict, ctx: Optional[RunContext] = None) -> dict:
-        """执行单个工具调用 — 通过 chain.on_wrap_tool_call 走洋葱包裹（15s超时）"""
+        """执行单个工具调用 — 按工具类型区分超时"""
+        tool_name = tc.get("function", {}).get("name", "")
         tool_args = {
-            "name": tc.get("function", {}).get("name", ""),
+            "name": tool_name,
             "arguments": json.loads(tc.get("function", {}).get("arguments", "{}")),
-            "_tool_name": tc.get("function", {}).get("name", ""),
-            "_server": self._lookup_server(tc.get("function", {}).get("name", ""), ctx),
+            "_tool_name": tool_name,
+            "_server": self._lookup_server(tool_name, ctx),
         }
+        timeout = self._TOOL_TIMEOUTS.get(tool_name, self._DEFAULT_TIMEOUT)
+
         async def _do_execute():
             if ctx and hasattr(ctx, '_chain') and ctx._chain:
                 return await ctx._chain.on_wrap_tool_call(ctx, tool_args)
@@ -240,9 +316,9 @@ class ReActCoreMiddleware(BaseMiddleware):
             return await agent._execute_single_tool_call(tool_args)
 
         try:
-            return await asyncio.wait_for(_do_execute(), timeout=15)
+            return await asyncio.wait_for(_do_execute(), timeout=timeout)
         except asyncio.TimeoutError:
-            return {"success": False, "result": {"error": f"工具 {tool_args['name']} 执行超时(15s)"}}
+            return {"success": False, "result": {"error": f"工具 {tool_name} 执行超时({timeout}s)"}}
         except Exception as e:
             return {"success": False, "result": {"error": str(e)}}
 
@@ -346,7 +422,7 @@ class PlanAwareMiddleware(BaseMiddleware):
             + "2. 从第1步开始，每轮执行一个步骤\n"
             + "3. 每步完成后会自动更新进度状态\n"
             + "4. 完成后总结输出\n"
-            + "5. **不要只列出计划就停止** — 列出计划后立即开始执行第1步！"
+            + "5. 【关键】列出计划后立即开始执行第1步，不要只列计划不执行！"
         )
         logger.info(f"📋 计划已创建: {len(plan_state.steps)} 步, 上限 {_PLAN_ROUNDS} 轮")
 
@@ -377,8 +453,8 @@ class PlanAwareMiddleware(BaseMiddleware):
         """每轮 LLM 回复后：检测步骤完成，动态调整
 
         步骤完成判定条件（满足任一即可）：
-        1. 成功的文件写入 → "写入文件" 类步骤完成
-        2. 成功工具调用 + 已到轮次上限 → 收尾当前步骤
+        1. 成功的工具调用（file/search/fetch_url/execute_python 等）
+        2. 已到轮次上限 & 有成功结果 → 收尾当前步骤
         3. final_answer 已设置 → 全部完成
         """
         plan_state: PlanState = getattr(ctx, "plan_state", None)
@@ -392,17 +468,27 @@ class PlanAwareMiddleware(BaseMiddleware):
         if not current:
             return  # 所有步骤已处理完
 
-        # ── 条件1: 文件写入成功 → 步骤完成 ──
-        for tr in reversed(ctx.tool_results[-3:]):
-            if tr.get("success") and tr.get("tool_call", {}).get("name") == "file":
-                result = str(tr.get("result", ""))[:100]
-                plan_state.finish_current(result)
-                logger.info(f"✅ 步骤 [{current.id}] {current.name} 完成（文件写入）")
+        # ── 条件1: 本轮成功工具调用 → 步骤完成 ──
+        # 只检查本轮新产生的工具结果（避免跨轮误判）
+        new_tool_results = ctx.tool_results[-5:]  # 最多检查最近5个
+        for tr in new_tool_results:
+            if tr.get("success"):
+                tool_name = tr.get("tool_call", {}).get("name", "?")
+                # 如果是写文件，检查内容大小
+                if tool_name == "file":
+                    raw = tr.get("result", "")
+                    raw_str = str(raw)
+                    # 写入大小 < 1KB 可能是骨架/空文件，不标记完成
+                    if "byte" in raw_str:
+                        import re
+                        sizes = re.findall(r'(\d+)\s*bytes?', raw_str)
+                        if sizes and int(sizes[0]) < 1024:
+                            logger.warning(f"文件太小({sizes[0]} bytes)，不标记完成")
+                            continue
+                plan_state.finish_current(f"✅ {tool_name} 执行成功")
+                logger.info(f"✅ 步骤 [{current.id}] {current.name} 完成（{tool_name}）")
+                print(f"    \033[32m✅ 步骤完成: {current.name} [{tool_name}]\033[0m")
 
-                # 检测是否所有步骤完成
-                if plan_state.done():
-                    ctx.final_answer = f"✅ 全部 {len(plan_state.steps)} 步执行完成！\n{plan_state.status_prompt()}"
-                    ctx.interrupted = True
                 return  # 完成一个步骤，当前轮不再继续
 
         # ── 条件2: 已到轮次上限 → 收尾 ──
@@ -439,26 +525,29 @@ def build_default_chain() -> MiddlewareChain:
         ConfidenceMiddleware, ReflectionMiddleware,
         KEPAMiddleware, BranchMiddleware,
         DataPipelineMiddleware, AskUserMiddleware,
+        ReflectionCheckMiddleware,
     )
-    chain.add(ProfileMiddleware())       # 任务画像
-    chain.add(DynamicStageRoutingMiddleware())  # ⭐ 阶段流水线
-    chain.add(PlanAwareMiddleware())     # ⭐ 计划感知 — 先列计划，追踪进度
-    chain.add(ReActDepthMiddleware())    # 深度控制
-    chain.add(ReActCoreMiddleware())     # ReAct 核心循环
-    chain.add(DataPipelineMiddleware())  # ⭐ 数据流水线
-    chain.add(ConfidenceMiddleware())    # 置信度评估
-    chain.add(ReflectionMiddleware())    # 执行反思
-    chain.add(KEPAMiddleware())          # KEPA 闭环
-    chain.add(BranchMiddleware())        # 策略分支
-    chain.add(AskUserMiddleware())       # ⭐ 用户交互
+    chain.add(ProfileMiddleware())                # 任务画像
+    chain.add(DynamicStageRoutingMiddleware())    # ⭐ 阶段流水线
+    chain.add(PlanAwareMiddleware())              # ⭐ 计划感知 — 先列计划，追踪进度
+    chain.add(ReActDepthMiddleware())             # 深度控制
+    chain.add(ReActCoreMiddleware())              # ReAct 核心循环
+    chain.add(ReflectionCheckMiddleware())        # ⭐ 反思检查（替代主循环硬编码逻辑）
+    chain.add(DataPipelineMiddleware())           # ⭐ 数据流水线
+    chain.add(ConfidenceMiddleware())             # 置信度评估
+    chain.add(ReflectionMiddleware())             # 执行反思
+    chain.add(KEPAMiddleware())                   # KEPA 闭环
+    chain.add(BranchMiddleware())                 # 策略分支
+    chain.add(AskUserMiddleware())                # ⭐ 用户交互
     return chain
 
 
-async def run_react(task_description: str, max_rounds: int = 0) -> dict:
+async def run_react(task_description: str, max_rounds: int = 0, model: str = "") -> dict:
     """快捷入口：直接用 ReActCore 处理任务
     Args:
         task_description: 任务描述
         max_rounds: 最大轮数，0 表示自动判断（有计划模式→_PLAN_ROUNDS, 否则→默认）
+        model: 指定使用的 LLM 模型名（空字符串表示使用默认模型）
     """
     if max_rounds == 0:
         # 计划模式由 PlanAwareMiddleware 在 on_start 中动态设置 ctx.max_iterations
@@ -471,6 +560,8 @@ async def run_react(task_description: str, max_rounds: int = 0) -> dict:
             max_rounds = _MAX_ROUNDS
     ctx = RunContext(task_description)
     ctx.max_iterations = max_rounds  # 初始值，PlanAwareMiddleware.on_start 可能改写
+    if model:
+        ctx.model_override = model
     chain = build_default_chain()
 
     await chain.on_start(ctx)
@@ -485,39 +576,53 @@ async def run_react(task_description: str, max_rounds: int = 0) -> dict:
 
     while not ctx.interrupted and ctx.react_depth < effective_max:
         # ── 实时进度显示 ──
-        print(f"    \033[2m⏳ 第 {ctx.react_depth + 1}/{effective_max} 轮...\033[0m")
+        round_idx = ctx.react_depth + 1
+        plan_progress = ""
+        if plan_state and plan_state.created:
+            p = plan_state.progress()
+            cur = plan_state.current()
+            cur_name = cur.name if cur else "?"
+            plan_progress = f" [{p} | 当前: {cur_name}]"
+        print(f"\n    \033[1;37m━━━ 第 {round_idx}/{effective_max} 轮{plan_progress} ━━━\033[0m")
         # 最后一轮：告诉LLM直接输出答案
         if ctx.react_depth == effective_max - 1:
-            ctx.task_description += "\n\n[最后轮次] 这是最后一轮。请直接输出最终答案，不要再调用工具。如果已通过工具获取到数据，直接总结输出。"
-        await chain.on_think_start(ctx)
-        await chain.on_think_end(ctx)
-        await chain.on_tool_end(ctx)  # 触发 KEPA/反思/置信度中间件
-        # 检测反思反馈：工具全部失败且无产出时提前中断，防止空转
-        if ctx.profile.get("reflection_feedback") and not ctx.final_answer:
+            print(f"    \033[1;31m⚠️ 最后轮次 — LLM应直接输出最终答案\033[0m")
+            ctx.task_description += "\n\n[最后轮次] 本轮后结束。如果主要任务已经完成，直接输出结果。如果还有关键步骤没执行完（如文件写入），抓紧本轮完成。"
+        # ── 阶段1: on_think_start（阶段路由/深度检查/ReflectionCheck/数据流水线）──
+        hr_start = await chain.on_think_start(ctx)
+        if hr_start and hr_start.jump_to == "end":
             ctx.interrupted = True
-            logger.warning("检测到反思反馈且无产出，提前终止空转")
-        # 消费中间件决策信号
-        while ctx.decisions:
-            d = ctx.decisions.pop(0)
-            if d.get("action") == "retry" and not ctx.interrupted:
-                ctx.task_description += f"\n[决策] {d.get('reason','')} 重试。"
-                logger.info(f"中间件决策: {d.get('reason','')}")
-            elif d.get("action") == "abort":
-                ctx.interrupted = True
-                ctx.last_error = d.get("reason", "中间件终止执行")
-                logger.warning(f"中间件终止: {d.get('reason','')}")
+            ctx.last_error = hr_start.reason or "中间件终止(think_start)"
+            logger.warning(f"中间件终止(think_start): {hr_start.reason}")
+            break
+        if hr_start and hr_start.jump_to == "retry":
+            logger.info(f"中间件重试(think_start): {hr_start.reason}")
+            continue
 
-        # 检查反思历史：如果连续2轮都失败且有反思记录，将失败信息注入下一轮提示
-        if ctx.reflection_history and not ctx.final_answer:
-            last_ref = ctx.reflection_history[-1]
-            if last_ref.get("success_rate", 1) == 0 and last_ref.get("total_calls", 0) > 0:
-                # 在下一轮 task_description 注入提示
-                if not ctx.task_description.endswith("[反思]"):
-                    ctx.task_description += "\n[反思] 上一轮全部失败，请换一种方法（换工具或直接回答）。"
-                    logger.info("已注入反思提示到下一轮")
+        # ── 阶段2: on_think_end（LLM思考 + 工具执行）──
+        hr_end = await chain.on_think_end(ctx)
+        if hr_end and hr_end.jump_to == "end":
+            ctx.interrupted = True
+            ctx.last_error = hr_end.reason or "中间件终止(think_end)"
+            logger.warning(f"中间件终止(think_end): {hr_end.reason}")
+            break
+
+        # ── 阶段3: on_tool_end（反思/置信度/KEPA/ReflectionCheck决策）──
+        hr_tool = await chain.on_tool_end(ctx)
+        if hr_tool and hr_tool.jump_to == "end":
+            ctx.interrupted = True
+            ctx.last_error = hr_tool.reason or "中间件终止(tool_end)"
+            logger.warning(f"中间件终止(tool_end): {hr_tool.reason}")
+            break
+        if hr_tool and hr_tool.jump_to == "retry":
+            ctx.task_description += f"\n[重试] {hr_tool.reason}。"
+            logger.info(f"中间件重试(tool_end): {hr_tool.reason}")
+            continue
     await chain.on_finish(ctx)
     # 如果没设 final_answer 但有成功的工具结果，让LLM总结
-    if not ctx.final_answer and ctx.tool_results:
+    # 如果最终答案太短（<30字且没含实际数据），也触发兜底
+    _is_trivial = bool(ctx.final_answer and len(ctx.final_answer) < 40 and "成功" in ctx.final_answer)
+    if (not ctx.final_answer or _is_trivial) and ctx.tool_results:
         # 提取所有工具输出的文本
         outputs = []
         for tr in ctx.tool_results:
@@ -558,21 +663,24 @@ async def run_react(task_description: str, max_rounds: int = 0) -> dict:
                     ctx.final_answer = text
             except Exception:
                 pass
-        # 兜底：取最后一个工具结果的文本
-        if not ctx.final_answer:
-            last = ctx.tool_results[-1]
-            raw = last.get("result", last.get("error", ""))
-            if isinstance(raw, dict):
-                c = raw.get("content")
-                if isinstance(c, list) and c:
-                    txt = str(c[0].get("text", "")) if isinstance(c[0], dict) else str(c[0])
+        # 兜底：取第一个成功的工具结果（跳过失败）
+        if not ctx.final_answer or _is_trivial:
+            for last in reversed(ctx.tool_results):
+                if last.get("success"):
+                    raw = last.get("result", "")
+                    txt = ""
+                    if isinstance(raw, dict):
+                        c = raw.get("content")
+                        if isinstance(c, list) and c:
+                            txt = str(c[0].get("text", "")) if isinstance(c[0], dict) else str(c[0])
+                        else:
+                            txt = str(raw)
+                    else:
+                        txt = str(raw)
                     txt = txt.strip()
-                    if txt and txt != "None":
+                    if txt and txt != "None" and txt != "(无输出)":
                         ctx.final_answer = txt[:1000]
-            if not ctx.final_answer:
-                txt = str(raw)
-                if txt and txt != "None":
-                    ctx.final_answer = txt[:500]
+                        break
     return {
         "success": bool(ctx.final_answer),
         "answer": ctx.final_answer,

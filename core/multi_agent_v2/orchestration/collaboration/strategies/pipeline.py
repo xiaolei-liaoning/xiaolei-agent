@@ -31,6 +31,10 @@ logger = logging.getLogger(__name__)
 class PipelineStrategy(BaseCollaborationStrategy):
     """流水线协作策略 - 顺序执行，每个阶段专注特定任务"""
 
+    def __init__(self, context_center):
+        super().__init__(context_center)
+        logger.warning("[DEPRECATED] %s is deprecated. Use Orchestrator agent()/parallel()/pipeline() instead.", self.__class__.__name__)
+
     async def execute(
         self,
         task: Task,
@@ -142,6 +146,7 @@ class RecursiveTaskDecomposer:
     """递归任务分解器"""
 
     def __init__(self, max_depth: int = 3):
+        logger.warning("[DEPRECATED] %s is deprecated. Use Orchestrator agent()/parallel()/pipeline() instead.", self.__class__.__name__)
         self.max_depth = max_depth
 
     async def decompose_recursive(
@@ -323,6 +328,7 @@ class LLMReflection:
     """LLM反思引擎 - 使用LLM进行反思"""
 
     def __init__(self, llm_facade: Optional[Any] = None):
+        logger.warning("[DEPRECATED] %s is deprecated. Use Orchestrator agent()/parallel()/pipeline() instead.", self.__class__.__name__)
         self.llm_facade = llm_facade
         self.reflection_count = 0
 
@@ -513,6 +519,7 @@ class AdaptivePipelineWithReflection:
         llm_facade: Optional[Any] = None,
         trigger_config: Optional[ReflectionTriggerConfig] = None
     ):
+        logger.warning("[DEPRECATED] %s is deprecated. Use Orchestrator agent()/parallel()/pipeline() instead.", self.__class__.__name__)
         self.trigger = ReflectionTrigger(trigger_config)
         self.reflection_engine = LLMReflection(llm_facade)
         self.config = trigger_config or ReflectionTriggerConfig()

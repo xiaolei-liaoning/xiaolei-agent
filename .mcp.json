@@ -3,7 +3,7 @@
     "codegraph": {
       "command": "/opt/homebrew/opt/node@22/bin/node",
       "args": [
-        "/Users/leiyuxuan/Desktop/逝去的白月光/小雷版小龙虾agent/.claude/codegraph/dist/bin/codegraph.js",
+        "/Users/leiyuxuan/Desktop/小雷版agent/.claude/codegraph/dist/bin/codegraph.js",
         "serve",
         "--mcp"
       ]

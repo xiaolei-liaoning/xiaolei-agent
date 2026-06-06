@@ -864,71 +864,23 @@ class EnhancedCLI:
                    CliColors.GREEN if self.debug_mode else CliColors.RED)
 
     async def handle_run(self, parsed_cmd: ParsedCommand):
-        """处理执行工作流命令（增强版 - 动画步骤显示）"""
+        """处理执行工作流命令"""
         request = parsed_cmd.action if parsed_cmd.action else parsed_cmd.remaining
-
         if not request:
             print_error("请提供任务描述")
             return
 
-        # 使用增强思考引擎
-        from cli.animated_spinner import AsyncSpinner, print_section, CLAUDE
-        from cli.thinking_engine import get_thinking_engine
+        from cli.base import WorkflowEngineWrapper
+        wrapper = WorkflowEngineWrapper()
 
-        engine = get_thinking_engine()
-        print_section(f"🚀 工作流: {request[:50]}{'...' if len(request) > 50 else ''}")
+        import time
+        start = time.time()
+        result = await wrapper.create_and_execute(request)
+        elapsed = time.time() - start
 
-        # 预设步骤计划
-        step_plan = [
-            {"title": "分析用户意图", "description": "理解用户需求并创建工作流", "tag": "分析"},
-            {"title": "执行工作流", "description": "按步骤执行各项任务", "tag": "执行"},
-            {"title": "汇总结果", "description": "整理并展示执行结果", "tag": "结果"},
-        ]
-        engine.plan_steps(step_plan)
-
-        try:
-            from cli.base import WorkflowEngineWrapper
-
-            wrapper = WorkflowEngineWrapper()
-
-            # Step 1: 分析意图
-            engine.start_step(1, "分析用户意图")
-            async with AsyncSpinner("正在分析用户意图...", color=CLAUDE):
-                await asyncio.sleep(0.2)
-            engine.complete_step(1, success=True)
-
-            # Step 2: 执行工作流
-            engine.start_step(2, "执行工作流")
-            async with AsyncSpinner("调用工作流引擎...", color=CLAUDE):
-                result = await wrapper.create_and_execute(request)
-            engine.complete_step(2, success=result.get("success", False),
-                                 detail=f"耗时: {result.get('total_time', 0):.1f}s"
-                                 if result.get("total_time") else "")
-
-            # Step 3: 汇总结果
-            engine.start_step(3, "汇总结果")
-            if result.get("success"):
-                async with AsyncSpinner("整理执行结果...", color=CLAUDE):
-                    await asyncio.sleep(0.1)
-                engine.complete_step(3, success=True)
-            else:
-                engine.complete_step(3, success=False,
-                                     error_message=result.get("error", "执行失败"))
-
-            # 总进度
-            engine.progress_summary()
-            engine.summary(result.get("success", False),
-                          result.get("total_time", 0))
-
-            # 显示结果
-            self._display_workflow_result(result)
-
-        except Exception as e:
-            if engine._current_step > 0:
-                engine.complete_step(engine._current_step, success=False,
-                                     error_message=str(e))
-            engine.summary(False, 0, detail=str(e))
-            log_error(f"执行失败: {e}")
+        success = result.get("success", False)
+        self._display_workflow_result(result)
+        log_info(f"执行完成: success={success}, 耗时={elapsed:.1f}s")
 
     async def handle_orchestrate(self, parsed_cmd: ParsedCommand):
         """多Agent编排 — 真正的多Agent并发协作"""
@@ -2036,6 +1988,13 @@ class EnhancedCLI:
             print(f"  📋 名称: {result.get('workflow_name')}")
         if result.get("total_time"):
             print(f"  ⏱️  耗时: {result.get('total_time', 0):.2f}秒")
+
+        # 显示最终回答
+        final_result = result.get("result", "")
+        if final_result and len(str(final_result)) > 10:
+            answer_text = str(final_result)[:500]
+            print(f"\n  📝 最终回答:")
+            print(f"    {answer_text}")
 
         results = result.get("results", [])
         if results:

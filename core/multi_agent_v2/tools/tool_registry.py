@@ -467,7 +467,7 @@ async def _handle_fetch_url(args: Dict) -> Dict:
     except (json.JSONDecodeError, AttributeError):
         pass
 
-    msg = f"状态码:{resp.status} 原始:{len(text)}字符\n{preview}\n📁完整数据: {fp}"
+    msg = f"状态码:200 原始:{len(text)}字符\n{preview}\n📁完整数据: {fp}"
     return {"result": {"content": [{"text": msg}]}}
 
 

@@ -1,14 +1,12 @@
 """
-协作策略模块 - 多Agent协作模式（已合并：strategies.py 包含全部协作逻辑）
+协作策略模块 - 多Agent协作模式
 """
 
 from .strategies import (
     CollaborationResult,
+    CollaborationMode,
     BaseCollaborationStrategy,
     PipelineStrategy,
-    MasterSlaveStrategy,
-    ReviewStrategy,
-    AuctionStrategy,
     HybridStrategy,
     LLMReflection,
     ReflectionTrigger,
@@ -19,11 +17,6 @@ from .strategies import (
     ResultAggregator,
     PartialResult,
     AggregationStrategy,
-    ComplexCollaborationEngine,
-    CollaborationMode as ComplexCollaborationMode,
-    DynamicTeamForming,
-    TaskAuction,
-    ConsensusMechanism,
     KnowledgeSharing,
     SimpleAggregator,
     WeightedVoteAggregator,
@@ -34,11 +27,9 @@ from .strategies import (
 
 __all__ = [
     "CollaborationResult",
+    "CollaborationMode",
     "BaseCollaborationStrategy",
     "PipelineStrategy",
-    "MasterSlaveStrategy",
-    "ReviewStrategy",
-    "AuctionStrategy",
     "HybridStrategy",
     "LLMReflection",
     "ReflectionTrigger",
@@ -49,11 +40,6 @@ __all__ = [
     "ResultAggregator",
     "PartialResult",
     "AggregationStrategy",
-    "ComplexCollaborationEngine",
-    "ComplexCollaborationMode",
-    "DynamicTeamForming",
-    "TaskAuction",
-    "ConsensusMechanism",
     "KnowledgeSharing",
     "SimpleAggregator",
     "WeightedVoteAggregator",

@@ -61,5 +61,6 @@
       "iconColour": "#66ccff"
     }
   },
-  "Codegeex.RepoIndex": true
+  "Codegeex.RepoIndex": true,
+  "cmake.sourceDirectory": "/Users/leiyuxuan/Desktop/小雷版agent/herdr/vendor/libghostty-vt"
 }

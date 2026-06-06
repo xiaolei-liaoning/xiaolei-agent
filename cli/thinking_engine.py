@@ -85,7 +85,7 @@ class ThinkingEngine:
             else:
                 self._print(f"  [{SUBTLE}]{i}.[/{SUBTLE}] {title}{tag_str}")
 
-        self._print()
+        self._print("")
 
     def start_step(self, step_num: int, title: str = ""):
         """开始一个步骤 — 显示 [1/5] 格式，记录开始时间"""

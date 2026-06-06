@@ -67,6 +67,7 @@ class RunContext:
     trace: Any = None
     tool_defs: Optional[List[Dict]] = None
     is_code_task: bool = False
+    model_override: Optional[str] = None
     profile: Dict[str, Any] = field(default_factory=lambda: {
         "use_shared_bus": True, "use_memory_store": False, "use_rag": False,
         "use_mcp_fallback": True, "use_workspace": True, "use_sandbox": True,
@@ -357,6 +358,7 @@ class DynamicStageRoutingMiddleware(BaseMiddleware):
     阶段：理解→收集→分析→写→验证→导出→总结
     根据执行画像裁剪，代码/搜索/简单任务走不同阶段序列。
     """
+    HOOKS = ("on_start", "on_think_start", "on_finish")
 
     def __init__(self):
         super().__init__()
@@ -416,48 +418,44 @@ class DynamicStageRoutingMiddleware(BaseMiddleware):
         plan_state = getattr(ctx, "plan_state", None)
         has_plan = plan_state is not None and plan_state.created
 
-        # ── 阶段完成判定 & 切换（仅无计划时）──
-        if not has_plan:
-            stage_done = self._is_stage_done(stage, ctx)
+        # PlanAwareMiddleware 有计划时，跳过所有 DynamicStageRouting 逻辑
+        # （包括阶段完成判定和阶段提示注入），由 PlanAware 的步骤追踪主导进度
+        if has_plan:
+            return
 
-            # 兜底：同一阶段超过 3 轮仍未完成则强制推进（防卡死）
-            rounds_in_stage = ctx.iteration - self._stage_start_iteration
-            if not stage_done and rounds_in_stage >= 3:
-                logger.warning(
-                    f"阶段 [{stage['name']}] 已执行 {rounds_in_stage} 轮仍未完成，强制推进"
-                )
-                stage_done = True
+        # ── 阶段完成判定 & 切换 ──
+        stage_done = self._is_stage_done(stage, ctx)
 
-            if stage_done:
-                self._stage_results[stage["name"]] = {
-                    "result": ctx.tool_results[-1] if ctx.tool_results else None,
-                    "iteration": ctx.iteration,
-                }
-                ctx._stage_index += 1
-                if ctx._stage_index < len(ctx._stage_sequence):
-                    ctx.stage = ctx._stage_sequence[ctx._stage_index]
-                    logger.info(f"进入阶段: {ctx.stage['name']}")
-                    self._stage_start_iteration = ctx.iteration
-                else:
-                    ctx.stage = None  # 所有阶段完成
-        else:
-            # PlanAware 有计划时：不做阶段完成判定，让 PlanAware 的步骤追踪主导
-            pass
+        # 兜底：同一阶段超过 3 轮仍未完成则强制推进（防卡死）
+        rounds_in_stage = ctx.iteration - self._stage_start_iteration
+        if not stage_done and rounds_in_stage >= 3:
+            logger.warning(
+                f"阶段 [{stage['name']}] 已执行 {rounds_in_stage} 轮仍未完成，强制推进"
+            )
+            stage_done = True
+
+        if stage_done:
+            self._stage_results[stage["name"]] = {
+                "result": ctx.tool_results[-1] if ctx.tool_results else None,
+                "iteration": ctx.iteration,
+            }
+            ctx._stage_index += 1
+            if ctx._stage_index < len(ctx._stage_sequence):
+                ctx.stage = ctx._stage_sequence[ctx._stage_index]
+                logger.info(f"进入阶段: {ctx.stage['name']}")
+                self._stage_start_iteration = ctx.iteration
+            else:
+                ctx.stage = None  # 所有阶段完成
 
         # ── 阶段提示注入 ──
         current = ctx.stage
         if current and current["name"] != self._last_injected_stage:
-            # 移除旧阶段提示
             if self._last_injected_stage:
                 for s in ctx._stage_sequence:
                     old_inj = f"\n[阶段] 当前: {s['name']} — {s['prompt']}"
                     if old_inj in ctx.task_description:
                         ctx.task_description = ctx.task_description.replace(old_inj, "")
-            # 注入新阶段提示
-            if has_plan:
-                injection = f"\n[阶段] 当前: {current['name']}"  # 仅阶段名
-            else:
-                injection = f"\n[阶段] 当前: {current['name']} — {current['prompt']}"
+            injection = f"\n[阶段] 当前: {current['name']} — {current['prompt']}"
             if injection not in ctx.task_description:
                 ctx.task_description += injection
             self._last_injected_stage = current["name"]

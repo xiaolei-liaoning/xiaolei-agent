@@ -6,6 +6,7 @@
   - 现代化的执行日志显示
 """
 
+import asyncio
 import json
 import logging
 import time
@@ -47,166 +48,57 @@ class WorkflowEngineWrapper:
                                   chat_history: List[Dict] = None,
                                   context: Dict = None,
                                   mode: str = "single") -> Dict[str, Any]:
-        """统一执行入口
-
-        支持三种模式：
-        - single（默认）: 单 WorkerAgent 迭代执行
-        - collaborate: 多 Agent 协作执行
-        - workflow: 文件工作流执行
-        """
+        """统一执行入口"""
         engine = get_thinking_engine()
+        start_time = time.time()
 
-        # ── 模式选择动画 ──
-        mode_labels = {
-            "single": "单 Agent",
-            "collaborate": "多 Agent 协作",
-            "workflow": "工作流文件",
-        }
-        mode_label = mode_labels.get(mode, mode)
-
-        # 显示模式标签和请求
-        if mode != "workflow":
-            print_section(f"🦞 {mode_label}: {user_request[:60]}{'...' if len(user_request) > 60 else ''}", CLAUDE)
-        else:
-            think_start(user_request)
-
-        think_log("正在分析用户意图...")
         log_info(f"分析用户请求: {user_request[:80]}, mode={mode}")
-
-        if context:
-            think_log(f"上下文信息: {context}")
 
         if mode == "workflow":
             return await self.execute_workflow_file(user_request)
-
         if mode == "collaborate":
             return await self._execute_collaborate(user_request, engine)
 
-        # ── single 模式（默认）：单 WorkAgent ────────────────────────
-        # 增强：显示清晰的步骤进度 + 工具调用链
+        # ── single 模式：直接跑 ──────────────────────────────────
+        # 显示请求
+        print(f"\n    \033[1;36m⚡ {user_request[:80]}\033[0m")
 
-        from core.multi_agent_v2.agents import WorkAgent
+        # ── 直接执行 ──
+        from core.multi_agent_v2.agents.react_core import run_react
+        result = await run_react(user_request, max_rounds=0)
 
-        agent = WorkAgent(agent_id="cli-agent")
+        elapsed = time.time() - start_time
+        success = result.get("success", False)
+        iterations = result.get("iterations", 1)
+        final_answer = result.get("answer", "")
+        tool_results = result.get("tool_results", [])
 
-        # ── 预设步骤计划（显示给用户） ──────────────────────────────
-        step_plan = [
-            {"title": "理解任务", "description": "分析用户请求的意图和需求", "tag": "思考"},
-            {"title": "制定计划", "description": "拆解任务为可执行步骤", "tag": "规划"},
-            {"title": "执行计划", "description": "迭代调用工具完成任务", "tag": "执行"},
-            {"title": "检查结果", "description": "验证执行结果是否满足需求", "tag": "验证"},
-            {"title": "输出总结", "description": "整理执行结果并输出", "tag": "总结"},
-        ]
+        # 显示摘要
+        if tool_results:
+            chain_names = []
+            for tr in tool_results:
+                tc = tr.get("tool_call", {})
+                name = tc.get("name", "")
+                ok = tr.get("success", False)
+                icon = "✅" if ok else "⚠️"
+                if name:
+                    chain_names.append(f"{icon}{name}")
+            if chain_names:
+                print(f"    \033[2m工具链: {' → '.join(chain_names[:10])}\033[0m")
 
-        engine.plan_steps(step_plan)
-        total_steps = len(step_plan)
-
-        try:
-            # Step 1: 理解任务（带动画）
-            step_num = 1
-            engine.start_step(step_num, "理解任务")
-            async with AsyncSpinner("分析请求意图...", color=CLAUDE):
-                await asyncio.sleep(0.3)  # 模拟思考动画
-            engine.complete_step(step_num, success=True, detail="任务理解完成")
-
-            # Step 2: 制定计划
-            step_num = 2
-            engine.start_step(step_num, "制定计划")
-            async with AsyncSpinner("拆解任务...", color=CLAUDE):
-                pass  # agent.run 内部会做计划
-            engine.complete_step(step_num, success=True)
-
-            # Step 3: 执行计划 — 实际运行 agent，捕获工具调用链
-            step_num = 3
-            engine.start_step(step_num, "执行计划")
-
-            # 使用 ChainCollector 捕获工具调用，而非直接打印 verbose trace
-            collector = _ChainCollector()
-            agent.set_trace(collector)
-
-            result = await agent.run(user_request, max_iterations=3)
-
-            success = result.get("success", False)
-            iterations = result.get("iterations", 1)
-            confidence = result.get("confidence", 0)
-
-            # 显示工具调用链
-            tool_chain = collector.get_tool_chain()
-            if tool_chain:
-                chain_display = " → ".join(tool_chain)
-                engine.log_step_message(f"由 {chain_display}")
-            else:
-                # fallback: 从 result 中解析
-                tool_results = result.get("result", {}).get("tool_results", [])
-                chain_names = []
-                for tr in tool_results:
-                    tc = tr.get("tool_call", {})
-                    name = tc.get("name", "")
-                    if name and name != "_text_reply":
-                        chain_names.append(name)
-                if chain_names:
-                    chain_display = " → ".join(chain_names[:12])
-                    engine.log_step_message(f"由 {chain_display}")
-
-            # 显示迭代信息
-            engine.log_step_message(f"迭代 {iterations} 轮 · {len(tool_chain) if tool_chain else len(tool_results) if 'tool_results' in locals() else 0} 次工具调用")
-
-            engine.complete_step(
-                step_num, success=success
-            )
-
-            # Step 4: 检查结果
-            step_num = 4
-            engine.start_step(step_num, "检查结果")
-            if success:
-                check_detail = f"置信度: {confidence:.0%}"
-                if "result" in result:
-                    preview = str(result.get("result", ""))[:100]
-                    if preview:
-                        check_detail += f" | 结果: {preview}..."
-                engine.complete_step(step_num, success=True, detail=check_detail)
-            else:
-                engine.complete_step(step_num, success=False,
-                                     error_message=result.get("error", "执行失败"))
-
-            # Step 5: 输出总结
-            step_num = 5
-            engine.start_step(step_num, "输出总结")
-            async with AsyncSpinner("整理执行结果...", color=CLAUDE):
-                await asyncio.sleep(0.2)
-            engine.complete_step(step_num, success=True)
-
-            log_info(f"Agent 执行完成: success={success}, 迭代={iterations}轮, 置信度={confidence:.2f}")
-
-        except Exception as e:
-            log_error(f"Agent 执行失败: {e}")
-            logger.exception("Agent run failed")
-
-            # 标记当前步骤失败
-            if engine._current_step > 0:
-                engine.complete_step(engine._current_step, success=False,
-                                     error_message=str(e))
-
-            engine.summary(False, detail=str(e))
-
-            return {"success": False, "error": str(e)}
-
-        # 总进度摘要
-        engine.progress_summary()
-
-        # 总结
-        duration = time.time() - engine._start_time if engine._start_time else 0
-        engine.summary(success, duration)
+        print(f"    \033[1;32m{'✅' if success else '❌'} {iterations}轮 · {elapsed:.1f}s\033[0m")
+        log_info(f"Agent 执行完成: success={success}, 迭代={iterations}轮, 耗时={elapsed:.1f}s")
 
         return {
             "success": success,
             "iterations": iterations,
-            "confidence": confidence,
-            "total_time": duration,
-            "results": [{"step": 1, "type": "agent_run", "success": success,
-                         "data_preview": str(result.get("result", ""))[:200]}],
+            "result": final_answer,
+            "error": result.get("error"),
+            "total_time": elapsed,
             "agent_result": result,
             "mode": mode,
+            "results": [{"step": 1, "type": "agent_run", "success": success,
+                         "data_preview": str(final_answer)[:200]}],
         }
 
     async def _execute_collaborate(self, user_request: str,

@@ -63,6 +63,7 @@ class BaseCollaborationStrategy(ABC):
     """协作策略基类"""
 
     def __init__(self, context_center: GlobalContextCenter):
+        logger.warning("[DEPRECATED] %s is deprecated. Use Orchestrator agent()/parallel()/pipeline() instead.", self.__class__.__name__)
         self.context_center = context_center
 
     @abstractmethod
@@ -666,6 +667,10 @@ async def select_strategy_with_llm(
 
 class HybridStrategy(BaseCollaborationStrategy):
     """混合协作策略 - 根据任务特征动态组合多种模式"""
+
+    def __init__(self, context_center: GlobalContextCenter):
+        super().__init__(context_center)
+        logger.warning("[DEPRECATED] %s is deprecated. Use Orchestrator agent()/parallel()/pipeline() instead.", self.__class__.__name__)
 
     async def execute(
         self,

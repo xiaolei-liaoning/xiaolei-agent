@@ -11,9 +11,8 @@ import logging
 import time
 from typing import Any, Dict, List, Optional
 
-from .middleware import BaseMiddleware, RunContext, DynamicStageRoutingMiddleware
+from .middleware import BaseMiddleware, RunContext, DynamicStageRoutingMiddleware, HookResult
 
-from core.multi_agent_v2.infrastructure.shared_bus import get_shared_bus, Message, MessageType
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +25,7 @@ KEPA_PREFIX = "── KEPA 分析 ──"
 
 class ProfileMiddleware(BaseMiddleware):
     """根据任务描述决定执行画像（是否用 workspace / sandbox / RAG 等）"""
+    HOOKS = ("on_start",)
 
     async def on_start(self, ctx: RunContext) -> None:
         profile = ctx.profile
@@ -68,6 +68,7 @@ class ProfileMiddleware(BaseMiddleware):
 
 class ReActDepthMiddleware(BaseMiddleware):
     """追踪 ReAct 深度，防止无限循环"""
+    HOOKS = ("on_think_start", "on_tool_end")
 
     MAX_DEPTH = 30
 
@@ -96,6 +97,7 @@ class ReActDepthMiddleware(BaseMiddleware):
 
 class ConfidenceMiddleware(BaseMiddleware):
     """基于工具调用成功率和结果质量计算置信度"""
+    HOOKS = ("on_tool_end",)
 
     async def on_tool_end(self, ctx: RunContext) -> None:
         if not ctx.tool_results:
@@ -140,6 +142,7 @@ class ConfidenceMiddleware(BaseMiddleware):
 
 class ReflectionMiddleware(BaseMiddleware):
     """定期对执行结果进行反思，沉淀经验"""
+    HOOKS = ("on_tool_end",)
 
     REFLECTION_INTERVAL = 3  # 每 N 轮反思一次
 
@@ -190,6 +193,7 @@ class SubtaskMiddleware(BaseMiddleware):
 
 class BranchMiddleware(BaseMiddleware):
     """根据执行状态决定是否需要切换策略"""
+    HOOKS = ("on_think_end",)
 
     def __init__(self):
         super().__init__()
@@ -206,111 +210,152 @@ class BranchMiddleware(BaseMiddleware):
             ctx.task_description += "\n[系统] 当前策略连续失败，请换一种方法。"
             self._hint_added = True
 
-            # 发布分支决策到 SharedBus
-            if ctx.profile.get("use_shared_bus"):
-                try:
-                    bus = get_shared_bus()
-                    decision_msg = Message(
-                        type=MessageType.AGENT_MESSAGE,
-                        sender=self.agent.agent_id if self.agent else "unknown",
-                        topic="branch:decision",
-                        payload={
-                            "consecutive_failures": consecutive_fails,
-                            "decision": "retry_with_different_strategy",
-                            "error": (ctx.last_error or "")[:200],
-                            "iteration": ctx.iteration,
-                            "timestamp": time.time(),
-                        },
-                    )
-                    await bus.publish("branch:decision", decision_msg)
-                except Exception as e:
-                    logger.debug(f"BranchMiddleware 发布失败: {e}")
-
 
 # ════════════════════════════════════════════════════════════════
 # KEPAMiddleware — KEPA 闭环
 # ════════════════════════════════════════════════════════════════
 
 class KEPAMiddleware(BaseMiddleware):
-    """KEPA 闭环 — 将 Knowledge/Evaluation/Planning/Action 注入提示词并发布到 SharedBus"""
+    """KEPA 闭环 — 知识沉淀 + 跨 Agent 共享
+
+    双向闭环：
+    - on_tool_end: 从工具结果提取知识 → 存入 SharedBus 共享存储
+    - on_think_start: 查询 SharedBus 中的共享知识 → 注入到 LLM 提示词
+    """
+    HOOKS = ("on_think_start", "on_tool_end", "on_finish")
 
     async def on_think_start(self, ctx: RunContext) -> None:
-        """在 LLM 思考前注入 KEPA 分析并发布到 SharedBus"""
+        """在 LLM 思考前注入 KEPA 分析 + 跨 Agent 共享知识"""
         if not ctx.profile.get("use_shared_bus"):
             return
         if not ctx.tool_results or ctx.iteration < 2:
             return
 
         try:
+            # 1. 查询 SharedBus 中的共享知识（其他 Agent 沉淀的）
+            shared = await self._fetch_shared_knowledge(ctx)
+
+            # 2. 自身上下文的知识摘要
+            knowledge_text = self._build_knowledge(ctx)
+            evaluation_text = self._build_evaluation(ctx)
+            planning_text = self._build_planning(ctx)
+
+            # 3. 注入到提示词
+            lines = [KEPA_PREFIX]
+            if shared:
+                lines.append(f"[跨Agent知识] 其他Agent提供了: {shared}")
+            lines.append(f"知识: {knowledge_text}")
+            lines.append(f"评估: {evaluation_text}")
+            lines.append(f"规划: {planning_text}")
+            lines.append("──")
+            action_text = "\n".join(lines)
+            ctx.task_description += f"\n\n{action_text}\n"
+        except Exception as e:
+            logger.debug(f"KEPA 分析注入失败: {e}")
+
+    async def _fetch_shared_knowledge(self, ctx: RunContext) -> str:
+        """从 SharedBus 获取其他 Agent 沉淀的共享知识"""
+        try:
+            from core.multi_agent_v2.infrastructure.shared_bus import get_shared_bus
             bus = get_shared_bus()
 
-            # Knowledge: 数据摘要
-            knowledge_text = self._build_knowledge(ctx)
-            msg_knowledge = Message(
-                type=MessageType.AGENT_MESSAGE,
-                sender=self.agent.agent_id if self.agent else "unknown",
-                topic="kepa:knowledge",
-                payload={
-                    "summary": knowledge_text,
-                    "iteration": ctx.iteration,
-                    "timestamp": time.time(),
-                },
-            )
-            await bus.publish("kepa:knowledge", msg_knowledge)
+            # 检测任务与哪些知识标签相关
+            desc_lower = ctx.task_description.lower()
+            relevant_tags = set()
+            if any(kw in desc_lower for kw in ["搜索", "查询", "百度", "热搜", "search"]):
+                relevant_tags.add("search")
+            if any(kw in desc_lower for kw in ["代码", "程序", "脚本", "code", "python"]):
+                relevant_tags.add("code")
+            if any(kw in desc_lower for kw in ["数据", "分析", "统计", "data", "analysis"]):
+                relevant_tags.add("analysis")
+            if any(kw in desc_lower for kw in ["文件", "写入", "保存", "file", "write"]):
+                relevant_tags.add("file")
+            relevant_tags.add("kepa")  # 通用标签
 
-            # Evaluation: 充分性判断
-            evaluation_text = self._build_evaluation(ctx)
-            msg_evaluation = Message(
-                type=MessageType.AGENT_MESSAGE,
-                sender=self.agent.agent_id if self.agent else "unknown",
-                topic="kepa:evaluation",
-                payload={
-                    "judgment": evaluation_text,
-                    "iteration": ctx.iteration,
-                    "timestamp": time.time(),
-                },
-            )
-            await bus.publish("kepa:evaluation", msg_evaluation)
+            if not relevant_tags:
+                return ""
 
-            # Planning: 下一步建议
-            planning_text = self._build_planning(ctx)
-            msg_planning = Message(
-                type=MessageType.AGENT_MESSAGE,
-                sender=self.agent.agent_id if self.agent else "unknown",
-                topic="kepa:planning",
-                payload={
-                    "suggestions": planning_text,
-                    "iteration": ctx.iteration,
-                    "timestamp": time.time(),
-                },
-            )
-            await bus.publish("kepa:planning", msg_planning)
+            # 逐个标签查询，收集结果
+            snippets = []
+            for tag in relevant_tags:
+                results = await bus.search_knowledge(tag)
+                for key, entry in results.items():
+                    meta = entry.get("meta", {})
+                    summary = meta.get("summary", "")
+                    source = meta.get("source", "")
+                    if summary and len(str(summary)) > 10:
+                        snippets.append(f"[{source}]: {summary[:200]}")
+            if snippets:
+                return " | ".join(snippets[:3])
+            return ""
+        except Exception:
+            return ""
 
-            # Action: 注入到提示词的内容
-            action_lines = [
-                KEPA_PREFIX,
-                f"知识: {knowledge_text}",
-                f"评估: {evaluation_text}",
-                f"规划: {planning_text}",
-                "──",
-            ]
-            action_text = "\n".join(action_lines)
-            ctx.task_description += f"\n\n{action_text}\n"
+    async def on_tool_end(self, ctx: RunContext) -> None:
+        """工具执行后：提取知识 → 存入 SharedBus"""
+        if not ctx.profile.get("use_shared_bus"):
+            return
+        if not ctx.tool_results:
+            return
 
-            msg_action = Message(
-                type=MessageType.AGENT_MESSAGE,
-                sender=self.agent.agent_id if self.agent else "unknown",
-                topic="kepa:action",
-                payload={
-                    "injected": action_text,
-                    "iteration": ctx.iteration,
-                    "timestamp": time.time(),
-                },
-            )
-            await bus.publish("kepa:action", msg_action)
+        try:
+            from core.multi_agent_v2.infrastructure.shared_bus import get_shared_bus
+            bus = get_shared_bus()
 
+            # 提取最后成功的工具结果
+            for r in reversed(ctx.tool_results):
+                if not r.get("success"):
+                    continue
+                tc = r.get("tool_call", {})
+                name = tc.get("name", "")
+                if not name:
+                    continue
+
+                # 提取摘要
+                result_str = str(r.get("result", ""))
+                summary = result_str[:200]
+                if len(summary) < 10:
+                    continue
+
+                # 自动推断标签
+                tags = {"kepa"}
+                if name in ("search", "fetch_url", "rag_search"):
+                    tags.add("search")
+                elif name in ("execute_python", "execute_shell"):
+                    tags.add("code")
+                elif name == "file":
+                    tags.add("file")
+                if "分析" in ctx.task_description or "analysis" in ctx.task_description:
+                    tags.add("analysis")
+
+                key = f"kepa:{name}:{ctx.iteration}"
+                source = ctx.profile.get("agent_id", "unknown")
+                await bus.store_knowledge(key, {"result": summary, "tool": name},
+                                          tags=tags, source=source, summary=summary)
+                logger.debug(f"KEPA 知识已沉淀: {key} (tags={tags})")
+                break  # 每轮只存一条
         except Exception as e:
-            logger.debug(f"KEPA 分析注入/发布失败: {e}")
+            logger.debug(f"KEPA 知识沉淀失败: {e}")
+
+    async def on_finish(self, ctx: RunContext) -> None:
+        """执行完成：最终知识摘要到 SharedBus"""
+        if not ctx.profile.get("use_shared_bus"):
+            return
+        if not ctx.final_answer:
+            return
+        try:
+            from core.multi_agent_v2.infrastructure.shared_bus import get_shared_bus
+            bus = get_shared_bus()
+            source = ctx.profile.get("agent_id", "unknown")
+            await bus.store_knowledge(
+                f"kepa:final:{source}",
+                {"final": ctx.final_answer[:500]},
+                tags={"kepa", "final"},
+                source=source,
+                summary=f"最终结果: {ctx.final_answer[:200]}",
+            )
+        except Exception:
+            pass
 
     def _build_knowledge(self, ctx: RunContext) -> str:
         """从工具结果构建知识摘要"""
@@ -357,54 +402,6 @@ class KEPAMiddleware(BaseMiddleware):
             return "文件已写入，建议验证和总结"
         return "继续当前任务"
 
-    async def on_tool_end(self, ctx: RunContext) -> None:
-        if not ctx.profile.get("use_shared_bus"):
-            return
-        try:
-            bus = get_shared_bus()
-            if ctx.tool_results:
-                last = ctx.tool_results[-1]
-                msg = Message(
-                    type=MessageType.TASK_PROGRESS if last.get("success") else MessageType.TASK_FAILED,
-                    sender=self.agent.agent_id if self.agent else "unknown",
-                    topic="kepa:tool_result",
-                    payload={
-                        "type": "tool_result",
-                        "agent_id": self.agent.agent_id if self.agent else "unknown",
-                        "iteration": ctx.iteration,
-                        "tool_name": last.get("tool_call", {}).get("name", "?"),
-                        "success": last.get("success", False),
-                        "preview": str(last.get("result", ""))[:200],
-                        "timestamp": time.time(),
-                    },
-                )
-                await bus.publish(msg.topic, msg)
-        except Exception as e:
-            logger.debug(f"KEPA 发布失败: {e}")
-
-    async def on_finish(self, ctx: RunContext) -> None:
-        """发布最终执行报告"""
-        if not ctx.profile.get("use_shared_bus"):
-            return
-        try:
-            bus = get_shared_bus()
-            msg = Message(
-                type=MessageType.TASK_COMPLETED,
-                sender=self.agent.agent_id if self.agent else "unknown",
-                topic="agent:done",
-                payload={
-                    "success": ctx.confidence_total > 0.5,
-                    "iterations": ctx.iteration,
-                    "total_tools": len(ctx.tool_results),
-                    "confidence": ctx.confidence_total,
-                    "final_answer": ctx.final_answer[:500],
-                    "timestamp": time.time(),
-                },
-            )
-            await bus.publish(msg.topic, msg)
-        except Exception as e:
-            logger.debug(f"KEPA 完成消息发布失败: {e}")
-
 
 # ════════════════════════════════════════════════════════════════
 # AskUserMiddleware — 用户交互
@@ -412,6 +409,7 @@ class KEPAMiddleware(BaseMiddleware):
 
 class AskUserMiddleware(BaseMiddleware):
     """在关键决策点询问用户"""
+    HOOKS = ("on_think_end", "on_tool_end", "on_wrap_tool_call")
 
     async def on_think_end(self, ctx: RunContext) -> None:
         """首轮简单回答时确认"""
@@ -456,6 +454,7 @@ class DataPipelineMiddleware(BaseMiddleware):
     - 在步骤之间传递结构化数据
     - 自动截断过长的数据（保护 token 预算）
     """
+    HOOKS = ("on_think_start",)
 
     MAX_DATA_LENGTH = 1500
 
@@ -482,7 +481,7 @@ class DataPipelineMiddleware(BaseMiddleware):
         ctx.task_description += pipeline_hint
 
     async def on_tool_end(self, ctx: RunContext) -> None:
-        """工具执行后，记录输出摘要到执行上下文，并发布到 SharedBus"""
+        """工具执行后，记录输出摘要到执行上下文"""
         if not ctx.tool_results:
             return
         last = ctx.tool_results[-1]
@@ -495,22 +494,50 @@ class DataPipelineMiddleware(BaseMiddleware):
         if summary:
             logger.debug(f"数据流: [{name}] → {summary[:80]}...")
 
-        # 发布流水线数据到 SharedBus
-        if ctx.profile.get("use_shared_bus"):
-            try:
-                bus = get_shared_bus()
-                data_msg = Message(
-                    type=MessageType.TASK_PROGRESS,
-                    sender=self.agent.agent_id if self.agent else "unknown",
-                    topic="pipeline:data",
-                    payload={
-                        "tool_name": name,
-                        "success": last.get("success", False),
-                        "summary": summary[:300] if summary else "",
-                        "iteration": ctx.iteration,
-                        "timestamp": time.time(),
-                    },
-                )
-                await bus.publish("pipeline:data", data_msg)
-            except Exception as e:
-                logger.debug(f"DataPipeline 发布失败: {e}")
+
+# ════════════════════════════════════════════════════════════════
+# ReflectionCheckMiddleware — 反思检查（替代主循环硬编码逻辑）
+# ════════════════════════════════════════════════════════════════
+
+class ReflectionCheckMiddleware(BaseMiddleware):
+    """检查反思历史与工具执行结果，替代主循环中的两段硬编码反思逻辑
+
+    职责：
+    - on_think_start: 如果上轮全部失败，注入 [反思] 提示到本轮
+    - on_tool_end: 检测本轮全部失败 → 设置 reflection_feedback → 返回 HookResult(end)
+    """
+    HOOKS = ("on_think_start", "on_tool_end")
+
+    async def on_think_start(self, ctx: RunContext) -> Optional[HookResult]:
+        """在 LLM 思考前注入反思反馈（替换主循环 L607-614 硬编码）"""
+        if not ctx.reflection_history or ctx.final_answer:
+            return
+
+        last_ref = ctx.reflection_history[-1]
+        if last_ref.get("success_rate", 1) == 0 and last_ref.get("total_calls", 0) > 0:
+            if not ctx.task_description.endswith("[反思]"):
+                ctx.task_description += "\n[反思] 上一轮全部失败，请换一种方法（换工具或直接回答）。"
+                logger.info("ReflectionCheck: 注入反思提示到下一轮")
+
+    async def on_tool_end(self, ctx: RunContext) -> Optional[HookResult]:
+        """检测工具全部失败（替换主循环 L592-595 硬编码 + L596-605 决策队列）"""
+        if ctx.iteration < 1 or not ctx.tool_results:
+            return
+
+        # 检查最近这轮的调用是否全部失败
+        recent = ctx.tool_results[-3:]  # 最近 3 次调用
+        if len(recent) == 0:
+            return
+
+        # 如果最近3次调用都失败且没有产出，标记终止
+        all_failed = all(not r.get("success") for r in recent)
+        no_output = not any(
+            r.get("result") and str(r.get("result", "")) != "{}" and str(r.get("result", "")) != ""
+            for r in recent
+        )
+
+        if all_failed and no_output and len(recent) >= 2:
+            ctx.profile["reflection_feedback"] = True
+            reason = f"连续 {len(recent)} 次工具调用全部失败且无产出"
+            logger.warning(f"ReflectionCheck: {reason}")
+            return HookResult(jump_to="end", reason=reason)

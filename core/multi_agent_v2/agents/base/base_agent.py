@@ -20,11 +20,17 @@ logger = logging.getLogger(__name__)
 class BaseAgent:
     """Agent 基类 — 极简核心"""
 
-    def __init__(self, agent_id=None, agent_type=AgentType.WORKER, name=None, description=""):
+    def __init__(self, agent_id=None, agent_type=AgentType.WORKER, name=None, description="",
+                 personality="", role=""):
         self.agent_id = agent_id or str(uuid.uuid4().hex[:12])
         self.agent_type = agent_type
         self.agent_name = name or f"agent_{self.agent_id[:8]}"
         self.description = description
+        # ── 个性/角色配置 ──
+        self.personality = personality  # 个性描述（如"你是一个严谨的数据分析师"）
+        self.role = role                # 角色分类（analyst/coder/researcher/coordinator）
+        # ── 临时记忆（per-task，任务结束后清空）──
+        self.temp_memory: Dict[str, Any] = {}
         self._trace = None
         self._bus_listener_task: Optional[asyncio.Task] = None
         logger.info(f"Agent: {self.agent_id}")
@@ -32,10 +38,30 @@ class BaseAgent:
     def set_trace(self, trace):
         self._trace = trace
 
+    # ── 个性/记忆 ───────────────────────────────────────────────────
+
+    def reset_temp_memory(self) -> None:
+        """清空临时记忆（任务结束后调用）"""
+        self.temp_memory.clear()
+
+    def system_prompt_for_role(self) -> str:
+        """根据角色生成系统提示前缀"""
+        prompts = {
+            "analyst": "你是一个数据分析专家，擅长从数据中提取洞察和撰写分析报告。",
+            "coder": "你是一个资深程序员，擅长编写高质量代码和调试。",
+            "researcher": "你是一个研究助手，擅长搜索信息、验证事实和汇总发现。",
+            "coordinator": "你是一个协调者，擅长拆分任务、分配和汇总多方结果。",
+        }
+        if self.personality:
+            return self.personality
+        return prompts.get(self.role, "")
+
     # ── SharedBus 消息路由 ──────────────────────────────────────────
 
-    async def _start_bus_listener(self) -> None:
+    async def _start_bus_listener(self, enable: bool = False) -> None:
         """启动 SharedBus 直接消息监听（后台协程）"""
+        if not enable:
+            return
         if self._bus_listener_task is not None and not self._bus_listener_task.done():
             return  # 已在监听
 
@@ -47,6 +73,8 @@ class BaseAgent:
                     msg = await bus.receive_direct(self.agent_id, timeout=30.0)
                     if msg is not None:
                         await self._on_bus_direct_message(msg)
+                    else:
+                        await asyncio.sleep(0.5)  # 防忙循环
                 except asyncio.CancelledError:
                     break
                 except Exception as e:
@@ -56,47 +84,8 @@ class BaseAgent:
         self._bus_listener_task = asyncio.create_task(_listen())
 
     async def _on_bus_direct_message(self, msg: "Message") -> None:
-        """处理 SharedBus 直接消息 — 按消息类型路由"""
-        from core.multi_agent_v2.infrastructure.shared_bus import MessageType
-
-        msg_type = msg.type
-        payload = msg.payload or {}
-
-        if msg_type == MessageType.TASK_ASSIGNED:
-            task_id = payload.get("task_id", "")
-            subtask = payload.get("subtask", "")
-            logger.info(f"Agent {self.agent_id} 收到任务分配: task={task_id} subtask={subtask}")
-            # 未来：自动触发任务执行
-
-        elif msg_type == MessageType.TASK_PROGRESS:
-            logger.debug(f"Agent {self.agent_id} 进度通知: {payload.get('preview', '')[:80]}")
-
-        elif msg_type == MessageType.TASK_COMPLETED:
-            task_id = payload.get("task_id", "")
-            result_preview = str(payload.get("final_answer", ""))[:200]
-            logger.info(f"Agent {self.agent_id} 任务完成通知: task={task_id} result={result_preview}")
-
-        elif msg_type == MessageType.TASK_FAILED:
-            task_id = payload.get("task_id", "")
-            error = payload.get("error", "unknown")
-            logger.warning(f"Agent {self.agent_id} 任务失败通知: task={task_id} error={error}")
-
-        elif msg_type == MessageType.AGENT_MESSAGE:
-            sender = msg.sender
-            content = payload.get("content", "")
-            logger.info(f"Agent {self.agent_id} 收到来自 {sender} 的消息: {str(content)[:200]}")
-
-        elif msg_type == MessageType.RESULT_PROPOSAL:
-            sender = msg.sender
-            result_preview = str(payload.get("result", ""))[:200]
-            logger.info(f"Agent {self.agent_id} 收到来自 {sender} 的结果协商: {result_preview}")
-
-        elif msg_type == MessageType.REFLECTION_RESULT:
-            sender = msg.sender
-            logger.info(f"Agent {self.agent_id} 收到来自 {sender} 的反思结果")
-
-        else:
-            logger.debug(f"Agent {self.agent_id} 收到未处理的消息类型: {msg_type}")
+        """处理 SharedBus 直接消息"""
+        logger.debug(f"Agent {self.agent_id} 收到 SharedBus 消息: {msg.type} 来自 {msg.sender}")
 
     # ── Think/Act/Reflect（兼容 collaboration 策略） ─────────────────
 
@@ -139,7 +128,7 @@ class BaseAgent:
             def _ok(t):
                 if t.server == "__builtin__": return True  # builtin handler 全部可用
                 return t.name in _HANDLER_MAP or t.handler is not None
-            core_n = ["search","execute_code"]
+            core_n = ["search"]
             items = [{"type":"function","function":{"name":t.name,"description":t.description,"parameters":t.parameters},
                       "_server":t.server,"_tool_name":t.tool_name} for t in raw if _ok(t)]
             core = [i for i in items if i["function"]["name"] in core_n]
