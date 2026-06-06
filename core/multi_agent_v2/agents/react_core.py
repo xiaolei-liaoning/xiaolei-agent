@@ -292,24 +292,22 @@ class PlanAwareMiddleware(BaseMiddleware):
     MIN_PLAN_LENGTH = 15  # 低于此长度的任务跳过计划（中文场景，15个字以上即可）
 
     async def on_start(self, ctx: RunContext) -> None:
-        """执行前创建计划 — 调用 LLM 生成结构化步骤"""
+        """执行前创建计划 — 简短任务跳过，长任务超时快退"""
         if len(ctx.task_description) < self.MIN_PLAN_LENGTH:
             return  # 简短任务不需要计划
 
-        # 避免重复创建（可能被多个中间件调用）
+        # 避免重复创建
         if getattr(ctx, "plan_state", None) is not None:
             return
 
         plan_state = PlanState()
         ctx.plan_state = plan_state
 
-        # 调用 LLM 创建计划（可能耗时，先打提示）
-        print(f"    \033[2m📋 正在制定执行计划...\033[0m")
+        # 快速尝试创建计划（3s超时）
         try:
             from core.engine.llm_backend import get_llm_router
             router = get_llm_router()
             if not router.is_available():
-                logger.debug("LLM 不可用，跳过计划创建")
                 return
 
             resp = await asyncio.wait_for(
@@ -317,7 +315,7 @@ class PlanAwareMiddleware(BaseMiddleware):
                     {"role": "system", "content": PLAN_CREATION_PROMPT},
                     {"role": "user", "content": ctx.task_description},
                 ], temperature=0.3, max_tokens=1200),
-                timeout=15,
+                timeout=3,  # 快速失败，不阻塞执行
             )
 
             text = resp if isinstance(resp, str) else str(resp)
