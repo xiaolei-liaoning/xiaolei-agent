@@ -16,10 +16,15 @@
 自动发现：MCP 服务器（mcp/ 目录 + .mcp.json）
 """
 
-import asyncio, json, logging, os, re, time
+import asyncio
+import json
+import logging
+import os
+import re
+import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
-from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
@@ -29,100 +34,247 @@ SERVER_BUILTIN = "__builtin__"
 # 工具领域分类系统
 # ═══════════════════════════════════════════════════════════════════
 
+
 class ToolDomain:
     """工具功能领域 — 用于按域分类、按域筛选"""
-    SEARCH = "search"          # 搜索/查询
-    FILE = "file"              # 文件读写
-    CODE = "code"              # 代码执行/编写
-    ANALYSIS = "analysis"      # 数据分析/图表
-    SYSTEM = "system"          # 系统信息/监控
-    TEXT = "text"              # 文本处理
-    TRANSLATE = "translate"    # 翻译
-    WEB = "web"                # 网页抓取
-    GUI = "gui"                # GUI自动化
+
+    SEARCH = "search"  # 搜索/查询
+    FILE = "file"  # 文件读写
+    CODE = "code"  # 代码执行/编写
+    ANALYSIS = "analysis"  # 数据分析/图表
+    SYSTEM = "system"  # 系统信息/监控
+    TEXT = "text"  # 文本处理
+    TRANSLATE = "translate"  # 翻译
+    WEB = "web"  # 网页抓取
+    GUI = "gui"  # GUI自动化
     AUTOMATION = "automation"  # 工作流/自动化
-    REFLECT = "reflect"        # 反思/复盘
-    API = "api"                # HTTP API 调用
-    GIT = "git"                # Git 操作
-    FUN = "fun"                # 趣味
-    GAME = "game"              # 游戏
-    WEATHER = "weather"        # 天气
-    ART = "art"                # ASCII 艺术
-    WORKFLOW = "workflow"      # 工作流引擎
-    DATA_SOURCE = "data_source" # 内置数据源
-    SKILL = "skill"            # 技能执行
-    MISC = "misc"              # 杂项
+    REFLECT = "reflect"  # 反思/复盘
+    API = "api"  # HTTP API 调用
+    GIT = "git"  # Git 操作
+    FUN = "fun"  # 趣味
+    GAME = "game"  # 游戏
+    WEATHER = "weather"  # 天气
+    ART = "art"  # ASCII 艺术
+    WORKFLOW = "workflow"  # 工作流引擎
+    DATA_SOURCE = "data_source"  # 内置数据源
+    SKILL = "skill"  # 技能执行
+    MISC = "misc"  # 杂项
 
 
 # 任务→领域分类关键词表
 # 每个领域包含一组触发词，任务描述命中任一触发词即匹配该领域
 DOMAIN_CLASSIFIER = {
     ToolDomain.SEARCH: [
-        "搜索", "查找", "查询", "搜", "寻找", "找一下", "查一下", "搜一下",
-        "百度", "谷歌", "bing", "search", "find", "lookup", "query",
-        "搜索一下", "查查",
+        "搜索",
+        "查找",
+        "查询",
+        "搜",
+        "寻找",
+        "找一下",
+        "查一下",
+        "搜一下",
+        "百度",
+        "谷歌",
+        "bing",
+        "search",
+        "find",
+        "lookup",
+        "query",
+        "搜索一下",
+        "查查",
+        "github",
+        "GitHub",
     ],
     ToolDomain.FILE: [
-        "文件", "保存", "写入", "读取", "打开文件", "创建文件", "读写",
-        "写文件", "读文件", "path", "路径", "file", "save", "write", "read",
-        "存储", "另存为", "导出到",
+        "文件",
+        "保存",
+        "写入",
+        "读取",
+        "打开文件",
+        "创建文件",
+        "读写",
+        "写文件",
+        "读文件",
+        "path",
+        "路径",
+        "file",
+        "save",
+        "write",
+        "read",
+        "存储",
+        "另存为",
+        "导出到",
     ],
     ToolDomain.CODE: [
-        "代码", "编写", "编程", "写代码", "写程序", "debug", "debugging",
-        "code", "program", "脚本", "script", "执行", "运行代码", "编译",
-        "实现", "编写一个", "写一个",
+        "代码",
+        "编写",
+        "编程",
+        "写代码",
+        "写程序",
+        "debug",
+        "debugging",
+        "code",
+        "program",
+        "脚本",
+        "script",
+        "执行",
+        "运行代码",
+        "编译",
+        "实现",
+        "编写一个",
+        "写一个",
     ],
     ToolDomain.ANALYSIS: [
-        "分析", "统计", "图表", "plot", "分析数据", "analyze", "csv",
-        "数据", "datasets", "dataset", "绘图", "可视化", "画图",
-        "报告", "报表", "汇总",
+        "分析",
+        "统计",
+        "图表",
+        "plot",
+        "分析数据",
+        "analyze",
+        "csv",
+        "数据",
+        "datasets",
+        "dataset",
+        "绘图",
+        "可视化",
+        "画图",
+        "报告",
+        "报表",
+        "汇总",
     ],
     ToolDomain.SYSTEM: [
-        "系统", "cpu", "内存", "磁盘", "进程", "system", "info",
-        "资源", "监控", "监测", "网络", "ip",
+        "系统",
+        "cpu",
+        "内存",
+        "磁盘",
+        "进程",
+        "system",
+        "info",
+        "资源",
+        "监控",
+        "监测",
+        "网络",
+        "ip",
     ],
     ToolDomain.WEB: [
-        "网页", "抓取", "爬取", "scrape", "fetch", "热搜", "trending",
-        "爬虫", "网站", "页面", "文章",
+        "网页",
+        "抓取",
+        "爬取",
+        "scrape",
+        "fetch",
+        "热搜",
+        "trending",
+        "爬虫",
+        "网站",
+        "页面",
+        "文章",
+        "github",
+        "GitHub",
     ],
     ToolDomain.TRANSLATE: [
-        "翻译", "translate", "英文", "中文", "语言", "双语",
-        "译成", "转换语言",
+        "翻译",
+        "translate",
+        "英文",
+        "中文",
+        "语言",
+        "双语",
+        "译成",
+        "转换语言",
     ],
     ToolDomain.REFLECT: [
-        "反思", "复盘", "总结", "review", "reflect", "回顾",
-        "评估", "改进", "优化建议",
+        "反思",
+        "复盘",
+        "总结",
+        "review",
+        "reflect",
+        "回顾",
+        "评估",
+        "改进",
+        "优化建议",
     ],
     ToolDomain.API: [
-        "api", "接口", "请求", "http", "调用接口", "rest", "post请求",
-        "get请求", "curl",
+        "api",
+        "接口",
+        "请求",
+        "http",
+        "调用接口",
+        "rest",
+        "post请求",
+        "get请求",
+        "curl",
     ],
     ToolDomain.GIT: [
-        "git", "提交", "commit", "push", "pull", "branch", "版本控制",
+        "git",
+        "提交",
+        "commit",
+        "push",
+        "pull",
+        "branch",
+        "版本控制",
     ],
     ToolDomain.GUI: [
-        "打开应用", "打开软件", "启动", "截图", "screenshot",
-        "音量", "亮度", "自动化操作",
+        "打开应用",
+        "打开软件",
+        "启动",
+        "截图",
+        "screenshot",
+        "音量",
+        "亮度",
+        "自动化操作",
     ],
     ToolDomain.AUTOMATION: [
-        "工作流", "自动化", "发送邮件", "邮件", "通知", "日历",
-        "workflow", "automation", "email",
+        "工作流",
+        "自动化",
+        "发送邮件",
+        "邮件",
+        "通知",
+        "日历",
+        "workflow",
+        "automation",
+        "email",
     ],
     ToolDomain.WEATHER: [
-        "天气", "weather", "温度", "下雨", "下雪", "预报", "气温",
+        "天气",
+        "weather",
+        "温度",
+        "下雨",
+        "下雪",
+        "预报",
+        "气温",
     ],
     ToolDomain.FUN: [
-        "笑话", "谜语", "星座", "运势", "趣闻", "joke", "fun",
-        "冷知识", "娱乐",
+        "笑话",
+        "谜语",
+        "星座",
+        "运势",
+        "趣闻",
+        "joke",
+        "fun",
+        "冷知识",
+        "娱乐",
     ],
     ToolDomain.GAME: [
-        "游戏", "猜数字", "猜拳", "骰子", "game", "play",
+        "游戏",
+        "猜数字",
+        "猜拳",
+        "骰子",
+        "game",
+        "play",
     ],
     ToolDomain.ART: [
-        "ascii", "艺术", "图案", "打印图案", "画一个", "字符画",
+        "ascii",
+        "艺术",
+        "图案",
+        "打印图案",
+        "画一个",
+        "字符画",
     ],
     ToolDomain.WORKFLOW: [
-        "工作流", "工作流引擎", "创建工作流", "执行工作流", "流程编排",
+        "工作流",
+        "工作流引擎",
+        "创建工作流",
+        "执行工作流",
+        "流程编排",
     ],
 }
 
@@ -235,18 +387,21 @@ async def llm_classify_domains(task: str) -> Optional[set]:
 
     try:
         from core.engine.llm_backend import get_llm_router
+
         router = get_llm_router()
 
         resp = await asyncio.wait_for(
-            router.chat([{"role": "user", "content": prompt}],
-                       temperature=0.05, max_tokens=20),
+            router.chat(
+                [{"role": "user", "content": prompt}], temperature=0.05, max_tokens=20
+            ),
             timeout=3.0,
         )
         if not resp or "系统正在处理" in resp:
             return None
 
         import re as _re
-        numbers = _re.findall(r'\d+', resp.strip())
+
+        numbers = _re.findall(r"\d+", resp.strip())
         domains = set()
         for n in numbers:
             n_int = int(n)
@@ -255,7 +410,7 @@ async def llm_classify_domains(task: str) -> Optional[set]:
 
         if domains:
             _domain_cache[task_hash] = (domains, time.time())
-            logger.info(f"LLM分类: \"{task[:40]}…\" → {domains}")
+            logger.info(f'LLM分类: "{task[:40]}…" → {domains}')
             return domains
     except asyncio.TimeoutError:
         logger.debug(f"LLM分类超时: {task[:40]}")
@@ -276,14 +431,20 @@ def estimate_tool_token_count(tool_def: "ToolDefinition") -> int:
 
 @dataclass
 class ToolDefinition:
-    name: str; description: str; parameters: Dict[str, Any]
-    server: str = ""; tool_name: str = ""; tags: List[str] = field(default_factory=list)
+    name: str
+    description: str
+    parameters: Dict[str, Any]
+    server: str = ""
+    tool_name: str = ""
+    tags: List[str] = field(default_factory=list)
     handler: Optional[Callable] = None
     domains: set = field(default_factory=set)  # 工具所属领域集合
+
 
 # ═══════════════════════════════════════════════════════════════════
 # 内置 Handlers
 # ═══════════════════════════════════════════════════════════════════
+
 
 def _has_readable_content(html_text: str) -> bool:
     """判断 HTML 页面是否有可读的文本内容（不需要 JS 渲染也能用）
@@ -294,10 +455,11 @@ def _has_readable_content(html_text: str) -> bool:
     """
     # 提取所有标签内的文本
     import re
-    text_content = re.sub(r'<script[^>]*>.*?</script>', '', html_text, flags=re.DOTALL)
-    text_content = re.sub(r'<style[^>]*>.*?</style>', '', text_content, flags=re.DOTALL)
-    text_content = re.sub(r'<[^>]+>', ' ', text_content)
-    text_content = re.sub(r'\s+', ' ', text_content).strip()
+
+    text_content = re.sub(r"<script[^>]*>.*?</script>", "", html_text, flags=re.DOTALL)
+    text_content = re.sub(r"<style[^>]*>.*?</style>", "", text_content, flags=re.DOTALL)
+    text_content = re.sub(r"<[^>]+>", " ", text_content)
+    text_content = re.sub(r"\s+", " ", text_content).strip()
 
     # 可读文本量评估
     text_len = len(text_content)
@@ -312,12 +474,14 @@ def _has_readable_content(html_text: str) -> bool:
 
 # ── 纯 asyncio HTTP GET（不创建线程，可安全取消） ───────────────────
 
+
 async def _http_get(url: str, timeout: int = 10) -> str:
     """纯 asyncio HTTP GET（使用 asyncio.open_connection, 无 run_in_executor）
 
     asyncio.wait_for 取消此协程时，socket 立即关闭，不留僵尸线程。
     """
     from urllib.parse import urlparse
+
     parsed = urlparse(url)
     host = parsed.hostname or "localhost"
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
@@ -329,14 +493,17 @@ async def _http_get(url: str, timeout: int = 10) -> str:
     try:
         if parsed.scheme == "https":
             import ssl
+
             ctx = ssl.create_default_context()
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
             reader, writer = await asyncio.wait_for(
-                asyncio.open_connection(host, port, ssl=ctx), timeout=timeout)
+                asyncio.open_connection(host, port, ssl=ctx), timeout=timeout
+            )
         else:
             reader, writer = await asyncio.wait_for(
-                asyncio.open_connection(host, port), timeout=timeout)
+                asyncio.open_connection(host, port), timeout=timeout
+            )
 
         request = (
             f"GET {path} HTTP/1.1\r\n"
@@ -376,10 +543,13 @@ async def _http_get(url: str, timeout: int = 10) -> str:
 
 async def _handle_fetch_url(args: Dict) -> Dict:
     """HTTP GET 获取网页/API数据（纯asyncio，不创建线程）"""
-    url = args.get("url", ""); ml = args.get("max_length", 80000)
-    if not url: return {"result": {"content": [{"text": "需要 url 参数"}]}}
+    url = args.get("url", "")
+    ml = args.get("max_length", 80000)
+    if not url:
+        return {"result": {"content": [{"text": "需要 url 参数"}]}}
     import ssl
-    from urllib.parse import urlparse, urlunparse, quote
+    from urllib.parse import quote, urlparse, urlunparse
+
     try:
         url.encode("ascii")
     except (UnicodeEncodeError, UnicodeDecodeError):
@@ -387,18 +557,24 @@ async def _handle_fetch_url(args: Dict) -> Dict:
         path = quote(parsed.path, safe="/%@") if parsed.path else ""
         q = parsed.query
         if q:
-            try: q.encode("ascii")
+            try:
+                q.encode("ascii")
             except (UnicodeEncodeError, UnicodeDecodeError):
                 parts = []
                 for part in q.split("&"):
                     if "=" in part:
                         k, v = part.split("=", 1)
-                        try: v.encode("ascii")
-                        except: v = quote(v, safe="")
+                        try:
+                            v.encode("ascii")
+                        except:
+                            v = quote(v, safe="")
                         parts.append(f"{k}={v}")
-                    else: parts.append(part)
+                    else:
+                        parts.append(part)
                 q = "&".join(parts)
-        url = urlunparse((parsed.scheme, parsed.netloc, path, parsed.params, q, parsed.fragment))
+        url = urlunparse(
+            (parsed.scheme, parsed.netloc, path, parsed.params, q, parsed.fragment)
+        )
 
     # 使用 asyncio 原生 HTTP 请求（不创建线程）
     try:
@@ -408,21 +584,45 @@ async def _handle_fetch_url(args: Dict) -> Dict:
     except Exception as e:
         return {"result": {"content": [{"text": f"请求失败: {e}"}]}}
     je = None
-    for p in [r'<!--s-data:(.*?)-->', r'window\.__INITIAL_STATE__\s*=\s*(\{.*?\});',
-              r'<script[^>]*id="__NEXT_DATA__"[^>]*>(.*?)</script>']:
+    for p in [
+        r"<!--s-data:(.*?)-->",
+        r"window\.__INITIAL_STATE__\s*=\s*(\{.*?\});",
+        r'<script[^>]*id="__NEXT_DATA__"[^>]*>(.*?)</script>',
+    ]:
         m = re.search(p, text, re.DOTALL)
-        if m: je = m.group(1).strip(); break
+        if m:
+            je = m.group(1).strip()
+            break
     if not je:
         # 兜底：找第一个 { 或 [ 尝试作为 JSON
-        m = re.search(r'[\{\[]', text)
+        m = re.search(r"[\{\[]", text)
         if m:
-            maybe_json = text[m.start():].strip()
+            maybe_json = text[m.start() :].strip()
             # 严格验证：必须是真正的 JSON（CSS 会以 { 后跟字母开头）
             is_real_json = False
-            if maybe_json.startswith("{") and maybe_json.lstrip("{").strip().startswith('"'):
+            if maybe_json.startswith("{") and maybe_json.lstrip("{").strip().startswith(
+                '"'
+            ):
                 # {"key": value} 格式 — 真 JSON
                 is_real_json = True
-            elif maybe_json.startswith("[") and maybe_json.lstrip("[").strip()[:1] in ('"', '{', '[', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 't', 'f', 'n'):
+            elif maybe_json.startswith("[") and maybe_json.lstrip("[").strip()[:1] in (
+                '"',
+                "{",
+                "[",
+                "0",
+                "1",
+                "2",
+                "3",
+                "4",
+                "5",
+                "6",
+                "7",
+                "8",
+                "9",
+                "t",
+                "f",
+                "n",
+            ):
                 # [...] 数组格式
                 is_real_json = True
             if is_real_json:
@@ -434,7 +634,15 @@ async def _handle_fetch_url(args: Dict) -> Dict:
     if not je and stripped.startswith("<") and not _has_readable_content(stripped):
         fp = f"/tmp/agent_fetch_{int(time.time())}.html"
         Path(fp).write_text(text, encoding="utf-8")
-        return {"result": {"content": [{"text": f"网页是动态HTML (已保存到 {fp})。请用 execute_python 执行 Python 通过 requests + BeautifulSoup/正则解析来提取数据。"}]}}
+        return {
+            "result": {
+                "content": [
+                    {
+                        "text": f"网页是动态HTML (已保存到 {fp})。请用 execute_python 执行 Python 通过 requests + BeautifulSoup/正则解析来提取数据。"
+                    }
+                ]
+            }
+        }
     fp = f"/tmp/agent_fetch_{int(time.time())}.json"
     Path(fp).write_text(clean, encoding="utf-8")
 
@@ -452,9 +660,14 @@ async def _handle_fetch_url(args: Dict) -> Dict:
                         word = item.get("word", item.get("query", ""))
                         hot_score = item.get("hotScore", item.get("heat", ""))
                         if word:
-                            hot_items.append(f"  {word}" + (f" (热度:{hot_score})" if hot_score else ""))
+                            hot_items.append(
+                                f"  {word}"
+                                + (f" (热度:{hot_score})" if hot_score else "")
+                            )
             if hot_items:
-                preview = f"获取到 {len(hot_items)} 条热搜/榜单数据：\n" + "\n".join(hot_items[:20])
+                preview = f"获取到 {len(hot_items)} 条热搜/榜单数据：\n" + "\n".join(
+                    hot_items[:20]
+                )
                 if len(hot_items) > 20:
                     preview += f"\n  ...共{len(hot_items)}条，完整数据见文件"
             # 通用 JSON 格式友好展示
@@ -463,7 +676,10 @@ async def _handle_fetch_url(args: Dict) -> Dict:
                 if len(text_repr) < 500:
                     preview = text_repr
                 else:
-                    preview = text_repr[:500] + f"\n...截断 ({len(text_repr)} 字符)，完整数据见文件"
+                    preview = (
+                        text_repr[:500]
+                        + f"\n...截断 ({len(text_repr)} 字符)，完整数据见文件"
+                    )
     except (json.JSONDecodeError, AttributeError):
         pass
 
@@ -473,9 +689,15 @@ async def _handle_fetch_url(args: Dict) -> Dict:
 
 async def _handle_file(args: Dict) -> Dict:
     """读写文件"""
-    action=args.get("action",""); path=args.get("path","")
-    if not path: return {"result":{"content":[{"text":"需要 path 参数"}]}}
-    path = re.sub(r'%([^%]+)%', lambda m: os.environ.get(m.group(1), os.environ.get('HOME', '~')), path)
+    action = args.get("action", "")
+    path = args.get("path", "")
+    if not path:
+        return {"result": {"content": [{"text": "需要 path 参数"}]}}
+    path = re.sub(
+        r"%([^%]+)%",
+        lambda m: os.environ.get(m.group(1), os.environ.get("HOME", "~")),
+        path,
+    )
     # 中文路径映射：LLM 可能用"桌面上/xxx.txt"代替绝对路径
     desktop = os.path.expanduser("~/Desktop")
     if path.startswith("桌面上/"):
@@ -483,16 +705,18 @@ async def _handle_file(args: Dict) -> Dict:
     elif path.startswith("桌面/"):
         path = desktop + path[2:]
     path = os.path.expanduser(path)
-    if action=="read":
-        if not os.path.isfile(path): return {"result":{"content":[{"text":f"文件不存在: {path}"}]}}
-        return {"result":{"content":[{"text":open(path,encoding="utf-8").read()}]}}
-    if action=="write":
-        c=args.get("content","")
-        if not c: return {"result":{"content":[{"text":"需要 content 参数"}]}}
-        Path(path).parent.mkdir(parents=True,exist_ok=True)
-        Path(path).write_text(c,encoding="utf-8")
-        return {"result":{"content":[{"text":f"已写入 {path} ({len(c)} bytes)"}]}}
-    return {"result":{"content":[{"text":"file 需要 action=read|write"}]}}
+    if action == "read":
+        if not os.path.isfile(path):
+            return {"result": {"content": [{"text": f"文件不存在: {path}"}]}}
+        return {"result": {"content": [{"text": open(path, encoding="utf-8").read()}]}}
+    if action == "write":
+        c = args.get("content", "")
+        if not c:
+            return {"result": {"content": [{"text": "需要 content 参数"}]}}
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        Path(path).write_text(c, encoding="utf-8")
+        return {"result": {"content": [{"text": f"已写入 {path} ({len(c)} bytes)"}]}}
+    return {"result": {"content": [{"text": "file 需要 action=read|write"}]}}
 
 
 async def _handle_hot_search(query: str) -> Optional[Dict]:
@@ -523,37 +747,104 @@ async def _handle_hot_search(query: str) -> Optional[Dict]:
             return None
 
     sources = []
+    query_lower = query.lower()
+
+    # 0. GitHub Trending 检测 — 当查询包含 github 时优先使用
+    is_github = "github" in query_lower or "git" in query_lower
+    if is_github:
+
+        async def _github_trending():
+            """抓取 GitHub Trending 页面"""
+            # 先尝试 GitHub API (gh CLI)
+            try:
+                from core.mcp.mcp_client import mcp_client
+
+                gh_tools = await mcp_client.list_tools("github-mcp")
+                # f"[{srv}] " 前缀的工具名 → 提取原始名称
+                actual_tools = [t.get("name", "") for t in gh_tools]
+            except Exception:
+                gh_tools = []
+            from datetime import datetime, timedelta
+
+            since_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+
+            # 方式 A: 用 GitHub API 直接获取 trending
+            gh_data = await _try_json(
+                f"https://api.github.com/search/repositories?q=created:>{since_date}&sort=stars&order=desc&per_page=15",
+                parser=lambda t: _format_github_trending(t, "GitHub 趋势仓库"),
+            )
+            if gh_data:
+                sources.append(gh_data)
+
+            # 方式 B: 爬取 GitHub Trending 页面做补充
+            gh_trending = await _try_json(
+                "https://github.com/trending?since=weekly",
+                parser=lambda t: _format_github_trending_html(t, "GitHub Trending"),
+            )
+            if gh_trending:
+                # 如果 API 已经拿到数据，把页面解析结果做补充
+                if gh_data:
+                    sources.append(gh_trending)
+                else:
+                    sources.append(gh_trending)
+
+        asyncio.create_task(_github_trending())
+        # GitHub 查询只等 GitHub 源，不等中文平台
+        await asyncio.sleep(2.5)
+        if sources:
+            combined = "\n\n".join(sources[:3])
+            return {
+                "result": {
+                    "content": [
+                        {"text": f"获取到 GitHub Trending 数据：\n\n{combined}"}
+                    ]
+                }
+            }
+        # GitHub 源都失败时降级到普通搜索
+        return None
 
     # 1. Zhihu hot list (public API, no auth needed)
     async def _zhihu():
-        data = await _try_json("https://www.zhihu.com/api/v3/feed/topstory/hot-lists?limit=10",
-            parser=lambda t: _format_hot_list(t, "知乎热搜"))
+        data = await _try_json(
+            "https://www.zhihu.com/api/v3/feed/topstory/hot-lists?limit=10",
+            parser=lambda t: _format_hot_list(t, "知乎热搜"),
+        )
         if data:
             sources.append(data)
+
     asyncio.create_task(_zhihu())
 
     # 2. Weibo hot search (public mirror API)
     async def _weibo():
-        data = await _try_json("https://tenapi.cn/v2/weibohot",
-            parser=lambda t: _format_hot_list(t, "微博热搜"))
+        data = await _try_json(
+            "https://tenapi.cn/v2/weibohot",
+            parser=lambda t: _format_hot_list(t, "微博热搜"),
+        )
         if data:
             sources.append(data)
+
     asyncio.create_task(_weibo())
 
     # 3. Douyin hot (public mirror API)
     async def _douyin():
-        data = await _try_json("https://tenapi.cn/v2/douyinhot",
-            parser=lambda t: _format_hot_list(t, "抖音热榜"))
+        data = await _try_json(
+            "https://tenapi.cn/v2/douyinhot",
+            parser=lambda t: _format_hot_list(t, "抖音热榜"),
+        )
         if data:
             sources.append(data)
+
     asyncio.create_task(_douyin())
 
     # 4. Baidu hot search (via alternative API)
     async def _baidu():
-        data = await _try_json("https://top.baidu.com/api/board?tab=realtime",
-            parser=lambda t: _format_hot_list(t, "百度热搜"))
+        data = await _try_json(
+            "https://top.baidu.com/api/board?tab=realtime",
+            parser=lambda t: _format_hot_list(t, "百度热搜"),
+        )
         if data:
             sources.append(data)
+
     asyncio.create_task(_baidu())
 
     # 等待至少一个源返回（5s超时）
@@ -575,18 +866,22 @@ def _format_hot_list(json_text: str, source_name: str) -> Optional[str]:
         # 格式1: {data: {list: [{title:..., ...}]}}
         for d in [data]:
             entries = []
+
             # 递归搜索list/items/data数组
             def _find_list(obj, depth=0):
-                if depth > 3: return []
+                if depth > 3:
+                    return []
                 if isinstance(obj, dict):
-                    if 'list' in obj and isinstance(obj['list'], list):
-                        return obj['list']
+                    if "list" in obj and isinstance(obj["list"], list):
+                        return obj["list"]
                     for v in obj.values():
-                        r = _find_list(v, depth+1)
-                        if r: return r
+                        r = _find_list(v, depth + 1)
+                        if r:
+                            return r
                 if isinstance(obj, list):
                     return obj
                 return []
+
             entries = _find_list(data)
 
             if not entries and isinstance(data, list):
@@ -594,13 +889,19 @@ def _format_hot_list(json_text: str, source_name: str) -> Optional[str]:
 
             for e in entries[:15]:
                 if isinstance(e, dict):
-                    title = e.get('title', e.get('name', e.get('word', e.get('content', ''))))
-                    hot = e.get('hot', e.get('hotScore', e.get('heat', e.get('count', ''))))
-                    desc = e.get('desc', e.get('description', ''))
+                    title = e.get(
+                        "title", e.get("name", e.get("word", e.get("content", "")))
+                    )
+                    hot = e.get(
+                        "hot", e.get("hotScore", e.get("heat", e.get("count", "")))
+                    )
+                    desc = e.get("desc", e.get("description", ""))
                     if isinstance(title, str) and title:
                         line = title[:60]
-                        if hot: line += f" (热度:{hot})"
-                        if desc and isinstance(desc, str): line += f" — {desc[:50]}"
+                        if hot:
+                            line += f" (热度:{hot})"
+                        if desc and isinstance(desc, str):
+                            line += f" — {desc[:50]}"
                         items.append(line)
 
         if items:
@@ -610,15 +911,108 @@ def _format_hot_list(json_text: str, source_name: str) -> Optional[str]:
         return None
 
 
+def _format_github_trending(json_text: str, source_name: str) -> Optional[str]:
+    """从 GitHub Search API JSON 中提取趋势仓库列表"""
+    try:
+        data = json.loads(json_text)
+        items_raw = data.get("items", [])
+        if not items_raw:
+            return None
+        lines = []
+        for repo in items_raw[:15]:
+            name = repo.get("full_name", repo.get("name", ""))
+            desc = repo.get("description", "") or ""
+            stars = repo.get("stargazers_count", 0)
+            forks = repo.get("forks_count", 0)
+            lang = repo.get("language") or ""
+            if name:
+                line = f"  ⭐ {stars}  🍴 {forks}"
+                if lang:
+                    line += f"  🔤 {lang}"
+                line += f"\n      {name}"
+                if desc:
+                    line += f" — {desc[:80]}"
+                lines.append(line)
+        if lines:
+            return f"【{source_name}】\n" + "\n".join(lines[:15])
+        return None
+    except Exception:
+        return None
+
+
+def _format_github_trending_html(html_text: str, source_name: str) -> Optional[str]:
+    """从 GitHub Trending 页面 HTML 中提取趋势仓库列表"""
+    try:
+        import re
+
+        # 提取 article 标签内的 repo 信息
+        # GitHub trending 页面结构: <article> 内包含 h1/h2/repo 名和描述
+        articles = re.findall(r"<article[^>]*>.*?</article>", html_text, re.DOTALL)
+        if not articles:
+            return None
+        lines = []
+        for art in articles[:15]:
+            # 提取仓库名
+            name_match = re.search(
+                r'<h[12][^>]*>.*?<a[^>]*href="/([^"]+)"[^>]*>([^<]+)</a>', art
+            )
+            if name_match:
+                full_name = name_match.group(1).strip()
+                display = name_match.group(2).strip()
+            else:
+                # 备选: 直接找 h1/h2 中的文本
+                h_match = re.search(r"<h[12][^>]*>\s*(.+?)\s*</h[12]>", art)
+                if h_match:
+                    display = h_match.group(1).strip()
+                    full_name = display
+                else:
+                    continue
+
+            # 提取描述
+            desc_match = re.search(
+                r'<p[^>]*class="[^"]*col-9[^"]*"[^>]*>(.*?)</p>', art, re.DOTALL
+            )
+            desc = desc_match.group(1).strip() if desc_match else ""
+            desc = re.sub(r"<[^>]+>", "", desc).strip()
+
+            # 提取语言
+            lang_match = re.search(
+                r'<span[^>]*itemprop="programmingLanguage"[^>]*>(.*?)</span>', art
+            )
+            lang = lang_match.group(1).strip() if lang_match else ""
+
+            # 提取星数
+            stars_match = re.search(
+                r'<a[^>]*href="/[^"]+/stargazers"[^>]*>\s*([\d,]+)\s*</a>', art
+            )
+            stars = stars_match.group(1).strip() if stars_match else ""
+
+            line = f"  ⭐ {stars}"
+            if lang:
+                line += f"  🔤 {lang}"
+            line += f"\n      {full_name}"
+            if desc:
+                line += f" — {desc[:80]}"
+            lines.append(line)
+
+        if lines:
+            return f"【{source_name}】\n" + "\n".join(lines[:15])
+        return None
+    except Exception:
+        return None
+
+
 async def _handle_search(args: Dict) -> Dict:
     """联网搜索 — 并发尝试多个搜索引擎 + 热门数据直连"""
     query = args.get("query", "")
-    if not query: return {"result": {"content": [{"text": "需要 query 参数"}]}}
+    if not query:
+        return {"result": {"content": [{"text": "需要 query 参数"}]}}
     from urllib.parse import quote
+
     encoded = quote(query)
 
     # ── 热榜/热搜检测：直接调用公开数据源 ──
-    is_hot = '热搜' in query or '热榜' in query or 'trending' in query.lower()
+    is_hot = "热搜" in query or "热榜" in query or "trending" in query.lower()
     if is_hot:
         hot_results = await _handle_hot_search(query)
         if hot_results:
@@ -635,26 +1029,32 @@ async def _handle_search(args: Dict) -> Dict:
 
             # 从 fetch_url 的结果中提取可读文本
             import re as _re
+
             # 尝试从保存的文件中提取纯文本
             file_path = None
-            m = _re.search(r'📁完整数据:\s*(\S+)', text)
+            m = _re.search(r"📁完整数据:\s*(\S+)", text)
             if not m:
-                m = _re.search(r'已保存到\s+(\S+)', text)
+                m = _re.search(r"已保存到\s+(\S+)", text)
             if m:
                 file_path = m.group(1)
 
             content_text = ""
             if file_path:
                 import os as _os
+
                 if _os.path.exists(file_path):
-                    raw = open(file_path, encoding='utf-8').read()
+                    raw = open(file_path, encoding="utf-8").read()
                     # 提取纯文本
-                    content_text = _re.sub(r'<script[^>]*>.*?</script>', '', raw, flags=_re.DOTALL)
-                    content_text = _re.sub(r'<style[^>]*>.*?</style>', '', content_text, flags=_re.DOTALL)
-                    content_text = _re.sub(r'<[^>]+>', ' ', content_text)
-                    content_text = _re.sub(r'\s+', ' ', content_text).strip()
+                    content_text = _re.sub(
+                        r"<script[^>]*>.*?</script>", "", raw, flags=_re.DOTALL
+                    )
+                    content_text = _re.sub(
+                        r"<style[^>]*>.*?</style>", "", content_text, flags=_re.DOTALL
+                    )
+                    content_text = _re.sub(r"<[^>]+>", " ", content_text)
+                    content_text = _re.sub(r"\s+", " ", content_text).strip()
                     # 去掉 URL 和纯数字噪声，保留有意义的文本
-                    content_text = _re.sub(r'https?://\S+', '', content_text)
+                    content_text = _re.sub(r"https?://\S+", "", content_text)
 
             if content_text and len(content_text) > 80:
                 return f"搜索结果({url}):\n{content_text[:3000]}"
@@ -670,8 +1070,11 @@ async def _handle_search(args: Dict) -> Dict:
         f"https://www.google.com/search?q={encoded}&num=10",
     ]
     tasks = [asyncio.create_task(_try_one(u)) for u in urls]
-    done, pending = await asyncio.wait(tasks, timeout=8.0, return_when=asyncio.FIRST_COMPLETED)
-    for p in pending: p.cancel()
+    done, pending = await asyncio.wait(
+        tasks, timeout=8.0, return_when=asyncio.FIRST_COMPLETED
+    )
+    for p in pending:
+        p.cancel()
     for task in done:
         text = task.result()
         if text:
@@ -687,13 +1090,20 @@ async def _handle_search(args: Dict) -> Dict:
             return {"result": {"content": [{"text": text}]}}
     except BaseException:
         pass
-    return {"result": {"content": [{"text": "搜索暂时无法获取结果，请用 fetch_url 直接访问目标网址"}]}}
+    return {
+        "result": {
+            "content": [
+                {"text": "搜索暂时无法获取结果，请用 fetch_url 直接访问目标网址"}
+            ]
+        }
+    }
 
 
 async def _handle_execute_python(args: Dict) -> Dict:
     """执行 Python 代码 — 通过 mode 参数指定执行模式"""
     code = args.get("code", "")
-    if not code: return {"result": {"content": [{"text": "缺少 code 参数"}]}}
+    if not code:
+        return {"result": {"content": [{"text": "缺少 code 参数"}]}}
     mode = args.get("mode", "local")  # local(默认,可写桌面文件) | sandbox(隔离)
     timeout = int(args.get("timeout", 30))
 
@@ -702,53 +1112,90 @@ async def _handle_execute_python(args: Dict) -> Dict:
         skip_check = args.get("skip_module_check", False)
         sandbox_err = ""
         try:
-            from core.tools.sandbox_executor import SandboxExecutor, ResourceLimits
+            from core.tools.sandbox_executor import ResourceLimits, SandboxExecutor
+
             limits = ResourceLimits(timeout=min(timeout, 60), max_output_size_kb=10000)
             ex = SandboxExecutor()
-            sr = await ex.execute_python(code, limits=limits, skip_module_check=skip_check)
+            sr = await ex.execute_python(
+                code, limits=limits, skip_module_check=skip_check
+            )
             if sr.status.value in ("completed", "success"):
                 out = sr.stdout if sr.stdout else ("(无输出)" if sr.stderr else "")
                 err = sr.stderr if sr.stderr else ""
                 full = out[:8000] + ("\n" + err[:2000] if err else "")
-                return {"result": {"content": [{"text": f"[沙盒] ✅ 执行成功\n{full}"}]}}
+                return {
+                    "result": {"content": [{"text": f"[沙盒] ✅ 执行成功\n{full}"}]}
+                }
             sandbox_err = sr.error_message or sr.stderr or "执行失败"
         except Exception as e:
             sandbox_err = f"{type(e).__name__}: {e}"
         # 沙盒失败 → 降级到 local（保证 LLM 生成的代码能拿到反馈）
         try:
-            import io, contextlib, textwrap
+            import contextlib
+            import io
+            import textwrap
+
             dedented = textwrap.dedent(code)
-            f = io.StringIO(); err = io.StringIO()
+            f = io.StringIO()
+            err = io.StringIO()
             with contextlib.redirect_stdout(f), contextlib.redirect_stderr(err):
                 exec(dedented)
             out = f.getvalue() or err.getvalue() or "(无输出)"
-            return {"result": {"content": [{"text": f"[沙盒❌→本地✅] 沙盒: {sandbox_err[:100]}\n{out[:5000]}"}]}}
+            return {
+                "result": {
+                    "content": [
+                        {
+                            "text": f"[沙盒❌→本地✅] 沙盒: {sandbox_err[:100]}\n{out[:5000]}"
+                        }
+                    ]
+                }
+            }
         except Exception as e2:
-            return {"result": {"content": [{"text": f"[沙盒❌] {sandbox_err[:200]}\n[本地❌] {type(e2).__name__}: {e2}"[:3000]}]}}
+            return {
+                "result": {
+                    "content": [
+                        {
+                            "text": f"[沙盒❌] {sandbox_err[:200]}\n[本地❌] {type(e2).__name__}: {e2}"[
+                                :3000
+                            ]
+                        }
+                    ]
+                }
+            }
 
     # local 模式：本地 exec（可写桌面文件，速度快）
     try:
-        import io, contextlib, textwrap
+        import contextlib
+        import io
+        import textwrap
+
         dedented = textwrap.dedent(code)
-        f = io.StringIO(); err = io.StringIO()
+        f = io.StringIO()
+        err = io.StringIO()
         with contextlib.redirect_stdout(f), contextlib.redirect_stderr(err):
             exec(dedented)
         out = f.getvalue() or err.getvalue() or "(无输出)"
         return {"result": {"content": [{"text": f"[本地] ✅ 执行成功\n{out[:5000]}"}]}}
     except Exception as e:
-        return {"result": {"content": [{"text": f"[本地] ❌ {type(e).__name__}: {e}"[:3000]}]}}
+        return {
+            "result": {
+                "content": [{"text": f"[本地] ❌ {type(e).__name__}: {e}"[:3000]}]
+            }
+        }
 
 
 async def _handle_execute_shell(args: Dict) -> Dict:
     """执行 Shell 命令 — 通过 mode 参数指定执行模式"""
     command = args.get("command", "")
-    if not command: return {"result": {"content": [{"text": "缺少 command 参数"}]}}
+    if not command:
+        return {"result": {"content": [{"text": "缺少 command 参数"}]}}
     mode = args.get("mode", "local")
     timeout = int(args.get("timeout", 30))
 
     if mode == "sandbox":
         try:
-            from core.tools.sandbox_executor import SandboxExecutor, ResourceLimits
+            from core.tools.sandbox_executor import ResourceLimits, SandboxExecutor
+
             limits = ResourceLimits(timeout=min(timeout, 60), max_output_size_kb=10000)
             ex = SandboxExecutor()
             sr = await ex.execute_shell(command, limits=limits)
@@ -756,37 +1203,69 @@ async def _handle_execute_shell(args: Dict) -> Dict:
                 out = sr.stdout if sr.stdout else ("(无输出)" if sr.stderr else "")
                 err = sr.stderr if sr.stderr else ""
                 full = out[:8000] + ("\n" + err[:2000] if err else "")
-                return {"result": {"content": [{"text": f"[沙盒] ✅ 执行成功\n{full}"}]}}
-            return {"result": {"content": [{"text": f"[沙盒] ❌ {sr.error_message or sr.stderr or '执行失败'}"[:5000]}]}}
+                return {
+                    "result": {"content": [{"text": f"[沙盒] ✅ 执行成功\n{full}"}]}
+                }
+            return {
+                "result": {
+                    "content": [
+                        {
+                            "text": f"[沙盒] ❌ {sr.error_message or sr.stderr or '执行失败'}"[
+                                :5000
+                            ]
+                        }
+                    ]
+                }
+            }
         except Exception as e:
-            return {"result": {"content": [{"text": f"[沙盒] ❌ {type(e).__name__}: {e}"[:3000]}]}}
+            return {
+                "result": {
+                    "content": [{"text": f"[沙盒] ❌ {type(e).__name__}: {e}"[:3000]}]
+                }
+            }
 
     # local 模式
     import asyncio
+
     try:
         proc = await asyncio.create_subprocess_shell(command, stdout=-1, stderr=-1)
         o, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        return {"result": {"content": [{"text": f"[本地] 返回码 {proc.returncode}\n{o.decode()[:3000]}"}]}}
+        return {
+            "result": {
+                "content": [
+                    {"text": f"[本地] 返回码 {proc.returncode}\n{o.decode()[:3000]}"}
+                ]
+            }
+        }
     except asyncio.TimeoutError:
         return {"result": {"content": [{"text": "[本地] ❌ 执行超时"}]}}
     except Exception as e:
-            return {"result": {"content": [{"text": f"[本地] ❌ {e}"[:2000]}]}}
+        return {"result": {"content": [{"text": f"[本地] ❌ {e}"[:2000]}]}}
     except Exception as e:
-        return {"result": {"content": [{"text": f"[沙盒] ❌ {type(e).__name__}: {e}"[:3000]}]}}
+        return {
+            "result": {
+                "content": [{"text": f"[沙盒] ❌ {type(e).__name__}: {e}"[:3000]}]
+            }
+        }
 
 
 async def _handle_rag_search(args: Dict) -> Dict:
     """RAG 增强搜索 — 向量库 + 知识提取 + 联网搜索"""
     query = args.get("query", "")
-    if not query: return {"result": {"content": [{"text": "需要 query 参数"}]}}
+    if not query:
+        return {"result": {"content": [{"text": "需要 query 参数"}]}}
     max_results = int(args.get("max_results", 5))
     learn = args.get("learn", True)
     try:
         from core.search.rag_search_engine import RAGSearchEngine
+
         engine = RAGSearchEngine()
         result = await engine.search_and_learn(
-            query=query, user_id=1, learn=learn,
-            max_results=max_results, enhance=True,
+            query=query,
+            user_id=1,
+            learn=learn,
+            max_results=max_results,
+            enhance=True,
         )
         text_parts = [f"查询: {result.get('query', query)}"]
         if result.get("from_cache"):
@@ -802,7 +1281,9 @@ async def _handle_rag_search(args: Dict) -> Dict:
         else:
             text_parts.append("未找到相关结果")
         if result.get("knowledge_extracted"):
-            text_parts.append(f"\n🧠 知识提取: {str(result['knowledge_extracted'])[:200]}")
+            text_parts.append(
+                f"\n🧠 知识提取: {str(result['knowledge_extracted'])[:200]}"
+            )
         return {"result": {"content": [{"text": "\n".join(text_parts)[:5000]}]}}
     except Exception as e:
         return {"result": {"content": [{"text": f"RAG 搜索失败: {e}"}]}}
@@ -816,11 +1297,14 @@ async def _handle_skill_execute(args: Dict) -> Dict:
         return {"result": {"content": [{"text": "需要 skill_name 参数"}]}}
     try:
         from core.engine.skill_dispatcher import get_skill_dispatcher
+
         dispatcher = get_skill_dispatcher()
         # 先试 SkillRegistry 直接执行
         try:
-            from core.skill_base import get_skill_registry
             import inspect
+
+            from core.skill_base import get_skill_registry
+
             registry = get_skill_registry()
             skill = registry.get(skill_name)
             if skill:
@@ -829,15 +1313,31 @@ async def _handle_skill_execute(args: Dict) -> Dict:
                     result = await skill.execute(params, context=ctx)
                 else:
                     result = skill.execute(params, context=ctx)
-                return {"result": {"content": [{"text": f"[技能] ✅ {skill_name} 执行成功\n{str(result)[:3000]}"}]}}
+                return {
+                    "result": {
+                        "content": [
+                            {
+                                "text": f"[技能] ✅ {skill_name} 执行成功\n{str(result)[:3000]}"
+                            }
+                        ]
+                    }
+                }
         except Exception:
             pass
         # 兜底：通过 dispatcher 匹配
         matched = dispatcher.match_skill(skill_name)
         if matched:
             result = dispatcher.dispatch(skill_name)
-            return {"result": {"content": [{"text": f"[技能] ✅ 匹配到 {matched}\n{str(result)[:3000]}"}]}}
-        return {"result": {"content": [{"text": f"[技能] ❌ 未找到技能: {skill_name}"}]}}
+            return {
+                "result": {
+                    "content": [
+                        {"text": f"[技能] ✅ 匹配到 {matched}\n{str(result)[:3000]}"}
+                    ]
+                }
+            }
+        return {
+            "result": {"content": [{"text": f"[技能] ❌ 未找到技能: {skill_name}"}]}
+        }
     except Exception as e:
         return {"result": {"content": [{"text": f"技能执行失败: {e}"}]}}
 
@@ -847,9 +1347,12 @@ async def _handle_kepa_reflect(args: Dict) -> Dict:
     action = args.get("action", "full")
     context = args.get("context", "")
     if action not in ("think", "act", "reflect", "full"):
-        return {"result": {"content": [{"text": "action 必须是 think|act|reflect|full"}]}}
+        return {
+            "result": {"content": [{"text": "action 必须是 think|act|reflect|full"}]}
+        }
     try:
         from core.engine.llm_backend import get_llm_router
+
         router = get_llm_router()
         results = []
 
@@ -857,21 +1360,27 @@ async def _handle_kepa_reflect(args: Dict) -> Dict:
             prompt = f"请分析以下上下文，给出深入洞察和执行建议：\n\n{context}\n\n输出格式：\n洞察: ...\n建议: ..."
             resp = await router.chat(
                 [{"role": "user", "content": prompt}],
-                temperature=0.5, max_tokens=800,
+                temperature=0.5,
+                max_tokens=800,
             )
             resp_text = resp if isinstance(resp, str) else str(resp)
             results.append(f"【思考】{resp_text[:500]}")
 
         if action in ("act", "full") and action != "think":
-            results.append("【行动】KEPA 行动阶段：基于洞察生成执行方案。请使用其他工具（execute_python/fetch_url等）执行具体操作。")
+            results.append(
+                "【行动】KEPA 行动阶段：基于洞察生成执行方案。请使用其他工具（execute_python/fetch_url等）执行具体操作。"
+            )
 
         if action in ("reflect", "full"):
             try:
                 from core.auto_reviewer import get_auto_reviewer
+
                 reviewer = get_auto_reviewer()
                 review = await reviewer.review(
-                    task_id="kepa_reflect", task_description=context,
-                    execution_logs=context, task_result=context,
+                    task_id="kepa_reflect",
+                    task_description=context,
+                    execution_logs=context,
+                    task_result=context,
                 )
                 if review:
                     results.append(f"【感知】做得好的: {review.what_went_well[:200]}")
@@ -894,6 +1403,7 @@ async def _handle_ask_clarification(args: Dict) -> Dict:
         return {"result": {"content": [{"text": "需要 message 参数"}]}}
     try:
         from core.services.clarification_service import get_clarification_service
+
         service = get_clarification_service()
         questions = service.generate_questions(
             message=message,
@@ -922,6 +1432,7 @@ async def _handle_self_reflect(args: Dict) -> Dict:
         return {"result": {"content": [{"text": "需要 task_description 参数"}]}}
     try:
         from core.auto_reviewer import get_auto_reviewer
+
         reviewer = get_auto_reviewer()
         review = await reviewer.review(
             task_id=f"reflect_{int(time.time())}",
@@ -937,7 +1448,9 @@ async def _handle_self_reflect(args: Dict) -> Dict:
         if review.improvement:
             lines.append(f"\n💡 改进建议:\n{review.improvement[:500]}")
         if review.is_worth_saving:
-            lines.append(f"\n📌 值得沉淀为技能{' (' + review.skill_name + ')' if review.skill_name else ''}")
+            lines.append(
+                f"\n📌 值得沉淀为技能{' (' + review.skill_name + ')' if review.skill_name else ''}"
+            )
         return {"result": {"content": [{"text": "\n".join(lines)[:5000]}]}}
     except Exception as e:
         return {"result": {"content": [{"text": f"复盘失败: {e}"}]}}
@@ -959,13 +1472,15 @@ async def _handle_git(args: Dict) -> Dict:
             "pull": ["git", "pull"],
         }
         if action not in cmds or cmds[action] is None:
-            return {"result":{"content":[{"text":f"未知操作或缺少参数: {action}"}]}}
-        proc = await asyncio.create_subprocess_exec(*cmds[action], cwd=repo, stdout=-1, stderr=-1)
+            return {"result": {"content": [{"text": f"未知操作或缺少参数: {action}"}]}}
+        proc = await asyncio.create_subprocess_exec(
+            *cmds[action], cwd=repo, stdout=-1, stderr=-1
+        )
         o, e = await asyncio.wait_for(proc.communicate(), timeout=15)
         text = (o.decode() if o else "") or (e.decode() if e else "(无输出)")
-        return {"result":{"content":[{"text":f"git {action}\n{text[:3000]}"}]}}
+        return {"result": {"content": [{"text": f"git {action}\n{text[:3000]}"}]}}
     except Exception as ex:
-        return {"result":{"content":[{"text":f"git {action} 失败: {ex}"[:500]}]}}
+        return {"result": {"content": [{"text": f"git {action} 失败: {ex}"[:500]}]}}
 
 
 async def _handle_call_api(args: Dict) -> Dict:
@@ -982,6 +1497,7 @@ async def _handle_call_api(args: Dict) -> Dict:
     timeout = int(args.get("timeout", 15))
     try:
         from tools.http_client import HTTPClient
+
         client = HTTPClient(timeout=min(timeout, 60), max_retries=2)
         if method == "GET":
             resp = client.get(url, headers=headers)
@@ -1005,7 +1521,11 @@ async def _handle_call_api(args: Dict) -> Dict:
         error = resp.get("error", resp.get("message", "请求失败"))
         return {"result": {"content": [{"text": f"[API] ❌ {status}: {error}"[:3000]}]}}
     except Exception as e:
-        return {"result": {"content": [{"text": f"[API] ❌ {type(e).__name__}: {e}"[:3000]}]}}
+        return {
+            "result": {
+                "content": [{"text": f"[API] ❌ {type(e).__name__}: {e}"[:3000]}]
+            }
+        }
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1028,116 +1548,264 @@ _HANDLER_MAP: Dict[str, Callable] = {
 }
 
 _SANDBOX_TOOL_DEFS = [
-    ToolDefinition(name="execute_python", server=SERVER_BUILTIN, tags=["code", "sandbox"],
+    ToolDefinition(
+        name="execute_python",
+        server=SERVER_BUILTIN,
+        tags=["code", "sandbox"],
         domains={ToolDomain.CODE},
         description="执行 Python 代码。默认本地执行（可读/写/修改桌面文件）；mode=sandbox 沙盒隔离执行。",
-        parameters={"type":"object","properties":{
-            "code":{"type":"string","description":"Python 代码"},
-            "mode":{"type":"string","enum":["local","sandbox"],"description":"local=本地(默认,可写桌面文件) | sandbox=沙盒隔离"},
-            "timeout":{"type":"integer","description":"超时秒数（默认30，最大60）"},
-            "skip_module_check":{"type":"boolean","description":"仅 sandbox 模式：是否跳过模块安全检查"},
-        },"required":["code"]},
-        handler=_handle_execute_python),
-    ToolDefinition(name="execute_shell", server=SERVER_BUILTIN, tags=["code", "shell"],
+        parameters={
+            "type": "object",
+            "properties": {
+                "code": {"type": "string", "description": "Python 代码"},
+                "mode": {
+                    "type": "string",
+                    "enum": ["local", "sandbox"],
+                    "description": "local=本地(默认,可写桌面文件) | sandbox=沙盒隔离",
+                },
+                "timeout": {
+                    "type": "integer",
+                    "description": "超时秒数（默认30，最大60）",
+                },
+                "skip_module_check": {
+                    "type": "boolean",
+                    "description": "仅 sandbox 模式：是否跳过模块安全检查",
+                },
+            },
+            "required": ["code"],
+        },
+        handler=_handle_execute_python,
+    ),
+    ToolDefinition(
+        name="execute_shell",
+        server=SERVER_BUILTIN,
+        tags=["code", "shell"],
         domains={ToolDomain.CODE, ToolDomain.SYSTEM, ToolDomain.FILE},
         description="Shell 命令执行。默认本地执行；mode=sandbox 沙盒隔离执行。",
-        parameters={"type":"object","properties":{
-            "command":{"type":"string","description":"Shell 命令"},
-            "mode":{"type":"string","enum":["local","sandbox"],"description":"local=本地(默认) | sandbox=沙盒隔离"},
-            "timeout":{"type":"integer","description":"超时秒数（默认30，最大60）"},
-        },"required":["command"]},
-        handler=_handle_execute_shell),
-    ToolDefinition(name="git", server=SERVER_BUILTIN, tags=["git", "code"],
+        parameters={
+            "type": "object",
+            "properties": {
+                "command": {"type": "string", "description": "Shell 命令"},
+                "mode": {
+                    "type": "string",
+                    "enum": ["local", "sandbox"],
+                    "description": "local=本地(默认) | sandbox=沙盒隔离",
+                },
+                "timeout": {
+                    "type": "integer",
+                    "description": "超时秒数（默认30，最大60）",
+                },
+            },
+            "required": ["command"],
+        },
+        handler=_handle_execute_shell,
+    ),
+    ToolDefinition(
+        name="git",
+        server=SERVER_BUILTIN,
+        tags=["git", "code"],
         domains={ToolDomain.GIT},
         description="Git 操作 — status/add/commit/log/diff/branch/pull。在当前项目目录执行。",
-        parameters={"type":"object","properties":{
-            "action":{"type":"string","enum":["status","add","commit","log","diff","branch","pull"],"description":"git 操作"},
-            "message":{"type":"string","description":"commit 时的提交信息"},
-            "files":{"type":"string","description":"add 时的文件路径（默认全部 .）"},
-            "count":{"type":"integer","description":"log 显示的提交数（默认5）"},
-        },"required":["action"]},
-        handler=_handle_git),
-    ToolDefinition(name="search", server=SERVER_BUILTIN, tags=["web", "search"],
+        parameters={
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": [
+                        "status",
+                        "add",
+                        "commit",
+                        "log",
+                        "diff",
+                        "branch",
+                        "pull",
+                    ],
+                    "description": "git 操作",
+                },
+                "message": {"type": "string", "description": "commit 时的提交信息"},
+                "files": {
+                    "type": "string",
+                    "description": "add 时的文件路径（默认全部 .）",
+                },
+                "count": {
+                    "type": "integer",
+                    "description": "log 显示的提交数（默认5）",
+                },
+            },
+            "required": ["action"],
+        },
+        handler=_handle_git,
+    ),
+    ToolDefinition(
+        name="search",
+        server=SERVER_BUILTIN,
+        tags=["web", "search"],
         domains={ToolDomain.SEARCH, ToolDomain.WEB},
         description="联网搜索查询信息。用百度/Bing 并发搜索网页，适合查最新资讯、找网页内容。",
-        parameters={"type":"object","properties":{"query":{"type":"string","description":"搜索关键词"}},"required":["query"]},
-        handler=_handle_search),
-    ToolDefinition(name="rag_search", server=SERVER_BUILTIN, tags=["rag", "search", "knowledge"],
+        parameters={
+            "type": "object",
+            "properties": {"query": {"type": "string", "description": "搜索关键词"}},
+            "required": ["query"],
+        },
+        handler=_handle_search,
+    ),
+    ToolDefinition(
+        name="rag_search",
+        server=SERVER_BUILTIN,
+        tags=["rag", "search", "knowledge"],
         domains={ToolDomain.SEARCH, ToolDomain.ANALYSIS},
         description="RAG 增强搜索 — 向量库检索 + 知识提取 + 联网搜索。比 search 更深度，适合研究型问题。",
-        parameters={"type":"object","properties":{
-            "query":{"type":"string","description":"搜索查询"},
-            "max_results":{"type":"integer","description":"最大结果数（默认5）"},
-            "learn":{"type":"boolean","description":"是否提取知识到向量库"},
-        },"required":["query"]},
-        handler=_handle_rag_search),
-    ToolDefinition(name="skill_execute", server=SERVER_BUILTIN, tags=["skill"],
+        parameters={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "搜索查询"},
+                "max_results": {
+                    "type": "integer",
+                    "description": "最大结果数（默认5）",
+                },
+                "learn": {"type": "boolean", "description": "是否提取知识到向量库"},
+            },
+            "required": ["query"],
+        },
+        handler=_handle_rag_search,
+    ),
+    ToolDefinition(
+        name="skill_execute",
+        server=SERVER_BUILTIN,
+        tags=["skill"],
         domains={ToolDomain.SKILL},
         description="执行已注册的技能。技能是预定义的功能模块（天气/翻译/自动化等）。",
-        parameters={"type":"object","properties":{
-            "skill_name":{"type":"string","description":"技能名称"},
-            "params":{"type":"object","description":"技能参数"},
-        },"required":["skill_name"]},
-        handler=_handle_skill_execute),
-    ToolDefinition(name="kepa_reflect", server=SERVER_BUILTIN, tags=["kepa", "reflect"],
+        parameters={
+            "type": "object",
+            "properties": {
+                "skill_name": {"type": "string", "description": "技能名称"},
+                "params": {"type": "object", "description": "技能参数"},
+            },
+            "required": ["skill_name"],
+        },
+        handler=_handle_skill_execute,
+    ),
+    ToolDefinition(
+        name="kepa_reflect",
+        server=SERVER_BUILTIN,
+        tags=["kepa", "reflect"],
         domains={ToolDomain.REFLECT},
         description="KEPA 反思循环：Knowledge→Execution→Perception→Adjustment。对当前状态进行深度思考和自我调整。action=think(仅思考)|act(仅行动)|reflect(仅反思)|full(完整循环)",
-        parameters={"type":"object","properties":{
-            "action":{"type":"string","enum":["think","act","reflect","full"],"description":"反思阶段"},
-            "context":{"type":"string","description":"需要反思的上下文信息"},
-        },"required":["action"]},
-        handler=_handle_kepa_reflect),
-    ToolDefinition(name="ask_clarification", server=SERVER_BUILTIN, tags=["clarification"],
+        parameters={
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["think", "act", "reflect", "full"],
+                    "description": "反思阶段",
+                },
+                "context": {"type": "string", "description": "需要反思的上下文信息"},
+            },
+            "required": ["action"],
+        },
+        handler=_handle_kepa_reflect,
+    ),
+    ToolDefinition(
+        name="ask_clarification",
+        server=SERVER_BUILTIN,
+        tags=["clarification"],
         domains={ToolDomain.MISC},
         description="反问澄清 — 当用户输入模糊或执行失败时，生成追问来明确需求。",
-        parameters={"type":"object","properties":{
-            "message":{"type":"string","description":"需要澄清的消息"},
-            "error_context":{"type":"string","description":"错误上下文（可选）"},
-        },"required":["message"]},
-        handler=_handle_ask_clarification),
-    ToolDefinition(name="self_reflect", server=SERVER_BUILTIN, tags=["reflect"],
+        parameters={
+            "type": "object",
+            "properties": {
+                "message": {"type": "string", "description": "需要澄清的消息"},
+                "error_context": {
+                    "type": "string",
+                    "description": "错误上下文（可选）",
+                },
+            },
+            "required": ["message"],
+        },
+        handler=_handle_ask_clarification,
+    ),
+    ToolDefinition(
+        name="self_reflect",
+        server=SERVER_BUILTIN,
+        tags=["reflect"],
         domains={ToolDomain.REFLECT},
         description="自动复盘反思 — 分析执行过程，生成改进建议和教训总结。适合在任务完成后调用。",
-        parameters={"type":"object","properties":{
-            "task_description":{"type":"string","description":"任务描述"},
-            "execution_logs":{"type":"string","description":"执行日志"},
-            "task_result":{"type":"string","description":"执行结果（可选）"},
-        },"required":["task_description","execution_logs"]},
-        handler=_handle_self_reflect),
-    ToolDefinition(name="call_api", server=SERVER_BUILTIN, tags=["api", "http"],
+        parameters={
+            "type": "object",
+            "properties": {
+                "task_description": {"type": "string", "description": "任务描述"},
+                "execution_logs": {"type": "string", "description": "执行日志"},
+                "task_result": {"type": "string", "description": "执行结果（可选）"},
+            },
+            "required": ["task_description", "execution_logs"],
+        },
+        handler=_handle_self_reflect,
+    ),
+    ToolDefinition(
+        name="call_api",
+        server=SERVER_BUILTIN,
+        tags=["api", "http"],
         domains={ToolDomain.API, ToolDomain.WEB},
         description="通用 HTTP 客户端 — 支持 GET/POST/PUT/DELETE 请求。用于调用外部 REST API 接口。",
-        parameters={"type":"object","properties":{
-            "method":{"type":"string","enum":["GET","POST","PUT","DELETE"],"description":"HTTP 方法"},
-            "url":{"type":"string","description":"请求 URL"},
-            "headers":{"type":"object","description":"请求头"},
-            "data":{"type":"object","description":"表单数据"},
-            "json_data":{"type":"object","description":"JSON 数据"},
-            "timeout":{"type":"integer","description":"超时秒数（默认15，最大60）"},
-        },"required":["url"]},
-        handler=_handle_call_api),
-    ToolDefinition(name="fetch_url", server=SERVER_BUILTIN, tags=["web", "fetch"],
+        parameters={
+            "type": "object",
+            "properties": {
+                "method": {
+                    "type": "string",
+                    "enum": ["GET", "POST", "PUT", "DELETE"],
+                    "description": "HTTP 方法",
+                },
+                "url": {"type": "string", "description": "请求 URL"},
+                "headers": {"type": "object", "description": "请求头"},
+                "data": {"type": "object", "description": "表单数据"},
+                "json_data": {"type": "object", "description": "JSON 数据"},
+                "timeout": {
+                    "type": "integer",
+                    "description": "超时秒数（默认15，最大60）",
+                },
+            },
+            "required": ["url"],
+        },
+        handler=_handle_call_api,
+    ),
+    ToolDefinition(
+        name="fetch_url",
+        server=SERVER_BUILTIN,
+        tags=["web", "fetch"],
         domains={ToolDomain.WEB, ToolDomain.SEARCH, ToolDomain.API},
         description="HTTP GET 获取网页/API数据。用于抓取网页内容、调用简单 API 接口。",
-        parameters={"type":"object","properties":{
-            "url":{"type":"string","description":"目标URL"},
-            "max_length":{"type":"integer","description":"最大返回字符数"},
-        },"required":["url"]},
-        handler=_handle_fetch_url),
-    ToolDefinition(name="file", server=SERVER_BUILTIN, tags=["file", "storage"],
+        parameters={
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "目标URL"},
+                "max_length": {"type": "integer", "description": "最大返回字符数"},
+            },
+            "required": ["url"],
+        },
+        handler=_handle_fetch_url,
+    ),
+    ToolDefinition(
+        name="file",
+        server=SERVER_BUILTIN,
+        tags=["file", "storage"],
         domains={ToolDomain.FILE},
         description="直接读写文件。action=read 读取文件内容；action=write 写入文件内容。",
-        parameters={"type":"object","properties":{
-            "action":{"type":"string","enum":["read","write"]},
-            "path":{"type":"string","description":"文件路径"},
-            "content":{"type":"string","description":"写入内容（write时必填）"},
-        },"required":["action","path"]},
-        handler=_handle_file),
+        parameters={
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["read", "write"]},
+                "path": {"type": "string", "description": "文件路径"},
+                "content": {"type": "string", "description": "写入内容（write时必填）"},
+            },
+            "required": ["action", "path"],
+        },
+        handler=_handle_file,
+    ),
 ]
 
 
 def _safe(raw: str) -> str:
-    return re.sub(r'[^a-zA-Z0-9_-]', '_', raw)
+    return re.sub(r"[^a-zA-Z0-9_-]", "_", raw)
 
 
 class ToolRegistry:
@@ -1166,7 +1834,9 @@ class ToolRegistry:
                     self._tools[sd.name] = sd
                     all_tools.append(sd)
             self._initialized = True
-            logger.info(f"内置工具: {sum(1 for t in self._tools.values() if t.server=='__builtin__')} 个")
+            logger.info(
+                f"内置工具: {sum(1 for t in self._tools.values() if t.server=='__builtin__')} 个"
+            )
 
         # Source 2: MCP 工具（已探索过就跳过）
         if not self._mcp_explored:
@@ -1176,7 +1846,9 @@ class ToolRegistry:
                 if t.name not in self._tools:
                     self._tools[t.name] = t
                     all_tools.append(t)
-            n_mcp = sum(1 for t in self._tools.values() if t.server not in ("__builtin__", ""))
+            n_mcp = sum(
+                1 for t in self._tools.values() if t.server not in ("__builtin__", "")
+            )
             if n_mcp:
                 logger.info(f"MCP 工具: {n_mcp} 个")
         else:
@@ -1190,7 +1862,10 @@ class ToolRegistry:
     async def _discover_mcp_configs(self) -> set:
         """发现所有 MCP 服务器配置并注册到 mcp_client，返回服务器名集合"""
         from core.mcp.mcp_client import mcp_client
-        proot = os.path.normpath(os.path.join(os.path.dirname(__file__),"..","..",".."))
+
+        proot = os.path.normpath(
+            os.path.join(os.path.dirname(__file__), "..", "..", "..")
+        )
         servers = set(await mcp_client.list_servers())
 
         # 1. 从 mcp/ 目录发现
@@ -1199,12 +1874,16 @@ class ToolRegistry:
             for fn in sorted(os.listdir(mcp_dir)):
                 if not fn.endswith("_mcp_server.py"):
                     continue
-                srv = fn.replace("_mcp_server.py","").replace("_","-")
+                srv = fn.replace("_mcp_server.py", "").replace("_", "-")
                 if srv in servers:
                     continue
-                await mcp_client.connect_server(name=srv, command="python3",
-                    args=[os.path.join(mcp_dir,fn)], cwd=proot,
-                    env={"PYTHONPATH": proot})
+                await mcp_client.connect_server(
+                    name=srv,
+                    command="python3",
+                    args=[os.path.join(mcp_dir, fn)],
+                    cwd=proot,
+                    env={"PYTHONPATH": proot},
+                )
                 servers.add(srv)
 
         # 2. 从 .mcp.json 发现
@@ -1212,12 +1891,16 @@ class ToolRegistry:
         if os.path.exists(mcj):
             try:
                 with open(mcj) as f:
-                    for srv, sc in json.load(f).get("mcpServers",{}).items():
+                    for srv, sc in json.load(f).get("mcpServers", {}).items():
                         if srv in servers:
                             continue
-                        await mcp_client.connect_server(name=srv, command=sc["command"],
-                            args=sc.get("args",[]), cwd=proot,
-                            env={"PYTHONPATH": proot})
+                        await mcp_client.connect_server(
+                            name=srv,
+                            command=sc["command"],
+                            args=sc.get("args", []),
+                            cwd=proot,
+                            env={"PYTHONPATH": proot},
+                        )
                         servers.add(srv)
             except Exception:
                 pass
@@ -1227,6 +1910,7 @@ class ToolRegistry:
     async def _list_mcp_tools(self, srv: str) -> tuple:
         """从单个 MCP 服务器拉取工具列表（5s 超时）"""
         from core.mcp.mcp_client import mcp_client
+
         try:
             tools = await asyncio.wait_for(mcp_client.list_tools(srv), timeout=5.0)
             return (srv, tools)
@@ -1274,31 +1958,55 @@ class ToolRegistry:
                     desc = tool.get("description", "")
                     if not desc:
                         desc = f"通过 {srv} 服务器提供的工具"
-                    mcp_tools.append(ToolDefinition(
-                        name=fn,
-                        description=f"[{srv}] {desc}",
-                        parameters=tool.get("inputSchema", {}) or {},
-                        server=srv, tool_name=raw, tags=["mcp"],
-                        domains=srv_domains,
-                    ))
+                    mcp_tools.append(
+                        ToolDefinition(
+                            name=fn,
+                            description=f"[{srv}] {desc}",
+                            parameters=tool.get("inputSchema", {}) or {},
+                            server=srv,
+                            tool_name=raw,
+                            tags=["mcp"],
+                            domains=srv_domains,
+                        )
+                    )
         except Exception:
             pass
 
         if mcp_tools:
-            logger.info(f"MCP: {len(mcp_tools)} 个工具来自 {len({t.server for t in mcp_tools})} 台服务器")
+            logger.info(
+                f"MCP: {len(mcp_tools)} 个工具来自 {len({t.server for t in mcp_tools})} 台服务器"
+            )
         return mcp_tools
 
     def get_handler_map(self) -> Dict[str, Callable]:
         result = dict(_HANDLER_MAP)
         for n, td in self._tools.items():
-            if td.handler and n not in result: result[n] = td.handler
+            if td.handler and n not in result:
+                result[n] = td.handler
         return result
 
     def get_handler(self, name: str) -> Optional[Callable]:
         h = _HANDLER_MAP.get(name)
-        if h: return h
+        if h:
+            return h
         td = self._tools.get(name)
-        return td.handler if td else None
+        if td and td.handler:
+            return td.handler
+        # MCP 工具：通过 MCP client 代理执行
+        if td and td.server and td.tool_name and td.server not in ("", SERVER_BUILTIN):
+            srv = td.server
+            tname = td.tool_name
+
+            async def _mcp_handler(args: dict) -> str:
+                from core.mcp.mcp_client import mcp_client
+
+                result = await mcp_client.call_tool(srv, tname, args)
+                if isinstance(result, str) and result.startswith("❌"):
+                    raise RuntimeError(result)
+                return result
+
+            return _mcp_handler
+        return None
 
     async def get_tools_for_task(self, task: str, max_tools=20) -> List[ToolDefinition]:
         """按任务相关性排序的工具列表
@@ -1358,7 +2066,9 @@ class ToolRegistry:
             # --- 工具名精确匹配（LLM 在计划阶段已指名时最强信号）--
             exact_match = 8.0 if nl in desc else 0.0
 
-            scored.append((domain_score + kw_score + exact_match, domain_score, kw_score, t))
+            scored.append(
+                (domain_score + kw_score + exact_match, domain_score, kw_score, t)
+            )
 
         # ═══ 第三步：按总分降序 ═══
         scored.sort(key=lambda x: -x[0])
@@ -1400,11 +2110,50 @@ class ToolRegistry:
         # ═══ 第七步：条件化核心工具保留 ═══
         # 只在任务描述暗示会用到时才强制保留，避免浪费名额
         CONDITIONAL_CORE = {
-            "search": ["搜索", "查找", "查询", "搜", "找", "查", "search", "find", "query", "看看"],
-            "file": ["文件", "保存", "写入", "读取", "写", "桌面", "file", "write", "read", "路径"],
-            "execute_python": ["代码", "python", "脚本", "执行", "运行", "程序", "写一个"],
+            "search": [
+                "搜索",
+                "查找",
+                "查询",
+                "搜",
+                "找",
+                "查",
+                "search",
+                "find",
+                "query",
+                "看看",
+            ],
+            "file": [
+                "文件",
+                "保存",
+                "写入",
+                "读取",
+                "写",
+                "桌面",
+                "file",
+                "write",
+                "read",
+                "路径",
+            ],
+            "execute_python": [
+                "代码",
+                "python",
+                "脚本",
+                "执行",
+                "运行",
+                "程序",
+                "写一个",
+            ],
             "execute_shell": ["命令", "shell", "终端", "执行", "运行"],
-            "fetch_url": ["网页", "url", "http", "网站", "api", "接口", "请求", "fetch"],
+            "fetch_url": [
+                "网页",
+                "url",
+                "http",
+                "网站",
+                "api",
+                "接口",
+                "请求",
+                "fetch",
+            ],
         }
         for tool_name, keywords in CONDITIONAL_CORE.items():
             if any(kw.lower() in desc for kw in keywords):
@@ -1416,8 +2165,17 @@ class ToolRegistry:
                         # 超出预算，从末尾弹一个非核心 MCP 工具
                         for i in range(len(result) - 1, -1, -1):
                             n = result[i].name
-                            if n not in ("search", "file", "execute_python", "execute_shell", "fetch_url") \
-                               and result[i].server != SERVER_BUILTIN:
+                            if (
+                                n
+                                not in (
+                                    "search",
+                                    "file",
+                                    "execute_python",
+                                    "execute_shell",
+                                    "fetch_url",
+                                )
+                                and result[i].server != SERVER_BUILTIN
+                            ):
                                 result.pop(i)
                                 break
 
@@ -1435,7 +2193,7 @@ class ToolRegistry:
         by_server = {}
         for t in self._tools.values():
             by_server.setdefault(t.server, []).append(t.name)
-        mcp_count = sum(1 for s in by_server if s not in ("__builtin__","__mcp__",""))
+        mcp_count = sum(1 for s in by_server if s not in ("__builtin__", "__mcp__", ""))
         return {
             "total": len(self._tools),
             "builtin": len(by_server.get("__builtin__", [])),
@@ -1454,31 +2212,56 @@ class ToolRegistry:
     def is_mcp_tool_available(self, name: str) -> bool:
         """检查 MCP 工具是否来自已连接的服务器"""
         t = self._tools.get(name)
-        return bool(t and t.server not in ("__builtin__","__mcp__",""))
+        return bool(t and t.server not in ("__builtin__", "__mcp__", ""))
 
     def validate_arguments(self, name: str, args: Dict) -> tuple:
         t = self._tools.get(name)
-        if not t: return False, "未知工具"
+        if not t:
+            return False, "未知工具"
         p = t.parameters
-        if not p: return True, ""
-        props = p.get("properties",{}); req = p.get("required",[])
+        if not p:
+            return True, ""
+        props = p.get("properties", {})
+        req = p.get("required", [])
         for f in req:
-            if f not in args: return False, f"缺少 {f}"
-        for k,v in list(args.items()):
+            if f not in args:
+                return False, f"缺少 {f}"
+        for k, v in list(args.items()):
             if k in props:
-                pt = props[k].get("type","")
-                if pt == "string" and not isinstance(v, str): args[k] = str(v)
-                elif pt in ("integer","number") and isinstance(v, str):
-                    try: args[k] = int(v) if pt=="integer" else float(v)
-                    except: return False, f"{k} 不能从 {v} 转换"
+                pt = props[k].get("type", "")
+                if pt == "string" and not isinstance(v, str):
+                    args[k] = str(v)
+                elif pt in ("integer", "number") and isinstance(v, str):
+                    try:
+                        args[k] = int(v) if pt == "integer" else float(v)
+                    except:
+                        return False, f"{k} 不能从 {v} 转换"
         return True, ""
 
     @property
-    def count(self) -> int: return len(self._tools)
+    def count(self) -> int:
+        return len(self._tools)
 
 
 _registry = None
-def get_tool_registry() -> 'ToolRegistry':
+
+
+def get_tool_registry() -> "ToolRegistry":
     global _registry
-    if _registry is None: _registry = ToolRegistry()
+    if _registry is None:
+        _registry = ToolRegistry()
+    return _registry
+
+    @property
+    def count(self) -> int:
+        return len(self._tools)
+
+
+_registry = None
+
+
+def get_tool_registry() -> "ToolRegistry":
+    global _registry
+    if _registry is None:
+        _registry = ToolRegistry()
     return _registry
