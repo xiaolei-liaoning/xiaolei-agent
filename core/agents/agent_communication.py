@@ -107,7 +107,7 @@ class CommunicationCenter:
         self._topics: Dict[str, list] = {}            # topic → [(agent_id, callback)]
         self._pending_requests: Dict[str, asyncio.Future] = {}
 
-    def _safe_create_task(self, coro: asyncio.coroutine) -> asyncio.Task:
+    def _safe_create_task(self, coro) -> asyncio.Task:
         """安全创建异步任务，避免异常被静默吞没"""
         task = asyncio.create_task(coro)
 

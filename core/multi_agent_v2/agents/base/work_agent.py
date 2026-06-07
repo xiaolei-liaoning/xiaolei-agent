@@ -7,13 +7,13 @@ WorkAgent - 统一智能体（精简版）
   - personality/role → system_prompt_for_role() → 注入 LLM
   - temp_memory 临时记忆
   - _execute_fast() → run_react() → 4层 MiddlewareChain
-  - 总线监听 + SharedBus 消息
   - 任务完成即消失（finally 清理）
 
 已删除：
   - adapt_to_task() / capabilities 系统（不参与实际执行决策）
   - _execute_full 路径（已删除）
   - light_mode 参数
+  - SharedBus 总线监听（JS Workflow 独立模式，agent 间不通信）
 """
 
 import asyncio
@@ -22,7 +22,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from .base_agent import BaseAgent
-from .models import AgentType, Task, ActionResult
+from .models import ActionResult, AgentType, Task
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +53,9 @@ class WorkAgent(BaseAgent):
         # 工作记录
         self.work_history: List[Dict[str, Any]] = []
 
+        # Agent标签，用于输出前缀
+        self._agent_label: str = name or "Agent"
+
         logger.info(f"WorkAgent 初始化完成: {self.agent_id}")
 
     def reset(self) -> None:
@@ -63,44 +66,6 @@ class WorkAgent(BaseAgent):
         self.personality = ""
         self.role = ""
         logger.debug(f"WorkAgent {self.agent_id} 状态已重置")
-
-    # ── SharedBus 监听 ─────────────────────────────────────────────────
-
-    async def _start_bus_listener(self, enable: bool = False) -> None:
-        """启动 SharedBus 监听"""
-        if not enable:
-            return
-        try:
-            from core.multi_agent_v2.infrastructure.shared_bus import get_shared_bus, Message
-            bus = get_shared_bus()
-        except Exception:
-            logger.debug("SharedBus 不可用，跳过总线监听")
-            return
-
-        async def _listen_loop():
-            while True:
-                try:
-                    msg = await bus.receive_direct(self.agent_id, timeout=2.0)
-                    if msg is None:
-                        await asyncio.sleep(0.5)
-                        continue
-                    self._on_bus_message(msg)
-                except asyncio.CancelledError:
-                    break
-                except Exception:
-                    await asyncio.sleep(0.5)
-
-        self._bus_listener_task = asyncio.create_task(_listen_loop())
-
-    def _stop_bus_listener(self) -> None:
-        """停止 SharedBus 监听"""
-        if self._bus_listener_task is not None and not self._bus_listener_task.done():
-            self._bus_listener_task.cancel()
-            self._bus_listener_task = None
-
-    def _on_bus_message(self, msg: "Message") -> None:
-        """处理收到的总线消息"""
-        logger.debug(f"收到总线消息: {msg.type} 来自 {msg.sender}")
 
     # ── 执行入口 ───────────────────────────────────────────────────────
 
@@ -115,21 +80,49 @@ class WorkAgent(BaseAgent):
         desc = task.description
 
         print(f"\n    \033[1;36m⚡ 开始任务: {desc[:80]}\033[0m")
-        await self._start_bus_listener(enable=True)
 
         try:
             # ── 简单对话检测 ──
-            _TOOL_KW = ["搜索", "查找", "写", "创建", "生成", "分析", "报告", "爬",
-                        "保存", "文件", "数据", "代码", "游戏", "脚本", "curl", "fetch",
-                        "http", "api", "百度", "谷歌", "翻译",
-                        "打开", "启动", "运行", "执行", "open", "launch"]
+            _TOOL_KW = [
+                "搜索",
+                "查找",
+                "写",
+                "创建",
+                "生成",
+                "分析",
+                "报告",
+                "爬",
+                "保存",
+                "文件",
+                "数据",
+                "代码",
+                "游戏",
+                "脚本",
+                "curl",
+                "fetch",
+                "http",
+                "api",
+                "百度",
+                "谷歌",
+                "翻译",
+                "打开",
+                "启动",
+                "运行",
+                "执行",
+                "open",
+                "launch",
+            ]
             is_simple = len(desc) < 30 and not any(kw in desc for kw in _TOOL_KW)
             if is_simple:
                 from core.engine.llm_backend import get_llm_router
+
                 router = get_llm_router()
                 if router and router.is_available():
                     print(f"    \033[1;36m\U0001f914 LLM直接回答...\033[0m")
-                    resp = await router.chat([{"role": "user", "content": desc}])
+                    model = task.context.get("model", "")
+                    resp = await router.chat(
+                        [{"role": "user", "content": desc}], model=model or None
+                    )
                     answer = str(resp) if resp else ""
                     elapsed = time.time() - start
                     is_mock = "[LLM_MOCK]" in answer
@@ -137,7 +130,11 @@ class WorkAgent(BaseAgent):
                         success=bool(answer) and not is_mock,
                         output=answer if not is_mock else "LLM暂不可用，请稍后重试",
                         execution_time=elapsed,
-                        metadata={"light_mode": True, "direct_reply": True, "mock": is_mock},
+                        metadata={
+                            "light_mode": True,
+                            "direct_reply": True,
+                            "mock": is_mock,
+                        },
                     )
 
             # ── 复杂任务：走 ReActCore 中间件链 ──
@@ -145,6 +142,7 @@ class WorkAgent(BaseAgent):
             max_rounds = max(_mr, 10) if _mr else 10
             logger.info(f"WorkAgent → ReActCore (max_rounds={max_rounds})")
             from core.multi_agent_v2.agents.react_core import run_react
+
             result = await run_react(
                 desc,
                 max_rounds=max_rounds,
@@ -163,16 +161,21 @@ class WorkAgent(BaseAgent):
                 output=str(output) if output else None,
                 error=error,
                 execution_time=elapsed,
-                metadata={"light_mode": True, "iterations": result.get("iterations", 0)},
+                metadata={
+                    "light_mode": True,
+                    "iterations": result.get("iterations", 0),
+                },
             )
 
-            self.work_history.append({
-                "task_id": task.task_id,
-                "task_type": task.type,
-                "success": success,
-                "execution_time": elapsed,
-                "timestamp": time.time(),
-            })
+            self.work_history.append(
+                {
+                    "task_id": task.task_id,
+                    "task_type": task.type,
+                    "success": success,
+                    "execution_time": elapsed,
+                    "timestamp": time.time(),
+                }
+            )
             if len(self.work_history) > 100:
                 self.work_history = self.work_history[-100:]
 
@@ -181,9 +184,9 @@ class WorkAgent(BaseAgent):
 
         except Exception as e:
             logger.error(f"WorkAgent [轻量] 异常: {e}")
-            return ActionResult(success=False, error=str(e), execution_time=time.time() - start)
-        finally:
-            self._stop_bus_listener()
+            return ActionResult(
+                success=False, error=str(e), execution_time=time.time() - start
+            )
 
     def get_work_stats(self) -> Dict[str, Any]:
         """获取工作统计"""

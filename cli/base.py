@@ -136,14 +136,11 @@ class WorkflowEngineWrapper:
             engine.start_step(step_num, "并行执行")
 
             async with AsyncSpinner(f"正在并行执行 {agent_count} 个 Agent...", color=CLAUDE):
-                thunks = [
-                    lambda d=d, i=i: orch.agent(
-                        d,
-                        {"label": f"Agent_{i+1}", "timeout": 180},
-                    )
+                tasks = [
+                    orch.agent(d, {"label": f"Agent_{i+1}", "timeout": 180})
                     for i, d in enumerate(dimensions)
                 ]
-                results = await orch.parallel(thunks, max_concurrent=agent_count)
+                results = await asyncio.gather(*tasks)
 
             success_count = sum(1 for r in results if r.success)
             engine.complete_step(

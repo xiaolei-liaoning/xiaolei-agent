@@ -238,8 +238,12 @@ def clear_and_rebuild_vector_store():
         import chromadb
         from chromadb.config import Settings
         
-        # 设置向量库路径
-        persist_dir = os.path.expanduser("~/.小雷版小龙虾/vector_db")
+        # 设置向量库路径（优先使用移动硬盘）
+        persist_dir = os.environ.get(
+            "VECTOR_DB_PATH",
+            "/Volumes/xiaaolei/ai-agent-data/vector_db" if os.path.exists("/Volumes/xiaaolei")
+            else os.path.expanduser("~/.小雷版小龙虾/vector_db")
+        )
         
         logger.info("向量库路径: %s", persist_dir)
         
@@ -344,7 +348,11 @@ def test_vector_search():
         import chromadb
         from chromadb.config import Settings
         
-        persist_dir = os.path.expanduser("~/.小雷版小龙虾/vector_db")
+        persist_dir = os.environ.get(
+            "VECTOR_DB_PATH",
+            "/Volumes/xiaaolei/ai-agent-data/vector_db" if os.path.exists("/Volumes/xiaaolei")
+            else os.path.expanduser("~/.小雷版小龙虾/vector_db")
+        )
         client = chromadb.PersistentClient(
             path=persist_dir,
             settings=Settings(anonymized_telemetry=False),

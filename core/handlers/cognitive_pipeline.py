@@ -21,7 +21,15 @@ from ..services.clarification_service import (
 from ..memory.short_term_memory import ShortTermMemoryManager
 from ..context import ExecutionContext
 from ..workflow.bfs_processor import get_bfs_processor
-from ..multi_agent_v2.orchestration.collaboration.strategies import ReflectionTriggerConfig
+from dataclasses import dataclass
+
+
+@dataclass
+class ReflectionTriggerConfig:
+    """反思触发配置（原从 collaboration.strategies 导入，已内联）"""
+    max_reflections: int = 3
+
+
 class ReflectionDecision:
     CONTINUE = "continue"
     FAIL = "fail"

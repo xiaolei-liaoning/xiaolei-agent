@@ -6,6 +6,34 @@
         "/Users/leiyuxuan/Desktop/小雷版agent/.claude/codegraph/dist/bin/codegraph.js",
         "serve",
         "--mcp"
+      ],
+      "timeout": 30000
+    },
+    "playwright": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@playwright/mcp@0.0.70"
+      ]
+    },
+    "context7": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@upstash/context7-mcp@2.1.8"
+      ]
+    },
+    "deepwiki": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "deepwiki-mcp@0.0.6"
+      ]
+    },
+    "evermem": {
+      "command": "python3",
+      "args": [
+        "/tmp/evermem_mcp_server.py"
       ]
     }
   }

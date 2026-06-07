@@ -37,7 +37,6 @@ class BaseAgent:
         # 临时记忆（per-task，任务结束后清空）
         self.temp_memory: Dict[str, Any] = {}
         self._trace = None
-        self._bus_listener_task: Optional[asyncio.Task] = None
         logger.info(f"Agent: {self.agent_id}")
 
     def set_trace(self, trace):
@@ -60,35 +59,6 @@ class BaseAgent:
         if self.personality:
             return self.personality
         return prompts.get(self.role, "")
-
-    # ── SharedBus 消息路由 ───────────────────────────────────────
-
-    async def _start_bus_listener(self, enable: bool = False) -> None:
-        """启动 SharedBus 直接消息监听（后台协程）"""
-        if not enable:
-            return
-        if self._bus_listener_task is not None and not self._bus_listener_task.done():
-            return
-        async def _listen():
-            from core.multi_agent_v2.infrastructure.shared_bus import get_shared_bus
-            bus = get_shared_bus()
-            while True:
-                try:
-                    msg = await bus.receive_direct(self.agent_id, timeout=30.0)
-                    if msg is not None:
-                        await self._on_bus_direct_message(msg)
-                    else:
-                        await asyncio.sleep(0.5)
-                except asyncio.CancelledError:
-                    break
-                except Exception as e:
-                    logger.debug(f"Agent {self.agent_id} 消息监听异常: {e}")
-                    await asyncio.sleep(1)
-        self._bus_listener_task = asyncio.create_task(_listen())
-
-    async def _on_bus_direct_message(self, msg: "Message") -> None:
-        """处理 SharedBus 直接消息"""
-        logger.debug(f"Agent {self.agent_id} 收到 SharedBus 消息: {msg.type} 来自 {msg.sender}")
 
     async def execute(self, task: Task) -> ActionResult:
         """执行任务 — 由子类实现"""

@@ -28,6 +28,13 @@ _MAX_ROUNDS = 10
 class ReActCoreMiddleware(BaseMiddleware):
     """ReAct 核心循环：LLM 自主决定调工具还是直接回答"""
 
+    def _get_prefix(self, ctx: RunContext) -> str:
+        """从上下文获取Agent前缀"""
+        if hasattr(ctx, "_chain") and ctx._chain and hasattr(ctx._chain, "_agent"):
+            agent = ctx._chain._agent
+            return _get_prefix(agent)
+        return ""
+
     async def on_start(self, ctx: RunContext) -> None:
         """on_start 时获取工具定义"""
         from core.multi_agent_v2.tools.tool_registry import get_tool_registry
@@ -102,7 +109,7 @@ class ReActCoreMiddleware(BaseMiddleware):
             "你是AI助手，通过调用可用工具来完成任务。\n\n"
             "【关键规则】\n"
             "- 搜索资讯 → 调用 search 工具\n"
-            '- 百度热搜 → 调用 execute_shell 工具，command参数="python3 scripts/fetch_baidu_hotsearch.py"\n'
+            "- 抓取网页内容（热搜、新闻、页面数据等）→ 优先用 Playwright MCP 的 browser_navigate + browser_snapshot\n"
             "- 读写文件 → 调用 file 工具\n"
             "- 查看目录 → 调用 execute_shell 工具\n"
             "- 执行代码 → 调用 execute_python 工具\n"
@@ -155,8 +162,9 @@ class ReActCoreMiddleware(BaseMiddleware):
                     }
                 )
 
+        prefix = self._get_prefix(ctx)
         print(
-            f"    \033[1;36m🤔 LLM思考第{ctx.react_depth}/{ctx.max_iterations}轮...\033[0m"
+            f"{prefix}    \033[1;36m🤔 LLM思考第{ctx.react_depth}/{ctx.max_iterations}轮...\033[0m"
         )
 
         async def _llm_call():
@@ -196,6 +204,7 @@ class ReActCoreMiddleware(BaseMiddleware):
         if ctx.interrupted:
             return
 
+        prefix = self._get_prefix(ctx)
         reply = getattr(ctx, "_last_reply", "")
         if not reply:
             logger.warning(f"第{ctx.react_depth}轮 LLM返回空响应")
@@ -217,14 +226,14 @@ class ReActCoreMiddleware(BaseMiddleware):
                 return
 
             # 纯文本 = 最终答案
-            print(f"    \033[32m✅ LLM输出最终答案\033[0m")
+            print(f"{prefix}    \033[32m✅ LLM输出最终答案\033[0m")
             ctx.final_answer = text
             ctx.interrupted = True
             return
 
         # 执行工具调用
         tool_names = [tc.get("function", {}).get("name", "?") for tc in tool_calls]
-        print(f"    \033[1;33m🔧 调用: {', '.join(tool_names)}\033[0m")
+        print(f"{prefix}    \033[1;33m🔧 调用: {', '.join(tool_names)}\033[0m")
 
         results = await self._execute_tool_calls_parallel(tool_calls, ctx)
 
@@ -245,7 +254,7 @@ class ReActCoreMiddleware(BaseMiddleware):
                     or str(result.get("result", ""))[:60]
                 )
                 detail = f" {err[:60]}" if err else " (执行失败，无错误信息)"
-            print(f"    \033[1;32m{icon} {name}{detail}\033[0m")
+            print(f"{prefix}    \033[1;32m{icon} {name}{detail}\033[0m")
 
             try:
                 args = json.loads(tc.get("function", {}).get("arguments", "{}"))
@@ -276,7 +285,7 @@ class ReActCoreMiddleware(BaseMiddleware):
                     ctx.task_description += (
                         f"\n[代码错误] 上次代码出错，请修复后重试: {err_text[:400]}"
                     )
-                    print(f"    \033[1;31m⚠️ 代码出错，已注入修复提示\033[0m")
+                    print(f"{prefix}    \033[1;31m⚠️ 代码出错，已注入修复提示\033[0m")
 
         # 达到轮次上限且没有 final_answer → 用已有结果
         if ctx.react_depth >= ctx.max_iterations and not ctx.final_answer:
@@ -442,7 +451,9 @@ async def _generate_plan(
         return []
 
 
-def _display_plan(ctx: RunContext, header: str = "📋 执行计划") -> None:
+def _display_plan(
+    ctx: RunContext, header: str = "📋 执行计划", prefix: str = ""
+) -> None:
     """显示计划进度条"""
     if not ctx.plan:
         return
@@ -451,7 +462,7 @@ def _display_plan(ctx: RunContext, header: str = "📋 执行计划") -> None:
     color = "\033[1;34m"
     reset = "\033[0m"
 
-    lines = [f"    {color}{header}（{done}/{total}）:{reset}"]
+    lines = [f"{prefix}    {color}{header}（{done}/{total}）:{reset}"]
     for step in ctx.plan:
         if step.status == "done":
             icon = "✅"
@@ -462,7 +473,7 @@ def _display_plan(ctx: RunContext, header: str = "📋 执行计划") -> None:
         else:
             icon = "  "
         desc = step.description.replace("\n", " ")[:60]
-        lines.append(f"      {icon} {desc}")
+        lines.append(f"{prefix}      {icon} {desc}")
     print("\n".join(lines))
 
 
@@ -559,6 +570,16 @@ async def _replan_failed(ctx: RunContext) -> bool:
     return True
 
 
+def _get_prefix(agent: Any = None) -> str:
+    """获取Agent前缀标签"""
+    if agent and hasattr(agent, "_agent_label"):
+        label = agent._agent_label
+        # 截取合适的长度
+        short_label = label[:15] if len(label) > 15 else label
+        return f"[{short_label}] "
+    return ""
+
+
 async def run_react(
     task_description: str,
     max_rounds: int = 0,
@@ -592,24 +613,29 @@ async def run_react(
     await chain.on_start(ctx)
     ctx._chain = chain
 
+    # 获取前缀
+    prefix = _get_prefix(agent)
+
     # ── 规划阶段：先制定计划，再执行 ──
     ctx.plan = await _generate_plan(task_description, ctx)
     if ctx.plan:
-        _display_plan(ctx)
+        _display_plan(ctx, prefix=prefix)
     else:
-        print(f"    \033[2;37m📋 无显式计划，自动按 ReAct 循环执行\033[0m")
+        print(f"{prefix}    \033[2;37m📋 无显式计划，自动按 ReAct 循环执行\033[0m")
 
     while not ctx.interrupted and ctx.react_depth < ctx.max_iterations:
         round_idx = ctx.react_depth + 1
-        print(f"\n    \033[1;37m━━━ 第 {round_idx}/{ctx.max_iterations} 轮 ━━━\033[0m")
+        print(
+            f"\n{prefix}    \033[1;37m━━━ 第 {round_idx}/{ctx.max_iterations} 轮 ━━━\033[0m"
+        )
 
         # 显示计划进度
         if ctx.plan:
-            _display_plan(ctx)
+            _display_plan(ctx, prefix=prefix)
 
         # 全部步骤完成 → 结束
         if ctx.plan and all(s.status == "done" for s in ctx.plan):
-            print(f"    \033[1;32m✅ 所有计划步骤已完成\033[0m")
+            print(f"{prefix}    \033[1;32m✅ 所有计划步骤已完成\033[0m")
             ctx.interrupted = True
             break
 
@@ -617,13 +643,13 @@ async def run_react(
         if ctx.react_depth >= 3 and ctx.plan:
             done_count = sum(1 for s in ctx.plan if s.status == "done")
             if done_count == 0 and ctx.react_depth >= 8:
-                print(f"    \033[1;33m⚠️ 多轮未见推进，提前结束\033[0m")
+                print(f"{prefix}    \033[1;33m⚠️ 多轮未见推进，提前结束\033[0m")
                 ctx.interrupted = True
                 break
 
         # 最后一轮提示
         if ctx.react_depth == ctx.max_iterations - 1:
-            print(f"    \033[1;31m⚠️ 最后轮次 — 直接输出最终答案\033[0m")
+            print(f"{prefix}    \033[1;31m⚠️ 最后轮次 — 直接输出最终答案\033[0m")
             ctx.task_description += (
                 "\n\n[最后轮次] 本轮后结束。如果主要任务已经完成，直接输出结果。"
             )

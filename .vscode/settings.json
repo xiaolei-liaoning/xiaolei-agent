@@ -62,5 +62,15 @@
     }
   },
   "Codegeex.RepoIndex": true,
-  "cmake.sourceDirectory": "/Users/leiyuxuan/Desktop/小雷版agent/herdr/vendor/libghostty-vt"
+  "cmake.sourceDirectory": "/Users/leiyuxuan/Desktop/小雷版agent/herdr/vendor/libghostty-vt",
+
+  // cSpell 拼写检查 - 项目专有名词白名单
+  "cSpell.words": [
+    "wechat",
+    "xiaolei",
+    "jieba",
+    "monokai",
+    "osascript",
+    "fromlist"
+  ]
 }

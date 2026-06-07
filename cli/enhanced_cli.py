@@ -42,23 +42,45 @@
 
 import argparse
 import asyncio
-import json
 import logging
 import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Any, Dict, List, Optional
 
 # 添加项目路径
 sys.path.insert(0, str(Path(__file__).parent))
 
+
 # 先解析参数并初始化日志系统（在导入任何可能产生日志的模块之前）
 def _pre_init_logger():
     """预初始化日志系统 - 在导入其他模块之前"""
+    # ── Python 3.13 asyncio subprocess bugfix ──
+    # _try_finish() 在多个 pipe 同时关闭时会重复调用 waiter.set_result()，
+    # 触发 InvalidStateError。这里 monkey-patch 掉。
+    import sys as _sys
+
+    if _sys.version_info >= (3, 13):
+        try:
+            import asyncio.base_subprocess as _asp
+
+            _orig = _asp.BaseSubprocessTransport._try_finish
+
+            def _patched_try_finish(self):
+                try:
+                    _orig(self)
+                except asyncio.InvalidStateError:
+                    pass
+
+            _asp.BaseSubprocessTransport._try_finish = _patched_try_finish
+        except Exception:
+            pass
+
     # ── 先过滤已知噪音 ──
     import warnings
+
     warnings.filterwarnings("ignore", message="pkg_resources is deprecated")
     warnings.filterwarnings("ignore", message="Number of requested results")
     # 在 ChromaDB 加载前禁用其遥测
@@ -73,14 +95,15 @@ def _pre_init_logger():
     no_console_log = False
 
     import sys
+
     in_tmux = os.environ.get("TMUX") is not None
 
     for i, arg in enumerate(sys.argv):
-        if arg in ('--log-file', '-l') and i + 1 < len(sys.argv):
+        if arg in ("--log-file", "-l") and i + 1 < len(sys.argv):
             log_file = sys.argv[i + 1]
-        elif arg == '--no-console-log':
+        elif arg == "--no-console-log":
             no_console_log = True
-        elif arg in ('--dual-terminal', '-d'):
+        elif arg in ("--dual-terminal", "-d"):
             # 双终端模式自动启用日志文件和禁用控制台日志
             script_dir = Path(__file__).parent
             log_file = str(script_dir / "logs" / "agent.log")
@@ -100,26 +123,44 @@ def _pre_init_logger():
 
     # 初始化日志系统
     from cli.logging_system import init_logger
-    init_logger(log_file=log_file, log_to_console=not no_console_log)
+
+    init_logger(log_file=log_file or "", log_to_console=not no_console_log)
+
 
 # 预初始化日志系统（必须在导入其他模块之前）
 _pre_init_logger()
 
-# 导入CLI模块
-from cli.colors import CliColors, print_color, print_chat_bubble, print_success, print_error, print_warning, ansi
-from cli.prompt import get_chat_input
-from cli.command_parser import (
-    CommandParser, CommandType, ParsedCommand, get_command_parser
+# 导入CLI模块 (noqa: E402 — 必须在 _pre_init_logger() 之后)
+from cli.colors import (  # noqa: E402
+    CliColors,
+    print_chat_bubble,
+    print_color,
+    print_error,
+    print_success,
+    print_warning,
 )
-from cli.thinking_engine import (
-    ThinkingEngine, get_thinking_engine,
-    think_start, think_analyze, think_plan, think_step,
-    think_log, think_complete, think_data, think_summarize,
-    set_thinking_enabled
+from cli.command_parser import (  # noqa: E402
+    CommandType,
+    ParsedCommand,
+    get_command_parser,
 )
-from cli.logging_system import (
-    get_logger, init_logger,
-    log_debug, log_info, log_success, log_warning, log_error,
+from cli.logging_system import (  # noqa: E402
+    log_error,
+    log_info,
+    log_success,
+    log_warning,
+)
+from cli.prompt import get_chat_input  # noqa: E402
+from cli.thinking_engine import (  # noqa: E402
+    get_thinking_engine,
+    set_thinking_enabled,
+    think_analyze,
+    think_complete,
+    think_log,
+    think_plan,
+    think_start,
+    think_step,
+    think_summarize,
 )
 
 # 导入核心服务（延迟导入）
@@ -127,12 +168,14 @@ CLARIFICATION_SERVICE = None
 PERMISSION_SERVICE = None
 FORKED_AGENT_SERVICE = None
 
+
 def _import_core_services():
     """延迟导入核心服务"""
     global CLARIFICATION_SERVICE, PERMISSION_SERVICE, FORKED_AGENT_SERVICE
 
     try:
         from core.services.clarification_service import get_clarification_service
+
         CLARIFICATION_SERVICE = get_clarification_service()
         log_success("✅ 反问服务导入成功")
     except Exception as e:
@@ -140,6 +183,7 @@ def _import_core_services():
 
     try:
         from core.services.permission_service import get_permission_service
+
         PERMISSION_SERVICE = get_permission_service()
         log_success("✅ 权限服务导入成功")
     except Exception as e:
@@ -147,6 +191,7 @@ def _import_core_services():
 
     try:
         from core.services.forked_agent_service import get_forked_agent_service
+
         FORKED_AGENT_SERVICE = get_forked_agent_service()
         log_success("✅ Forked Agent服务导入成功")
     except Exception as e:
@@ -184,6 +229,7 @@ class EnhancedCLI:
     def _init_session(self):
         """初始化会话状态（延迟到日志系统初始化后调用）"""
         import uuid
+
         self.session_id = str(uuid.uuid4())[:8]
         self.chat_history = []
         log_info(f"会话已初始化: {self.session_id}")
@@ -192,7 +238,6 @@ class EnhancedCLI:
         """打印欢迎界面 — 现代化风格：简洁品牌面板 + 系统统计 + 快速参考"""
         print("\033c", end="")
         brand = "rgb(215,119,87)"
-        soft = "rgb(153,153,153)"
         dim = "rgb(80,80,80)"
 
         from rich.console import Console as RichConsole
@@ -203,18 +248,22 @@ class EnhancedCLI:
         rc.print()
 
         # ── 品牌面板 ──
-        rc.print(Panel(
-            "[bold rgb(215,119,87)]🦞  xiaolei AI Agent[/bold rgb(215,119,87)]\n"
-            f"[{dim}]session: {self.session_id or 'initializing'}  ·  "
-            f"version: 3.4.0[/{dim}]",
-            border_style=brand, padding=(1, 2),
-        ))
+        rc.print(
+            Panel(
+                "[bold rgb(215,119,87)]🦞  xiaolei AI Agent[/bold rgb(215,119,87)]\n"
+                f"[{dim}]session: {self.session_id or 'initializing'}  ·  "
+                f"version: 3.4.0[/{dim}]",
+                border_style=brand,
+                padding=(1, 2),
+            )
+        )
 
         # ── 系统统计 ──
         tool_total = 0
         mcp_count = 0
         try:
             from core.multi_agent_v2.tools.tool_registry import get_tool_registry
+
             reg = get_tool_registry()
             summary = reg.get_available_tools_summary()
             tool_total = summary.get("total", 0)
@@ -223,9 +272,11 @@ class EnhancedCLI:
             pass
 
         if tool_total > 0:
-            rc.print(f"  [{dim}]●[/]  [{bold}]Tools: {tool_total}[/]"
-                     f"  [{dim}]·[/]  [{bold}]MCP: {mcp_count}[/] connected"
-                     f"  [{dim}]·[/]  [{brand}]/tools[/] for details")
+            rc.print(
+                f"  [{dim}]●[/]  [bold]Tools: {tool_total}[/]"
+                f"  [{dim}]·[/]  [bold]MCP: {mcp_count}[/] connected"
+                f"  [{dim}]·[/]  [{brand}]/tools[/] for details"
+            )
         else:
             rc.print(f"  [{dim}]●[/]  tools initializing…")
 
@@ -235,14 +286,15 @@ class EnhancedCLI:
         cmd_table = Table(show_header=False, box=None, padding=(0, 3, 0, 0))
         cmd_table.add_column("Command", style=f"bold {brand}", no_wrap=True)
         cmd_table.add_column("What it does", style="white")
-        cmd_table.add_row("/run \"task\"", "Execute a workflow")
+        cmd_table.add_row('/run "task"', "Execute a workflow")
         cmd_table.add_row("/chat", "Conversation mode")
-        cmd_table.add_row("/smart \"task\"", "Multi-agent collaboration")
+        cmd_table.add_row('/smart "task"', "Multi-agent collaboration")
         cmd_table.add_row("/help", "Full command reference")
         rc.print(cmd_table)
 
         # ── 随机小贴士 ──
         import random
+
         tips = [
             "Type /help search <term> to search commands",
             "Natural language requests work without / prefix",
@@ -352,11 +404,13 @@ class EnhancedCLI:
 
     def handle_help(self, search_term: str = ""):
         """分类帮助系统 — 命令按类别分面板展示"""
-        from rich.console import Console as RichConsole, Group
+        from rich.columns import Columns
+        from rich.console import Console as RichConsole
+        from rich.console import Group
         from rich.panel import Panel
         from rich.table import Table
-        from rich.columns import Columns
-        from cli.colors import CLAUDE, SUCCESS, SUBTLE, BOLD, INACTIVE
+
+        from cli.colors import CLAUDE, INACTIVE, SUBTLE
 
         rc = RichConsole()
 
@@ -367,12 +421,20 @@ class EnhancedCLI:
 
         # 命令分类
         categories = {
-            "📋 Core": ["/run", "/chat", "/smart", "/orchestrate"],
+            "📋 Core": ["/run", "/chat", "/smart", "/orchestrate", "/agents"],
             "📊 Analysis": ["/analyze", "/review", "/scrape"],
             "🤖 Automation": ["/automate", "/wechat"],
             "⚙️ System": ["/status", "/config", "/mcp", "/tools", "/plugin"],
             "🎮 Tools": ["/agent", "/game", "/fun", "/art"],
-            "🔄 Session": ["/help", "/history", "/clear", "/debug", "/think", "/reset", "/quit"],
+            "🔄 Session": [
+                "/help",
+                "/history",
+                "/clear",
+                "/debug",
+                "/think",
+                "/reset",
+                "/quit",
+            ],
         }
 
         help_map = self.command_parser.COMMAND_HELP
@@ -385,10 +447,14 @@ class EnhancedCLI:
             for cmd in cmds:
                 desc = help_map.get(cmd, "")
                 table.add_row(cmd, desc)
-            panels.append(Panel(
-                table, title=f"[bold]{cat_name}[/bold]",
-                border_style=SUBTLE, padding=(1, 2),
-            ))
+            panels.append(
+                Panel(
+                    table,
+                    title=f"[bold]{cat_name}[/bold]",
+                    border_style=SUBTLE,
+                    padding=(1, 2),
+                )
+            )
 
         # 分两列展示
         rc.print()
@@ -398,17 +464,21 @@ class EnhancedCLI:
         help_layout = Panel(
             Columns([left, right], equal=True, expand=True),
             title=f"[bold {CLAUDE}]🦞 xiaolei AI Agent 命令参考[/bold {CLAUDE}]",
-            border_style=CLAUDE, padding=(1, 2),
+            border_style=CLAUDE,
+            padding=(1, 2),
         )
         rc.print(help_layout)
-        rc.print(f"\n  [{INACTIVE}]💡 提示: /help search <关键词> 搜索命令 /tools 查看所有工具状态[/{INACTIVE}]")
+        rc.print(
+            f"\n  [{INACTIVE}]💡 提示: /help search <关键词> 搜索命令 /tools 查看所有工具状态[/{INACTIVE}]"
+        )
         rc.print()
 
     def _handle_help_search(self, term: str):
         """搜索命令帮助"""
         from rich.console import Console as RichConsole
         from rich.table import Table
-        from cli.colors import CLAUDE, SUBTLE, INACTIVE
+
+        from cli.colors import CLAUDE, INACTIVE, SUBTLE
 
         rc = RichConsole()
         help_map = self.command_parser.COMMAND_HELP
@@ -419,19 +489,26 @@ class EnhancedCLI:
                 results.append((cmd, desc))
 
         if not results:
-            rc.print(f"\n  [{INACTIVE}]未找到包含 \"{term}\" 的命令[/{INACTIVE}]")
+            rc.print(f'\n  [{INACTIVE}]未找到包含 "{term}" 的命令[/{INACTIVE}]')
             return
 
-        table = Table(title=f"搜索 \"{term}\" 结果 ({len(results)} 条)",
-                      title_style="bold", border_style=SUBTLE,
-                      header_style=f"bold {CLAUDE}")
+        table = Table(
+            title=f'搜索 "{term}" 结果 ({len(results)} 条)',
+            title_style="bold",
+            border_style=SUBTLE,
+            header_style=f"bold {CLAUDE}",
+        )
         table.add_column("命令", style=f"bold {CLAUDE}")
         table.add_column("说明", style="white")
         for cmd, desc in results:
             # 高亮匹配部分
             idx = cmd.lower().find(term_lower)
             if idx >= 0:
-                cmd = cmd[:idx] + f"[{CLAUDE}]{cmd[idx:idx+len(term)]}[/{CLAUDE}]" + cmd[idx+len(term):]
+                cmd = (
+                    cmd[:idx]
+                    + f"[{CLAUDE}]{cmd[idx:idx+len(term)]}[/{CLAUDE}]"
+                    + cmd[idx + len(term) :]
+                )
             table.add_row(cmd, desc)
         rc.print()
         rc.print(table)
@@ -442,13 +519,14 @@ class EnhancedCLI:
         from rich.console import Console as RichConsole
         from rich.panel import Panel
         from rich.table import Table
-        from rich.columns import Columns
-        from cli.colors import CLAUDE, SUCCESS, ERROR, SUBTLE, BOLD, INACTIVE, WARNING
+
+        from cli.colors import BOLD, CLAUDE, INACTIVE, SUBTLE, SUCCESS
 
         rc = RichConsole()
 
         try:
             from core.multi_agent_v2.tools.tool_registry import get_tool_registry
+
             reg = get_tool_registry()
             if not reg._initialized:
                 await reg.discover_all()
@@ -496,89 +574,120 @@ class EnhancedCLI:
                 if server in ("__builtin__", "__mcp__", ""):
                     continue
                 names = ", ".join(t.name for t in tools)
-                mcp_rows.append(f"  [{CLAUDE}]●[/] {server}: [{SUBTLE}]{names}[/{SUBTLE}]")
+                mcp_rows.append(
+                    f"  [{CLAUDE}]●[/] {server}: [{SUBTLE}]{names}[/{SUBTLE}]"
+                )
 
-            panels = [Panel(tag_table, title="[bold]工具列表[/bold]", border_style=SUBTLE, padding=(1, 2))]
+            panels = [
+                Panel(
+                    tag_table,
+                    title="[bold]工具列表[/bold]",
+                    border_style=SUBTLE,
+                    padding=(1, 2),
+                )
+            ]
 
             if mcp_rows:
                 mcp_text = "\n".join(mcp_rows)
-                from rich.text import Text
-                panels.append(Panel(mcp_text, title="[bold]MCP 服务器[/bold]", border_style=CLAUDE, padding=(1, 2)))
+
+                panels.append(
+                    Panel(
+                        mcp_text,
+                        title="[bold]MCP 服务器[/bold]",
+                        border_style=CLAUDE,
+                        padding=(1, 2),
+                    )
+                )
 
             # 输出
             rc.print()
-            rc.print(Panel(
-                f"  {overview}",
-                title=f"[bold]🔧 工具系统概览[/bold]",
-                border_style=SUBTLE, padding=(0, 1),
-            ))
+            rc.print(
+                Panel(
+                    f"  {overview}",
+                    title="[bold]🔧 工具系统概览[/bold]",
+                    border_style=SUBTLE,
+                    padding=(0, 1),
+                )
+            )
             for p in panels:
                 rc.print(p)
-            rc.print(f"  [{INACTIVE}]💡 提示: 工具按任务需求自动筛选，用自然语言描述任务即可自动使用合适工具[/{INACTIVE}]")
+            rc.print(
+                f"  [{INACTIVE}]💡 提示: 工具按任务需求自动筛选，用自然语言描述任务即可自动使用合适工具[/]"
+            )
             rc.print()
 
         except Exception as e:
             self._display_error_panel(e, "获取工具列表失败")
 
-    def handle_show(self, parsed_cmd: 'ParsedCommand'):
+    def handle_show(self, parsed_cmd: "ParsedCommand"):
         """展开之前折叠的输出"""
         target = parsed_cmd.action or parsed_cmd.remaining
         if not target:
             from cli.colors import print_warning
+
             print_warning("请指定要展开的内容，如: /show error")
             return
 
         # 从折叠缓存中查找
         key = target.strip().lower()
-        if hasattr(self, '_collapsed_outputs') and key in self._collapsed_outputs:
-            from cli.colors import _console
+        if hasattr(self, "_collapsed_outputs") and key in self._collapsed_outputs:
             from rich.panel import Panel
-            from rich.text import Text
+
+            from cli.colors import _console
+
             data = self._collapsed_outputs[key]
-            _console.print(Panel(
-                str(data)[:10000],
-                title=f"[+] {key}",
-                border_style="grey58",
-            ))
+            _console.print(
+                Panel(
+                    str(data)[:10000],
+                    title=f"[+] {key}",
+                    border_style="grey58",
+                )
+            )
         else:
             from cli.colors import print_warning
+
             print_warning(f"未找到展开内容: {target}")
 
-    def _display_collapsible_result(self, title: str, content: str,
-                                     collapsed: bool = True,
-                                     max_chars: int = 500) -> str:
+    def _display_collapsible_result(
+        self, title: str, content: str, collapsed: bool = True, max_chars: int = 500
+    ) -> str:
         """显示可折叠的结果 — 长内容自动折叠，可通过 /show <id> 展开
 
         Returns:
             result_id: 用于 /show 命令的ID
         """
-        from rich.console import Console as RichConsole
-        from rich.panel import Panel
-        from cli.colors import _console, CLAUDE, SUBTLE, INACTIVE
-
         # 生成唯一ID
         import hashlib
+
+        from rich.panel import Panel
+
+        from cli.colors import INACTIVE, SUBTLE, _console
+
         result_id = hashlib.md5(title.encode()).hexdigest()[:8]
 
         if len(content) <= max_chars:
-            _console.print(Panel(
-                content,
-                title=title,
-                border_style=SUBTLE,
-                padding=(0, 2),
-            ))
+            _console.print(
+                Panel(
+                    content,
+                    title=title,
+                    border_style=SUBTLE,
+                    padding=(0, 2),
+                )
+            )
         else:
             preview = content[:max_chars]
             remaining = len(content) - max_chars
-            _console.print(Panel(
-                f"{preview}\n\n[{INACTIVE}]...（剩余 {remaining} 字符，/show {result_id} 展开全文）[/{INACTIVE}]",
-                title=f"[+] {title}",
-                border_style=SUBTLE,
-                padding=(0, 2),
-            ))
+            _console.print(
+                Panel(
+                    f"{preview}\n\n[{INACTIVE}]...（剩余 {remaining} 字符，/show {result_id} 展开全文）[/{INACTIVE}]",
+                    title=f"[+] {title}",
+                    border_style=SUBTLE,
+                    padding=(0, 2),
+                )
+            )
 
             # 存入折叠缓存
-            if not hasattr(self, '_collapsed_outputs'):
+            if not hasattr(self, "_collapsed_outputs"):
                 self._collapsed_outputs = {}
             self._collapsed_outputs[result_id] = content
 
@@ -589,41 +698,61 @@ class EnhancedCLI:
         suggestions = []
         msg_lower = error_msg.lower()
 
-        network_kw = ["connection", "timeout", "network", "dns",
-                      "refused", "unreachable", "socket", "reset"]
+        network_kw = [
+            "connection",
+            "timeout",
+            "network",
+            "dns",
+            "refused",
+            "unreachable",
+            "socket",
+            "reset",
+        ]
         if any(kw in msg_lower for kw in network_kw):
             suggestions.append("Check your network connection and try again")
             suggestions.append("Use /mcp status to verify MCP server connectivity")
 
         if "ModuleNotFoundError" in error_class or "ImportError" in error_class:
-            suggestions.append("Run 'pip install -r requirements.txt' to install dependencies")
+            suggestions.append(
+                "Run 'pip install -r requirements.txt' to install dependencies"
+            )
 
         if "KeyError" in error_class or "AttributeError" in error_class:
             suggestions.append("This may be a configuration issue. Try /config show")
 
         json_kw = ["json.decoder.jsondecodeerror", "parse", "unexpected token"]
         if any(kw in msg_lower for kw in json_kw):
-            suggestions.append("Check that the input is valid JSON or the expected format")
+            suggestions.append(
+                "Check that the input is valid JSON or the expected format"
+            )
 
         if "PermissionError" in error_class:
-            suggestions.append("You may need to grant permission via the permission service")
+            suggestions.append(
+                "You may need to grant permission via the permission service"
+            )
 
         if "FileNotFoundError" in error_class:
             suggestions.append("Check that the file path exists and is accessible")
 
         return suggestions
 
-    def _display_error_panel(self, error: Exception, context: str = "",
-                              suggestions: list = None) -> None:
+    def _display_error_panel(
+        self,
+        error: Exception,
+        context: str = "",
+        suggestions: Optional[List[str]] = None,
+    ) -> None:
         """显示带建议操作的错误面板 — 支持自动错误分类"""
-        from rich.console import Console as RichConsole
-        from rich.panel import Panel
-        from rich.syntax import Syntax
-        from rich.text import Text
-        from cli.colors import _console, ERROR, SUBTLE, BOLD, INACTIVE, WARNING
         import traceback
 
-        tb = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+        from rich.panel import Panel
+        from rich.syntax import Syntax
+
+        from cli.colors import ERROR, INACTIVE, SUBTLE, WARNING, _console
+
+        tb = "".join(
+            traceback.format_exception(type(error), error, error.__traceback__)
+        )
         error_class = type(error).__name__
 
         # 自动分类建议
@@ -632,12 +761,14 @@ class EnhancedCLI:
 
         # 错误面板
         _console.print()
-        _console.print(Panel(
-            f"[bold {ERROR}]⚠️  {error_class}[/bold {ERROR}]  {str(error)[:200]}",
-            title=f"❌ {context or 'Error'}",
-            border_style=ERROR,
-            padding=(0, 2),
-        ))
+        _console.print(
+            Panel(
+                f"[bold {ERROR}]⚠️  {error_class}[/bold {ERROR}]  {str(error)[:200]}",
+                title=f"❌ {context or 'Error'}",
+                border_style=ERROR,
+                padding=(0, 2),
+            )
+        )
 
         # 建议
         if all_suggestions:
@@ -648,23 +779,28 @@ class EnhancedCLI:
         # 可展开的堆栈
         if len(tb) > 200:
             import hashlib
+
             key = hashlib.md5(tb.encode()).hexdigest()[:8]
-            _console.print(Panel(
-                Syntax(tb, "python", theme="monokai", line_numbers=True),
-                title=f"[+] 堆栈 (/show {key})",
-                border_style=SUBTLE,
-                padding=(0, 1),
-            ))
-            if not hasattr(self, '_collapsed_outputs'):
+            _console.print(
+                Panel(
+                    Syntax(tb, "python", theme="monokai", line_numbers=True),
+                    title=f"[+] 堆栈 (/show {key})",
+                    border_style=SUBTLE,
+                    padding=(0, 1),
+                )
+            )
+            if not hasattr(self, "_collapsed_outputs"):
                 self._collapsed_outputs = {}
             self._collapsed_outputs[key] = tb
         else:
-            _console.print(Panel(
-                Syntax(tb, "python", theme="monokai"),
-                title="堆栈",
-                border_style=SUBTLE,
-                padding=(0, 1),
-            ))
+            _console.print(
+                Panel(
+                    Syntax(tb, "python", theme="monokai"),
+                    title="堆栈",
+                    border_style=SUBTLE,
+                    padding=(0, 1),
+                )
+            )
         _console.print()
 
     def handle_quit(self):
@@ -777,7 +913,7 @@ class EnhancedCLI:
                     options = [opt.label for opt in q.options]
                     print_color(f"  选项: {', '.join(options)}", CliColors.GRAY)
             else:
-                print_color(f"  无需反问", CliColors.YELLOW)
+                print_color("  无需反问", CliColors.YELLOW)
 
         print_color("\n  ✅ 反问服务测试通过", CliColors.GREEN)
 
@@ -801,9 +937,18 @@ class EnhancedCLI:
         for perm_type, desc in test_permissions:
             print_color(f"\n  测试: {desc}", CliColors.WHITE)
             decision = PERMISSION_SERVICE.check_permission(perm_type)
-            print_color(f"  决策: {decision.value}",
-                       CliColors.GREEN if decision.value == "allow" else
-                       CliColors.YELLOW if decision.value == "prompt" else CliColors.RED)
+            print_color(
+                f"  决策: {decision.value}",
+                (
+                    CliColors.GREEN
+                    if decision.value == "allow"
+                    else (
+                        CliColors.YELLOW
+                        if decision.value == "prompt"
+                        else CliColors.RED
+                    )
+                ),
+            )
 
         print_color("\n  ✅ 权限服务测试通过", CliColors.GREEN)
 
@@ -820,7 +965,8 @@ class EnhancedCLI:
         result = await FORKED_AGENT_SERVICE.create_side_question("什么是人工智能？")
 
         if result.status.value == "completed":
-            print_color(f"  响应: {result.response[:30]}...", CliColors.GREEN)
+            response_text = (result.response or "")[:30]
+            print_color(f"  响应: {response_text}...", CliColors.GREEN)
         else:
             print_error(f"  失败: {result.error}")
 
@@ -831,7 +977,10 @@ class EnhancedCLI:
             {"prompt": "任务B"},
         ]
         results = await FORKED_AGENT_SERVICE.run_parallel_tasks(tasks)
-        print_color(f"  完成任务数: {len([r for r in results if r.status.value == 'completed'])}", CliColors.GREEN)
+        print_color(
+            f"  完成任务数: {len([r for r in results if r.status.value == 'completed'])}",
+            CliColors.GREEN,
+        )
 
         print_color("\n  ✅ Forked Agent服务测试通过", CliColors.GREEN)
 
@@ -858,10 +1007,14 @@ class EnhancedCLI:
 
         # 显示模式状态
         print_color("\n当前模式:", CliColors.CYAN)
-        print_color(f"  思考模式: {'✅ 启用' if self.thinking_engine.is_enabled() else '❌ 禁用'}",
-                   CliColors.GREEN if self.thinking_engine.is_enabled() else CliColors.RED)
-        print_color(f"  调试模式: {'✅ 启用' if self.debug_mode else '❌ 禁用'}",
-                   CliColors.GREEN if self.debug_mode else CliColors.RED)
+        print_color(
+            f"  思考模式: {'✅ 启用' if self.thinking_engine.is_enabled() else '❌ 禁用'}",
+            CliColors.GREEN if self.thinking_engine.is_enabled() else CliColors.RED,
+        )
+        print_color(
+            f"  调试模式: {'✅ 启用' if self.debug_mode else '❌ 禁用'}",
+            CliColors.GREEN if self.debug_mode else CliColors.RED,
+        )
 
     async def handle_run(self, parsed_cmd: ParsedCommand):
         """处理执行工作流命令"""
@@ -871,9 +1024,11 @@ class EnhancedCLI:
             return
 
         from cli.base import WorkflowEngineWrapper
+
         wrapper = WorkflowEngineWrapper()
 
         import time
+
         start = time.time()
         result = await wrapper.create_and_execute(request)
         elapsed = time.time() - start
@@ -884,437 +1039,250 @@ class EnhancedCLI:
 
     async def handle_orchestrate(self, parsed_cmd: ParsedCommand):
         """多Agent编排 — 真正的多Agent并发协作"""
-        from cli.colors import CLAUDE, BOLD, SUCCESS, log_status, print_error, print_success
-        from cli.animated_spinner import print_section
+        from cli.colors import (
+            print_error,
+        )
 
         action = parsed_cmd.action or ""
         remaining = parsed_cmd.remaining or ""
 
-        # ── /orchestrate demo — 交互式示例选择 ──
-        if action == "demo":
-            print_section("🧪 多Agent编排 - 演示模式")
-            from core.multi_agent_v2.orchestration.demo import main
-            await main()
+        # 简单的多Agent自动编排
+        task = remaining or action or ""
+        if not task:
+            print_error("请提供任务描述")
             return
+        await self._run_ad_hoc(task)
 
-        # ── /orchestrate list — 列出已注册工作流 ──
-        if action == "list":
-            from core.multi_agent_v2.orchestration.orchestrator import list_workflows, get_workflow
-            wfs = list_workflows()
-            print_section("📋 已注册工作流")
-            if not wfs:
-                log_status("暂无注册的工作流", color=CLAUDE)
-                log_status("请先运行编排示例注册：python -m core.multi_agent_v2.orchestration.demo", color=CLAUDE)
-            else:
-                for name in wfs:
-                    wf = get_workflow(name)
-                    desc = wf.meta.description if wf and hasattr(wf, 'meta') else ""
-                    phases_str = ""
-                    if wf and hasattr(wf, 'meta') and wf.meta.phases:
-                        phases_str = f"  ({' → '.join(p['title'] for p in wf.meta.phases)})"
-                    log_status(f"  • {name}: {desc}{phases_str}", color=CLAUDE)
-            return
-
-        # ── /orchestrate run <workflow_name> — 运行命名工作流 ──
-        if action == "run":
-            workflow_name = remaining
-            if not workflow_name:
-                print_error("请指定工作流名称，如: /orchestrate run 并行调研")
-                return
-            from core.multi_agent_v2.orchestration.orchestrator import run_workflow, reset
-            reset()
-            print_section(f"🚀 工作流: {workflow_name}")
-            result = await run_workflow(workflow_name)
-            if hasattr(result, 'success') and hasattr(result, 'output'):
-                if result.success:
-                    print_success(f"✅ 成功 ({result.execution_time:.1f}s)")
-                    print(result.text()[:1000])
-                else:
-                    log_status(f"⚠️ 失败: {result.error}", color="red")
-            return
-
-        # ── /orchestrate "自然语言描述" — 自动编排 ──
-        if not remaining and not action:
-            print_error("请提供任务描述或工作流名称")
-            log_status("示例: /orchestrate demo", color=CLAUDE)
-            log_status("      /orchestrate run 并行调研", color=CLAUDE)
-            log_status("      /orchestrate list", color=CLAUDE)
-            return
-
-        # 有文本 → 尝试匹配已注册的工作流
-        if action and action not in ("demo", "list", "run", "play"):
-            name = action if remaining else ""
-            task = f"{action} {remaining}" if remaining else action
-            from core.multi_agent_v2.orchestration.orchestrator import list_workflows, run_workflow as _run_wf
-            wfs = list_workflows()
-            if name in wfs:
-                reset()
-                print_section(f"🚀 工作流: {name}")
-                result = await _run_wf(name)
-                if hasattr(result, 'success') and hasattr(result, 'output'):
-                    if result.success:
-                        print_success(f"✅ 成功 ({result.execution_time:.1f}s)")
-                        print(result.text()[:1000])
-                return
-            # 无匹配工作流，LLM 动态编排
-            await self._run_with_scheduler(task)
-            return
-
-        # remaining 有内容 → LLM 动态编排
-        await self._run_with_scheduler(remaining)
-
-    async def _run_with_scheduler(self, task: str):
-        """动态编排：LLM 自由生成 JS 编排脚本 → 后处理修复 → js_orchestrator 执行
-
-        LLM 真正写 JS 编排逻辑（不固定模板），可以自由使用：
-        - parallel() 并发织网
-        - 条件分支：根据中间结果决定后续路径
-        - 阶段拆分：多阶段流水线
-        - 错误处理：超时/失败重试
-        - 动态拼接：根据子任务结果构造新的子任务
-
-        Python 做后处理修复常见 JS 语法问题，保证可执行。
-        """
-        from cli.colors import CLAUDE, log_status, print_error, print_success
-        from cli.animated_spinner import print_section
-        from cli.orch_progress import OrchestrationProgressDisplay
-        import re
-
-        print_section("🕸️  动态编排 - JS Workflow")
-
-        # ── 编排进度显示 ──
-        display = OrchestrationProgressDisplay()
-        display.set_workflow_name(task[:60])
-        display.set_phases(["Research", "Synthesis"])
-
-        from cli.colors import _console
-        from rich.panel import Panel
-        _console.print()
-        _console.print(Panel(
-            "[bold]Phase Plan:[/bold]\n"
-            "  [dim]1.[/dim] Research  — 并行执行子任务分析\n"
-            "  [dim]2.[/dim] Synthesis — 汇总各子任务结果\n"
-            f"\n[dim]Workflow: {task[:100]}[/dim]",
-            title="📋 编排计划",
-            border_style="rgb(215,119,87)",
-            padding=(1, 2),
-        ))
-        _console.print()
-
+    async def _llm_decompose_task(self, task: str) -> list:
+        """用 LLM 动态将任务分解为子任务"""
         try:
             from core.engine.llm_backend import get_llm_router
+
             router = get_llm_router()
-            if not router.is_available():
-                log_status("LLM 不可用，走简单并行", color="yellow")
-                raise ValueError("LLM不可用")
-
-            # ── 模式1: LLM 自由生成 JS 编排脚本 ──
-            script = await self._mode_free_js(router, task)
-
-            # ── 模式1 失败 → 模式2: JSON 子任务 + 固定 JS 模板 ──
-            if not script:
-                log("自由JS失败，走JSON子任务+JS模板模式...")
-                script = await self._mode_json_template(router, task)
-
-            if not script:
-                log_status("JS 编排全失败，走简单并行", color="yellow")
-                raise ValueError("JS编排失败")
-
-            log("JS 编排脚本已生成，开始执行...")
-
-            # ── 3. 执行 ──
-            from core.multi_agent_v2.orchestration.js_orchestrator import run_js_workflow
-            result = await run_js_workflow(script)
-
-            # ── 4. 输出 ──
-            print_section("📋 最终结果")
-            if result is not None:
-                text = str(result)
-                print(text[:2000] if len(text) > 2000 else text)
-            else:
-                log_status("无返回结果", color="red")
-
-            display.finish()
-
-        except (ValueError, Exception) as e:
-            log_status(f"JS 编排受阻 ({str(e)[:80]})，走简单并行", color="yellow")
-            await self._run_ad_hoc(task)
-
-    async def _mode_free_js(self, router, task: str) -> str:
-        """模式1: 用示例教 LLM 写 JS 编排脚本
-
-        给一个完美示例（含 agent/parallel/filter/map/join），
-        要求 LLM 为当前任务写同样的编排脚本，只改字符串内容不改逻辑。
-        """
-        import re
-
-        log("正在用示例教学LLM写编排脚本...")
-        try:
-            example = (
-                'export const meta = {\n'
-                '  name: "City Travel Guide",\n'
-                '  description: "Research and recommend travel destinations",\n'
-                '  phases: [{title: "Research"}, {title: "Synthesis"}],\n'
-                '};\n'
-                '\n'
-                'export default async function main() {\n'
-                '  phase("Research");\n'
-                '\n'
-                '  const results = await parallel([\n'
-                '    () => agent("Weather and best season to visit Tokyo", {label: "weather", timeout: 240}),\n'
-                '    () => agent("Top attractions and food in Tokyo", {label: "attractions", timeout: 240}),\n'
-                '    () => agent("Budget and transportation tips for Tokyo", {label: "budget", timeout: 240}),\n'
-                '  ]);\n'
-                '\n'
-                '  const valid = results.filter(r => r !== null);\n'
-                '  const combined = valid.map((r, i) => "[" + (i+1) + "]\\n" + r).join("\\n\\n");\n'
-                '\n'
-                '  phase("Synthesis");\n'
-                '  return await agent(\n'
-                '    "Write a travel guide based on the research:\\n\\n" + combined,\n'
-                '    {label: "final", timeout: 300},\n'
-                '  );\n'
-                '}\n'
-            )
+            if not router or not router.is_available():
+                return []
 
             prompt = (
-                "Example JS workflow (task: Tokyo travel guide):\n"
-                + example +
-                "\n---\n"
-                "Now write the SAME STRUCTURE for this DIFFERENT task:\n"
-                "Task: " + task + "\n\n"
-                "CHANGE: name, description, subtasks, labels.\n"
-                "KEEP: export/phase/parallel/filter/map/return structure.\n"
-                "NO backticks. Output ONLY JS."
+                "将以下任务拆解为3个独立的子任务，每个子任务聚焦一个不同的分析维度。\n"
+                "输出格式：每行一个子任务标题，不要序号，不要引号。\n\n"
+                f"任务：{task[:200]}\n\n"
+                '示例（如果是"分析某个网站"）：\n'
+                "网站架构分析\n"
+                "用户体验评估\n"
+                "性能优化建议\n\n"
+                "开始："
             )
-
-            js_raw = await asyncio.wait_for(
-                router.chat([{"role": "user", "content": prompt}],
-                           temperature=0.3, max_tokens=3000),
-                timeout=90,
-            )
-            script = js_raw if isinstance(js_raw, str) else str(js_raw)
-
-            # 去掉 markdown 代码块
-            m = re.search(r'```(?:javascript|js)?\s*\n(.*?)\n```', script, re.DOTALL)
-            if m: script = m.group(1).strip()
-
-            # 修复反引号（如果有的话）
-            if '`' in script:
-                n = script.count('`')
-                script = re.sub(r'`([^`]*?)`', lambda m: '"' + m.group(1).replace('"', '\\"') + '"', script)
-                log(f"  [修复] 反引号 {n}处")
-
-            # 验证基本结构
-            if "export const meta" not in script or "export default" not in script:
-                return ""
-
-            has_parallel = 'parallel(' in script
-            has_agent = 'agent(' in script
-            has_thunk = '() => agent' in script
-            has_await = 'await agent' in script
-            has_filter = 'filter(' in script
-            missing = []
-            if not has_parallel: missing.append("parallel")
-            if not has_agent: missing.append("agent")
-            if not has_thunk: missing.append("thunk")
-            if not has_await: missing.append("await")
-
-            if missing:
-                log(f"  结构不完整（缺 {missing}），退回模式2")
-                return ""
-
-            # 后处理：清理 meta 中多余字段（LLM 可能加了 subtasks/labels 等）
-            # 只保留 name, description, phases
-            script = re.sub(
-                r'export const meta = \{.*?\n\};',
-                lambda m: EnhancedCLI._clean_meta(m.group(0)),
-                script,
-                flags=re.DOTALL,
-            )
-
-            log(f"  ✅ 正确的 JS 编排脚本 ({len(script)} chars)")
-            for line in script.split('\n')[:6]:
-                log(f"    {line}")
-            log("    ...")
-
-            return script
-        except Exception as e:
-            log(f"  教学失败: {str(e)[:60]}")
-            return ""
-
-
-    @staticmethod
-    def _clean_meta(meta_block: str) -> str:
-        """清理 meta 对象，只保留 name/description/phases，去掉 LLM 自由发挥的字段"""
-        import re
-        allowed = ("name", "description", "phases")
-        lines = meta_block.split('\n')
-        new_lines = []
-        inside_phases_value = False
-        done = False  # phases 和所有允许字段处理完毕
-        for line in lines:
-            stripped = line.strip()
-            if done:
-                if stripped == '};':
-                    new_lines.append(line)
-                continue
-            # 保留 meta 声明和结构行（只保留到 phases 结束）
-            if stripped.startswith('export const meta'):
-                new_lines.append(line)
-                continue
-            key_match = re.match(r'"?(\w+)"?\s*:', stripped)
-            if key_match:
-                key = key_match.group(1)
-                if key in allowed:
-                    new_lines.append(line)
-                    if key == 'phases':
-                        inside_phases_value = ']' not in stripped
-                        if not inside_phases_value:
-                            done = True
-                else:
-                    done = True  # 遇到非允许的 key，停止一切
-                continue
-            # 非 key 行
-            if inside_phases_value:
-                new_lines.append(line)
-                if ']' in stripped:
-                    inside_phases_value = False
-                    done = True
-            # done=True 时跳过所有后续行直到 };，已在上面处理
-
-        # 确保有 }; 结尾
-        result = '\n'.join(new_lines)
-        if not result.strip().endswith('};'):
-            result = result.rstrip() + '\n};'
-        return result
-
-    async def _mode_json_template(self, router, task: str) -> str:
-        """模式2: LLM 输出 JSON 子任务列表 → 固定 JS 模板 → js_orchestrator 执行"""
-        import json, re
-
-        log("正在拆解子任务...")
-        try:
             resp = await asyncio.wait_for(
-                router.chat([{"role": "user", "content":
-                    "Output ONLY JSON, no other text.\n"
-                    '{"subtasks": ["独立子任务1", "独立子任务2", "独立子任务3", ...]}\n'
-                    "3-6个，每个是独立可执行的分析/对比维度。\n"
-                    "Task: " + task
-                }], temperature=0.2, max_tokens=1000),
-                timeout=30,
+                router.chat(
+                    [{"role": "user", "content": prompt}],
+                    temperature=0.3,
+                    max_tokens=300,
+                ),
+                timeout=15.0,
             )
-            text = resp if isinstance(resp, str) else str(resp)
-            m = re.search(r'\{.*\}', text, re.DOTALL)
-            parsed = json.loads(m.group()) if m else None
-            subtasks = parsed.get("subtasks", []) if isinstance(parsed, dict) else []
+            text = str(resp).strip() if resp else ""
+            if not text or "[LLM_MOCK]" in text:
+                return []
 
-            if len(subtasks) < 2:
-                return ""
+            lines = [line.strip() for line in text.split("\n") if line.strip()]
+            lines = [line for line in lines if line and not line.startswith("示例")]
+            # 去掉可能的序号前缀
+            import re
 
-            log(f"JSON模式: {len(subtasks)}个子任务")
-            for i, s in enumerate(subtasks[:6]):
-                log(f"  [{i+1}] {s[:80]}")
-
-            # 生成 JS 模板
-            lines = []
-            for i, s in enumerate(subtasks[:6]):
-                sl = s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
-                lines.append(f'    () => agent("{sl}", {{label: "r{i+1}", timeout: 240}}),')
-            body = "\n".join(lines)
-            td = task[:100].replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
-
-            script = (
-                'export const meta = {\n'
-                '  name: "dynamic",\n'
-                f'  description: "{td}",\n'
-                '  phases: [{title: "Research"}, {title: "Synthesis"}],\n'
-                '};\n'
-                '\n'
-                'export default async function main() {\n'
-                '  phase("Research");\n'
-                '\n'
-                '  const results = await parallel([\n'
-                f'{body}\n'
-                '  ]);\n'
-                '\n'
-                '  phase("Synthesis");\n'
-                '\n'
-                '  const valid = results.filter(r => r !== null);\n'
-                '  const context = valid.map((r, i) => "[" + (i+1) + "]\\n" + r).join("\\n\\n");\n'
-                '\n'
-                '  return await agent(\n'
-                f'    "Synthesize the following research about: {td}\\n\\n" + context,\n'
-                '    {label: "final", timeout: 300},\n'
-                '  );\n'
-                '}\n'
-            )
-            return script
-        except Exception as e:
-            log(f"JSON模式失败: {str(e)[:60]}")
-            return ""
+            lines = [re.sub(r"^\d+[\.\)、]\s*", "", line) for line in lines]
+            return lines[:3]
+        except Exception:
+            return []
 
     async def _run_ad_hoc(self, task: str):
-        """ad-hoc 模式：自动拆解为多Agent并行任务"""
-        from cli.colors import CLAUDE, log_status, print_error, print_success
+        """ad-hoc 模式：JS Workflow 编排
+
+        流程:
+          1. 用户直接给了 JS 脚本 → 直接执行
+          2. 用户给了 .js 文件路径 → 读取后执行
+          3. 否则 LLM 根据任务写 JS 脚本 → 执行
+        """
+        import json
+        import os
+
         from cli.animated_spinner import print_section
-        from core.multi_agent_v2.orchestration.orchestrator import (
-            phase, log, agent, parallel, pipeline, reset, AgentResult,
-        )
-        reset()
+        from cli.colors import CLAUDE, log_status, print_error
 
-        print_section("🤖 多Agent 自动编排")
+        print_section("🤖 多Agent 自动编排 (JS Workflow)")
 
-        # 提取多个搜索维度或子任务
-        import re
-        import random
-        sub_tasks = re.findall(r'"([^"]*)"', task)
-        if not sub_tasks:
-            sub_tasks = [t.strip() for t in task.replace("、", "，").split("，") if t.strip()]
+        script = ""
 
-        if len(sub_tasks) <= 1:
-            # 单任务：拆成不同维度
-            topics = ["实现方案", "核心原理", "优缺点"]
+        # ── 情况1：用户直接粘贴了 JS 脚本 ──
+        if task.strip().startswith("export const meta") or task.strip().startswith("export default"):
+            log_status("检测到 JS 脚本，直接执行", color=CLAUDE)
+            script = task
+
+        # ── 情况2：用户指定了 .js 文件路径 ──
+        elif task.endswith(".js") and os.path.exists(task):
+            log_status(f"加载 JS 文件: {task}", color=CLAUDE)
+            with open(task, "r", encoding="utf-8") as f:
+                script = f.read()
+
+        # ── 情况3：LLM 根据任务写 JS 脚本 ──
         else:
-            topics = sub_tasks
+            log_status("LLM 正在编写 JS Workflow 脚本...", color=CLAUDE)
+            script = await self._llm_write_workflow(task)
+            if not script:
+                log_status("LLM 写脚本失败，使用固定模板", color="yellow")
+                # 兜底：拆解任务用固定模板
+                import re
 
-        log(f"自动拆解为 {len(topics)} 个子任务")
+                sub_tasks = re.findall(r'"([^"]*)"', task)
+                if not sub_tasks:
+                    sub_tasks = [
+                        t.strip()
+                        for t in task.replace("、", "，").split("，")
+                        if t.strip()
+                    ]
+
+                if len(sub_tasks) <= 1:
+                    topics = await self._llm_decompose_task(task)
+                    if not topics:
+                        topics = [task]
+                else:
+                    topics = sub_tasks
+
+                log_status(f"拆解为 {len(topics)} 个子任务", color=CLAUDE)
+                topics_js = json.dumps(topics, ensure_ascii=False)
+                script = f"""
+export const meta = {{
+    name: "多Agent自动编排",
+    description: "并行分析{len(topics)}个维度后综合汇总",
+    phases: [
+        {{"title": "并行分析", "detail": "{len(topics)}个子任务"}},
+        {{"title": "综合汇总", "detail": "合并结果"}},
+    ],
+}}
+
+export default async function() {{
+    phase("并行分析")
+    const topics = {topics_js}
+
+    const results = await parallel(
+        topics.map((t, i) => () => agent(`深入分析: ${{t}}`, {{
+            agentType: "analyst",
+            label: `子任务${{i+1}}: ${{t.substring(0, 20)}}`,
+            timeout: 120,
+        }}))
+    )
+
+    phase("综合汇总")
+    const good = results.filter(r => r && typeof r === 'string' && r.length > 0)
+    if (good.length === 0) return "所有子任务失败"
+
+    const context = good.map((r, i) => `【子任务${{i+1}}】\\n${{r.substring(0, 500)}}`).join("\\n\\n")
+    return await agent(`综合以下对各个维度的分析结果，给出整体结论:\\n\\n${{context}}`, {{
+        agentType: "analyst",
+        label: "综合汇总",
+        timeout: 180,
+    }})
+}}
+"""
 
         try:
-            phase("并行执行")
+            from core.multi_agent_v2.workflow import run_claude_workflow
 
-            # 多个 Agent 同时执行
-            results = await parallel([
-                lambda t=t, i=i: agent(
-                    f"深入分析: {t}",
-                    {"label": f"子任务{i+1}: {t[:20]}", "timeout": 120},
-                )
-                for i, t in enumerate(topics)
-            ])
+            wr = await run_claude_workflow(script)
 
-            good = [r for r in results if r and r.success]
-            if not good:
-                log("所有子任务失败")
-                return
-
-            phase("综合汇总")
-
-            context = "\n\n".join(
-                f"【{r.label}】\n{r.text()[:500]}" for r in good
-            )
-            final = await agent(
-                f"综合以下对各个维度的分析结果，给出整体结论:\n\n{context}",
-                {"label": "综合汇总", "timeout": 180},
-            )
-
-            if final and final.success:
+            if wr.success and wr.output:
                 print_section("📋 最终结果")
-                print(final.text()[:1000])
+                text = str(wr.output)
+                print(text[:1000] if len(text) > 1000 else text)
+
+                if wr.phases:
+                    print(
+                        f"    \033[2;37m阶段: {' → '.join(p.title for p in wr.phases)}"
+                        f" | {wr.elapsed:.1f}s\033[0m"
+                    )
             else:
-                log("汇总失败")
+                log_status(f"编排完成但无结果: {wr.error or '无输出'}", color="yellow")
 
         except Exception as e:
             print_error(f"编排执行失败: {e}")
+
+    async def _llm_write_workflow(self, task: str) -> str:
+        """用 LLM 根据任务描述生成 JS Workflow 脚本"""
+        try:
+            from core.engine.llm_backend import get_llm_router
+
+            router = get_llm_router()
+            if not router or not router.is_available():
+                return ""
+
+            prompt = (
+                "你是一个 Workflow 脚本生成器。根据用户的任务描述，生成一个 JavaScript Workflow 脚本。\n\n"
+                "可用的全局 API：\n"
+                "  - phase(title)              - 标记阶段\n"
+                "  - log(msg)                  - 输出日志\n"
+                "  - agent(prompt, opts)       - 调用子Agent（返回纯文本字符串）\n"
+                "    opts: { agentType, label, timeout, schema, model }\n"
+                "    agentType: \"analyst\" | \"Explore\" | \"Plan\" | \"code-reviewer\"\n"
+                "  - parallel([thunks])        - 并行执行（数组里是 () => agent(...)）\n"
+                "  - pipeline(items, ...stages) - 无屏障流水线\n"
+                "  - budget.remaining()        - 剩余预算\n\n"
+                "脚本结构必须：\n"
+                "  export const meta = {\n"
+                '    name: "脚本名",\n'
+                '    description: "描述",\n'
+                "    phases: [{title, detail}, ...],\n"
+                "  }\n"
+                "  export default async function() {\n"
+                "    // 编排逻辑\n"
+                "    return 结果\n"
+                "  }\n\n"
+                "示例（简单的并行分析）：\n"
+                "  export const meta = {\n"
+                '    name: "技术调研",\n'
+                '    description: "并行调研多个技术方向",\n'
+                "    phases: [{title: \"调研\"}, {title: \"汇总\"}],\n"
+                "  }\n"
+                "  export default async function() {\n"
+                '    phase("调研")\n'
+                "    const results = await parallel([\n"
+                '      () => agent("分析Rust特性", {agentType: "analyst", label: "Rust"}),\n'
+                '      () => agent("分析Go特性", {agentType: "analyst", label: "Go"}),\n'
+                "    ])\n"
+                '    phase("汇总")\n'
+                '    return await agent("对比以上结果", {agentType: "analyst", label: "汇总"})\n'
+                "  }\n\n"
+                "重要规则：\n"
+                "  1. 直接输出脚本代码，不要解释，不要 markdown 代码块\n"
+                "  2. agent() 返回纯文本字符串，不是对象\n"
+                "  3. 变量名用英文，不要中文\n"
+                "  4. 根据任务复杂度决定用 agent() / parallel() / pipeline()\n"
+                "  5. 复杂任务拆成多个 phase，每个 phase 聚焦一个步骤\n"
+                "  6. schema 必须是 JSON Schema 对象，不是字符串\n\n"
+                f"任务描述：{task[:500]}\n\n"
+                "开始生成："
+            )
+            resp = await asyncio.wait_for(
+                router.chat(
+                    [{"role": "user", "content": prompt}],
+                    temperature=0.3,
+                    max_tokens=2000,
+                ),
+                timeout=30.0,
+            )
+            text = str(resp).strip() if resp else ""
+            if not text or "[LLM_MOCK]" in text:
+                return ""
+
+            # 清理可能的 markdown 代码块标记
+            text = text.removeprefix("```javascript").removeprefix("```js").removeprefix("```")
+            text = text.removesuffix("```").strip()
+
+            # 验证：必须包含 export const meta
+            if "export const meta" not in text:
+                return ""
+
+            return text
+        except Exception:
+            return ""
 
     async def handle_analyze(self, parsed_cmd: ParsedCommand):
         """处理分析命令"""
@@ -1323,10 +1291,12 @@ class EnhancedCLI:
 
         think_start(f"数据分析: {action}")
         think_analyze("数据分析")
-        think_plan([
-            {"title": "数据分析", "description": f"执行{action}分析"},
-            {"title": "生成结果", "description": "生成分析报告或图表"}
-        ])
+        think_plan(
+            [
+                {"title": "数据分析", "description": f"执行{action}分析"},
+                {"title": "生成结果", "description": "生成分析报告或图表"},
+            ]
+        )
 
         think_step(1)
         think_log(f"正在执行{action}分析...")
@@ -1338,16 +1308,18 @@ class EnhancedCLI:
             workflow = {
                 "name": f"分析_{action}",
                 "description": f"{action}分析",
-                "steps": [{
-                    "type": "analyze",
-                    "action": action,
-                    "params": params,
-                    "description": f"执行{action}分析"
-                }],
-                "generate_report": True
+                "steps": [
+                    {
+                        "type": "analyze",
+                        "action": action,
+                        "params": params,
+                        "description": f"执行{action}分析",
+                    }
+                ],
+                "generate_report": True,
             }
 
-            result = await wrapper.get_engine().execute_workflow(workflow)
+            result = await wrapper.create_and_execute(str(workflow), mode="workflow")
             think_complete(1, success=True)
 
             think_step(2)
@@ -1370,11 +1342,13 @@ class EnhancedCLI:
 
         think_start(f"爬取{site}: {action}")
         think_analyze("数据爬取")
-        think_plan([
-            {"title": "连接网站", "description": f"访问{site}网站"},
-            {"title": "获取数据", "description": f"获取{action}数据"},
-            {"title": "保存结果", "description": "保存数据到文件"}
-        ])
+        think_plan(
+            [
+                {"title": "连接网站", "description": f"访问{site}网站"},
+                {"title": "获取数据", "description": f"获取{action}数据"},
+                {"title": "保存结果", "description": "保存数据到文件"},
+            ]
+        )
 
         think_step(1)
         think_log(f"正在连接{site}...")
@@ -1386,16 +1360,18 @@ class EnhancedCLI:
             workflow = {
                 "name": f"爬虫_{site}",
                 "description": f"爬取{site}数据",
-                "steps": [{
-                    "type": "scrape",
-                    "site": site,
-                    "action": action,
-                    "description": f"爬取{site}{action}"
-                }],
-                "generate_report": True
+                "steps": [
+                    {
+                        "type": "scrape",
+                        "site": site,
+                        "action": action,
+                        "description": f"爬取{site}{action}",
+                    }
+                ],
+                "generate_report": True,
             }
 
-            result = await wrapper.get_engine().execute_workflow(workflow)
+            result = await wrapper.create_and_execute(str(workflow), mode="workflow")
             think_complete(1, success=True)
 
             think_step(2)
@@ -1426,9 +1402,7 @@ class EnhancedCLI:
 
         think_start(f"自动化操作: {action}")
         think_analyze("GUI自动化")
-        think_plan([
-            {"title": f"执行{action}", "description": f"执行{action}操作"}
-        ])
+        think_plan([{"title": f"执行{action}", "description": f"执行{action}操作"}])
 
         think_step(1)
         think_log(f"正在执行{action}...")
@@ -1440,16 +1414,18 @@ class EnhancedCLI:
             workflow = {
                 "name": f"CLI自动化_{action}",
                 "description": f"CLI触发的{action}操作",
-                "steps": [{
-                    "type": "automate",
-                    "action": action,
-                    "params": params,
-                    "description": f"执行{action}"
-                }],
-                "generate_report": False
+                "steps": [
+                    {
+                        "type": "automate",
+                        "action": action,
+                        "params": params,
+                        "description": f"执行{action}",
+                    }
+                ],
+                "generate_report": False,
             }
 
-            result = await wrapper.get_engine().execute_workflow(workflow)
+            result = await wrapper.create_and_execute(str(workflow), mode="workflow")
             think_complete(1, success=True)
             think_summarize(True, result)
 
@@ -1476,42 +1452,44 @@ class EnhancedCLI:
 
             think_start(f"发送微信消息给{friend}")
             think_analyze("微信消息发送")
-            think_plan([
-                {"title": "打开微信", "description": "启动微信应用"},
-                {"title": "搜索好友", "description": f"查找好友{friend}"},
-                {"title": "发送消息", "description": f"发送消息: {message}"}
-            ])
+            think_plan(
+                [
+                    {"title": "打开微信", "description": "启动微信应用"},
+                    {"title": "搜索好友", "description": f"查找好友{friend}"},
+                    {"title": "发送消息", "description": f"发送消息: {message}"},
+                ]
+            )
 
             think_step(1)
             think_log("正在打开微信...")
 
             try:
-                subprocess.run(['open', '-a', 'WeChat'])
+                subprocess.run(["open", "-a", "WeChat"])
                 await asyncio.sleep(2)
                 think_complete(1, success=True)
 
                 think_step(2)
                 think_log(f"搜索好友{friend}...")
-                script = f'tell application "System Events" to tell application process "WeChat" to keystroke "f" using command down'
-                subprocess.run(['osascript', '-e', script])
+                script = 'tell application "System Events" to tell application process "WeChat" to keystroke "f" using command down'
+                subprocess.run(["osascript", "-e", script])
                 await asyncio.sleep(0.5)
                 script2 = f'tell application "System Events" to tell application process "WeChat" to keystroke "{friend}"'
-                subprocess.run(['osascript', '-e', script2])
+                subprocess.run(["osascript", "-e", script2])
                 await asyncio.sleep(0.8)
                 script3 = 'tell application "System Events" to tell application process "WeChat" to keystroke return'
-                subprocess.run(['osascript', '-e', script3])
+                subprocess.run(["osascript", "-e", script3])
                 await asyncio.sleep(1.5)
                 think_complete(2, success=True)
 
                 think_step(3)
                 think_log("发送消息...")
-                subprocess.run(['pbcopy'], input=message.encode('utf-8'))
+                subprocess.run(["pbcopy"], input=message.encode("utf-8"))
                 await asyncio.sleep(0.2)
                 script4 = 'tell application "System Events" to tell application process "WeChat" to keystroke "v" using command down'
-                subprocess.run(['osascript', '-e', script4])
+                subprocess.run(["osascript", "-e", script4])
                 await asyncio.sleep(0.3)
                 script5 = 'tell application "System Events" to tell application process "WeChat" to keystroke return'
-                subprocess.run(['osascript', '-e', script5])
+                subprocess.run(["osascript", "-e", script5])
                 await asyncio.sleep(1.0)
                 think_complete(3, success=True)
 
@@ -1562,16 +1540,17 @@ class EnhancedCLI:
             return
 
         import uuid
-        from core.multi_agent_v2.agents.base.work_agent import WorkAgent
-        from core.multi_agent_v2.agents.base.models import Task
-        from cli.colors import print_success, print_error
+
+        from cli.colors import print_error, print_success
         from cli.thinking_trace import get_trace
+        from core.multi_agent_v2.agents.base.models import Task
+        from core.multi_agent_v2.agents.base.work_agent import WorkAgent
 
         trace = get_trace()
         trace.enabled = True
         trace.start(request[:80])
 
-        agent = WorkAgent(light_mode=True)
+        agent = WorkAgent()
         task = Task(task_id=uuid.uuid4().hex[:8], type="general", description=request)
 
         try:
@@ -1606,7 +1585,7 @@ class EnhancedCLI:
             try:
                 user_input = get_chat_input(self)
 
-                if user_input.lower() in ['quit', 'exit', 'bye', '结束']:
+                if user_input.lower() in ["quit", "exit", "bye", "结束"]:
                     print_color("👋 退出聊天模式", CliColors.BLUE)
                     self.chat_mode = False
                     break
@@ -1641,10 +1620,11 @@ class EnhancedCLI:
             return
 
         import uuid
-        from core.multi_agent_v2.agents.base.work_agent import WorkAgent
-        from core.multi_agent_v2.agents.base.models import Task
 
-        agent = WorkAgent(light_mode=True)
+        from core.multi_agent_v2.agents.base.models import Task
+        from core.multi_agent_v2.agents.base.work_agent import WorkAgent
+
+        agent = WorkAgent()
         task = Task(task_id=uuid.uuid4().hex[:8], type="general", description=request)
 
         try:
@@ -1659,7 +1639,9 @@ class EnhancedCLI:
                 print_chat_bubble(answer[:500], is_user=False)
                 self.chat_history.append({"role": "assistant", "content": answer[:500]})
 
-    async def _handle_mcp_recommendation(self, mcp_result: Dict[str, Any], original_request: str):
+    async def _handle_mcp_recommendation(
+        self, mcp_result: Dict[str, Any], original_request: str
+    ):
         """处理MCP服务器推荐结果
 
         Args:
@@ -1670,6 +1652,8 @@ class EnhancedCLI:
             log_warning(f"MCP推荐失败: {mcp_result.get('error')}")
             return
 
+        from cli.colors import _console
+
         # 显示推荐信息
         recommendation_text = mcp_result.get("recommendation_text", "")
         if recommendation_text:
@@ -1677,7 +1661,7 @@ class EnhancedCLI:
 
         # 获取用户选择
         try:
-            user_choice = _console.input(f"\n[yellow bold]请选择: [/]").strip().lower()
+            user_choice = _console.input("\n[yellow bold]请选择: [/]").strip().lower()
         except (EOFError, KeyboardInterrupt):
             user_choice = "no"
 
@@ -1738,7 +1722,9 @@ class EnhancedCLI:
         # 智能调用MCP工具
         await self._smart_call_mcp_tool(selected_server, original_request)
 
-    async def _handle_clarification(self, clarification_result: Dict[str, Any], original_request: str):
+    async def _handle_clarification(
+        self, clarification_result: Dict[str, Any], original_request: str
+    ):
         """处理反问结果
 
         Args:
@@ -1749,6 +1735,8 @@ class EnhancedCLI:
             log_warning(f"反问步骤失败: {clarification_result.get('error')}")
             return
 
+        from cli.colors import _console
+
         # 显示反问信息
         clarification_text = clarification_result.get("clarification_text", "")
         if clarification_text:
@@ -1756,26 +1744,34 @@ class EnhancedCLI:
 
         # 获取用户回答
         try:
-            user_answer = _console.input(f"\n[yellow bold]请输入您的回答: [/]").strip()
+            user_answer = _console.input("\n[yellow bold]请输入您的回答: [/]").strip()
         except (EOFError, KeyboardInterrupt):
             user_answer = ""
 
         # 如果用户提供了回答，结合原请求和新信息重新处理
         if user_answer:
             enhanced_request = f"{original_request}。补充信息：{user_answer}"
-            print_color(f"\n好的，我将根据您的补充信息重新处理：{enhanced_request}", CliColors.GREEN)
+            print_color(
+                f"\n好的，我将根据您的补充信息重新处理：{enhanced_request}",
+                CliColors.GREEN,
+            )
 
             # 重新调用工作流处理增强后的问题
             from cli.base import WorkflowEngineWrapper
+
             wrapper = WorkflowEngineWrapper()
-            result = await wrapper.create_and_execute(enhanced_request, chat_history=self.chat_history)
+            result = await wrapper.create_and_execute(
+                enhanced_request, chat_history=self.chat_history
+            )
 
             # 显示结果
             if result.get("success") and result.get("results"):
                 first_result = result["results"][0] if result["results"] else {}
                 if first_result.get("type") == "mcp_interaction":
                     # 如果仍然是MCP推荐，再次处理
-                    await self._handle_mcp_recommendation(first_result, enhanced_request)
+                    await self._handle_mcp_recommendation(
+                        first_result, enhanced_request
+                    )
                 else:
                     # 直接显示结果
                     response = result.get("summary", result.get("result", "任务完成"))
@@ -1786,7 +1782,9 @@ class EnhancedCLI:
                 llm_response = await self._chat_with_llm(enhanced_request)
                 if llm_response:
                     print_chat_bubble(llm_response, is_user=False)
-                    self.chat_history.append({"role": "assistant", "content": llm_response})
+                    self.chat_history.append(
+                        {"role": "assistant", "content": llm_response}
+                    )
         else:
             # 如果用户没有提供答案，使用LLM处理原始请求
             print_color("\n未收到您的回答，将使用普通聊天模式", CliColors.YELLOW)
@@ -1844,10 +1842,10 @@ class EnhancedCLI:
         """
         from core.mcp.awesome_mcp_manager import awesome_mcp_manager
 
-        print_color(f"\n🔍 正在分析您的需求并选择合适工具...", CliColors.CYAN)
+        print_color("\n🔍 正在分析您的需求并选择合适工具...", CliColors.CYAN)
 
         # 获取服务器可用工具列表
-        tools = await awesome_mcp_manager.list_tools(server_name)
+        tools = await awesome_mcp_manager.get_server_tools(server_name)
 
         if not tools:
             print_warning("未找到可用工具，将使用普通聊天模式")
@@ -1881,7 +1879,7 @@ class EnhancedCLI:
 
         if missing_params:
             # 询问用户提供缺失的参数
-            print_color(f"\n❓ 需要提供以下信息:", CliColors.YELLOW)
+            print_color("\n❓ 需要提供以下信息:", CliColors.YELLOW)
             for param in missing_params:
                 try:
                     value = input(f"   {param}: ").strip()
@@ -1893,22 +1891,33 @@ class EnhancedCLI:
 
         # 调用工具
         print_color(f"\n🚀 正在调用 {server_name}.{tool_name}...", CliColors.CYAN)
-        result = await awesome_mcp_manager.call_tool(server_name, tool_name, **extracted_params)
+        result = await awesome_mcp_manager.call_server_tool(
+            server_name, tool_name, extracted_params
+        )
 
-        if result and result.get("success"):
+        if result and isinstance(result, dict) and result.get("success"):
             print_success("✅ 工具调用成功")
             response_text = result.get("result", "操作完成")
             print_chat_bubble(str(response_text), is_user=False)
-            self.chat_history.append({"role": "assistant", "content": str(response_text)})
+            self.chat_history.append(
+                {"role": "assistant", "content": str(response_text)}
+            )
         else:
-            print_error(f"❌ 工具调用失败: {result.get('error', '未知错误')}")
+            error_msg = (
+                result.get("error", "未知错误")
+                if isinstance(result, dict)
+                else "未知错误"
+            )
+            print_error(f"❌ 工具调用失败: {error_msg}")
             # 回退到普通聊天
             llm_response = await self._chat_with_llm(user_request)
             if llm_response:
                 print_chat_bubble(llm_response, is_user=False)
                 self.chat_history.append({"role": "assistant", "content": llm_response})
 
-    def _match_best_tool(self, tools: List[Dict[str, Any]], user_request: str) -> Optional[Dict[str, Any]]:
+    def _match_best_tool(
+        self, tools: List[Dict[str, Any]], user_request: str
+    ) -> Optional[Dict[str, Any]]:
         """根据用户请求匹配最合适的工具"""
         message_lower = user_request.lower()
         best_score = 0
@@ -1923,7 +1932,9 @@ class EnhancedCLI:
                 score += 3
 
             keywords = tool_desc.split()
-            matched_keywords = [kw for kw in keywords if len(kw) > 2 and kw in message_lower]
+            matched_keywords = [
+                kw for kw in keywords if len(kw) > 2 and kw in message_lower
+            ]
             score += len(matched_keywords) * 0.5
 
             if score > best_score:
@@ -1935,9 +1946,12 @@ class EnhancedCLI:
 
         return best_tool
 
-    def _extract_tool_params(self, user_request: str, tool: Dict[str, Any]) -> Dict[str, Any]:
+    def _extract_tool_params(
+        self, user_request: str, tool: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """从用户请求中提取工具参数"""
         import re
+
         params = {}
         properties = tool.get("inputSchema", {}).get("properties", {})
 
@@ -1945,17 +1959,19 @@ class EnhancedCLI:
             param_type = param_schema.get("type", "string")
 
             if param_name.lower() in ["city", "location", "place"]:
-                city_match = re.search(r'([一-龥]+市|[一-龥]+省)', user_request)
+                city_match = re.search(r"([一-龥]+市|[一-龥]+省)", user_request)
                 if city_match:
                     params[param_name] = city_match.group(1)
 
-            elif param_type == "string" and ("url" in param_name.lower() or "link" in param_name.lower()):
-                url_match = re.search(r'https?://\S+', user_request)
+            elif param_type == "string" and (
+                "url" in param_name.lower() or "link" in param_name.lower()
+            ):
+                url_match = re.search(r"https?://\S+", user_request)
                 if url_match:
                     params[param_name] = url_match.group(0)
 
             elif param_type in ["number", "integer"]:
-                number_match = re.search(r'(\d+\.?\d*)', user_request)
+                number_match = re.search(r"(\d+\.?\d*)", user_request)
                 if number_match:
                     num_value = float(number_match.group(1))
                     if param_type == "integer":
@@ -1963,7 +1979,6 @@ class EnhancedCLI:
                     params[param_name] = num_value
 
         return params
-
 
     def _display_workflow_result(self, result: Dict[str, Any]):
         """显示工作流结果"""
@@ -1979,9 +1994,13 @@ class EnhancedCLI:
             return
 
         print()
-        print_color("────────────────────────────────────────────────────────", CliColors.PURPLE)
+        print_color(
+            "────────────────────────────────────────────────────────", CliColors.PURPLE
+        )
         print_success("✅ 任务完成！")
-        print_color("────────────────────────────────────────────────────────", CliColors.PURPLE)
+        print_color(
+            "────────────────────────────────────────────────────────", CliColors.PURPLE
+        )
         print()
 
         if result.get("workflow_name"):
@@ -1993,7 +2012,7 @@ class EnhancedCLI:
         final_result = result.get("result", "")
         if final_result and len(str(final_result)) > 10:
             answer_text = str(final_result)[:500]
-            print(f"\n  📝 最终回答:")
+            print("\n  📝 最终回答:")
             print(f"    {answer_text}")
 
         results = result.get("results", [])
@@ -2030,7 +2049,9 @@ class EnhancedCLI:
             print(f"\n  📄 报告文件: {result['report_path']}")
 
         print()
-        print_color("────────────────────────────────────────────────────────", CliColors.PURPLE)
+        print_color(
+            "────────────────────────────────────────────────────────", CliColors.PURPLE
+        )
         print()
 
         print()
@@ -2152,7 +2173,7 @@ MCP命令使用帮助:
             return
 
         print_color(f"\n🔗 正在连接MCP服务器: {server_name}...", CliColors.CYAN)
-        result = await mcp_client.connect_server(server_name, "connect", {}, ".")
+        result = await mcp_client.connect_server(server_name, "connect", [], ".")
 
         if result:
             print_success(f"成功连接MCP服务器: {server_name}")
@@ -2326,10 +2347,10 @@ MCP命令使用帮助:
         result = await mcp_client.call_tool(server_name, tool_name, **kwargs)
 
         if result:
-            print_success(f"调用成功")
+            print_success("调用成功")
             print_color(f"结果:\n{result}", CliColors.WHITE)
         else:
-            print_error(f"调用失败")
+            print_error("调用失败")
 
     async def mcp_disconnect(self, parsed_cmd):
         """断开MCP服务器连接"""
@@ -2394,14 +2415,18 @@ MCP命令使用帮助:
                 key, value = part.split("=", 1)
                 kwargs[key] = value
 
-        print_color(f"\n🚀 快速调用 {self.current_mcp_server}.{tool_name}...", CliColors.CYAN)
-        result = await mcp_client.call_tool(self.current_mcp_server, tool_name, **kwargs)
+        print_color(
+            f"\n🚀 快速调用 {self.current_mcp_server}.{tool_name}...", CliColors.CYAN
+        )
+        result = await mcp_client.call_tool(
+            self.current_mcp_server, tool_name, **kwargs
+        )
 
         if result:
-            print_success(f"调用成功")
+            print_success("调用成功")
             print_color(f"结果:\n{result}", CliColors.WHITE)
         else:
-            print_error(f"调用失败")
+            print_error("调用失败")
 
     async def mcp_status(self):
         """查看MCP连接状态"""
@@ -2420,8 +2445,10 @@ MCP命令使用帮助:
         else:
             print_warning("  暂无已连接的MCP服务器")
 
-        print_color(f"\n当前服务器: {self.current_mcp_server or '未选择'}",
-                   CliColors.CYAN if self.current_mcp_server else CliColors.GRAY)
+        print_color(
+            f"\n当前服务器: {self.current_mcp_server or '未选择'}",
+            CliColors.CYAN if self.current_mcp_server else CliColors.GRAY,
+        )
 
     async def mcp_register_server(self, parsed_cmd):
         """注册自定义MCP服务器"""
@@ -2429,7 +2456,9 @@ MCP命令使用帮助:
 
         remaining = parsed_cmd.remaining.strip()
         if not remaining:
-            print_error("请提供服务器配置，如: /mcp register myserver --command npx --args \"-y @my/mcp\"")
+            print_error(
+                '请提供服务器配置，如: /mcp register myserver --command npx --args "-y @my/mcp"'
+            )
             return
 
         # 解析参数
@@ -2470,13 +2499,13 @@ MCP命令使用帮助:
             print_error("必须指定 --command 参数")
             return
 
-        print_color(f"\n📝 正在注册自定义MCP服务器...", CliColors.CYAN)
+        print_color("\n📝 正在注册自定义MCP服务器...", CliColors.CYAN)
         success = awesome_mcp_manager.register_server(
             name=server_name,
             command=command,
             args=args,
             env=env if env else None,
-            description=description
+            description=description,
         )
 
         if success:
@@ -2484,9 +2513,11 @@ MCP命令使用帮助:
             print_color(f"   命令: {command} {' '.join(args)}", CliColors.GRAY)
             if description:
                 print_color(f"   描述: {description}", CliColors.GRAY)
-            print_color(f"\n💡 使用 /mcp connect {server_name} 连接此服务器", CliColors.YELLOW)
+            print_color(
+                f"\n💡 使用 /mcp connect {server_name} 连接此服务器", CliColors.YELLOW
+            )
         else:
-            print_error(f"❌ 注册服务器失败")
+            print_error("❌ 注册服务器失败")
 
     async def mcp_unregister_server(self, parsed_cmd):
         """注销自定义MCP服务器"""
@@ -2503,7 +2534,7 @@ MCP命令使用帮助:
         if success:
             print_success(f"✅ 成功注销服务器: {server_name}")
         else:
-            print_error(f"❌ 注销失败，服务器不存在或不是自定义服务器")
+            print_error("❌ 注销失败，服务器不存在或不是自定义服务器")
 
     async def mcp_list_custom_servers(self):
         """列出所有自定义MCP服务器"""
@@ -2517,23 +2548,27 @@ MCP命令使用帮助:
         if custom_servers:
             for server in custom_servers:
                 print_color(f"  📦 {server['name']}", CliColors.GREEN)
-                print_color(f"     命令: {server['command']} {' '.join(server['args'])}", CliColors.GRAY)
-                if server.get('description'):
+                print_color(
+                    f"     命令: {server['command']} {' '.join(server['args'])}",
+                    CliColors.GRAY,
+                )
+                if server.get("description"):
                     print_color(f"     描述: {server['description']}", CliColors.GRAY)
                 print()
         else:
             print_warning("  暂无自定义服务器")
             print_color("\n💡 使用 /mcp register 命令注册新服务器", CliColors.YELLOW)
 
-
     def mcp_show_history(self):
         """显示MCP调用历史"""
         print_color("\n📜 MCP调用历史:", CliColors.CYAN)
         print_color("────────────────", CliColors.GRAY)
 
-        if hasattr(self, 'mcp_history') and self.mcp_history:
+        if hasattr(self, "mcp_history") and self.mcp_history:
             for i, entry in enumerate(reversed(self.mcp_history[-10:]), 1):
-                print_color(f"  {i}. {entry['server']}.{entry['tool']}", CliColors.WHITE)
+                print_color(
+                    f"  {i}. {entry['server']}.{entry['tool']}", CliColors.WHITE
+                )
         else:
             print_warning("  暂无MCP调用历史")
 
@@ -2617,7 +2652,9 @@ MCP命令使用帮助:
             print_color("\n🦾 Agent管理", CliColors.CYAN)
             print_color("────────────────", CliColors.GRAY)
             print_color("/agent list - 列出所有Agent", CliColors.WHITE)
-            print_color("/agent call <Agent> <任务> - 调用Agent执行任务", CliColors.WHITE)
+            print_color(
+                "/agent call <Agent> <任务> - 调用Agent执行任务", CliColors.WHITE
+            )
 
     async def handle_review(self, parsed_cmd):
         """处理审查命令"""
@@ -2694,7 +2731,10 @@ MCP命令使用帮助:
         remaining = parsed_cmd.remaining.strip()
 
         if action == "demo" or action == "status":
-            print_color(f"ℹ️  /smart demo/status 已不再支持，直接使用 /smart \"任务\" 执行", CliColors.YELLOW)
+            print_color(
+                'ℹ️  /smart demo/status 已不再支持，直接使用 /smart "任务" 执行',
+                CliColors.YELLOW,
+            )
             return
 
         # 作为智能任务请求，走 WorkAgent 新路径
@@ -2702,59 +2742,20 @@ MCP命令使用帮助:
         if user_query:
             await self.handle_smart_request(user_query)
         else:
-            print_error("请提供任务描述，如: /smart \"爬取微博热搜并分析\"")
+            print_error('请提供任务描述，如: /smart "爬取微博热搜并分析"')
             print_color("\n💡 智能多Agent命令用法:", CliColors.CYAN)
             print_color("────────────────────────", CliColors.GRAY)
-            print_color("/smart \"任务描述\" - 使用智能Agent执行任务", CliColors.WHITE)
+            print_color('/smart "任务描述" - 使用智能Agent执行任务', CliColors.WHITE)
             print_color("直接输入自然语言 - 自动识别处理（无需前缀）", CliColors.WHITE)
 
     async def handle_workflows(self, parsed_cmd):
-        """处理工作流进度查看命令
+        """处理工作流进度查看命令"""
+        from cli.colors import CliColors, print_color
 
-        /workflows list       - 列出已注册的工作流
-        /workflows status     - 查看当前活动显示状态
-        /workflows            - 默认显示摘要
-        """
-        action = parsed_cmd.action.lower() if parsed_cmd.action else ""
-        remaining = parsed_cmd.remaining.strip()
-
-        from cli.colors import CLAUDE, SUCCESS, print_color, CliColors
-        from core.multi_agent_v2.orchestration.orchestrator import (
-            list_workflows, _current_display,
-        )
-
-        print_color("\n📋 工作流概览", CliColors.BOLD)
+        print_color("\n📋 多Agent编排", CliColors.BOLD)
         print_color("─" * 50, CliColors.GRAY)
-
-        if action == "list":
-            names = list_workflows()
-            if names:
-                print_color(f"已注册工作流 ({len(names)}):", CliColors.CYAN)
-                for name in names:
-                    print_color(f"  • {name}", CliColors.WHITE)
-            else:
-                print_color("暂无注册的工作流", CliColors.GRAY)
-                print_color("使用 /orchestrate \"任务\" 动态编排", CliColors.GRAY)
-
-        elif action == "status":
-            active = _current_display
-            if active:
-                print_color("状态: 🟢 活跃", CliColors.GREEN)
-                print_color(f"显示实例: {active}", CliColors.CYAN)
-            else:
-                print_color("状态: ⚪ 无活跃显示", CliColors.GRAY)
-                print_color("运行 /orchestrate \"任务\" 查看实时进度", CliColors.GRAY)
-
-        else:
-            names = list_workflows()
-            active = _current_display
-            print_color(f"注册工作流: {len(names)}", CLAUDE)
-            print_color(f"活动编排:   {'🟢 运行中' if active else '⚪ 无'}", CliColors.GREEN if active else CliColors.GRAY)
-            print_color("", CliColors.WHITE)
-            print_color("子命令:", CliColors.WHITE)
-            print_color("  /workflows list           - 列出所有工作流", CliColors.GRAY)
-            print_color("  /workflows status         - 查看活动编排状态", CliColors.GRAY)
-            print_color("  /orchestrate \"任务\"       - 启动新编排", CliColors.GRAY)
+        print_color('使用 /orchestrate "任务" 启动多Agent自动编排', CliColors.GRAY)
+        print_color('使用 /smart "任务" 启动智能Agent执行', CliColors.GRAY)
 
     async def run(self):
         """运行CLI主循环 — 委托给 REPL 实现"""
@@ -2764,10 +2765,11 @@ MCP命令使用帮助:
         await repl.run()
 
 
-async def main(log_file: str = None, log_to_console: bool = True):
+async def main(log_file: Optional[str] = None, log_to_console: bool = True):
     """主入口"""
     from cli.logging_system import init_logger
-    init_logger(log_file=log_file, log_to_console=log_to_console)
+
+    init_logger(log_file=log_file or "", log_to_console=log_to_console)
 
     cli = EnhancedCLI()
     cli._init_session()  # 延迟初始化会话，确保日志系统已配置
@@ -2778,7 +2780,15 @@ def parse_args():
     """解析命令行参数 - 只识别CLI自己的参数，其他参数透传"""
     import sys
 
-    my_args = ["--log-file", "-l", "--no-console-log", "--dual-terminal", "-d", "--single-terminal", "-s"]
+    my_args = [
+        "--log-file",
+        "-l",
+        "--no-console-log",
+        "--dual-terminal",
+        "-d",
+        "--single-terminal",
+        "-s",
+    ]
 
     # 检查是否有我们的参数
     has_my_args = any(arg in sys.argv for arg in my_args)
@@ -2789,33 +2799,34 @@ def parse_args():
             log_file=None,
             no_console_log=False,
             dual_terminal=False,
-            single_terminal=False
+            single_terminal=False,
         )
 
     # 有我们的参数，使用 argparse 解析
     parser = argparse.ArgumentParser(description="小雷版小龙虾 AI Agent CLI")
     parser.add_argument(
-        "--log-file", "-l",
+        "--log-file",
+        "-l",
         type=str,
         default=None,
-        help="日志文件路径（用于双终端模式）"
+        help="日志文件路径（用于双终端模式）",
     )
     parser.add_argument(
-        "--no-console-log",
-        action="store_true",
-        help="不在终端输出日志（用于日志面板）"
+        "--no-console-log", action="store_true", help="不在终端输出日志（用于日志面板）"
     )
     parser.add_argument(
-        "--dual-terminal", "-d",
-        action="store_true",
-        default=False,
-        help="启用双终端模式（进度+日志分离显示）"
-    )
-    parser.add_argument(
-        "--single-terminal", "-s",
+        "--dual-terminal",
+        "-d",
         action="store_true",
         default=False,
-        help="禁用双终端模式（单终端运行）"
+        help="启用双终端模式（进度+日志分离显示）",
+    )
+    parser.add_argument(
+        "--single-terminal",
+        "-s",
+        action="store_true",
+        default=False,
+        help="禁用双终端模式（单终端运行）",
     )
     return parser.parse_args()
 
@@ -2848,8 +2859,7 @@ def setup_dual_terminal():
 
     # 检查会话是否已存在
     result = subprocess.run(
-        ["tmux", "has-session", "-t", session_name],
-        capture_output=True
+        ["tmux", "has-session", "-t", session_name], capture_output=True
     )
 
     if result.returncode == 0:
@@ -2863,7 +2873,9 @@ def setup_dual_terminal():
         subprocess.run(["tmux", "new-session", "-d", "-s", session_name, "-n", "Agent"])
 
         # 设置滚动历史（增加到 10000 行）
-        subprocess.run(["tmux", "set-option", "-t", session_name, "history-limit", "10000"])
+        subprocess.run(
+            ["tmux", "set-option", "-t", session_name, "history-limit", "10000"]
+        )
 
         # 设置鼠标支持（让滚动更流畅）
         subprocess.run(["tmux", "set-option", "-t", session_name, "mouse", "on"])
@@ -2875,16 +2887,28 @@ def setup_dual_terminal():
         subprocess.run(["tmux", "resize-pane", "-L", "70"])
 
         # 左侧面板：运行 CLI（使用 --dual-terminal 参数）
-        subprocess.run([
-            "tmux", "send-keys", "-t", f"{session_name}:Agent.0",
-            f"cd '{script_dir}' && python cli.py --dual-terminal", "C-m"
-        ])
+        subprocess.run(
+            [
+                "tmux",
+                "send-keys",
+                "-t",
+                f"{session_name}:Agent.0",
+                f"cd '{script_dir}' && python cli.py --dual-terminal",
+                "C-m",
+            ]
+        )
 
         # 右侧面板：显示实时日志
-        subprocess.run([
-            "tmux", "send-keys", "-t", f"{session_name}:Agent.1",
-            f"cd '{script_dir}' && tail -f '{log_file}'", "C-m"
-        ])
+        subprocess.run(
+            [
+                "tmux",
+                "send-keys",
+                "-t",
+                f"{session_name}:Agent.1",
+                f"cd '{script_dir}' && tail -f '{log_file}'",
+                "C-m",
+            ]
+        )
 
         # 切换到左侧面板
         subprocess.run(["tmux", "select-pane", "-t", "0"])
@@ -2903,7 +2927,9 @@ if __name__ == "__main__":
 
     # 检查是否启用双终端模式
     # 如果没有明确指定single-terminal，默认启用双终端（如果有tmux）
-    enable_dual = args.dual_terminal or (not args.single_terminal and os.environ.get("TMUX") is None)
+    enable_dual = args.dual_terminal or (
+        not args.single_terminal and os.environ.get("TMUX") is None
+    )
 
     if enable_dual and shutil.which("tmux"):
         # 尝试启动双终端模式
@@ -2911,7 +2937,4 @@ if __name__ == "__main__":
             sys.exit(0)
         # 如果失败，回退到单终端模式
 
-    asyncio.run(main(
-        log_file=args.log_file,
-        log_to_console=not args.no_console_log
-    ))
+    asyncio.run(main(log_file=args.log_file, log_to_console=not args.no_console_log))

@@ -1,13 +1,11 @@
-"""v2 中间件空上下文安全行为测试"""
+"""v2 中间件空上下文安全行为测试（精简版 — 4层链）"""
 import asyncio
 import sys
 sys.path.insert(0, '.')
 
 from core.multi_agent_v2.agents.middleware import RunContext, BaseMiddleware
 from core.multi_agent_v2.agents.middlewares import (
-    ProfileMiddleware, ReActDepthMiddleware, ConfidenceMiddleware,
-    ReflectionMiddleware, KEPAMiddleware, BranchMiddleware,
-    DataPipelineMiddleware, AskUserMiddleware, ReflectionCheckMiddleware,
+    ReActDepthMiddleware, ReflectionMiddleware, KEPAMiddleware,
 )
 from core.multi_agent_v2.agents.react_core import build_default_chain
 
@@ -23,20 +21,6 @@ async def test_kepa_empty_context():
     except Exception as e:
         assert False, f'KEPA raised exception in empty context: {e}'
     print('✅ test_kepa_empty_context')
-
-
-async def test_reflection_check_empty_context():
-    """ReflectionCheckMiddleware 在空上下文中不抛异常"""
-    rcm = ReflectionCheckMiddleware()
-    ctx = RunContext('test')
-    try:
-        hr = await rcm.on_think_start(ctx)
-        assert hr is None or hr.jump_to == 'continue', f'Unexpected HookResult: {hr}'
-        hr2 = await rcm.on_tool_end(ctx)
-        assert hr2 is None or hr2.jump_to == 'continue' or hr2.jump_to == 'end'
-    except Exception as e:
-        assert False, f'ReflectionCheck raised exception in empty context: {e}'
-    print('✅ test_reflection_check_empty_context')
 
 
 async def test_all_middlewares_empty_context():
@@ -65,23 +49,10 @@ async def test_reflection_middleware_empty():
     print('✅ test_reflection_middleware_empty')
 
 
-async def test_branch_middleware_empty():
-    """BranchMiddleware 在空上下文中不抛异常"""
-    bm = BranchMiddleware()
-    ctx = RunContext('test')
-    try:
-        await bm.on_think_end(ctx)
-    except Exception as e:
-        assert False, f'BranchMiddleware raised: {e}'
-    print('✅ test_branch_middleware_empty')
-
-
 async def main():
     await test_kepa_empty_context()
-    await test_reflection_check_empty_context()
     await test_all_middlewares_empty_context()
     await test_reflection_middleware_empty()
-    await test_branch_middleware_empty()
     print('\n🎉 All middleware behavior tests passed!')
 
 

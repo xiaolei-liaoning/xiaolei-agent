@@ -2,23 +2,25 @@
 SubagentRegistry — 子 Agent 类型注册表
 
 全局单例，管理 SubagentProfile 的注册、查找、智能分派。
-内置 5 种预定义类型。
+内置 5 种预定义类型 + 5 种官方内置类型。
 
 注册表可在任意时刻扩展：
   registry.register(SubagentProfile(name="my-custom", ...))
+  registry.load_from_directory("/path/to/.claude/agents")
 
-未注册的类型会降级为 "general"。
+未注册的类型会降级为 "general-purpose"。
 """
 
 import logging
-from typing import Dict, Optional
+import os
+from typing import Dict, List, Optional
 
 from .models import SubagentProfile
 
 logger = logging.getLogger(__name__)
 
-# ── 内置子 Agent 类型配置 ─────────────────────────────────────
-_BUILTIN_PROFILES: Dict[str, SubagentProfile] = {
+# ── 旧内置子 Agent 类型配置（legacy，保留兼容性） ─────────
+_LEGACY_BUILTIN_PROFILES: Dict[str, SubagentProfile] = {
     "general": SubagentProfile(
         name="general",
         description="通用子 Agent，默认类型",
@@ -57,9 +59,38 @@ _BUILTIN_PROFILES: Dict[str, SubagentProfile] = {
     ),
 }
 
+# ── 官方内置子 Agent 类型配置 ─────────────────────────────
+_OFFICIAL_BUILTIN_PROFILES: Dict[str, SubagentProfile] = {
+    "general-purpose": SubagentProfile(
+        name="general-purpose",
+        description="通用 Agent，适合各种任务",
+        personality="你是一个全能的助手，可以处理各种任务。",
+    ),
+    "Explore": SubagentProfile(
+        name="Explore",
+        description="探索 Agent，专门用于搜索和探索",
+        personality="你是一个探索专家，擅长搜索、浏览和发现信息。",
+    ),
+    "Plan": SubagentProfile(
+        name="Plan",
+        description="计划 Agent，专门用于制定计划",
+        personality="你是一个计划专家，擅长制定详细的执行计划。",
+    ),
+    "statusline-setup": SubagentProfile(
+        name="statusline-setup",
+        description="状态栏设置 Agent",
+        personality="你是一个设置助手，负责配置状态栏。",
+    ),
+    "claude-code-guide": SubagentProfile(
+        name="claude-code-guide",
+        description="Claude Code 指南 Agent",
+        personality="你是一个 Claude Code 专家，帮助用户了解和使用 Claude Code。",
+    ),
+}
+
 
 class SubagentRegistry:
-    """子 Agent 类型注册表 — 全局单例"""
+    """子 Agent 类型注册表 — 全局单例（完整官方兼容）"""
 
     _instance: Optional["SubagentRegistry"] = None
 
@@ -71,10 +102,19 @@ class SubagentRegistry:
         return cls._instance
 
     def _ensure(self) -> None:
-        """懒加载内置类型"""
+        """懒加载内置类型：先加载官方，再加载 legacy"""
         if not self._initialized:
-            self._profiles = dict(_BUILTIN_PROFILES)
+            self._profiles = dict(_OFFICIAL_BUILTIN_PROFILES)
+            # 兼容旧名
+            for name, profile in _LEGACY_BUILTIN_PROFILES.items():
+                if name not in self._profiles:
+                    self._profiles[name] = profile
             self._initialized = True
+
+    def load_builtin_agents(self) -> None:
+        """加载官方 5 个内置 Agent（已由 _ensure 加载，显式调用用于刷新）"""
+        self._ensure()
+        logger.info(f"SubagentRegistry: 内置 Agent 已加载，共 {len(self._profiles)} 个")
 
     def register(self, profile: SubagentProfile) -> None:
         """注册或覆盖一个子 Agent 类型"""
@@ -88,20 +128,75 @@ class SubagentRegistry:
         return self._profiles.get(name)
 
     def dispatch(self, name: str) -> SubagentProfile:
-        """智能分派：按名查找 → 降级到 general
+        """智能分派：先查官方名 → 再查 legacy 名 → 最后默认 general-purpose
 
         Args:
             name: agentType 字符串
 
         Returns:
-            SubagentProfile，未注册时返回 general
+            SubagentProfile，未注册时返回 general-purpose
         """
         self._ensure()
         profile = self._profiles.get(name)
         if profile is None:
-            logger.debug(f"SubagentRegistry: 未找到类型 '{name}'，降级为 general")
-            return self._profiles["general"]
+            # 尝试忽略大小写匹配
+            name_lower = name.lower()
+            for key in self._profiles.keys():
+                if key.lower() == name_lower:
+                    return self._profiles[key]
+            logger.debug(
+                f"SubagentRegistry: 未找到类型 '{name}'，降级为 general-purpose"
+            )
+            return self._profiles["general-purpose"]
         return profile
+
+    def load_from_directory(self, dir_path: str) -> int:
+        """从目录加载所有 .md 文件作为 SubagentProfile
+
+        Args:
+            dir_path: 目录路径
+
+        Returns:
+            int: 加载的数量
+        """
+        self._ensure()
+        count = 0
+        if not os.path.isdir(dir_path):
+            logger.warning(f"SubagentRegistry: 目录不存在: {dir_path}")
+            return 0
+
+        for filename in os.listdir(dir_path):
+            if filename.endswith(".md"):
+                filepath = os.path.join(dir_path, filename)
+                try:
+                    profile = SubagentProfile.from_markdown(filepath)
+                    self.register(profile)
+                    count += 1
+                except Exception as e:
+                    logger.warning(f"SubagentRegistry: 加载失败 {filepath}: {e}")
+
+        logger.info(f"SubagentRegistry: 从 {dir_path} 加载了 {count} 个 Agent")
+        return count
+
+    def search(self, query: str) -> List[SubagentProfile]:
+        """搜索匹配的 Agent（按名称或描述）
+
+        Args:
+            query: 搜索关键词
+
+        Returns:
+            List[SubagentProfile]: 匹配的 Profile 列表
+        """
+        self._ensure()
+        query_lower = query.lower()
+        results = []
+        for profile in self._profiles.values():
+            if (
+                query_lower in profile.name.lower()
+                or query_lower in profile.description.lower()
+            ):
+                results.append(profile)
+        return results
 
     def list_types(self) -> Dict[str, str]:
         """列出所有已注册类型名+描述"""

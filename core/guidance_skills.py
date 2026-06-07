@@ -1,21 +1,24 @@
 """指导型 Skill 加载器 — 将 everything-claude-code 的 SKILL.md 嵌入 agent
 
-读取 ~/Desktop/claude/everything-claude-code-main/.agents/skills/
-下的所有 SKILL.md，自动生成 GuidanceSkill 并注册到全局 SkillRegistry。
+读取 everything-claude-code 技能仓库路径下的 SKILL.md，
+自动生成 GuidanceSkill 并注册到全局 SkillRegistry。
 """
 
+import logging
 import os
 import re
-import logging
 from typing import Dict, Optional
 
 from .skill_base import GuidanceSkill, get_skill_registry
 
 logger = logging.getLogger(__name__)
 
-# everything-claude-code 技能仓库路径
+# everything-claude-code 技能仓库路径（环境变量优先，否则使用默认路径）
 SKILLS_BASE = os.path.expanduser(
-    "~/Desktop/claude/everything-claude-code-main/.agents/skills"
+    os.getenv(
+        "EVERYTHING_CLAUDE_SKILLS",
+        "~/Desktop/claude/everything-claude-code-main/.agents/skills",
+    )
 )
 
 # Skill 分类映射（用于生成关键词）
@@ -25,8 +28,14 @@ SKILL_CATEGORIES = {
     "backend": {"backend-patterns", "api-design", "mcp-server-patterns", "bun-runtime"},
     "content": {"article-writing", "content-engine", "crosspost", "brand-voice"},
     "media": {"video-editing", "fal-ai-media"},
-    "ai": {"deep-research", "exa-search", "documentation-lookup", "e2e-testing",
-           "eval-harness", "everything-claude-code"},
+    "ai": {
+        "deep-research",
+        "exa-search",
+        "documentation-lookup",
+        "e2e-testing",
+        "eval-harness",
+        "everything-claude-code",
+    },
     "devops": {"tdd-workflow", "verification-loop", "coding-standards", "agent-sort"},
     "investor": {"investor-materials", "investor-outreach"},
     "security": {"security-review"},
@@ -35,9 +44,15 @@ SKILL_CATEGORIES = {
 
 # 系统级 Skill（保留在 Claude Code 原生中，不嵌入 agent）
 SYSTEM_SKILLS = {
-    "update-config", "keybindings-help", "simplify",
-    "fewer-permission-prompts", "loop", "init", "review",
-    "security-review", "GenericAgent",
+    "update-config",
+    "keybindings-help",
+    "simplify",
+    "fewer-permission-prompts",
+    "loop",
+    "init",
+    "review",
+    "security-review",
+    "GenericAgent",
 }
 
 # 手动维护的中文关键词（自动生成不够好时补充）
@@ -80,7 +95,7 @@ def scan_skills() -> Dict[str, dict]:
         # 从 frontmatter 提取元数据
         description = ""
         try:
-            with open(skill_md, 'r', encoding='utf-8') as f:
+            with open(skill_md, "r", encoding="utf-8") as f:
                 content = f.read()
             if content.startswith("---"):
                 parts = content.split("---", 2)
@@ -128,12 +143,12 @@ def build_keywords(name: str, description: str) -> list:
         words.add(" ".join(parts))
 
     # 英文关键词：从 description 提取常见单词
-    desc_en = re.findall(r'[a-zA-Z]{3,}', description)
+    desc_en = re.findall(r"[a-zA-Z]{3,}", description)
     for w in desc_en[:5]:
         words.add(w.lower())
 
     # 中文关键词：从 description 提取
-    desc_cn = re.findall(r'[一-鿿]{2,10}', description)
+    desc_cn = re.findall(r"[一-鿿]{2,10}", description)
     for w in desc_cn[:3]:
         words.add(w)
 
@@ -207,14 +222,13 @@ def get_skills_by_category(category: str) -> list:
     """
     registry = get_skill_registry()
     cat_skills = SKILL_CATEGORIES.get(category, set())
-    return [s for s in registry.all() if hasattr(s, 'name') and s.name in cat_skills]
+    return [s for s in registry.all() if hasattr(s, "name") and s.name in cat_skills]
 
 
 def list_guidance_skills() -> str:
     """格式化输出所有指导型技能"""
     registry = get_skill_registry()
-    guidance_skills = [s for s in registry.all()
-                       if hasattr(s, 'skill_md_path')]
+    guidance_skills = [s for s in registry.all() if hasattr(s, "skill_md_path")]
 
     if not guidance_skills:
         return "（未加载指导型技能）"

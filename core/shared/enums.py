@@ -53,10 +53,3 @@ class TaskPhase(Enum):
     INTEGRATION = "integration"
 
 
-class CollaborationMode(Enum):
-    """协作模式"""
-    PIPELINE = "pipeline"              # 流水线：顺序执行
-    MASTER_SLAVE = "master_slave"    # 主从：主Agent分解+聚合
-    REVIEW = "review"               # 评审：多Agent并行+评审
-    AUCTION = "auction"             # 拍卖：任务竞标
-    HYBRID = "hybrid"               # 混合模式

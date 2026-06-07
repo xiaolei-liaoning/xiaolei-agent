@@ -1,4 +1,4 @@
-"""v2 MiddlewareChain 基础行为测试"""
+"""v2 MiddlewareChain 基础行为测试（精简版 — 4层链）"""
 import asyncio
 import sys
 sys.path.insert(0, '.')
@@ -59,7 +59,6 @@ async def test_bind_agent():
     mw = CaptureAgent()
     chain.add(mw)
     chain.bind_agent('my-agent')
-    # Call on_start to trigger agent_ref capture
     ctx = RunContext('test')
     await chain.on_start(ctx)
     assert mw.agent_ref == 'my-agent', f'Expected my-agent, got {mw.agent_ref}'
@@ -94,13 +93,11 @@ async def test_hookresult_shortcircuit():
 
 async def test_build_default_chain():
     chain = build_default_chain()
-    assert len(chain._middlewares) == 12, f'Expected 12 middlewares, got {len(chain._middlewares)}'
+    assert len(chain._middlewares) == 4, f'Expected 4 middlewares, got {len(chain._middlewares)}'
     names = [type(m).__name__ for m in chain._middlewares]
     expected = [
-        'ProfileMiddleware', 'DynamicStageRoutingMiddleware', 'PlanAwareMiddleware',
-        'ReActDepthMiddleware', 'ReActCoreMiddleware', 'ReflectionCheckMiddleware',
-        'DataPipelineMiddleware', 'ConfidenceMiddleware', 'ReflectionMiddleware',
-        'KEPAMiddleware', 'BranchMiddleware', 'AskUserMiddleware'
+        'ReActDepthMiddleware', 'ReActCoreMiddleware',
+        'ReflectionMiddleware', 'KEPAMiddleware',
     ]
     assert names == expected, f'Mismatch: {names}'
     print('✅ test_build_default_chain')

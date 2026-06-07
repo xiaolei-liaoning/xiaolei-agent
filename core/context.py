@@ -85,12 +85,6 @@ class ExecutionContext:
 
         if max_context_tokens is not None:
             ctx.max_context_tokens = max_context_tokens
-            try:
-                from .multi_agent_v2.orchestration.context.global_context_center import GlobalContextCenter
-                gcc = GlobalContextCenter()
-                gcc._max_context_tokens = max_context_tokens
-            except Exception:
-                pass
 
         return ctx
 

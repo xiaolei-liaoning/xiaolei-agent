@@ -235,7 +235,11 @@ class VectorMemoryStore:
             return
         self._initialized = True
 
-        self.persist_dir = persist_dir or os.path.expanduser("~/.小雷版小龙虾/vector_db")
+        self.persist_dir = persist_dir or os.environ.get(
+            "VECTOR_DB_PATH",
+            "/Volumes/xiaaolei/ai-agent-data/vector_db" if os.path.exists("/Volumes/xiaaolei") 
+            else os.path.expanduser("~/.小雷版小龙虾/vector_db")
+        )
         os.makedirs(self.persist_dir, exist_ok=True)
 
         self._client = chromadb.PersistentClient(

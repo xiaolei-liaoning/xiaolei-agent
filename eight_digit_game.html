@@ -1,11 +1,434 @@
 <!DOCTYPE html>
-<html>
+<html lang="zh-CN">
 <head>
-	<title>八数码游戏</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>八数码游戏 - 8-Puzzle</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  }
+  .container {
+    background: rgba(255,255,255,0.95);
+    border-radius: 20px;
+    padding: 30px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    max-width: 500px;
+    width: 90%;
+  }
+  h1 {
+    text-align: center;
+    color: #333;
+    margin-bottom: 8px;
+    font-size: 24px;
+  }
+  .subtitle {
+    text-align: center;
+    color: #888;
+    font-size: 13px;
+    margin-bottom: 20px;
+  }
+  .stats {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 15px;
+    font-size: 14px;
+    color: #555;
+  }
+  .stats span { background: #f0f0f0; padding: 4px 12px; border-radius: 12px; }
+  .board {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+    aspect-ratio: 1;
+    background: #ddd;
+    border-radius: 12px;
+    padding: 6px;
+    position: relative;
+  }
+  .tile {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #4a90d9;
+    color: white;
+    font-size: 28px;
+    font-weight: bold;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    user-select: none;
+    aspect-ratio: 1;
+  }
+  .tile:hover:not(.empty) { background: #357abd; transform: scale(1.03); }
+  .tile.empty {
+    background: #e8e8e8;
+    color: transparent;
+    cursor: default;
+  }
+  .tile.solved {
+    background: #27ae60;
+    animation: pop 0.3s ease;
+  }
+  @keyframes pop { 0% { transform: scale(1.1); } 100% { transform: scale(1); } }
+  .tile.solving {
+    background: #e67e22;
+    transition: all 0.15s ease;
+  }
+  .controls {
+    display: flex;
+    gap: 10px;
+    margin-top: 18px;
+    flex-wrap: wrap;
+  }
+  .controls button {
+    flex: 1;
+    min-width: 80px;
+    padding: 10px 16px;
+    border: none;
+    border-radius: 10px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    color: white;
+  }
+  .btn-shuffle { background: #e74c3c; }
+  .btn-shuffle:hover { background: #c0392b; }
+  .btn-solve { background: #2ecc71; }
+  .btn-solve:hover { background: #27ae60; }
+  .btn-reset { background: #95a5a6; }
+  .btn-reset:hover { background: #7f8c8d; }
+  .btn-stop { background: #e67e22; }
+  .btn-stop:hover { background: #d35400; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .status {
+    text-align: center;
+    margin-top: 12px;
+    font-size: 14px;
+    color: #555;
+    min-height: 22px;
+  }
+  .status.solved-text { color: #27ae60; font-weight: bold; }
+  @media (max-width: 400px) {
+    .tile { font-size: 22px; }
+    h1 { font-size: 20px; }
+  }
+</style>
 </head>
 <body>
-	<h1>八数码游戏</h1>
-	<div id="game"></div>
-	<script src="game.js"></script>
+<div class="container">
+  <h1>🧩 八数码游戏</h1>
+  <p class="subtitle">点击数字移动方块 · 目标：按顺序排列</p>
+  <div class="stats">
+    <span>步数: <b id="moveCount">0</b></span>
+    <span>⏱ <b id="timer">00:00</b></span>
+  </div>
+  <div class="board" id="board"></div>
+  <div class="controls">
+    <button class="btn-shuffle" id="btnShuffle">🔀 洗牌</button>
+    <button class="btn-solve" id="btnSolve">🤖 自动求解</button>
+    <button class="btn-reset" id="btnReset">↺ 重置</button>
+    <button class="btn-stop" id="btnStop" style="display:none">⏹ 停止</button>
+  </div>
+  <div class="status" id="status">点击洗牌开始游戏</div>
+</div>
+<script>
+// ─── 八数码游戏引擎 ──────────────────────────────────────────────
+const boardEl = document.getElementById('board');
+const moveCountEl = document.getElementById('moveCount');
+const timerEl = document.getElementById('timer');
+const statusEl = document.getElementById('status');
+const btnShuffle = document.getElementById('btnShuffle');
+const btnSolve = document.getElementById('btnSolve');
+const btnReset = document.getElementById('btnReset');
+const btnStop = document.getElementById('btnStop');
+
+let state = [1,2,3,4,5,6,7,8,0];   // 0 = empty
+let moves = 0;
+let solving = false;
+let timerInterval = null;
+let seconds = 0;
+let isReady = false;
+
+// ─── 工具函数 ───────────────────────────────────────────────
+function indexToRC(i) { return [Math.floor(i/3), i%3]; }
+function rcToIndex(r,c) { return r*3 + c; }
+
+function getNeighbors(i) {
+  const [r,c] = indexToRC(i);
+  const nb = [];
+  if (r > 0) nb.push(rcToIndex(r-1,c));
+  if (r < 2) nb.push(rcToIndex(r+1,c));
+  if (c > 0) nb.push(rcToIndex(r,c-1));
+  if (c < 2) nb.push(rcToIndex(r,c+1));
+  return nb;
+}
+
+function isSolvable(arr) {
+  let inversions = 0;
+  for (let i = 0; i < 9; i++)
+    for (let j = i+1; j < 9; j++)
+      if (arr[i] && arr[j] && arr[i] > arr[j]) inversions++;
+  return inversions % 2 === 0;
+}
+
+function isSolved(arr) {
+  for (let i = 0; i < 8; i++) if (arr[i] !== i+1) return false;
+  return arr[8] === 0;
+}
+
+function clone(arr) { return [...arr]; }
+
+// ─── 渲染 ─────────────────────────────────────────────────────
+function render() {
+  boardEl.innerHTML = '';
+  for (let i = 0; i < 9; i++) {
+    const tile = document.createElement('div');
+    tile.className = 'tile' + (state[i] === 0 ? ' empty' : '') + (isSolved(state) ? ' solved' : '');
+    if (state[i] !== 0) tile.textContent = state[i];
+    tile.dataset.index = i;
+    tile.addEventListener('click', () => !solving && handleClick(i));
+    boardEl.appendChild(tile);
+  }
+  moveCountEl.textContent = moves;
+  if (isSolved(state) && isReady && !solving) {
+    statusEl.textContent = '🎉 恭喜你完成！';
+    statusEl.className = 'status solved-text';
+    stopTimer();
+  }
+}
+
+// ─── 操作 ─────────────────────────────────────────────────────
+function moveTile(i) {
+  const emptyIdx = state.indexOf(0);
+  const nb = getNeighbors(emptyIdx);
+  if (nb.includes(i)) {
+    [state[emptyIdx], state[i]] = [state[i], state[emptyIdx]];
+    moves++;
+    return true;
+  }
+  return false;
+}
+
+function handleClick(i) {
+  if (solving) return;
+  if (!isReady) {
+    statusEl.textContent = '请先点击洗牌！';
+    return;
+  }
+  if (moveTile(i)) render();
+}
+
+// ─── 洗牌 ─────────────────────────────────────────────────────
+function shuffle() {
+  if (solving) return;
+  stopTimer();
+  let arr = [1,2,3,4,5,6,7,8,0];
+  do {
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i+1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+  } while (!isSolvable(arr) || isSolved(arr));
+  state = arr;
+  moves = 0;
+  seconds = 0;
+  timerEl.textContent = '00:00';
+  isReady = true;
+  solving = false;
+  statusEl.textContent = '🎮 游戏开始！请移动方块';
+  statusEl.className = 'status';
+  btnStop.style.display = 'none';
+  startTimer();
+  render();
+}
+
+// ─── A* 求解器 ───────────────────────────────────────────────
+function aStarSolve(initial) {
+  // 曼哈顿距离启发式
+  function heuristic(arr) {
+    let h = 0;
+    for (let i = 0; i < 9; i++) {
+      if (arr[i] === 0) continue;
+      const target = arr[i] - 1;
+      const [cr, cc] = indexToRC(i);
+      const [tr, tc] = indexToRC(target);
+      h += Math.abs(cr - tr) + Math.abs(cc - tc);
+    }
+    return h;
+  }
+
+  function encode(arr) { return arr.join(','); }
+  const start = clone(initial);
+  const openSet = [{ state: start, g: 0, f: heuristic(start), path: [], blank: start.indexOf(0) }];
+  const closed = new Set();
+
+  while (openSet.length > 0) {
+    openSet.sort((a,b) => a.f - b.f);
+    const cur = openSet.shift();
+    const key = encode(cur.state);
+    if (closed.has(key)) continue;
+    closed.add(key);
+
+    if (isSolved(cur.state)) return cur.path;
+
+    for (const nb of getNeighbors(cur.blank)) {
+      const ns = clone(cur.state);
+      [ns[cur.blank], ns[nb]] = [ns[nb], ns[cur.blank]];
+      const nk = encode(ns);
+      if (closed.has(nk)) continue;
+      const ng = cur.g + 1;
+      openSet.push({ state: ns, g: ng, f: ng + heuristic(ns), path: [...cur.path, nb], blank: nb });
+    }
+  }
+  return null;
+}
+
+// ─── 自动求解动画 ──────────────────────────────────────────────
+function animateSolve(path) {
+  if (!path || path.length === 0) {
+    statusEl.textContent = '⚠️ 无法求解（这是什么情况？）';
+    statusEl.className = 'status';
+    solving = false;
+    btnStop.style.display = 'none';
+    btnShuffle.disabled = false;
+    btnSolve.disabled = false;
+    btnReset.disabled = false;
+    render();
+    return;
+  }
+
+  statusEl.textContent = `🤖 正在求解... (共 ${path.length} 步)`;
+  statusEl.className = 'status';
+  let step = 0;
+  const speed = Math.max(30, Math.min(200, 800 / path.length));
+
+  function doStep() {
+    if (!solving) {
+      btnStop.style.display = 'none';
+      btnShuffle.disabled = false;
+      btnSolve.disabled = false;
+      btnReset.disabled = false;
+      render();
+      return;
+    }
+    if (step >= path.length) {
+      solving = false;
+      btnStop.style.display = 'none';
+      btnShuffle.disabled = false;
+      btnSolve.disabled = false;
+      btnReset.disabled = false;
+      statusEl.textContent = `🤖 求解完成！共 ${path.length} 步`;
+      statusEl.className = 'status solved-text';
+      render();
+      return;
+    }
+    // 优化：批量移动，避免多余渲染
+    const batchSize = Math.max(1, Math.floor(path.length / 20));
+    for (let b = 0; b < batchSize && step < path.length; b++, step++) {
+      const emptyIdx = state.indexOf(0);
+      [state[emptyIdx], state[path[step]]] = [state[path[step]], state[emptyIdx]];
+      moves++;
+    }
+    render();
+    // 给每个生成的tile加动画类
+    document.querySelectorAll('.tile:not(.empty)').forEach(t => t.classList.add('solving'));
+    setTimeout(doStep, speed);
+  }
+
+  setTimeout(doStep, speed);
+}
+
+// ─── 求解入口 ──────────────────────────────────────────────────
+function solve() {
+  if (!isReady) { statusEl.textContent = '请先点击洗牌！'; return; }
+  if (isSolved(state)) { statusEl.textContent = '已经是完成状态啦！'; return; }
+  if (solving) return;
+
+  solving = true;
+  btnStop.style.display = 'inline-block';
+  btnShuffle.disabled = true;
+  btnSolve.disabled = true;
+  btnReset.disabled = true;
+  statusEl.textContent = '🧠 正在计算最优解...';
+  statusEl.className = 'status';
+
+  // 放到下一个事件循环，让UI先更新
+  setTimeout(() => {
+    const startT = performance.now();
+    const path = aStarSolve(state);
+    const elapsed = (performance.now() - startT).toFixed(1);
+    statusEl.textContent = `🧠 计算完成 (${elapsed}ms, ${path ? path.length : 0}步)，开始执行`;
+    setTimeout(() => animateSolve(path), 100);
+  }, 50);
+}
+
+// ─── 计时器 ────────────────────────────────────────────────────
+function startTimer() {
+  stopTimer();
+  timerInterval = setInterval(() => {
+    seconds++;
+    const m = String(Math.floor(seconds / 60)).padStart(2, '0');
+    const s = String(seconds % 60).padStart(2, '0');
+    timerEl.textContent = `${m}:${s}`;
+  }, 1000);
+}
+function stopTimer() {
+  if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+}
+
+// ─── 停止求解 ────────────────────────────────────────────────
+function stopSolving() {
+  solving = false;
+  btnStop.style.display = 'none';
+  btnShuffle.disabled = false;
+  btnSolve.disabled = false;
+  btnReset.disabled = false;
+  statusEl.textContent = '⏹ 已停止求解';
+  statusEl.className = 'status';
+}
+
+// ─── 重置（回到目标状态） ─────────────────────────────────────
+function resetPuzzle() {
+  if (solving) return;
+  stopTimer();
+  state = [1,2,3,4,5,6,7,8,0];
+  moves = 0;
+  seconds = 0;
+  timerEl.textContent = '00:00';
+  isReady = true;
+  statusEl.textContent = '已重置为完成状态，点击洗牌开始';
+  statusEl.className = 'status';
+  render();
+}
+
+// ─── 键盘快捷键 ────────────────────────────────────────────────
+document.addEventListener('keydown', (e) => {
+  const emptyIdx = state.indexOf(0);
+  const [r, c] = indexToRC(emptyIdx);
+  let target = -1;
+  if (e.key === 'ArrowUp' && r < 2) target = rcToIndex(r+1, c);
+  else if (e.key === 'ArrowDown' && r > 0) target = rcToIndex(r-1, c);
+  else if (e.key === 'ArrowLeft' && c < 2) target = rcToIndex(r, c+1);
+  else if (e.key === 'ArrowRight' && c > 0) target = rcToIndex(r, c-1);
+  if (target >= 0 && !solving) { e.preventDefault(); handleClick(target); }
+});
+
+// ─── 事件绑定 ────────────────────────────────────────────────
+btnShuffle.addEventListener('click', shuffle);
+btnSolve.addEventListener('click', solve);
+btnReset.addEventListener('click', resetPuzzle);
+btnStop.addEventListener('click', stopSolving);
+
+// ─── 初始化 ──────────────────────────────────────────────────
+render();
+</script>
 </body>
 </html>

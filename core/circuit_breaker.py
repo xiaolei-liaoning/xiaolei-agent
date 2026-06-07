@@ -3,10 +3,7 @@
 被以下模块引用（全部 import）：
   core/tasks/task_scheduler.py
   core/tasks/concurrent_processor.py
-
   core/security/error_handler.py
-
-  agent_group_executor.py
 """
 
 import time

@@ -34,6 +34,10 @@ wheels/
 *.swo
 *~
 
+# Editor history / tools
+.history/
+.opencode/
+
 # Logs
 *.log
 logs/

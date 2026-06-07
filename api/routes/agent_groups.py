@@ -612,36 +612,11 @@ async def execute_with_current_group(request: GroupExecuteRequest):
     logger.info(f"小组 {group.name} 开始执行任务，策略: {final_strategy}, "
                 f"失败策略: {final_failure_strategy}, 熔断策略: {final_circuit_strategy}, 超时: {final_timeout}")
     
-    # 使用新的Agent小组执行引擎
-    try:
-        from agent_group_executor import agent_group_executor
-    except Exception as e:
-        logger.error(f"导入Agent执行引擎失败: {e}")
-        raise HTTPException(status_code=500, detail="执行引擎初始化失败")
-    
-    try:
-        result = await agent_group_executor.execute_with_group(
-            group,
-            request.message,
-            strategy=final_strategy,
-            failure_strategy=final_failure_strategy,
-            circuit_strategy=final_circuit_strategy,
-            timeout=final_timeout
-        )
-        
-        # 更新小组统计
-        group.task_count += 1
-        if result.get('total_count', 0) > 0:
-            group.success_rate = result.get('success_count', 0) / result.get('total_count', 1)
-        group.updated_at = datetime.now()
-        
-        return {
-            "success": True,
-            "data": result
-        }
-    except Exception as e:
-        logger.error(f"小组执行任务失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    # 已迁移至 JS Workflow 编排系统
+    raise HTTPException(
+        status_code=410,
+        detail="AgentGroupExecutor 已移除，请使用 JS Workflow (core/multi_agent_v2/workflow/js_workflow.py)"
+    )
 
 
 @router.post("/{group_id}/execute")
@@ -661,36 +636,11 @@ async def execute_with_group(group_id: str, request: GroupExecuteRequest):
     logger.info(f"小组 {group.name} 开始执行任务，策略: {final_strategy}, "
                 f"失败策略: {final_failure_strategy}, 熔断策略: {final_circuit_strategy}, 超时: {final_timeout}")
     
-    # 使用Agent小组执行引擎
-    try:
-        from agent_group_executor import agent_group_executor
-    except Exception as e:
-        logger.error(f"导入Agent执行引擎失败: {e}")
-        raise HTTPException(status_code=500, detail="执行引擎初始化失败")
-    
-    try:
-        result = await agent_group_executor.execute_with_group(
-            group,
-            request.message,
-            strategy=final_strategy,
-            failure_strategy=final_failure_strategy,
-            circuit_strategy=final_circuit_strategy,
-            timeout=final_timeout
-        )
-        
-        # 更新小组统计
-        group.task_count += 1
-        if result.get('total_count', 0) > 0:
-            group.success_rate = result.get('success_count', 0) / result.get('total_count', 1)
-        group.updated_at = datetime.now()
-        
-        return {
-            "success": True,
-            "data": result
-        }
-    except Exception as e:
-        logger.error(f"小组执行任务失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    # 已迁移至 JS Workflow 编排系统
+    raise HTTPException(
+        status_code=410,
+        detail="AgentGroupExecutor 已移除，请使用 JS Workflow (core/multi_agent_v2/workflow/js_workflow.py)"
+    )
 
 
 # ==========================================

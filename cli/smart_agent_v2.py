@@ -163,25 +163,19 @@ class SmartAgentCLIv2:
 
             if len(dimensions) <= 1:
                 # 简单任务：单 agent 顺序执行
-                orch.phase("执行")
                 result = await orch.agent(user_query, {"label": "执行", "timeout": 120})
                 print_color(f"\n{'✅' if result.success else '⚠️'} 执行完成 ({result.execution_time:.1f}s)",
                            CliColors.GREEN if result.success else CliColors.YELLOW)
                 return result
 
             # 复杂任务：多维度并行
-            orch.phase("并行调研")
-
-            # 每个 thunk 是 lambda: coroutine，parallel() 内部会 await 执行
-            thunks = [
-                lambda d=d: orch.agent(d, {"label": d[:30], "timeout": 180})
+            tasks = [
+                orch.agent(d, {"label": d[:30], "timeout": 180})
                 for d in dimensions
             ]
-
-            results = await orch.parallel(thunks, max_concurrent=len(thunks))
+            results = await asyncio.gather(*tasks)
 
             # 汇总阶段
-            orch.phase("汇总")
             success_count = sum(1 for r in results if r.success)
             total = len(results)
             print_color(f"\n📊 并行执行完成: {success_count}/{total} 成功", CliColors.CYAN)
@@ -196,7 +190,6 @@ class SmartAgentCLIv2:
 
             # 汇总结果
             if success_count > 0:
-                orch.phase("结果整合")
                 summary_prompt = f"整合以下 {success_count} 个并行维度的结果为一个完整回答：\n"
                 for i, r in enumerate(results):
                     if r.success:
