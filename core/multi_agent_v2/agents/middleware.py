@@ -36,9 +36,16 @@ class RunContext:
     is_code_task: bool = False
     model_override: Optional[str] = None
     personality_prompt: str = ""
+    # Agent 类型工具约束
+    allowed_tools: Optional[List[str]] = None   # 工具白名单（None=不限制）
+    disallowed_tools: Optional[List[str]] = None  # 工具黑名单
     profile: Dict[str, Any] = field(default_factory=lambda: {
         "use_shared_bus": True, "use_memory_store": False,
     })
+
+    # ── 工具发现缓存（on_start 发现，on_think_start 筛选）──
+    _tool_cache: Optional[List[Any]] = None       # discover_all() 全量结果
+    _filtered_tools: Optional[List[Any]] = None   # get_tools_for_task() 筛选结果（首轮缓存）
 
     # ── 执行状态（每轮变动）──
     iteration: int = 0

@@ -193,7 +193,7 @@ class MCPClientManager:
             if not http_conn:
                 return []
             resp = await self._send_http_request_with_retry(
-                http_conn, "listTools", None
+                http_conn, "tools/list", None
             )
             if resp and "result" in resp:
                 return resp["result"].get("tools", [])
@@ -201,7 +201,7 @@ class MCPClientManager:
         else:
             process = await self._get_or_reconnect_stdio(server_name)
             resp = await self._send_request_with_retry(
-                process, "listTools", None, request_id=2
+                process, "tools/list", None, request_id=2
             )
             if resp and "result" in resp:
                 return resp["result"].get("tools", [])
@@ -223,7 +223,7 @@ class MCPClientManager:
             if not http_conn:
                 return f"❌ 无法连接到 HTTP 服务器 '{server_name}'"
             resp = await self._send_http_request_with_retry(
-                http_conn, "callTool",
+                http_conn, "tools/call",
                 {"name": tool_name, "arguments": arguments or {}}
             )
             if resp and "result" in resp:
@@ -239,7 +239,7 @@ class MCPClientManager:
         else:
             process = await self._get_or_reconnect_stdio(server_name)
             resp = await self._send_request_with_retry(
-                process, "callTool",
+                process, "tools/call",
                 {"name": tool_name, "arguments": arguments or {}},
                 request_id=2,
             )
@@ -312,19 +312,21 @@ class MCPClientManager:
                 if conn.initialized:
                     return conn.process
                 # 未初始化 → 重新初始化
-                resp = await self._send_request(
-                    conn.process, "initialize", {
-                        "protocolVersion": "2024-11-05",
-                        "clientInfo": {"name": "xiaolei", "version": "3.3.1"},
-                    }, request_id=1
-                )
-                if resp and "result" in resp:
-                    conn.initialized = True
-                    return conn.process
-                else:
-                    await self._cleanup_connection(name)
+            resp = await self._send_request(
+                conn.process, "initialize", {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": {"name": "xiaolei", "version": "3.3.1"},
+                }, request_id=1
+            )
+            if resp and "result" in resp:
+                await self._send_notification(conn.process, "notifications/initialized")
+                conn.initialized = True
+                return conn.process
             else:
                 await self._cleanup_connection(name)
+        else:
+            await self._cleanup_connection(name)
 
         # 自动重连
         config = self._server_configs.get(name)
@@ -338,10 +340,12 @@ class MCPClientManager:
         resp = await self._send_request(
             process, "initialize", {
                 "protocolVersion": "2024-11-05",
+                "capabilities": {},
                 "clientInfo": {"name": "xiaolei", "version": "3.3.1"},
             }, request_id=1
         )
         if resp and "result" in resp:
+            await self._send_notification(process, "notifications/initialized")
             conn.initialized = True
             return process
         raise RuntimeError(f"重连 stdio 服务器 '{name}' 失败")
@@ -395,6 +399,20 @@ class MCPClientManager:
                 process.stdout.readline(), timeout=30.0
             )
             return json.loads(response_line.decode()) if response_line else None
+
+    async def _send_notification(
+        self,
+        process: asyncio.subprocess.Process,
+        method: str,
+        params: Optional[dict] = None,
+    ) -> None:
+        """发送 JSON-RPC 通知（无 id，不期望响应）"""
+        async with self._request_lock:
+            notification = {"jsonrpc": "2.0", "method": method}
+            if params:
+                notification["params"] = params
+            process.stdin.write((json.dumps(notification) + "\n").encode())
+            await process.stdin.drain()
 
     # ── 进程管理 ──────────────────────────────────────────────────────────────
 

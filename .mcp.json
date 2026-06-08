@@ -29,12 +29,6 @@
         "-y",
         "deepwiki-mcp@0.0.6"
       ]
-    },
-    "evermem": {
-      "command": "python3",
-      "args": [
-        "/tmp/evermem_mcp_server.py"
-      ]
     }
   }
 }

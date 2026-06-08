@@ -32,6 +32,8 @@ _LEGACY_BUILTIN_PROFILES: Dict[str, SubagentProfile] = {
         personality="你是一个信息搜索专家，擅长从多源获取并验证信息。",
         role="researcher",
         max_rounds=5,
+        # 只读 + 搜索类工具
+        tools=["execute_python", "execute_shell", "fetch_url", "search", "rag_search", "file", "git", "call_api"],
     ),
     "analyst": SubagentProfile(
         name="analyst",
@@ -40,6 +42,9 @@ _LEGACY_BUILTIN_PROFILES: Dict[str, SubagentProfile] = {
         personality="你是一个数据分析专家，擅长从数据中提取洞察并撰写分析报告。",
         role="analyst",
         max_rounds=15,
+        # 读取 + 分析工具，禁止写入和执行
+        tools=["execute_python", "fetch_url", "search", "rag_search", "file", "git"],
+        disallowed_tools=["execute_shell", "call_api"],
     ),
     "coder": SubagentProfile(
         name="coder",
@@ -48,6 +53,8 @@ _LEGACY_BUILTIN_PROFILES: Dict[str, SubagentProfile] = {
         personality="你是一个资深程序员，擅长编写高质量代码和调试。",
         role="coder",
         max_rounds=20,
+        # 代码执行 + 文件操作
+        tools=["execute_python", "execute_shell", "file", "git", "search", "rag_search"],
     ),
     "critic": SubagentProfile(
         name="critic",
@@ -56,6 +63,9 @@ _LEGACY_BUILTIN_PROFILES: Dict[str, SubagentProfile] = {
         personality="你是一个严格的审查员，擅长找漏洞和错误。",
         role="analyst",
         max_rounds=3,
+        # 只读工具，禁止执行
+        tools=["execute_python", "fetch_url", "search", "rag_search", "file", "git"],
+        disallowed_tools=["execute_shell", "call_api", "skill_execute"],
     ),
 }
 
@@ -65,16 +75,23 @@ _OFFICIAL_BUILTIN_PROFILES: Dict[str, SubagentProfile] = {
         name="general-purpose",
         description="通用 Agent，适合各种任务",
         personality="你是一个全能的助手，可以处理各种任务。",
+        # 通用：禁用反思类工具（防止自我循环）
+        disallowed_tools=["kepa_reflect", "self_reflect"],
     ),
     "Explore": SubagentProfile(
         name="Explore",
         description="探索 Agent，专门用于搜索和探索",
         personality="你是一个探索专家，擅长搜索、浏览和发现信息。",
+        # 只读 + 搜索
+        tools=["execute_python", "execute_shell", "fetch_url", "search", "rag_search", "file", "git", "call_api"],
     ),
     "Plan": SubagentProfile(
         name="Plan",
         description="计划 Agent，专门用于制定计划",
         personality="你是一个计划专家，擅长制定详细的执行计划。",
+        # 计划模式：只读，禁止执行和写入
+        tools=["execute_python", "fetch_url", "search", "rag_search", "file", "git"],
+        disallowed_tools=["execute_shell", "call_api", "skill_execute"],
     ),
     "statusline-setup": SubagentProfile(
         name="statusline-setup",

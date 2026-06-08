@@ -36,54 +36,27 @@ class ReActCoreMiddleware(BaseMiddleware):
         return ""
 
     async def on_start(self, ctx: RunContext) -> None:
-        """on_start 时获取工具定义"""
-        from core.multi_agent_v2.tools.tool_registry import get_tool_registry
+        """on_start 时发现全部工具并缓存，不做任务筛选"""
+        from core.multi_agent_v2.tools.tool_registry import get_tool_registry, _SANDBOX_TOOL_DEFS
 
         reg = get_tool_registry()
         try:
-            await asyncio.wait_for(reg.discover_all(), timeout=10)
-            raw = list(reg._tools.values()) if reg._tools else []
-            ctx.tool_defs = [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": t.name,
-                        "description": t.description,
-                        "parameters": t.parameters,
-                    },
-                    "_server": t.server,
-                    "_tool_name": t.tool_name,
-                }
-                for t in raw[:20]
-            ]
-            n_builtin = sum(1 for t in raw if t.server == "__builtin__")
-            n_mcp = len(raw) - n_builtin
-            logger.info(
-                f"暴露 {len(ctx.tool_defs)} 个工具 ({n_builtin} 内置 + {n_mcp} MCP)"
-            )
+            await asyncio.wait_for(reg.discover_all(), timeout=15)
+            ctx._tool_cache = list(reg._tools.values())
+            n_builtin = sum(1 for t in ctx._tool_cache if t.server == "__builtin__")
+            n_mcp = len(ctx._tool_cache) - n_builtin
+            logger.info(f"工具发现完成: {len(ctx._tool_cache)} 个 ({n_builtin} 内置 + {n_mcp} MCP)")
         except asyncio.TimeoutError:
-            logger.warning("工具发现超时（10s），仅用内置工具")
-            try:
-                from core.multi_agent_v2.tools.tool_registry import _SANDBOX_TOOL_DEFS
-
-                ctx.tool_defs = [
-                    {
-                        "type": "function",
-                        "function": {
-                            "name": t.name,
-                            "description": t.description,
-                            "parameters": t.parameters,
-                        },
-                        "_server": "__builtin__",
-                        "_tool_name": t.name,
-                    }
-                    for t in _SANDBOX_TOOL_DEFS
-                ]
-            except Exception:
-                ctx.tool_defs = []
+            discovered = list(reg._tools.values())
+            if discovered:
+                ctx._tool_cache = discovered
+                logger.info(f"工具发现部分超时，使用已注册的 {len(ctx._tool_cache)} 个工具")
+            else:
+                ctx._tool_cache = list(_SANDBOX_TOOL_DEFS)
+                logger.warning("工具发现完全超时，仅用内置工具")
         except Exception as e:
-            logger.debug(f"工具发现失败: {e}")
-            ctx.tool_defs = []
+            ctx._tool_cache = list(_SANDBOX_TOOL_DEFS)
+            logger.debug(f"工具发现异常: {e}")
 
     async def on_think_start(self, ctx: RunContext) -> None:
         """每轮 LLM 调用"""
@@ -102,28 +75,60 @@ class ReActCoreMiddleware(BaseMiddleware):
         ctx.react_depth += 1
         ctx.iteration = ctx.react_depth
 
+        # ── 任务感知工具筛选（首轮筛选后缓存复用）──
+        tool_cache = getattr(ctx, '_tool_cache', None) or []
+        if tool_cache:
+            filtered = getattr(ctx, '_filtered_tools', None)
+            if filtered is None:
+                from core.multi_agent_v2.tools.tool_registry import get_tool_registry
+                reg = get_tool_registry()
+                try:
+                    filtered = await reg.get_tools_for_task(
+                        ctx.task_description,
+                        max_tools=20,
+                        allowed=ctx.allowed_tools,
+                        disallowed=ctx.disallowed_tools,
+                    )
+                except Exception:
+                    filtered = tool_cache[:20]
+                ctx._filtered_tools = filtered
+            ctx.tool_defs = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": t.name,
+                        "description": t.description,
+                        "parameters": t.parameters,
+                    },
+                    "_server": t.server,
+                    "_tool_name": t.tool_name,
+                }
+                for t in filtered
+            ]
+        else:
+            ctx.tool_defs = None
+
         # 构建消息 — 注入计划进度让 agent 知晓已完成/未完成步骤
         plan_context = _steps_summary(ctx) if ctx.plan else ""
 
         system_content = (
             "你是AI助手，通过调用可用工具来完成任务。\n\n"
-            "【关键规则】\n"
-            "- 搜索资讯 → 调用 search 工具\n"
-            "- 抓取网页内容（热搜、新闻、页面数据等）→ 优先用 Playwright MCP 的 browser_navigate + browser_snapshot\n"
-            "- 读写文件 → 调用 file 工具\n"
-            "- 查看目录 → 调用 execute_shell 工具\n"
-            "- 执行代码 → 调用 execute_python 工具\n"
-            "- 生成大文件 → 调用 execute_python 工具，用open().write()写入\n\n"
-            "【并行调用】\n"
-            "- 如果多个工具之间没有依赖关系，可以在一次回复中同时调用多个工具！\n"
-            "- 例如：搜索+读文件、或 执行代码+查天气 都可以同时调用\n"
-            "- 这样可以大幅减少轮数，更快完成任务\n\n"
-            "【注意】\n"
-            "- 必须调用工具函数来执行操作，不要只输出命令文本\n"
-            "- 写文件必须一次性写入完整内容，不要口头输出\n"
-            "- 如果任务要求写在桌面或保存到文件或生成报告，最后一步必须用 execute_python 调用 open().write() 写入桌面文件\n"
-            "- 拿到数据立刻分析使用\n"
-            "- 最终用文本输出结果"
+            "【工具使用】\n"
+            "- 根据工具的 description 和 parameters 判断何时使用哪个工具\n"
+            "- 一次回复可同时调用多个无依赖的工具，减少轮数\n"
+            "- 必须调用工具函数来执行操作，不要只输出命令文本\n\n"
+            "【内置爬虫（execute_python 隐藏能力）】\n"
+            "用 execute_python 调用内置爬虫模块获取数据：\n"
+            "- from mcp._impl.web_scraper.github_scraper import GitHubScraper; s=GitHubScraper(); s.scrape(action='trending')\n"
+            "- from mcp._impl.web_scraper.baidu_scraper import BaiduScraper; s=BaiduScraper(); s.scrape()\n"
+            "- from mcp._impl.web_scraper.bilibili_scraper import BilibiliScraper; s=BilibiliScraper(); s.scrape()\n"
+            "- from mcp._impl.web_scraper.weibo_scraper import WeiboScraper; s=WeiboScraper(); s.scrape()\n"
+            "- from mcp._impl.web_scraper.douyin_scraper import DouyinScraper; s=DouyinScraper(); s.scrape()\n"
+            "- 通用网页: 调用 fetch_url 工具\n"
+            "- ⚠️ browser_snapshot 只返回无障碍树骨架，不适合数据抓取\n\n"
+            "【输出】\n"
+            "- 写文件用 execute_python 的 open().write()，一次性写入完整内容\n"
+            "- 拿到数据立刻分析使用，最终用文本输出结果"
         )
         if plan_context:
             system_content += plan_context
@@ -225,6 +230,34 @@ class ReActCoreMiddleware(BaseMiddleware):
                 ctx.task_description += "\n[注意] 上轮LLM返回了空响应，请重新尝试。"
                 return
 
+            # 检测是否是中间步骤说明（而非最终答案）
+            is_intermediate_step = any(
+                keyword in text
+                for keyword in [
+                    "请用",
+                    "请使用",
+                    "下一步",
+                    "接下来",
+                    "然后",
+                    "需要",
+                    "应该",
+                    "可以",
+                    "试试",
+                    "建议",
+                    "推荐",
+                ]
+            )
+
+            if is_intermediate_step and ctx.react_depth < ctx.max_iterations:
+                # 这是中间步骤说明，不是最终答案，诱导LLM继续调用工具
+                print(
+                    f"{prefix}    \033[1;33m⚠️ LLM返回了中间步骤说明，尝试诱导继续执行\033[0m"
+                )
+                ctx.task_description += (
+                    f"\n[注意] 上一轮LLM返回了中间说明但未调用工具，请立即调用合适的工具继续执行任务。"
+                )
+                return
+
             # 纯文本 = 最终答案
             print(f"{prefix}    \033[32m✅ LLM输出最终答案\033[0m")
             ctx.final_answer = text
@@ -299,7 +332,6 @@ class ReActCoreMiddleware(BaseMiddleware):
             ctx.interrupted = True
 
     _TOOL_TIMEOUTS = {
-        "search": 45,
         "fetch_url": 30,
         "execute_python": 20,
         "execute_shell": 15,
@@ -400,16 +432,21 @@ async def _generate_plan(
 
     retry_hint = f"\n【重试背景】{retry_context}\n" if retry_context else ""
     plan_prompt = (
-        "将任务拆解为1-2个执行步骤，不要拆分过细。\n\n"
+        "将任务拆解为1-2个执行步骤，每个步骤只使用一个工具。\n\n"
+        "【重要规则】\n"
+        "- 最多2个步骤，不要拆分过细\n"
+        "- 每个步骤只能包含一个工具调用\n"
+        "- 抓取网页数据（热搜/新闻/搜索结果）→ 用 execute_python 调用内置爬虫，不要用 Playwright MCP\n\n"
         "可用工具（从以下选，不要编造）：\n"
-        '  execute_shell — 执行Shell命令。百度热搜用此工具，command="python3 scripts/fetch_baidu_hotsearch.py"\n'
-        "  execute_python — 执行Python代码。写文件唯一途径！生成文件到桌面、写代码都只有这个工具能用\n"
-        "  search — 联网搜索\n"
+        "  execute_python — 执行Python代码（写文件、调用内置爬虫、数据处理等万能工具）\n"
+        "  fetch_url — HTTP GET获取网页/API数据\n"
+        "  browser_navigate + browser_snapshot — Playwright浏览器（仅用于需要浏览器交互的场景，如填表单、登录）\n"
         "  open_app — 打开Mac应用\n\n"
         "示例：\n"
-        "步骤|抓取百度热搜并写分析报告到桌面|execute_shell,execute_python\n"
-        "步骤|写八数码游戏HTML到桌面文件|execute_python\n"
-        "步骤|打开QQ应用|open_app\n\n"
+        "任务: 抓取GitHub热搜 → 步骤|用execute_python调用GitHubScraper抓取数据|execute_python\n"
+        "任务: 抓取百度热搜 → 步骤|用execute_python调用BaiduScraper抓取数据|execute_python\n"
+        "任务: 写Python脚本到桌面 → 步骤|执行Python代码写文件|execute_python\n"
+        "任务: 打开QQ → 步骤|打开QQ应用|open_app\n\n"
         f"任务：{task_description[:300]}"
         f"{retry_hint}\n"
         "如果不需要工具：步骤|直接回答\n"
@@ -498,13 +535,12 @@ def _steps_summary(ctx: RunContext) -> str:
 
 
 def _update_step_status(ctx: RunContext) -> None:
-    """简单的轮次计数器：每轮有成功的工具调用就推进一个步骤"""
+    """更新步骤状态：检查步骤中指定的工具是否都已调用完成"""
     if not ctx.plan:
         return
 
     # 本轮有工具调用吗
-    has_any_call = bool(ctx.tool_results)
-    if not has_any_call:
+    if not ctx.tool_results:
         return
 
     # 检查最近一次工具调用的结果中是否包含错误
@@ -519,12 +555,31 @@ def _update_step_status(ctx: RunContext) -> None:
     if has_error:
         return
 
-    # 计算已完成步骤数，推进下一个
+    # 获取当前正在执行的步骤（第一个未完成的步骤）
     done_count = sum(1 for s in ctx.plan if s.status == "done")
     if done_count >= len(ctx.plan):
         return
 
-    ctx.plan[done_count].status = "done"
+    current_step = ctx.plan[done_count]
+    
+    # 检查步骤中指定的工具是否都已调用完成
+    # 收集所有已调用的工具名称
+    called_tools = set()
+    for tr in ctx.tool_results:
+        tc = tr.get("tool_call", {})
+        tool_name = tc.get("name", "")
+        if tool_name:
+            called_tools.add(tool_name)
+    
+    # 如果步骤指定了工具，检查是否都已调用
+    if current_step.tool_names:
+        step_tools = set(current_step.tool_names)
+        # 所有步骤指定的工具都已调用，才标记为完成
+        if step_tools.issubset(called_tools):
+            current_step.status = "done"
+    else:
+        # 没有指定工具，有成功的工具调用就推进
+        current_step.status = "done"
 
 
 async def _replan_failed(ctx: RunContext) -> bool:
@@ -586,6 +641,8 @@ async def run_react(
     model: str = "",
     personality_prompt: str = "",
     agent: Any = None,
+    allowed_tools: Optional[List[str]] = None,
+    disallowed_tools: Optional[List[str]] = None,
 ) -> dict:
     """快捷入口：直接用 ReActCore 处理任务
 
@@ -595,6 +652,8 @@ async def run_react(
         model: 指定使用的 LLM 模型名
         personality_prompt: Agent 个性/角色提示
         agent: 关联的 WorkAgent 实例
+        allowed_tools: 工具白名单（None=不限制）
+        disallowed_tools: 工具黑名单
     """
     if max_rounds == 0:
         max_rounds = _MAX_ROUNDS
@@ -605,6 +664,8 @@ async def run_react(
         ctx.model_override = model
     if personality_prompt:
         ctx.personality_prompt = personality_prompt
+    ctx.allowed_tools = allowed_tools
+    ctx.disallowed_tools = disallowed_tools
 
     chain = build_default_chain()
     if agent:

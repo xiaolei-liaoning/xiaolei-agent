@@ -86,6 +86,11 @@ class SubagentProfile:
         rounds = self.max_turns if self.max_turns != 10 else self.max_rounds
         if rounds:
             opts["max_rounds"] = rounds
+        # 工具约束：白名单 + 黑名单
+        if self.tools is not None:
+            opts["allowed_tools"] = self.tools
+        if self.disallowed_tools:
+            opts["disallowed_tools"] = self.disallowed_tools
         return opts
 
     @classmethod

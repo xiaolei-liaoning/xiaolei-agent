@@ -8,6 +8,7 @@ Orchestrator — 多Agent 编排引擎
 """
 
 import asyncio
+import json
 import logging
 import time
 import traceback
@@ -281,18 +282,25 @@ async def _execute_agent(
         schema_hint = validator.build_prompt_hint(schema)
         effective_prompt = f"{prompt}\n\n【输出要求】\n{schema_hint}"
 
+    # 构建 task context，注入工具约束
+    task_context = {}
+    if model:
+        task_context["model"] = model
+    if max_rounds:
+        task_context["max_rounds"] = max_rounds
+    # 注入 Agent 类型的工具约束
+    allowed_tools = opts.get("allowed_tools")
+    disallowed_tools = opts.get("disallowed_tools")
+    if allowed_tools:
+        task_context["allowed_tools"] = allowed_tools
+    if disallowed_tools:
+        task_context["disallowed_tools"] = disallowed_tools
+
     task = Task(
         task_id=f"task_{uuid.uuid4().hex[:8]}",
         type="general",
         description=effective_prompt,
-        context=(
-            {
-                "model": model,
-                "max_rounds": max_rounds,
-            }
-            if (model or max_rounds)
-            else {}
-        ),
+        context=task_context,
     )
 
     try:
@@ -321,6 +329,12 @@ async def _execute_agent(
 
                 # Schema校验+重试
                 if schema and result.success:
+                    # 当 schema 存在时，尝试将字符串输出解析为 JSON
+                    if isinstance(result.output, str) and schema:
+                        try:
+                            result.output = json.loads(result.output)
+                        except (json.JSONDecodeError, TypeError):
+                            pass
                     valid, errors = _validate_schema_with_status(result.output, schema)
                     if valid:
                         ar.output = result.output

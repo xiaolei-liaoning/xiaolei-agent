@@ -316,6 +316,10 @@ _MCP_SERVER_DOMAINS = {
     "deep-thinking-mcp": {ToolDomain.REFLECT, ToolDomain.MISC},
     "awesome-mcp-servers-mcp": {ToolDomain.MISC},
     "third-party-mcp": {ToolDomain.API, ToolDomain.AUTOMATION},
+    "playwright": {ToolDomain.WEB, ToolDomain.SEARCH, ToolDomain.AUTOMATION},
+    "codegraph": {ToolDomain.CODE, ToolDomain.ANALYSIS},
+    "context7": {ToolDomain.CODE, ToolDomain.ANALYSIS},
+    "deepwiki": {ToolDomain.CODE, ToolDomain.ANALYSIS},
 }
 
 
@@ -638,7 +642,7 @@ async def _handle_fetch_url(args: Dict) -> Dict:
             "result": {
                 "content": [
                     {
-                        "text": f"网页是动态HTML (已保存到 {fp})。请用 execute_python 执行 Python 通过 requests + BeautifulSoup/正则解析来提取数据。"
+                        "text": f"网页是动态HTML (已保存到 {fp})。你需要立即调用 execute_python 工具，使用Python代码读取并解析该HTML文件来提取数据。例如：\n```python\nimport re\nfrom pathlib import Path\nhtml = Path('{fp}').read_text()\n# 解析html提取数据\n```"
                     }
                 ]
             }
@@ -1535,7 +1539,6 @@ async def _handle_call_api(args: Dict) -> Dict:
 _HANDLER_MAP: Dict[str, Callable] = {
     "fetch_url": _handle_fetch_url,
     "file": _handle_file,
-    "search": _handle_search,
     "execute_python": _handle_execute_python,
     "execute_shell": _handle_execute_shell,
     "rag_search": _handle_rag_search,
@@ -1635,19 +1638,6 @@ _SANDBOX_TOOL_DEFS = [
             "required": ["action"],
         },
         handler=_handle_git,
-    ),
-    ToolDefinition(
-        name="search",
-        server=SERVER_BUILTIN,
-        tags=["web", "search"],
-        domains={ToolDomain.SEARCH, ToolDomain.WEB},
-        description="联网搜索查询信息。用百度/Bing 并发搜索网页，适合查最新资讯、找网页内容。",
-        parameters={
-            "type": "object",
-            "properties": {"query": {"type": "string", "description": "搜索关键词"}},
-            "required": ["query"],
-        },
-        handler=_handle_search,
     ),
     ToolDefinition(
         name="rag_search",
@@ -1840,17 +1830,31 @@ class ToolRegistry:
 
         # Source 2: MCP 工具（已探索过就跳过）
         if not self._mcp_explored:
-            self._mcp_explored = True
-            mcp_tools = await self._connect_mcp_servers_parallel()
-            for t in mcp_tools:
-                if t.name not in self._tools:
-                    self._tools[t.name] = t
-                    all_tools.append(t)
-            n_mcp = sum(
-                1 for t in self._tools.values() if t.server not in ("__builtin__", "")
-            )
-            if n_mcp:
-                logger.info(f"MCP 工具: {n_mcp} 个")
+            try:
+                mcp_tools = await asyncio.wait_for(
+                    self._connect_mcp_servers_parallel(), timeout=12
+                )
+                for t in mcp_tools:
+                    if t.name not in self._tools:
+                        self._tools[t.name] = t
+                        all_tools.append(t)
+                self._mcp_explored = True
+                n_mcp = sum(
+                    1 for t in self._tools.values() if t.server not in ("__builtin__", "")
+                )
+                if n_mcp:
+                    logger.info(f"MCP 工具: {n_mcp} 个")
+            except asyncio.TimeoutError:
+                n_partial = sum(
+                    1 for t in self._tools.values() if t.server not in ("__builtin__", "")
+                )
+                if n_partial:
+                    self._mcp_explored = True
+                    logger.info(f"MCP 部分超时: {n_partial} 个工具已注册")
+                else:
+                    logger.warning("MCP 连接超时，无工具注册")
+            except Exception as e:
+                logger.debug(f"MCP 连接异常: {e}")
         else:
             # MCP 工具已有缓存，直接收集
             for t in self._tools.values():
@@ -2008,7 +2012,13 @@ class ToolRegistry:
             return _mcp_handler
         return None
 
-    async def get_tools_for_task(self, task: str, max_tools=20) -> List[ToolDefinition]:
+    async def get_tools_for_task(
+        self,
+        task: str,
+        max_tools=20,
+        allowed: Optional[List[str]] = None,
+        disallowed: Optional[List[str]] = None,
+    ) -> List[ToolDefinition]:
         """按任务相关性排序的工具列表
 
         领域驱动选择：
@@ -2016,6 +2026,7 @@ class ToolRegistry:
         2. 领域内工具优先（内置/MCP 公平竞争），跨领域工具靠关键词补充
         3. 核心工具条件保留（任务描述含关键词才强制入选）
         4. 动态 max_tools：根据工具描述长度估算 token 消耗
+        5. Agent 类型硬约束：allowed 白名单 + disallowed 黑名单
         """
         if not self._initialized:
             return list(self._tools.values())[:max_tools]
@@ -2179,6 +2190,14 @@ class ToolRegistry:
                                 result.pop(i)
                                 break
 
+        # ═══ 第八步：Agent 类型硬约束过滤 ═══
+        if allowed is not None:
+            allowed_set = set(allowed)
+            result = [t for t in result if t.name in allowed_set]
+        if disallowed is not None:
+            disallowed_set = set(disallowed)
+            result = [t for t in result if t.name not in disallowed_set]
+
         return result[:dynamic_max]
 
     def get_tool(self, name: str) -> Optional[ToolDefinition]:
@@ -2237,20 +2256,6 @@ class ToolRegistry:
                     except:
                         return False, f"{k} 不能从 {v} 转换"
         return True, ""
-
-    @property
-    def count(self) -> int:
-        return len(self._tools)
-
-
-_registry = None
-
-
-def get_tool_registry() -> "ToolRegistry":
-    global _registry
-    if _registry is None:
-        _registry = ToolRegistry()
-    return _registry
 
     @property
     def count(self) -> int:

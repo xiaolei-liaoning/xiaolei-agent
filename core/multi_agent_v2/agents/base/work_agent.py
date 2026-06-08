@@ -149,6 +149,8 @@ class WorkAgent(BaseAgent):
                 model=task.context.get("model", ""),
                 personality_prompt=self.system_prompt_for_role(),
                 agent=self,
+                allowed_tools=task.context.get("allowed_tools"),
+                disallowed_tools=task.context.get("disallowed_tools"),
             )
 
             elapsed = time.time() - start

@@ -74,21 +74,3 @@ claude-minipet redeem <兑换码>
 
 ### MCP tools
 - `mcp__codegraph__*` (codegraph_status, files, context, explore, search, callers, callees, impact, node)
-- `mcp__evermem__evermem_search` — EverMem memory search (requires EverOS server running on port 8000)
-
-### EverMem MCP Setup
-```bash
-# Start local TF-IDF embedding server (port 8002, no API key needed)
-python3 /tmp/local_embedding_server.py &
-
-# Start EverOS server (port 8000, uses local TF-IDF)
-everos server start --port 8000
-
-# MCP server wrapper is at /tmp/evermem_mcp_server.py
-# Configured in .mcp.json as "evermem" server
-```
-
-### EverMem Config
-- `.env` requires `EVEROS_EMBEDDING__MODEL=local-tfidf` + `EVEROS_EMBEDDING__BASE_URL=http://127.0.0.1:8002`
-- Local TF-IDF: `core/memory/vector_memory.py` (LocalEmbeddingFunction), 1024-dim fixed output
-- No external API needed for embeddings
