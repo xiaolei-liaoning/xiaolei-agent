@@ -62,7 +62,7 @@
 <div class="container">
 
 <h1>多Agent 架构总览</h1>
-<p class="subtitle">小雷版小龙虾 Agent · JS Workflow 精简版 · 2026-06-07 清理 ~2200行预定义模式</p>
+<p class="subtitle">小雷版小龙虾 Agent · JS Workflow 精简版 · 2026-06-11 V1修复+Web接入</p>
 
 <!-- ============================== 架构总览 ============================== -->
 <div class="section">
@@ -79,6 +79,7 @@
     <span class="legend-item"><span class="legend-arrow">&rarr;</span> 控制流</span>
     <span class="legend-item"><span class="legend-arrow">⇌</span> 数据流</span>
     <span class="legend-item"><span class="legend-dot" style="background:#999"></span> 保留的基础设施</span>
+    <span class="legend-item" style="font-size:12px;color:#888;">中间件 10 层: Summarization → LoopDetection → Clarification → Todo → Permission → Hook → ReActDepth → ReActCore ★ → Reflection → KEPA ★</span>
   </div>
 
   <div class="mermaid-wrap" id="mermaid-main">
@@ -127,7 +128,7 @@ flowchart TB
 
   subgraph WorkAgent["WorkAgent 执行"]
     WA["WorkAgent.execute(task)<br/>_execute_fast() → run_react()"]
-    CHAIN["MiddlewareChain 4层<br/>ReActDepth → ReActCore ★ → Reflection → KEPA ★"]
+    CHAIN["MiddlewareChain 10层<br/>Summarization → LoopDetection → Clarification → Todo → Permission → Hook → ReActDepth → ReActCore ★ → Reflection → KEPA ★"]
     WA --> CHAIN
   end
 
@@ -150,10 +151,10 @@ flowchart TB
 
   %% Subagent 注册表
   JS_BRIDGE -.->|"opts.subagent_type →"| TL
-  TL -.->|"agentType: analyst/Explore"| AGT
+  TL -.->|"自动分配"| AGT
 
   %% 备注
-  JS ~~~ Notes["<b>&#9733; JS Workflow 是唯一的多Agent编排方式</b><br/><br/><b>3 种触发路径</b><br/>1. 用户自己写 JS 脚本粘贴<br/>2. 用户写好 .js 文件传路径<br/>3. LLM 自动生成 JS 脚本 + 执行<br/><br/><b>全局原语（JS 侧）</b><br/>phase() / log() / agent() / parallel() / pipeline() / budget<br/><br/><b>数据流</b><br/>JS agent() → IPC → Python orchestrator.agent() →<br/>AgentPool → WorkAgent → MiddlewareChain 4层 → LLM/Tools<br/><br/><b>Subagent 类型</b><br/>analyst, Explore, Plan, code-reviewer, general-purpose<br/>通过 SubagentRegistry 定义角色/模型/工具白名单<br/><br/><b>支持的特性</b><br/>- 结构化输出 (JSON Schema 声明)<br/>- 模型覆盖 (opts.model)<br/>- 超时控制 (opts.timeout)<br/>- Schema 自动校验 + 重试<br/>- SharedBus 知识共享 (KEPA)"]
+  JS ~~~ Notes["<b>&#9733; JS Workflow 是唯一的多Agent编排方式</b><br/><br/><b>3 种触发路径</b><br/>1. 用户自己写 JS 脚本粘贴<br/>2. 用户写好 .js 文件传路径<br/>3. LLM 自动生成 JS 脚本 + 执行<br/><br/><b>全局原语（JS 侧）</b><br/>phase() / log() / agent() / parallel() / pipeline() / budget<br/><br/><b>数据流</b><br/>JS agent() → IPC → Python orchestrator.agent() →<br/>AgentPool → WorkAgent → MiddlewareChain 10层 → LLM/Tools<br/><br/><b>Subagent 类型</b><br/>系统自动判断使用什么工具，无需手动指定<br/>通过 SubagentRegistry 定义角色/模型/工具白名单<br/><br/><b>支持的特性</b><br/>- 结构化输出 (JSON Schema 声明)<br/>- 模型覆盖 (opts.model)<br/>- 超时控制 (opts.timeout)<br/>- Schema 自动校验 + 重试<br/>- SharedBus 知识共享 (KEPA)"]
   style Notes fill:#fff8e1,stroke:#ffb300,stroke-dasharray:4
 </pre>
   </div>
@@ -174,7 +175,7 @@ flowchart TB
         <li><code>workflow/command.py</code> — 命令注册表</li>
         <li><code>workflow/discovery.py</code> — 命令发现</li>
         <li><code>orchestration/orchestrator.py</code> — agent() + AgentPool</li>
-        <li><code>agents/</code> — WorkAgent + MiddlewareChain 4层</li>
+        <li><code>agents/</code> — WorkAgent + MiddlewareChain 10层</li>
         <li><code>infrastructure/</code> — AgentPool + SharedBus</li>
         <li><code>tools/</code> — ToolRegistry + SchemaValidator</li>
       </ul>
@@ -198,7 +199,7 @@ flowchart TB
 <!-- ============================== V1 架构（保留历史对比） ============================== -->
 <div class="section">
   <div class="section-title">V1 遗留架构 — 队长-队员模式</div>
-  <span class="section-badge badge-remove">V1 代码保留 · core/agent_system.py · 与 JS Workflow 完全独立</span>
+  <span class="section-badge badge-keep">V1 代码已修复 · core/agent_system.py · 已接入 Web API（chat.py）</span>
 
   <div class="legend">
     <span class="legend-item"><span class="legend-dot" style="background:#1565C0"></span> 队长Agent（LeaderAgent）</span>
@@ -265,7 +266,7 @@ flowchart TB
   Leader -.->|"_llm_json()"| LLM
   Leader -.-> LLMAgentInternal
 
-  Leader ~~~ Notes1["&#9733; V1 特点<br/>&bull; 1 Leader + N Worker 分层监管<br/>&bull; LLM 分解&rarr;分配&rarr;并行&rarr;分析&rarr;循环<br/>&bull; 每人有 KEPA/RAG/反问/ContextMemory<br/>&bull; Leader 继承 LLMAgent，增加 supervise_task()<br/>&bull; share_memory() 借 V2 SharedBus 广播<br/>&bull; 无中间件链，四机制串行调用"]
+  Leader ~~~ Notes1["&#9733; V1 特点<br/>&bull; 1 Leader + N Worker 分层监管<br/>&bull; LLM 分解&rarr;分配&rarr;并行&rarr;分析&rarr;循环<br/>&bull; 每人有 KEPA/RAG/反问/ContextMemory<br/>&bull; Leader 继承 LLMAgent，增加 supervise_task()<br/>&bull; share_memory() 纯日志记录（V2 依赖已移除）<br/>&bull; 无中间件链，四机制串行调用<br/>&bull; 8 项 bug 已修复 + 26 测试覆盖<br/>&bull; 已接入 Web API（chat.py _handle_with_multi_agent）"]
   style Notes1 fill:#fff5f5,stroke:#ff6b6b,stroke-dasharray:4
 </pre>
   </div>
@@ -304,8 +305,8 @@ flowchart LR
   Func --> PipelineAPI["pipeline(items, ...stages)<br/>无屏障流水线"]
   Func --> BudgetAPI["budget.remaining()<br/>剩余预算"]
 
-  AgentAPI --> AgentOpts["opts:<br/>agentType / label<br/>timeout / schema / model"]
-  AgentOpts --- AgentHelp["agentType 取值<br/>analyst - 分析<br/>Explore - 探索<br/>Plan - 规划<br/>code-reviewer - 审查"]
+  AgentAPI --> AgentOpts["opts:<br/>label<br/>timeout / schema / model"]
+  AgentOpts --- AgentHelp["系统自动判断<br/>使用什么工具"]
   style AgentHelp fill:#f5f5f5,stroke:#ddd,color:#666
   style PhaseAPI fill:#F57C00,color:#fff
   style LogAPI fill:#F57C00,color:#fff
@@ -326,17 +327,17 @@ export const meta = {
 export default async function() {
   phase("搜索")
   const hotSearch = await agent("搜索百度热搜top10", {
-    agentType: "Explore", label: "热搜搜索", timeout: 60,
+    label: "热搜搜索", timeout: 60,
   })
 
   phase("分析")
   const analysis = await agent("分析热搜趋势", {
-    agentType: "analyst", label: "趋势分析", timeout: 120,
+    label: "趋势分析", timeout: 120,
   })
 
   phase("生成报告")
   return await agent("生成分析报告并保存到桌面", {
-    agentType: "analyst", label: "报告生成", timeout: 120,
+    label: "报告生成", timeout: 120,
   })
 }</code></pre>
 </div>
@@ -389,7 +390,7 @@ flowchart LR
     <thead>
       <tr>
         <th style="width:14%">维度</th>
-        <th style="width:43%"><span class="tag tag-remove">V1 队长-队员模式 (保留)</span></th>
+        <th style="width:43%"><span class="tag tag-keep">V1 队长-队员模式 (已修复·已接入Web)</span></th>
         <th style="width:43%"><span class="tag tag-keep">JS Workflow (唯一编排方式)</span></th>
       </tr>
     </thead>
@@ -398,12 +399,12 @@ flowchart LR
 	      <tr><td><strong>架构模式</strong></td><td>1 LeaderAgent + N 个 LLMAgent Worker<br/>Leader 继承 LLMAgent，增加 supervise_task() 主循环</td><td>单一 WorkAgent 类型 + AgentPool 8 池复用。<br/>JS 脚本编排，底层走 orchestrator.agent()</td></tr>
 	      <tr><td><strong>Agent 创建</strong></td><td><code>V1LeaderPool.create_team(worker_count, max_workers)</code><br/>返回 Leader + 5 Worker（3活跃 2休眠）</td><td><code>AgentPool(8)</code> 预热 8 个 Agent<br/><code>acquire()</code> 借用 &rarr; <code>release()</code> 归还复用</td></tr>
 	      <tr><td><strong>执行流程</strong></td><td>Leader 驱动：LLM分解 &rarr; round-robin分配 &rarr; asyncio.gather 并行 &rarr; LLM分析 &rarr; 循环最多3轮</td><td>JS 脚本编排：agent()/parallel()/pipeline() 自由组合<br/>由用户编写或 LLM 动态生成</td></tr>
-	      <tr><td><strong>Agent 内部</strong></td><td>4 机制串行：RAG &rarr; LLM &rarr; KEPA &rarr; 反问<br/>ContextMemory 环形缓冲（最近20条）</td><td><strong>MiddlewareChain 4层</strong>（HOOKS 声明式）：<br/>ReActDepth &rarr; ReActCore &#9733; &rarr; Reflection &rarr; KEPA &#9733;<br/>temp_memory 临时记忆 + personality/role 注入</td></tr>
-	      <tr><td><strong>通信方式</strong></td><td>Leader &rarr; Worker 单向调度<br/>share_memory() 借 V2 SharedBus 广播</td><td>JS agent() &rarr; IPC &rarr; orchestrator.agent()<br/>SharedBus：pub/sub + direct msg + 知识存储</td></tr>
+	      <tr><td><strong>Agent 内部</strong></td><td>4 机制串行：RAG &rarr; LLM &rarr; KEPA &rarr; 反问<br/>ContextMemory 环形缓冲（最近20条）</td><td><strong>MiddlewareChain 10层</strong>（HOOKS 声明式）：<br/>Summarization → LoopDetection → Clarification → Todo → Permission → Hook → ReActDepth → ReActCore &#9733; → Reflection → KEPA &#9733;<br/>temp_memory 临时记忆 + personality/role 注入</td></tr>
+	      <tr><td><strong>通信方式</strong></td><td>Leader &rarr; Worker 单向调度<br/>share_memory() 纯日志（V2 依赖已移除）</td><td>JS agent() &rarr; IPC &rarr; orchestrator.agent()<br/>SharedBus：pub/sub + direct msg + 知识存储</td></tr>
 	      <tr><td><strong>LLM 后端</strong></td><td><code>_llm_json()</code> 模块级函数，串行 LLM JSON 解析</td><td>GLMBackend + 免费 fallback 链 + MultiLLMRouter<br/>差异化超时（60s/30s）</td></tr>
 	      <tr><td><strong>编排方式</strong></td><td>Python 硬编码：Leader 的 supervise_task() 主循环</td><td>JS 脚本动态编排，支持 <code>agent() / parallel() / pipeline() / phase() / log() / budget()</code></td></tr>
 	      <tr><td><strong>脚本生成</strong></td><td>无。所有逻辑写在 Python 代码里</td><td><strong>3 种路径</strong>：<br/>① 用户贴 JS 脚本 &rarr; 直接执行<br/>② 用户传 .js 文件 &rarr; 加载执行<br/>③ 说人话 &rarr; LLM 自动写 JS 脚本 &rarr; 执行</td></tr>
-	      <tr><td><strong>中间件</strong></td><td>无。Agent 内 4 方法是独立方法串行调用</td><td><strong>MiddlewareChain 4 层</strong> + HOOKS + HookResult<br/>5 生命周期钩子 + 2 洋葱包裹钩子</td></tr>
+	      <tr><td><strong>中间件</strong></td><td>无。Agent 内 4 方法是独立方法串行调用</td><td><strong>MiddlewareChain 10 层</strong> + HOOKS + HookResult<br/>5 生命周期钩子 + 2 洋葱包裹钩子</td></tr>
 	      <tr><td><strong>工具集成</strong></td><td>无 ToolRegistry 集成，Agent 直接用 LLM 输出</td><td>ToolRegistry 12+ 内置 handler + MCP 自动发现<br/>handler 优先 &rarr; MCP fallback</td></tr>
 	      <tr><td><strong>生命周期</strong></td><td>create_team() &rarr; supervise_task() &rarr; share_memory() &rarr; discard()</td><td>AgentPool 预热 &rarr; agent() 借/还 &rarr; finally: stop_bus &rarr; reset &rarr; release</td></tr>
     </tbody>
@@ -476,7 +477,7 @@ flowchart LR
 </script>
 
 <footer style="text-align:center;font-size:12px;color:#999;margin-top:32px;">
-  小雷版小龙虾 Agent 架构文档 · 2026-06-07 · JS Workflow 精简版 · ~2200 行预定义模式已删除
+  小雷版小龙虾 Agent 架构文档 · 2026-06-11 · V1 8项bug修复 + Web接入
 </footer>
 
 </body>

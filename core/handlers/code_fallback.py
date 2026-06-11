@@ -204,19 +204,10 @@ async def try_code_generation(message: str, skill_name: str = "", params: Dict[s
                                   detail=f"{len(code)} 字符")
             _record_sandbox_event("file_read", "📄 代码预览",
                                   detail=_code_preview[:300])
-            # 流式执行：逐行输出到沙盒 viewer
-            _output_lines = []
-            def _on_stdout(line):
-                _output_lines.append(line)
-                _record_sandbox_event("command_run", "💻 输出", detail=line[:200])
-            def _on_stderr(line):
-                _output_lines.append(line)
-                _record_sandbox_event("command_run", "⚠️ stderr", detail=line[:200], status="fail")
-            result = await sandbox.execute_python_streaming(
+            # 执行 Python 代码
+            result = await sandbox.execute_python(
                 code=code, limits=custom_limits,
                 skip_module_check=bool(forbidden_modules),
-                on_stdout=_on_stdout,
-                on_stderr=_on_stderr,
             )
 
         from ..tools.sandbox_executor import ExecutionStatus

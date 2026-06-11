@@ -14,7 +14,7 @@ from typing import Optional, Dict, Any, List
 import time
 import logging
 
-from core.self_check_middleware import SelfCheckMiddleware, get_self_check_middleware
+from core.results.self_check_middleware import SelfCheckMiddleware, get_self_check_middleware
 from core.engine.llm_backend import get_llm_router
 
 logger = logging.getLogger(__name__)

@@ -1,14 +1,14 @@
 """
 SubagentProfile — 子 Agent 类型定义
 
-每个 SubagentProfile 定义了一种 agentType 的配置：
+每个 SubagentProfile 定义了一种 Agent 的配置：
   - 模型（model）
   - 角色提示（personality + role）
   - 最大 ReAct 轮数（max_rounds）
   - 工具白名单（allowed_tools）
   - Skills, MCP, Hooks, Memory, Isolation 等（官方 16 字段完整支持）
 
-WorkflowRuntime 的 agent() 根据 agentType 查注册表，
+WorkflowRuntime 的 agent() 根据类型名查注册表，
 将 profile 属性合并到 opts 后委托给 orchestrator.agent()。
 """
 

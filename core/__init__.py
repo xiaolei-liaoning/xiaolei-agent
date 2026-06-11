@@ -1,63 +1,58 @@
-"""核心模块导出 - 静态导入版本
-
-导入所有核心子模块并提供向后兼容的命名空间导出。
-"""
-import logging
-import sys
-
-logger = logging.getLogger(__name__)
-
-# ── 按功能域导入子包 ──
-from . import engine
-from . import search
-from . import memory
-from . import workflow
-from . import tools
-from . import infrastructure
-from . import tasks
-from . import mcp
-from . import results
-
-# 可选子包
-try:
-    from . import monitoring
-except Exception:
-    logger.debug("monitoring 子包导入跳过")
+"""核心模块导出"""
 
 try:
-    from . import security
-except Exception:
-    logger.debug("security 子包导入跳过")
+    from .workflow_engine import (
+        WorkflowManager,
+        Workflow,
+        WorkflowTask,
+        TaskStatus,
+        TaskType,
+        get_workflow_manager,
+        execute_complex_task,
+    )
+except ImportError:
+    WorkflowManager = Workflow = WorkflowTask = TaskStatus = TaskType = None
+    get_workflow_manager = execute_complex_task = None
+
+# 新增：可选增强模块
+try:
+    from .dynamic_short_term_memory import DynamicShortTermMemory
+    DYNAMIC_MEMORY_AVAILABLE = True
+except ImportError:
+    DYNAMIC_MEMORY_AVAILABLE = False
+    DynamicShortTermMemory = None
 
 try:
-    from . import services
-except Exception:
-    logger.debug("services 子包导入跳过")
+    from .enhanced_logger import setup_enhanced_logging, get_logger, log_performance, TimerLogger
+    ENHANCED_LOGGER_AVAILABLE = True
+except ImportError:
+    ENHANCED_LOGGER_AVAILABLE = False
+    setup_enhanced_logging = None
+    get_logger = None
+    log_performance = None
+    TimerLogger = None
 
-# ── 向后兼容的扁平化别名 ──
-# 允许 from core.database import ... 等旧式导入
-from .infrastructure import database
-from .tools import tool_result_formatter
-from .results import self_check_middleware
-from .mcp import awesome_mcp_manager
-from .monitoring import performance_utils
+try:
+    from .nlp_processor import NaturalLanguageProcessor, get_nlp_processor
+    NLP_PROCESSOR_AVAILABLE = True
+except ImportError:
+    NLP_PROCESSOR_AVAILABLE = False
+    NaturalLanguageProcessor = None
+    get_nlp_processor = None
 
-_sys_module_aliases = {
-    "core.database": database,
-    "core.tool_result_formatter": tool_result_formatter,
-    "core.self_check_middleware": self_check_middleware,
-    "core.awesome_mcp_manager": awesome_mcp_manager,
-    "core.performance_utils": performance_utils,
-}
-for name, mod in _sys_module_aliases.items():
-    if name not in sys.modules:
-        sys.modules[name] = mod
+try:
+    from .scheduled_cleanup import ScheduledCleanupManager, get_cleanup_manager
+    SCHEDULED_CLEANUP_AVAILABLE = True
+except ImportError:
+    SCHEDULED_CLEANUP_AVAILABLE = False
+    ScheduledCleanupManager = None
+    get_cleanup_manager = None
 
 __all__ = [
-    "engine", "search", "memory", "workflow", "tools",
-    "infrastructure", "tasks", "mcp", "results",
-    "database", "tool_result_formatter", "self_check_middleware",
-    "awesome_mcp_manager", "performance_utils",
+    "WorkflowManager", "Workflow", "WorkflowTask", "TaskStatus", "TaskType",
+    "get_workflow_manager", "execute_complex_task",
+    "DYNAMIC_MEMORY_AVAILABLE", "DynamicShortTermMemory",
+    "ENHANCED_LOGGER_AVAILABLE", "setup_enhanced_logging", "get_logger", "log_performance", "TimerLogger",
+    "NLP_PROCESSOR_AVAILABLE", "NaturalLanguageProcessor", "get_nlp_processor",
+    "SCHEDULED_CLEANUP_AVAILABLE", "ScheduledCleanupManager", "get_cleanup_manager",
 ]
-
-logger.debug("core 包加载完成")

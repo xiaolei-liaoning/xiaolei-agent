@@ -283,48 +283,43 @@ _BUILTIN_DOMAINS = {
     "execute_python": {ToolDomain.CODE},
     "execute_shell": {ToolDomain.CODE, ToolDomain.SYSTEM, ToolDomain.FILE},
     "git": {ToolDomain.GIT},
-    "search": {ToolDomain.SEARCH, ToolDomain.WEB},
+    "web_search": {ToolDomain.SEARCH, ToolDomain.WEB},
     "rag_search": {ToolDomain.SEARCH, ToolDomain.ANALYSIS},
     "skill_execute": {ToolDomain.SKILL},
     "kepa_reflect": {ToolDomain.REFLECT},
     "ask_clarification": {ToolDomain.MISC},
     "self_reflect": {ToolDomain.REFLECT},
-    "call_api": {ToolDomain.API, ToolDomain.WEB},
     "fetch_url": {ToolDomain.WEB, ToolDomain.SEARCH, ToolDomain.API},
-    "file": {ToolDomain.FILE},
 }
 
 # MCP 工具的领域映射（通过服务器名匹配）
+# 已清理与内置工具重叠的MCP服务器，保留有独特价值的
 _MCP_SERVER_DOMAINS = {
-    "search-engine-mcp": {ToolDomain.SEARCH, ToolDomain.WEB},
-    "web-scraper-mcp": {ToolDomain.WEB, ToolDomain.SEARCH},
-    "calculator-mcp": {ToolDomain.ANALYSIS},
-    "data-analysis-mcp": {ToolDomain.ANALYSIS},
-    "file-ops-mcp": {ToolDomain.FILE},
-    "text-processing-mcp": {ToolDomain.TEXT},
-    "text-analyzer-mcp": {ToolDomain.TEXT, ToolDomain.ANALYSIS},
-    "translator-mcp": {ToolDomain.TRANSLATE},
-    "weather-mcp": {ToolDomain.WEATHER},
-    "fun-mcp": {ToolDomain.FUN},
-    "game-mcp": {ToolDomain.GAME},
-    "art-mcp": {ToolDomain.ART},
-    "gui-automation-mcp": {ToolDomain.GUI, ToolDomain.AUTOMATION},
-    "system-toolbox-mcp": {ToolDomain.SYSTEM},
-    "sandbox-tools-mcp": {ToolDomain.CODE, ToolDomain.FILE, ToolDomain.SYSTEM},
-    "advanced-automation-mcp": {ToolDomain.AUTOMATION},
-    "openclaw-mcp": {ToolDomain.WORKFLOW},
-    "deep-thinking-mcp": {ToolDomain.REFLECT, ToolDomain.MISC},
-    "awesome-mcp-servers-mcp": {ToolDomain.MISC},
-    "third-party-mcp": {ToolDomain.API, ToolDomain.AUTOMATION},
+    # 外部MCP（.mcp.json配置）
     "playwright": {ToolDomain.WEB, ToolDomain.SEARCH, ToolDomain.AUTOMATION},
     "codegraph": {ToolDomain.CODE, ToolDomain.ANALYSIS},
     "context7": {ToolDomain.CODE, ToolDomain.ANALYSIS},
     "deepwiki": {ToolDomain.CODE, ToolDomain.ANALYSIS},
+    # 自定义MCP（mcp/目录，有独特功能）
+    "gui-automation-mcp": {ToolDomain.GUI, ToolDomain.AUTOMATION},
+    "deep-thinking-mcp": {ToolDomain.REFLECT, ToolDomain.MISC},
+    "translator-mcp": {ToolDomain.TRANSLATE},
+    "weather-mcp": {ToolDomain.WEATHER},
+    "skill-mcp": {ToolDomain.SKILL},
+    "openclaw-mcp": {ToolDomain.WORKFLOW},
+    "fun-mcp": {ToolDomain.FUN},
+    "game-mcp": {ToolDomain.GAME},
+    "art-mcp": {ToolDomain.ART},
+    "advanced-automation-mcp": {ToolDomain.AUTOMATION},
+    "awesome-mcp-servers-mcp": {ToolDomain.MISC},
+    "third-party-mcp": {ToolDomain.API, ToolDomain.AUTOMATION},
 }
 
 
-def classify_domains(task: str) -> set:
+def classify_domains(task) -> set:
     """将任务描述分类到 1-N 个领域，返回匹配的领域集合"""
+    if not isinstance(task, str):
+        task = str(task) if task else ""
     desc = task.lower()
     matched = set()
     for domain, keywords in DOMAIN_CLASSIFIER.items():
@@ -366,13 +361,15 @@ _DOMAIN_ITEMS = [
 _DOMAIN_IDX_MAP = {idx: domain for idx, domain, _ in _DOMAIN_ITEMS}
 
 
-async def llm_classify_domains(task: str) -> Optional[set]:
+async def llm_classify_domains(task) -> Optional[set]:
     """用 GLM-4-Flash 对任务做快速领域分类
 
     调用一次 LLM（温度0.05，最多20个token输出），根据语义判断任务领域。
     失败/超时返回 None → 调用方回退到静态关键词分类。
     同类任务缓存5分钟，避免重复调用。
     """
+    if not isinstance(task, str):
+        task = str(task) if task else ""
     if len(task) < 8:
         return None  # 太短的任务不需要 LLM
 
@@ -450,31 +447,6 @@ class ToolDefinition:
 # ═══════════════════════════════════════════════════════════════════
 
 
-def _has_readable_content(html_text: str) -> bool:
-    """判断 HTML 页面是否有可读的文本内容（不需要 JS 渲染也能用）
-
-    搜索引擎结果页、普通文档页等包含大量可读文本，
-    而纯 SPA 页面（如 React 应用）的原始 HTML 只有少量脚本标签和占位 div。
-    区分两者，避免误将搜索引擎结果页标记为"动态HTML"。
-    """
-    # 提取所有标签内的文本
-    import re
-
-    text_content = re.sub(r"<script[^>]*>.*?</script>", "", html_text, flags=re.DOTALL)
-    text_content = re.sub(r"<style[^>]*>.*?</style>", "", text_content, flags=re.DOTALL)
-    text_content = re.sub(r"<[^>]+>", " ", text_content)
-    text_content = re.sub(r"\s+", " ", text_content).strip()
-
-    # 可读文本量评估
-    text_len = len(text_content)
-    total_len = len(html_text)
-    ratio = text_len / max(total_len, 1)
-
-    # 条件：至少有足够可读文本（搜索引擎结果页虽JS多但仍有有用文本）
-    # SPA 页面原始 HTML 通常文本极少（< 200 字符）
-    # 搜索引擎结果页文本量较大（> 500 字符）但比例低（~2%）
-    return text_len > 500 or (text_len > 200 and ratio > 0.05)
-
 
 # ── 纯 asyncio HTTP GET（不创建线程，可安全取消） ───────────────────
 
@@ -546,11 +518,14 @@ async def _http_get(url: str, timeout: int = 10) -> str:
 
 
 async def _handle_fetch_url(args: Dict) -> Dict:
-    """HTTP GET 获取网页/API数据（纯asyncio，不创建线程）"""
+    """HTTP GET 获取网页/API数据 — 直接返回可读文本"""
+    from core.multi_agent_v2.tools.html_parser import html_to_text
+    from core.multi_agent_v2.tools.tool_result import ok, err
+
     url = args.get("url", "")
     ml = args.get("max_length", 80000)
     if not url:
-        return {"result": {"content": [{"text": "需要 url 参数"}]}}
+        return err("需要 url 参数")
     import ssl
     from urllib.parse import quote, urlparse, urlunparse
 
@@ -580,13 +555,14 @@ async def _handle_fetch_url(args: Dict) -> Dict:
             (parsed.scheme, parsed.netloc, path, parsed.params, q, parsed.fragment)
         )
 
-    # 使用 asyncio 原生 HTTP 请求（不创建线程）
     try:
         text = await _http_get(url, timeout=10)
     except asyncio.TimeoutError:
-        return {"result": {"content": [{"text": "请求超时(10s)"}]}}
+        return err("请求超时(10s)")
     except Exception as e:
-        return {"result": {"content": [{"text": f"请求失败: {e}"}]}}
+        return err(f"请求失败: {e}")
+
+    # 1. 尝试提取嵌入 JSON（__NEXT_DATA__/__INITIAL_STATE__）
     je = None
     for p in [
         r"<!--s-data:(.*?)-->",
@@ -598,63 +574,23 @@ async def _handle_fetch_url(args: Dict) -> Dict:
             je = m.group(1).strip()
             break
     if not je:
-        # 兜底：找第一个 { 或 [ 尝试作为 JSON
         m = re.search(r"[\{\[]", text)
         if m:
-            maybe_json = text[m.start() :].strip()
-            # 严格验证：必须是真正的 JSON（CSS 会以 { 后跟字母开头）
+            maybe_json = text[m.start():].strip()
             is_real_json = False
-            if maybe_json.startswith("{") and maybe_json.lstrip("{").strip().startswith(
-                '"'
-            ):
-                # {"key": value} 格式 — 真 JSON
+            if maybe_json.startswith("{") and maybe_json.lstrip("{").strip().startswith('"'):
                 is_real_json = True
             elif maybe_json.startswith("[") and maybe_json.lstrip("[").strip()[:1] in (
-                '"',
-                "{",
-                "[",
-                "0",
-                "1",
-                "2",
-                "3",
-                "4",
-                "5",
-                "6",
-                "7",
-                "8",
-                "9",
-                "t",
-                "f",
-                "n",
+                '"', "{", "[", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "t", "f", "n",
             ):
-                # [...] 数组格式
                 is_real_json = True
             if is_real_json:
                 je = maybe_json
-            else:
-                je = None
-    clean = je or text
-    stripped = clean.strip()
-    if not je and stripped.startswith("<") and not _has_readable_content(stripped):
-        fp = f"/tmp/agent_fetch_{int(time.time())}.html"
-        Path(fp).write_text(text, encoding="utf-8")
-        return {
-            "result": {
-                "content": [
-                    {
-                        "text": f"网页是动态HTML (已保存到 {fp})。你需要立即调用 execute_python 工具，使用Python代码读取并解析该HTML文件来提取数据。例如：\n```python\nimport re\nfrom pathlib import Path\nhtml = Path('{fp}').read_text()\n# 解析html提取数据\n```"
-                    }
-                ]
-            }
-        }
-    fp = f"/tmp/agent_fetch_{int(time.time())}.json"
-    Path(fp).write_text(clean, encoding="utf-8")
 
-    # 尝试解析 JSON 数据并生成可读摘要（尤其是热搜/榜单类数据）
-    preview = clean[:300]
-    try:
-        parsed = json.loads(clean) if je else None
-        if parsed:
+    if je:
+        # 有嵌入 JSON → 解析并格式化
+        try:
+            parsed = json.loads(je)
             # 尝试提取热搜列表
             cards = parsed.get("data", {}).get("cards", [])
             hot_items = []
@@ -664,69 +600,36 @@ async def _handle_fetch_url(args: Dict) -> Dict:
                         word = item.get("word", item.get("query", ""))
                         hot_score = item.get("hotScore", item.get("heat", ""))
                         if word:
-                            hot_items.append(
-                                f"  {word}"
-                                + (f" (热度:{hot_score})" if hot_score else "")
-                            )
+                            hot_items.append(f"  {word}" + (f" (热度:{hot_score})" if hot_score else ""))
             if hot_items:
-                preview = f"获取到 {len(hot_items)} 条热搜/榜单数据：\n" + "\n".join(
-                    hot_items[:20]
-                )
+                preview = f"获取到 {len(hot_items)} 条热搜/榜单数据：\n" + "\n".join(hot_items[:20])
                 if len(hot_items) > 20:
-                    preview += f"\n  ...共{len(hot_items)}条，完整数据见文件"
-            # 通用 JSON 格式友好展示
-            if not hot_items:
-                text_repr = json.dumps(parsed, ensure_ascii=False, indent=2)[:2000]
-                if len(text_repr) < 500:
-                    preview = text_repr
-                else:
-                    preview = (
-                        text_repr[:500]
-                        + f"\n...截断 ({len(text_repr)} 字符)，完整数据见文件"
-                    )
-    except (json.JSONDecodeError, AttributeError):
-        pass
+                    preview += f"\n  ...共{len(hot_items)}条"
+                return ok(preview)
+            # 通用 JSON
+            text_repr = json.dumps(parsed, ensure_ascii=False, indent=2)
+            if len(text_repr) > ml:
+                text_repr = text_repr[:int(ml * 0.7)] + f"\n...截断 ({len(text_repr)} 字符)"
+            return ok(text_repr)
+        except (json.JSONDecodeError, AttributeError):
+            pass
+        return ok(je[:ml])
 
-    msg = f"状态码:200 原始:{len(text)}字符\n{preview}\n📁完整数据: {fp}"
-    return {"result": {"content": [{"text": msg}]}}
+    # 2. 纯 HTML → 直接转换为可读文本
+    readable = html_to_text(text, max_length=ml)
+    if not readable or len(readable) < 20:
+        return err("无法解析页面内容")
+    return ok(readable)
 
 
-async def _handle_file(args: Dict) -> Dict:
-    """读写文件"""
-    action = args.get("action", "")
-    path = args.get("path", "")
-    if not path:
-        return {"result": {"content": [{"text": "需要 path 参数"}]}}
-    path = re.sub(
-        r"%([^%]+)%",
-        lambda m: os.environ.get(m.group(1), os.environ.get("HOME", "~")),
-        path,
-    )
-    # 中文路径映射：LLM 可能用"桌面上/xxx.txt"代替绝对路径
-    desktop = os.path.expanduser("~/Desktop")
-    if path.startswith("桌面上/"):
-        path = desktop + path[3:]
-    elif path.startswith("桌面/"):
-        path = desktop + path[2:]
-    path = os.path.expanduser(path)
-    if action == "read":
-        if not os.path.isfile(path):
-            return {"result": {"content": [{"text": f"文件不存在: {path}"}]}}
-        return {"result": {"content": [{"text": open(path, encoding="utf-8").read()}]}}
-    if action == "write":
-        c = args.get("content", "")
-        if not c:
-            return {"result": {"content": [{"text": "需要 content 参数"}]}}
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
-        Path(path).write_text(c, encoding="utf-8")
-        return {"result": {"content": [{"text": f"已写入 {path} ({len(c)} bytes)"}]}}
-    return {"result": {"content": [{"text": "file 需要 action=read|write"}]}}
+
 
 
 async def _handle_hot_search(query: str) -> Optional[Dict]:
     """处理热榜/热搜查询 — 调用多个公开数据源
 
     不依赖搜索引擎结果页（SPA问题），直接调用公开API。
+    根据查询关键词智能排序数据源优先级。
     """
     from urllib.parse import quote
 
@@ -807,54 +710,76 @@ async def _handle_hot_search(query: str) -> Optional[Dict]:
         # GitHub 源都失败时降级到普通搜索
         return None
 
-    # 1. Zhihu hot list (public API, no auth needed)
-    async def _zhihu():
+    # 根据查询关键词确定数据源优先级
+    want_baidu = "百度" in query or "baidu" in query_lower
+    want_zhihu = "知乎" in query or "zhihu" in query_lower
+    want_weibo = "微博" in query or "weibo" in query_lower
+    want_douyin = "抖音" in query or "douyin" in query_lower
+
+    # 定义所有可用数据源
+    all_sources = [
+        ("baidu", "百度热搜", "https://top.baidu.com/api/board?tab=realtime"),
+        ("zhihu", "知乎热搜", "https://www.zhihu.com/api/v3/feed/topstory/hot-lists?limit=10"),
+        ("weibo", "微博热搜", "https://tenapi.cn/v2/weibohot"),
+        ("douyin", "抖音热榜", "https://tenapi.cn/v2/douyinhot"),
+    ]
+
+    # 按优先级排序：明确指定的排前面，其他的排后面
+    if want_baidu:
+        # 百度优先：baidu第一，其他按默认顺序
+        sources_order = ["baidu", "zhihu", "weibo", "douyin"]
+    elif want_zhihu:
+        sources_order = ["zhihu", "baidu", "weibo", "douyin"]
+    elif want_weibo:
+        sources_order = ["weibo", "baidu", "zhihu", "douyin"]
+    elif want_douyin:
+        sources_order = ["douyin", "baidu", "zhihu", "weibo"]
+    else:
+        # 默认顺序：百度、知乎、微博、抖音
+        sources_order = ["baidu", "zhihu", "weibo", "douyin"]
+
+    # 构建有序数据源列表
+    ordered_sources = []
+    source_map = {s[0]: s for s in all_sources}
+    for key in sources_order:
+        if key in source_map:
+            ordered_sources.append(source_map[key])
+
+    # 并发请求所有数据源
+    async def _fetch_source(name: str, url: str):
         data = await _try_json(
-            "https://www.zhihu.com/api/v3/feed/topstory/hot-lists?limit=10",
-            parser=lambda t: _format_hot_list(t, "知乎热搜"),
+            url,
+            parser=lambda t, n=name: _format_hot_list(t, n),
         )
         if data:
             sources.append(data)
 
-    asyncio.create_task(_zhihu())
+    tasks = [_fetch_source(name, url) for name, _, url in ordered_sources]
+    await asyncio.gather(*tasks)
 
-    # 2. Weibo hot search (public mirror API)
-    async def _weibo():
-        data = await _try_json(
-            "https://tenapi.cn/v2/weibohot",
-            parser=lambda t: _format_hot_list(t, "微博热搜"),
-        )
-        if data:
-            sources.append(data)
-
-    asyncio.create_task(_weibo())
-
-    # 3. Douyin hot (public mirror API)
-    async def _douyin():
-        data = await _try_json(
-            "https://tenapi.cn/v2/douyinhot",
-            parser=lambda t: _format_hot_list(t, "抖音热榜"),
-        )
-        if data:
-            sources.append(data)
-
-    asyncio.create_task(_douyin())
-
-    # 4. Baidu hot search (via alternative API)
-    async def _baidu():
-        data = await _try_json(
-            "https://top.baidu.com/api/board?tab=realtime",
-            parser=lambda t: _format_hot_list(t, "百度热搜"),
-        )
-        if data:
-            sources.append(data)
-
-    asyncio.create_task(_baidu())
-
-    # 等待至少一个源返回（5s超时）
-    await asyncio.sleep(1.5)
+    # 等待所有任务完成（最多2秒）
+    await asyncio.sleep(0.5)
 
     if sources:
+        # 如果用户指定了平台，只返回该平台数据
+        if want_baidu:
+            baidu_data = [s for s in sources if "百度热搜" in s]
+            if baidu_data:
+                return {"result": {"content": [{"text": baidu_data[0]}]}}
+        elif want_zhihu:
+            zhihu_data = [s for s in sources if "知乎热搜" in s]
+            if zhihu_data:
+                return {"result": {"content": [{"text": zhihu_data[0]}]}}
+        elif want_weibo:
+            weibo_data = [s for s in sources if "微博热搜" in s]
+            if weibo_data:
+                return {"result": {"content": [{"text": weibo_data[0]}]}}
+        elif want_douyin:
+            douyin_data = [s for s in sources if "抖音热榜" in s]
+            if douyin_data:
+                return {"result": {"content": [{"text": douyin_data[0]}]}}
+
+        # 否则返回所有可用数据（最多3个源）
         combined = "\n\n".join(sources[:3])
         return {"result": {"content": [{"text": f"获取到热门数据：\n\n{combined}"}]}}
     return None
@@ -866,6 +791,28 @@ def _format_hot_list(json_text: str, source_name: str) -> Optional[str]:
         data = json.loads(json_text)
         items = []
 
+        # 百度热搜API特殊处理：{data: {cards: [{content: [...]}]}}
+        if isinstance(data, dict) and "data" in data:
+            cards = data.get("data", {}).get("cards", [])
+            if cards and isinstance(cards, list):
+                content = cards[0].get("content", [])
+                if content and isinstance(content, list):
+                    for e in content[:15]:
+                        if isinstance(e, dict):
+                            word = e.get("word", e.get("query", ""))
+                            hot_score = e.get("hotScore", e.get("hot", ""))
+                            desc = e.get("desc", e.get("description", ""))
+                            if word:
+                                line = word[:60]
+                                if hot_score:
+                                    line += f" (热度:{hot_score})"
+                                if desc and isinstance(desc, str):
+                                    line += f" — {desc[:50]}"
+                                items.append(line)
+                    if items:
+                        return f"【{source_name}】\n" + "\n".join(items[:10])
+
+        # 通用格式处理
         # 尝试多种JSON结构
         # 格式1: {data: {list: [{title:..., ...}]}}
         for d in [data]:
@@ -1007,11 +954,19 @@ def _format_github_trending_html(html_text: str, source_name: str) -> Optional[s
 
 
 async def _handle_search(args: Dict) -> Dict:
-    """联网搜索 — 并发尝试多个搜索引擎 + 热门数据直连"""
+    """联网搜索 — Bing + Baidu + DDG 三引擎并发，结果合并去重"""
+    from urllib.parse import quote
+    from core.multi_agent_v2.tools.html_parser import (
+        extract_search_results_bing,
+        extract_search_results_baidu,
+        extract_search_results_ddg,
+        merge_search_results,
+    )
+    from core.multi_agent_v2.tools.tool_result import ok, err
+
     query = args.get("query", "")
     if not query:
-        return {"result": {"content": [{"text": "需要 query 参数"}]}}
-    from urllib.parse import quote
+        return err("需要 query 参数")
 
     encoded = quote(query)
 
@@ -1020,120 +975,72 @@ async def _handle_search(args: Dict) -> Dict:
     if is_hot:
         hot_results = await _handle_hot_search(query)
         if hot_results:
-            return hot_results
+            # 兼容旧格式返回
+            text = hot_results.get("result", {}).get("content", [{}])[0].get("text", "")
+            if text:
+                return ok(text)
 
-    async def _try_one(url: str) -> str:
-        try:
-            result = await _handle_fetch_url({"url": url, "max_length": 80000})
-            text = result.get("result", {}).get("content", [{}])[0].get("text", "")
-            if not text or len(text) < 80:
-                return ""
-            if "请求失败" in text:
-                return ""
-
-            # 从 fetch_url 的结果中提取可读文本
-            import re as _re
-
-            # 尝试从保存的文件中提取纯文本
-            file_path = None
-            m = _re.search(r"📁完整数据:\s*(\S+)", text)
-            if not m:
-                m = _re.search(r"已保存到\s+(\S+)", text)
-            if m:
-                file_path = m.group(1)
-
-            content_text = ""
-            if file_path:
-                import os as _os
-
-                if _os.path.exists(file_path):
-                    raw = open(file_path, encoding="utf-8").read()
-                    # 提取纯文本
-                    content_text = _re.sub(
-                        r"<script[^>]*>.*?</script>", "", raw, flags=_re.DOTALL
-                    )
-                    content_text = _re.sub(
-                        r"<style[^>]*>.*?</style>", "", content_text, flags=_re.DOTALL
-                    )
-                    content_text = _re.sub(r"<[^>]+>", " ", content_text)
-                    content_text = _re.sub(r"\s+", " ", content_text).strip()
-                    # 去掉 URL 和纯数字噪声，保留有意义的文本
-                    content_text = _re.sub(r"https?://\S+", "", content_text)
-
-            if content_text and len(content_text) > 80:
-                return f"搜索结果({url}):\n{content_text[:3000]}"
-            elif content_text and len(content_text) > 5:
-                return f"搜索结果({url}):\n{content_text[:1000]}"
-            return ""
-        except BaseException:
-            pass
-        return ""
-
-    urls = [
-        f"https://cn.bing.com/search?q={encoded}&count=10",
-        f"https://www.google.com/search?q={encoded}&num=10",
+    # 三引擎并发
+    engines = [
+        ("Bing", f"https://cn.bing.com/search?q={encoded}&count=10", extract_search_results_bing),
+        ("百度", f"https://www.baidu.com/s?wd={encoded}&rn=10", extract_search_results_baidu),
+        ("DuckDuckGo", f"https://html.duckduckgo.com/html/?q={encoded}", extract_search_results_ddg),
     ]
-    tasks = [asyncio.create_task(_try_one(u)) for u in urls]
-    done, pending = await asyncio.wait(
-        tasks, timeout=8.0, return_when=asyncio.FIRST_COMPLETED
-    )
-    for p in pending:
-        p.cancel()
-    for task in done:
-        text = task.result()
-        if text:
-            return {"result": {"content": [{"text": text}]}}
-    # 都失败时用重试
-    await asyncio.sleep(0.5)
-    try:
-        text = await asyncio.wait_for(
-            _try_one(f"https://cn.bing.com/search?q={encoded}&count=10"),
-            timeout=8.0,
-        )
-        if text:
-            return {"result": {"content": [{"text": text}]}}
-    except BaseException:
-        pass
-    return {
-        "result": {
-            "content": [
-                {"text": "搜索暂时无法获取结果，请用 fetch_url 直接访问目标网址"}
-            ]
-        }
-    }
+
+    sources = []
+
+    async def _search_one(name: str, url: str, parser):
+        try:
+            html = await _http_get(url, timeout=8)
+            results = parser(html)
+            if results:
+                sources.append((name, results))
+        except Exception:
+            pass
+
+    await asyncio.gather(*[_search_one(n, u, p) for n, u, p in engines])
+
+    if not sources:
+        # 兜底：重试百度
+        try:
+            html = await _http_get(f"https://www.baidu.com/s?wd={encoded}&rn=10", timeout=8)
+            results = extract_search_results_baidu(html)
+            if results:
+                sources.append(("百度(重试)", results))
+        except Exception:
+            pass
+
+    if not sources:
+        return err("搜索暂不可用，请用 fetch_url 直接访问目标网址")
+
+    merged = merge_search_results(sources)
+    return ok(merged)
 
 
 async def _handle_execute_python(args: Dict) -> Dict:
-    """执行 Python 代码 — 通过 mode 参数指定执行模式"""
+    """执行 Python 代码 — 默认沙盒隔离，mode=local 需显式指定
+    
+    sandbox 模式：执行后检测文件写入操作，如有则提示用户确认保存路径
+    local 模式：需要用户确认后执行（无安全隔离）
+    """
     code = args.get("code", "")
     if not code:
         return {"result": {"content": [{"text": "缺少 code 参数"}]}}
-    mode = args.get("mode", "local")  # local(默认,可写桌面文件) | sandbox(隔离)
+    mode = args.get("mode", "sandbox")  # sandbox(默认,隔离) | local(显式指定,可写桌面文件)
     timeout = int(args.get("timeout", 30))
-
-    # sandbox 模式（失败时自动降级到 local）
-    if mode == "sandbox":
-        skip_check = args.get("skip_module_check", False)
-        sandbox_err = ""
-        try:
-            from core.tools.sandbox_executor import ResourceLimits, SandboxExecutor
-
-            limits = ResourceLimits(timeout=min(timeout, 60), max_output_size_kb=10000)
-            ex = SandboxExecutor()
-            sr = await ex.execute_python(
-                code, limits=limits, skip_module_check=skip_check
-            )
-            if sr.status.value in ("completed", "success"):
-                out = sr.stdout if sr.stdout else ("(无输出)" if sr.stderr else "")
-                err = sr.stderr if sr.stderr else ""
-                full = out[:8000] + ("\n" + err[:2000] if err else "")
-                return {
-                    "result": {"content": [{"text": f"[沙盒] ✅ 执行成功\n{full}"}]}
+    
+    # local 模式：需要用户确认（无安全隔离）
+    if mode == "local":
+        confirmed = args.get("confirmed", False)
+        if not confirmed:
+            return {
+                "result": {
+                    "content": [{"text": "⚠️ local 模式无安全隔离，代码将直接在本地执行。\n\n是否确认执行？请回复 '确认' 或调用 execute_python 并设置 confirmed=true"}],
+                    "requires_confirmation": True,
+                    "mode": "local"
                 }
-            sandbox_err = sr.error_message or sr.stderr or "执行失败"
-        except Exception as e:
-            sandbox_err = f"{type(e).__name__}: {e}"
-        # 沙盒失败 → 降级到 local（保证 LLM 生成的代码能拿到反馈）
+            }
+        # 用户已确认，执行代码
         try:
             import contextlib
             import io
@@ -1145,55 +1052,82 @@ async def _handle_execute_python(args: Dict) -> Dict:
             with contextlib.redirect_stdout(f), contextlib.redirect_stderr(err):
                 exec(dedented)
             out = f.getvalue() or err.getvalue() or "(无输出)"
+            return {"result": {"content": [{"text": f"[本地] ✅ 执行成功\n{out[:5000]}\n\n⚠️ 警告：当前为本地模式，无安全隔离"}]}}
+        except Exception as e:
             return {
                 "result": {
-                    "content": [
-                        {
-                            "text": f"[沙盒❌→本地✅] 沙盒: {sandbox_err[:100]}\n{out[:5000]}"
-                        }
-                    ]
-                }
-            }
-        except Exception as e2:
-            return {
-                "result": {
-                    "content": [
-                        {
-                            "text": f"[沙盒❌] {sandbox_err[:200]}\n[本地❌] {type(e2).__name__}: {e2}"[
-                                :3000
-                            ]
-                        }
-                    ]
+                    "content": [{"text": f"[本地] ❌ {type(e).__name__}: {e}\n\n⚠️ 警告：当前为本地模式，无安全隔离"[:3000]}]
                 }
             }
 
-    # local 模式：本地 exec（可写桌面文件，速度快）
+    # sandbox 模式（失败直接报错，不降级到裸 exec）
+    skip_check = args.get("skip_module_check", False)
     try:
-        import contextlib
-        import io
-        import textwrap
+        from core.tools.sandbox_executor import (
+            ResourceLimits, SandboxExecutor,
+            detect_file_writes, extract_file_paths, get_recommended_path,
+            format_file_writes_detected
+        )
 
-        dedented = textwrap.dedent(code)
-        f = io.StringIO()
-        err = io.StringIO()
-        with contextlib.redirect_stdout(f), contextlib.redirect_stderr(err):
-            exec(dedented)
-        out = f.getvalue() or err.getvalue() or "(无输出)"
-        return {"result": {"content": [{"text": f"[本地] ✅ 执行成功\n{out[:5000]}"}]}}
+        limits = ResourceLimits(timeout=min(timeout, 60), max_output_size_kb=10000)
+        ex = SandboxExecutor()
+        sr = await ex.execute_python(
+            code, limits=limits, skip_module_check=skip_check
+        )
+        if sr.status.value == "completed":
+            out = sr.stdout if sr.stdout else ("(无输出)" if sr.stderr else "")
+            err = sr.stderr if sr.stderr else ""
+            full = out[:8000] + ("\n" + err[:2000] if err else "")
+            
+            # 检测文件写入操作
+            file_writes = detect_file_writes(code)
+            if file_writes:
+                # 提取路径并获取推荐路径
+                detected_paths = extract_file_paths(code)
+                task_desc = args.get("_task_description", "")  # 从上下文获取任务描述
+                recommended_path = get_recommended_path(detected_paths, task_desc)
+                
+                # 格式化检测结果
+                file_write_msg = format_file_writes_detected(file_writes, recommended_path)
+                
+                return {
+                    "result": {
+                        "content": [{"text": f"[沙盒] ✅ 执行成功\n{full}\n\n{file_write_msg}"}],
+                        "needs_file_save": True,
+                        "file_writes": file_writes,
+                        "detected_paths": detected_paths,
+                        "recommended_path": recommended_path
+                    }
+                }
+            
+            return {
+                "result": {"content": [{"text": f"[沙盒] ✅ 执行成功\n{full}"}]}
+            }
+        # 沙盒执行失败，返回错误信息（不降级）
+        sandbox_err = sr.error_message or sr.stderr or "执行失败"
+        return {
+            "result": {
+                "content": [
+                    {"text": f"[沙盒] ❌ 执行失败: {sandbox_err[:3000]}"}
+                ]
+            }
+        }
     except Exception as e:
         return {
             "result": {
-                "content": [{"text": f"[本地] ❌ {type(e).__name__}: {e}"[:3000]}]
+                "content": [
+                    {"text": f"[沙盒] ❌ {type(e).__name__}: {e}"[:3000]}
+                ]
             }
         }
 
 
 async def _handle_execute_shell(args: Dict) -> Dict:
-    """执行 Shell 命令 — 通过 mode 参数指定执行模式"""
+    """执行 Shell 命令 — 默认沙盒隔离，mode=local 需显式指定"""
     command = args.get("command", "")
     if not command:
         return {"result": {"content": [{"text": "缺少 command 参数"}]}}
-    mode = args.get("mode", "local")
+    mode = args.get("mode", "sandbox")  # sandbox(默认,隔离) | local(显式指定)
     timeout = int(args.get("timeout", 30))
 
     if mode == "sandbox":
@@ -1203,18 +1137,19 @@ async def _handle_execute_shell(args: Dict) -> Dict:
             limits = ResourceLimits(timeout=min(timeout, 60), max_output_size_kb=10000)
             ex = SandboxExecutor()
             sr = await ex.execute_shell(command, limits=limits)
-            if sr.status.value in ("completed", "success"):
+            if sr.status.value == "completed":
                 out = sr.stdout if sr.stdout else ("(无输出)" if sr.stderr else "")
                 err = sr.stderr if sr.stderr else ""
                 full = out[:8000] + ("\n" + err[:2000] if err else "")
                 return {
                     "result": {"content": [{"text": f"[沙盒] ✅ 执行成功\n{full}"}]}
                 }
+            # 沙盒执行失败，返回错误信息（不降级）
             return {
                 "result": {
                     "content": [
                         {
-                            "text": f"[沙盒] ❌ {sr.error_message or sr.stderr or '执行失败'}"[
+                            "text": f"[沙盒] ❌ 执行失败: {sr.error_message or sr.stderr or '未知错误'}"[
                                 :5000
                             ]
                         }
@@ -1228,7 +1163,7 @@ async def _handle_execute_shell(args: Dict) -> Dict:
                 }
             }
 
-    # local 模式
+    # local 模式：无安全隔离，直接执行
     import asyncio
 
     try:
@@ -1237,20 +1172,14 @@ async def _handle_execute_shell(args: Dict) -> Dict:
         return {
             "result": {
                 "content": [
-                    {"text": f"[本地] 返回码 {proc.returncode}\n{o.decode()[:3000]}"}
+                    {"text": f"[本地] 返回码 {proc.returncode}\n{o.decode()[:3000]}\n\n⚠️ 警告：当前为本地模式，无安全隔离"}
                 ]
             }
         }
     except asyncio.TimeoutError:
-        return {"result": {"content": [{"text": "[本地] ❌ 执行超时"}]}}
+        return {"result": {"content": [{"text": "[本地] ❌ 执行超时\n\n⚠️ 警告：当前为本地模式，无安全隔离"}]}}
     except Exception as e:
-        return {"result": {"content": [{"text": f"[本地] ❌ {e}"[:2000]}]}}
-    except Exception as e:
-        return {
-            "result": {
-                "content": [{"text": f"[沙盒] ❌ {type(e).__name__}: {e}"[:3000]}]
-            }
-        }
+        return {"result": {"content": [{"text": f"[本地] ❌ {e}\n\n⚠️ 警告：当前为本地模式，无安全隔离"[:2000]}]}}
 
 
 async def _handle_rag_search(args: Dict) -> Dict:
@@ -1487,49 +1416,174 @@ async def _handle_git(args: Dict) -> Dict:
         return {"result": {"content": [{"text": f"git {action} 失败: {ex}"[:500]}]}}
 
 
-async def _handle_call_api(args: Dict) -> Dict:
-    """通用 HTTP 客户端 — 支持 GET/POST/PUT/DELETE"""
-    method = args.get("method", "GET").upper()
-    url = args.get("url", "")
-    if not url:
-        return {"result": {"content": [{"text": "需要 url 参数"}]}}
-    if method not in ("GET", "POST", "PUT", "DELETE"):
-        return {"result": {"content": [{"text": f"不支持的 HTTP 方法: {method}"}]}}
-    headers = args.get("headers", {})
-    data = args.get("data", None)
-    json_data = args.get("json_data", None)
-    timeout = int(args.get("timeout", 15))
-    try:
-        from tools.http_client import HTTPClient
 
-        client = HTTPClient(timeout=min(timeout, 60), max_retries=2)
-        if method == "GET":
-            resp = client.get(url, headers=headers)
-        elif method == "POST":
-            resp = client.post(url, data=data, json=json_data, headers=headers)
-        elif method == "PUT":
-            resp = client.put(url, data=data or json_data, headers=headers)
-        elif method == "DELETE":
-            resp = client.delete(url, headers=headers)
-        else:
-            resp = {"success": False, "error": f"不支持: {method}"}
-        success = resp.get("success", False)
-        status = resp.get("status", resp.get("status_code", "?"))
-        body = resp.get("data", resp.get("content", resp.get("response", "")))
-        if isinstance(body, (dict, list)):
-            body = json.dumps(body, ensure_ascii=False, indent=2)[:5000]
-        else:
-            body = str(body)[:5000]
-        if success:
-            return {"result": {"content": [{"text": f"[API] ✅ {status}\n{body}"}]}}
-        error = resp.get("error", resp.get("message", "请求失败"))
-        return {"result": {"content": [{"text": f"[API] ❌ {status}: {error}"[:3000]}]}}
+
+
+async def _handle_write_file(args: Dict) -> Dict:
+    """写文件到指定路径 — 兼容多种参数名"""
+    from core.multi_agent_v2.tools.tool_result import ok, err
+
+    path = args.get("path", "")
+    content = args.get("content", "")
+    # 兼容多种参数名
+    if not content:
+        content = args.get("code", "") or args.get("text", "") or args.get("html", "") or args.get("data", "") or args.get("file_content", "")
+    if not content:
+        logger.warning(f"write_file: 参数中没有 content/code/text/html，args keys={list(args.keys())}")
+        return err("需要 content 参数")
+    # 中文路径映射
+    desktop = os.path.expanduser("~/Desktop")
+    if path.startswith("桌面上/"):
+        path = desktop + path[3:]
+    elif path.startswith("桌面/"):
+        path = desktop + path[2:]
+    path = os.path.expanduser(path)
+    # 内容质量校验：代码文件不能太短或只是计划文本
+    is_code_file = any(path.endswith(ext) for ext in (".html", ".htm", ".py", ".js", ".ts", ".jsx", ".tsx", ".css", ".java", ".cpp", ".c", ".go", ".rs"))
+    if is_code_file and len(content) < 500:
+        # 太短的"代码"很可能是计划文本，拒绝写入
+        import re
+        has_code_indicators = bool(re.search(r'(?:def |class |function|<html|<!DOCTYPE|from |import |print\()', content))
+        if not has_code_indicators:
+            logger.warning(f"write_file: 内容疑似为计划文本非实际代码 (path={path}, len={len(content)})")
+            return err(f"❌ 内容疑似为计划文本而非实际代码！请写入完整的可运行代码（包括所有 HTML 结构、CSS、JavaScript 逻辑），当前内容只有 {len(content)} 字符。建议使用 write_file 一次性写入完整文件。")
+    try:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        Path(path).write_text(content, encoding="utf-8")
+        return ok(f"✅ 已写入文件: {path} ({len(content)} 字符)")
     except Exception as e:
-        return {
-            "result": {
-                "content": [{"text": f"[API] ❌ {type(e).__name__}: {e}"[:3000]}]
-            }
-        }
+        return err(f"❌ 写入失败: {type(e).__name__}: {e}")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 迁移工具：原 register_new_tools.py 中的工具（原生 async 实现）
+# ═══════════════════════════════════════════════════════════════════
+
+async def _handle_read_file(args: Dict) -> Dict:
+    """读取文件或目录 — 支持分页"""
+    from core.multi_agent_v2.tools.tool_result import ok, err
+
+    path = args.get("path", "")
+    if not path:
+        return err("需要 path 参数")
+    path = os.path.expanduser(path)
+    p = Path(path)
+    if not p.exists():
+        return err(f"路径不存在: {path}")
+    if p.is_dir():
+        entries = sorted(p.iterdir())[:args.get("limit", 200)]
+        lines = [f"{'📁' if e.is_dir() else '📄'} {e.name}" for e in entries]
+        return ok(f"目录 {path} ({len(entries)} 项):\n" + "\n".join(lines))
+    try:
+        text = p.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return err(f"无法解码文件: {path}")
+    lines = text.split("\n")
+    offset = max(0, args.get("offset", 1) - 1)
+    limit = args.get("limit", 2000)
+    page = lines[offset:offset + limit]
+    result = "\n".join(page)
+    if offset > 0 or offset + limit < len(lines):
+        result = f"(行 {offset+1}-{min(offset+limit, len(lines))}/{len(lines)})\n{result}"
+    return ok(result)
+
+
+async def _handle_edit_file(args: Dict) -> Dict:
+    """精确文本替换"""
+    from core.multi_agent_v2.tools.tool_result import ok, err
+
+    path = args.get("path", "")
+    old = args.get("old_string", "")
+    new = args.get("new_string", "")
+    replace_all = args.get("replace_all", False)
+    if not path or not old:
+        return err("需要 path 和 old_string 参数")
+    path = os.path.expanduser(path)
+    p = Path(path)
+    if not p.exists():
+        return err(f"文件不存在: {path}")
+    try:
+        text = p.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return err(f"无法解码文件: {path}")
+    count = text.count(old)
+    if count == 0:
+        return err("old_string 未在文件中找到")
+    if not replace_all and count > 1:
+        return err(f"找到 {count} 处匹配，请设置 replace_all=true 或提供更多上下文")
+    new_text = text.replace(old, new, -1 if replace_all else 1)
+    p.write_text(new_text, encoding="utf-8")
+    actual = text.count(old) - new_text.count(old) if replace_all else 1
+    return ok(f"编辑成功: {path} (替换 {actual} 处)")
+
+
+async def _handle_glob_search(args: Dict) -> Dict:
+    """文件模式匹配搜索"""
+    import glob as _glob
+    from core.multi_agent_v2.tools.tool_result import ok, err
+
+    pattern = args.get("pattern", "")
+    if not pattern:
+        return err("需要 pattern 参数")
+    search_path = args.get("path", ".")
+    limit = args.get("limit", 200)
+    full_pattern = os.path.join(search_path, pattern)
+    matches = sorted(_glob.glob(full_pattern, recursive=True))[:limit]
+    if not matches:
+        return ok("未找到匹配文件")
+    return ok(f"找到 {len(matches)} 个文件:\n" + "\n".join(matches[:50]))
+
+
+async def _handle_grep_search(args: Dict) -> Dict:
+    """正则表达式内容搜索"""
+    from core.multi_agent_v2.tools.tool_result import ok, err
+
+    pattern = args.get("pattern", "")
+    if not pattern:
+        return err("需要 pattern 参数")
+    search_path = args.get("path", ".")
+    include = args.get("include", "")
+    limit = args.get("limit", 200)
+    import re as _re
+    try:
+        regex = _re.compile(pattern)
+    except _re.error as e:
+        return err(f"正则表达式错误: {e}")
+    results = []
+    p = Path(search_path)
+    files = [p] if p.is_file() else list(p.rglob(include if include else "*"))
+    for fp in files:
+        if not fp.is_file() or len(results) >= limit:
+            break
+        try:
+            text = fp.read_text(encoding="utf-8", errors="ignore")
+            for i, line in enumerate(text.split("\n"), 1):
+                if regex.search(line):
+                    results.append(f"{fp}:{i}: {line.strip()[:100]}")
+                    if len(results) >= limit:
+                        break
+        except Exception:
+            continue
+    if not results:
+        return ok("未找到匹配内容")
+    return ok(f"找到 {len(results)} 个匹配:\n" + "\n".join(results[:30]))
+
+
+async def _handle_todo_write_tool(args: Dict) -> Dict:
+    """任务列表管理"""
+    from core.multi_agent_v2.tools.tool_result import ok, err
+
+    todos = args.get("todos", [])
+    if not todos:
+        return err("需要 todos 参数")
+    lines = []
+    for t in todos:
+        status = t.get("status", "pending")
+        icon = {"completed": "✅", "in_progress": "🔄", "cancelled": "❌"}.get(status, "⬜")
+        priority = t.get("priority", "")
+        p_icon = {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(priority, "")
+        lines.append(f"{icon} {p_icon} {t.get('content', '')}")
+    return ok("任务列表:\n" + "\n".join(lines))
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1538,33 +1592,54 @@ async def _handle_call_api(args: Dict) -> Dict:
 
 _HANDLER_MAP: Dict[str, Callable] = {
     "fetch_url": _handle_fetch_url,
-    "file": _handle_file,
+    "write_file": _handle_write_file,
+    "read_file": _handle_read_file,
+    "edit_file": _handle_edit_file,
+    "glob_search": _handle_glob_search,
+    "grep_search": _handle_grep_search,
     "execute_python": _handle_execute_python,
     "execute_shell": _handle_execute_shell,
+    "web_search": _handle_search,
     "rag_search": _handle_rag_search,
     "skill_execute": _handle_skill_execute,
     "kepa_reflect": _handle_kepa_reflect,
     "ask_clarification": _handle_ask_clarification,
     "self_reflect": _handle_self_reflect,
-    "call_api": _handle_call_api,
     "git": _handle_git,
+    "todo_write": _handle_todo_write_tool,
 }
 
 _SANDBOX_TOOL_DEFS = [
+    ToolDefinition(
+        name="write_file",
+        server=SERVER_BUILTIN,
+        tags=["file", "write"],
+        domains={ToolDomain.FILE},
+        description="写入文件到指定路径。用于创建游戏、脚本、HTML等文件到桌面。必填：path=文件路径(如~/Desktop/game.html或桌面/game.py)，content=完整文件内容(必须！文件的全部代码)。注意：content 参数是文件的完整内容，必须为非空字符串。创建游戏文件请用此工具，不要用 execute_python。",
+        parameters={
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "文件路径，如 ~/Desktop/game.html 或 ~/Desktop/game.py"},
+                "content": {"type": "string", "description": "要写入的完整文件内容（必填，不能为空）"},
+            },
+            "required": ["path", "content"],
+        },
+        handler=_handle_write_file,
+    ),
     ToolDefinition(
         name="execute_python",
         server=SERVER_BUILTIN,
         tags=["code", "sandbox"],
         domains={ToolDomain.CODE},
-        description="执行 Python 代码。默认本地执行（可读/写/修改桌面文件）；mode=sandbox 沙盒隔离执行。",
+        description="执行 Python 代码。默认沙盒隔离执行（安全）；mode=local 本地执行（可写桌面文件，无安全隔离）。",
         parameters={
             "type": "object",
             "properties": {
                 "code": {"type": "string", "description": "Python 代码"},
                 "mode": {
                     "type": "string",
-                    "enum": ["local", "sandbox"],
-                    "description": "local=本地(默认,可写桌面文件) | sandbox=沙盒隔离",
+                    "enum": ["sandbox", "local"],
+                    "description": "sandbox=沙盒隔离(默认,安全) | local=本地(可写桌面文件,无安全隔离)",
                 },
                 "timeout": {
                     "type": "integer",
@@ -1584,15 +1659,15 @@ _SANDBOX_TOOL_DEFS = [
         server=SERVER_BUILTIN,
         tags=["code", "shell"],
         domains={ToolDomain.CODE, ToolDomain.SYSTEM, ToolDomain.FILE},
-        description="Shell 命令执行。默认本地执行；mode=sandbox 沙盒隔离执行。",
+        description="Shell 命令执行。默认沙盒隔离执行（安全）；mode=local 本地执行（无安全隔离）。",
         parameters={
             "type": "object",
             "properties": {
                 "command": {"type": "string", "description": "Shell 命令"},
                 "mode": {
                     "type": "string",
-                    "enum": ["local", "sandbox"],
-                    "description": "local=本地(默认) | sandbox=沙盒隔离",
+                    "enum": ["sandbox", "local"],
+                    "description": "sandbox=沙盒隔离(默认,安全) | local=本地(无安全隔离)",
                 },
                 "timeout": {
                     "type": "integer",
@@ -1732,33 +1807,6 @@ _SANDBOX_TOOL_DEFS = [
         handler=_handle_self_reflect,
     ),
     ToolDefinition(
-        name="call_api",
-        server=SERVER_BUILTIN,
-        tags=["api", "http"],
-        domains={ToolDomain.API, ToolDomain.WEB},
-        description="通用 HTTP 客户端 — 支持 GET/POST/PUT/DELETE 请求。用于调用外部 REST API 接口。",
-        parameters={
-            "type": "object",
-            "properties": {
-                "method": {
-                    "type": "string",
-                    "enum": ["GET", "POST", "PUT", "DELETE"],
-                    "description": "HTTP 方法",
-                },
-                "url": {"type": "string", "description": "请求 URL"},
-                "headers": {"type": "object", "description": "请求头"},
-                "data": {"type": "object", "description": "表单数据"},
-                "json_data": {"type": "object", "description": "JSON 数据"},
-                "timeout": {
-                    "type": "integer",
-                    "description": "超时秒数（默认15，最大60）",
-                },
-            },
-            "required": ["url"],
-        },
-        handler=_handle_call_api,
-    ),
-    ToolDefinition(
         name="fetch_url",
         server=SERVER_BUILTIN,
         tags=["web", "fetch"],
@@ -1775,21 +1823,119 @@ _SANDBOX_TOOL_DEFS = [
         handler=_handle_fetch_url,
     ),
     ToolDefinition(
-        name="file",
+        name="web_search",
         server=SERVER_BUILTIN,
-        tags=["file", "storage"],
-        domains={ToolDomain.FILE},
-        description="直接读写文件。action=read 读取文件内容；action=write 写入文件内容。",
+        tags=["web", "search"],
+        domains={ToolDomain.SEARCH, ToolDomain.WEB},
+        description="网页搜索。支持多种搜索类型。用于获取实时信息、查找资料。",
         parameters={
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": ["read", "write"]},
-                "path": {"type": "string", "description": "文件路径"},
-                "content": {"type": "string", "description": "写入内容（write时必填）"},
+                "query": {"type": "string", "description": "搜索查询"},
+                "num_results": {"type": "integer", "description": "结果数量（默认8）"},
+                "type": {"type": "string", "enum": ["auto", "fast", "deep"], "description": "搜索类型"},
             },
-            "required": ["action", "path"],
+            "required": ["query"],
         },
-        handler=_handle_file,
+        handler=_handle_search,
+    ),
+    ToolDefinition(
+        name="read_file",
+        server=SERVER_BUILTIN,
+        tags=["file", "read"],
+        domains={ToolDomain.FILE},
+        description="读取文件或目录。支持分页读取。用于查看文件内容、浏览目录结构。",
+        parameters={
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "文件或目录路径"},
+                "offset": {"type": "integer", "description": "起始行号（从1开始）"},
+                "limit": {"type": "integer", "description": "读取行数限制"},
+            },
+            "required": ["path"],
+        },
+        handler=_handle_read_file,
+    ),
+    ToolDefinition(
+        name="edit_file",
+        server=SERVER_BUILTIN,
+        tags=["file", "edit", "write"],
+        domains={ToolDomain.FILE},
+        description="精确文本替换。支持替换所有匹配项。用于修改文件中的特定内容。",
+        parameters={
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "文件路径"},
+                "old_string": {"type": "string", "description": "要替换的原始文本"},
+                "new_string": {"type": "string", "description": "替换后的新文本"},
+                "replace_all": {"type": "boolean", "description": "是否替换所有匹配项"},
+            },
+            "required": ["path", "old_string", "new_string"],
+        },
+        handler=_handle_edit_file,
+    ),
+    ToolDefinition(
+        name="glob_search",
+        server=SERVER_BUILTIN,
+        tags=["search", "file", "glob"],
+        domains={ToolDomain.SEARCH, ToolDomain.FILE},
+        description="文件模式匹配搜索。支持递归搜索。用于查找符合模式的文件。",
+        parameters={
+            "type": "object",
+            "properties": {
+                "pattern": {"type": "string", "description": "Glob模式（如 *.py）"},
+                "path": {"type": "string", "description": "搜索目录（默认当前目录）"},
+                "limit": {"type": "integer", "description": "结果数量限制（默认200）"},
+            },
+            "required": ["pattern"],
+        },
+        handler=_handle_glob_search,
+    ),
+    ToolDefinition(
+        name="grep_search",
+        server=SERVER_BUILTIN,
+        tags=["search", "content", "regex"],
+        domains={ToolDomain.SEARCH, ToolDomain.TEXT},
+        description="正则表达式内容搜索。支持文件过滤。用于在文件中查找特定内容。",
+        parameters={
+            "type": "object",
+            "properties": {
+                "pattern": {"type": "string", "description": "正则表达式模式"},
+                "path": {"type": "string", "description": "搜索路径（文件或目录）"},
+                "include": {"type": "string", "description": "文件过滤模式（如 *.py）"},
+                "limit": {"type": "integer", "description": "结果数量限制（默认200）"},
+            },
+            "required": ["pattern"],
+        },
+        handler=_handle_grep_search,
+    ),
+    ToolDefinition(
+        name="todo_write",
+        server=SERVER_BUILTIN,
+        tags=["task", "todo", "management"],
+        domains={ToolDomain.AUTOMATION},
+        description="任务列表管理。支持创建、更新任务，设置优先级和状态。用于跟踪工作进度。",
+        parameters={
+            "type": "object",
+            "properties": {
+                "todos": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string"},
+                            "content": {"type": "string"},
+                            "status": {"type": "string", "enum": ["pending", "in_progress", "completed", "cancelled"]},
+                            "priority": {"type": "string", "enum": ["low", "medium", "high"]},
+                        },
+                        "required": ["content"],
+                    },
+                    "description": "任务列表",
+                },
+            },
+            "required": ["todos"],
+        },
+        handler=_handle_todo_write_tool,
     ),
 ]
 
@@ -2121,7 +2267,7 @@ class ToolRegistry:
         # ═══ 第七步：条件化核心工具保留 ═══
         # 只在任务描述暗示会用到时才强制保留，避免浪费名额
         CONDITIONAL_CORE = {
-            "search": [
+            "web_search": [
                 "搜索",
                 "查找",
                 "查询",
@@ -2132,18 +2278,25 @@ class ToolRegistry:
                 "find",
                 "query",
                 "看看",
+                "热搜",
+                "热榜",
+                "trending",
             ],
-            "file": [
-                "文件",
-                "保存",
-                "写入",
-                "读取",
+            "write_file": [
                 "写",
+                "创建",
+                "生成",
+                "保存",
                 "桌面",
-                "file",
+                "文件",
+                "游戏",
+                "脚本",
+                "HTML",
+                "Python",
                 "write",
-                "read",
-                "路径",
+                "create",
+                "generate",
+                "save",
             ],
             "execute_python": [
                 "代码",
@@ -2180,7 +2333,7 @@ class ToolRegistry:
                                 n
                                 not in (
                                     "search",
-                                    "file",
+                                    "write_file",
                                     "execute_python",
                                     "execute_shell",
                                     "fetch_url",

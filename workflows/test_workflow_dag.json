@@ -1,4 +1,5 @@
 {
+  "id": "test_workflow_dag",
   "name": "test_workflow_dag",
   "description": "测试工作流（nodes/edges 格式）",
   "nodes": [

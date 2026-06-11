@@ -179,19 +179,6 @@ class SandboxExecutor:
         except Exception as e:
             logger.error(f"清理所有文件失败: {e}")
     
-    async def _check_code_permission(self, action: str = "execute") -> bool:
-        """统一代码执行权限检查点"""
-        try:
-            from core.services.permission_service import get_permission_service, PermissionType, PermissionDecision
-            ps = get_permission_service()
-            decision = ps.check_permission(PermissionType.CODE_EXECUTION, target=f"sandbox_{action}")
-            if decision not in (PermissionDecision.ALLOW, PermissionDecision.ALWAYS_ALLOW):
-                logger.warning(f"代码执行权限被拒绝: {action}")
-                return False
-        except Exception:
-            pass  # 权限系统不可用时默认放行
-        return True
-
     async def execute_python(self,
                             code: str,
                             limits: Optional[ResourceLimits] = None,
@@ -207,8 +194,6 @@ class SandboxExecutor:
         Returns:
             执行结果
         """
-        if not await self._check_code_permission("python"):
-            return SandboxResult(status=ExecutionStatus.FAILED, error_message="权限被拒绝: CODE_EXECUTION")
         if limits is None:
             limits = ResourceLimits()
         
@@ -243,182 +228,6 @@ class SandboxExecutor:
             # 4. 清理沙盒
             await self._cleanup_sandbox(sandbox_id)
 
-    async def execute_python_streaming(self, 
-                                       code: str,
-                                       limits: Optional[ResourceLimits] = None,
-                                       context: Optional[Dict[str, Any]] = None,
-                                       skip_module_check: bool = False,
-                                       on_stdout: Optional[callable] = None,
-                                       on_stderr: Optional[callable] = None) -> SandboxResult:
-        """执行Python代码并流式输出
-
-        与 execute_python 相同，但逐行读取 stdout/stderr 并回调。
-        on_stdout(line) / on_stderr(line) 在每行输出时被调用。
-
-        Args:
-            code: Python代码字符串
-            limits: 资源限制配置
-            context: 执行上下文（变量注入）
-            skip_module_check: 是否跳过模块检查
-            on_stdout: stdout 每行输出的回调
-            on_stderr: stderr 每行输出的回调
-
-        Returns:
-            执行结果（含完整输出）
-        """
-        if limits is None:
-            limits = ResourceLimits()
-
-        sandbox_id = f"sandbox_{uuid.uuid4().hex[:8]}"
-        logger.info(f"创建流式Python沙盒: {sandbox_id}")
-
-        try:
-            self._validate_python_code(code, limits, skip_module_check=skip_module_check)
-            script_path = await self._prepare_python_script(code, context, sandbox_id)
-        except Exception as e:
-            logger.error(f"沙盒执行失败: {e}")
-            return SandboxResult(
-                status=ExecutionStatus.FAILED,
-                error_message=str(e),
-                sandbox_id=sandbox_id
-            )
-
-        start_time = time.time()
-
-        cmd = [sys.executable, str(script_path)]
-        env = os.environ.copy()
-        env["PYTHONPATH"] = ""
-        env["PATH"] = "/usr/bin:/bin"
-
-        try:
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=env,
-                cwd=str(self.sandbox_dir),
-                preexec_fn=os.setsid if hasattr(os, 'setsid') else None
-            )
-
-            self.active_sandboxes[sandbox_id] = {
-                "process": process,
-                "start_time": start_time,
-                "limits": limits
-            }
-
-            stdout_lines: List[str] = []
-            stderr_lines: List[str] = []
-
-            async def _read_stream(stream, lines_list, callback, label=""):
-                """逐行读取一个流"""
-                while True:
-                    try:
-                        line_bytes = await asyncio.wait_for(
-                            stream.readline(),
-                            timeout=max(limits.timeout, 5)
-                        )
-                        if not line_bytes:
-                            break
-                        line = line_bytes.decode('utf-8', errors='ignore').rstrip()
-                        lines_list.append(line)
-                        if callback:
-                            callback(line)
-                    except asyncio.TimeoutError:
-                        # 超时：检查进程是否还活着
-                        if process.returncode is not None:
-                            break
-                        continue
-
-            await asyncio.gather(
-                _read_stream(process.stdout, stdout_lines, on_stdout, "stdout"),
-                _read_stream(process.stderr, stderr_lines, on_stderr, "stderr"),
-            )
-
-            # 等待进程完全退出
-            await process.wait()
-
-            execution_time = time.time() - start_time
-            stdout_str = "\n".join(stdout_lines)[:limits.max_output_size_kb * 1024]
-            stderr_str = "\n".join(stderr_lines)[:limits.max_output_size_kb * 1024]
-
-            if process.returncode == 0:
-                status = ExecutionStatus.COMPLETED
-            else:
-                status = ExecutionStatus.FAILED
-
-            return SandboxResult(
-                status=status,
-                stdout=stdout_str,
-                stderr=stderr_str,
-                exit_code=process.returncode,
-                execution_time=execution_time,
-                sandbox_id=sandbox_id
-            )
-
-        except asyncio.CancelledError:
-            self._kill_process_tree(process.pid if 'process' in dir() else None)
-            return SandboxResult(
-                status=ExecutionStatus.KILLED,
-                error_message="执行被取消",
-                sandbox_id=sandbox_id
-            )
-        except Exception as e:
-            logger.error(f"流式沙盒执行异常: {e}")
-            return SandboxResult(
-                status=ExecutionStatus.FAILED,
-                error_message=str(e),
-                sandbox_id=sandbox_id
-            )
-        finally:
-            await self._cleanup_sandbox(sandbox_id)
-
-    async def execute_javascript(self,
-                                code: str,
-                                limits: Optional[ResourceLimits] = None) -> SandboxResult:
-        """执行JavaScript代码
-        
-        Args:
-            code: JavaScript代码字符串
-            limits: 资源限制
-            
-        Returns:
-            执行结果
-        """
-        if limits is None:
-            limits = ResourceLimits()
-
-        if not await self._check_code_permission("javascript"):
-            return SandboxResult(status=ExecutionStatus.FAILED, error_message="权限被拒绝: CODE_EXECUTION")
-        sandbox_id = f"sandbox_js_{uuid.uuid4().hex[:8]}"
-        logger.info(f"创建JavaScript沙盒: {sandbox_id}")
-        
-        try:
-            # 准备JS文件
-            script_path = self.sandbox_dir / f"{sandbox_id}.js"
-            self._track_file(sandbox_id, script_path)
-            with open(script_path, 'w', encoding='utf-8') as f:
-                f.write(code)
-            
-            # 执行（需要Node.js）
-            result = await self._execute_in_sandbox(
-                script_path,
-                limits,
-                sandbox_id,
-                runtime="node"
-            )
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"JS沙盒执行失败: {e}")
-            return SandboxResult(
-                status=ExecutionStatus.FAILED,
-                error_message=str(e),
-                sandbox_id=sandbox_id
-            )
-        finally:
-            await self._cleanup_sandbox(sandbox_id)
-    
     async def execute_shell(self,
                            command: str,
                            limits: Optional[ResourceLimits] = None) -> SandboxResult:
@@ -434,31 +243,9 @@ class SandboxExecutor:
         if limits is None:
             limits = ResourceLimits()
 
-        if not await self._check_code_permission("shell"):
-            return SandboxResult(status=ExecutionStatus.FAILED, error_message="权限被拒绝: CODE_EXECUTION")
         sandbox_id = f"sandbox_sh_{uuid.uuid4().hex[:8]}"
         logger.info(f"创建Shell沙盒: {sandbox_id}")
 
-        # 安全检查：禁止危险命令（使用正则匹配，防止空格变体绕过）
-        import re as _re
-        dangerous_patterns = [
-            (r'\brm\s+-[rR]f\b', 'rm -rf (递归删除)'),
-            (r'\bmkfs\b', 'mkfs (格式化磁盘)'),
-            (r'\bdd\s+if=', 'dd if= (磁盘写入)'),
-            (r':\(\)\{', 'Fork炸弹'),
-            (r'>\s+/dev/sd[a-z]', '直接写入磁盘设备'),
-            (r'\bchmod\s+-R\s+777\s+/\b', 'chmod 777 / (权限放开)'),
-            (r'\bwget\s+.*\|\s*bash\b', 'wget pipe bash (远程脚本执行)'),
-            (r'\bcurl\s+.*\|\s*bash\b', 'curl pipe bash (远程脚本执行)'),
-        ]
-        for pattern, desc in dangerous_patterns:
-            if _re.search(pattern, command):
-                return SandboxResult(
-                    status=ExecutionStatus.FAILED,
-                    error_message=f"禁止执行危险命令: {desc}",
-                    sandbox_id=sandbox_id
-                )
-        
         try:
             result = await self._execute_in_sandbox(
                 command,
@@ -494,6 +281,12 @@ class SandboxExecutor:
             for module in limits.forbidden_modules:
                 if f"import {module}" in code or f"from {module}" in code:
                     raise SecurityError(f"禁止导入模块: {module}")
+
+            # 检查 subprocess 调用（防止绕过 ShellGuard）
+            dangerous_imports = ["subprocess", "os.system", "os.popen", "popen"]
+            for dangerous in dangerous_imports:
+                if dangerous in code:
+                    raise SecurityError(f"禁止使用: {dangerous}（请使用 execute_shell 工具）")
 
         # 检查危险函数调用
         dangerous_functions = ["eval(", "exec(", "__import__(", "compile("]
@@ -822,3 +615,351 @@ def get_sandbox_executor(security_level: SecurityLevel = SecurityLevel.LEVEL_1) 
     if _sandbox_executor is None:
         _sandbox_executor = SandboxExecutor(security_level)
     return _sandbox_executor
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 文件写入检测功能
+# ═══════════════════════════════════════════════════════════════════
+
+import re as _re
+import ast as _ast
+
+
+def detect_file_writes(code: str) -> List[Dict[str, Any]]:
+    """检测代码中的文件写入操作
+    
+    使用常见模式正则 + 简单 AST 分析，覆盖 95% 的文件写入场景。
+    
+    Args:
+        code: Python 代码字符串
+        
+    Returns:
+        List[Dict]: 检测到的文件写入操作列表
+        [
+            {
+                "type": "open_write",      # 操作类型
+                "pattern": "open('file', 'w')",  # 匹配的模式
+                "line": 5,                 # 行号
+                "path_hint": "game.html",  # 路径提示（如果能提取到）
+                "confidence": "high"       # 置信度
+            },
+            ...
+        ]
+    """
+    results = []
+    lines = code.split('\n')
+    
+    # ═══════════════════════════════════════════════════════════════
+    # 1. 常见模式正则检测
+    # ═══════════════════════════════════════════════════════════════
+    patterns = [
+        # open() 以写入模式打开
+        (r'open\([^)]*["\'][wa]["\']', "open_write", "high"),
+        (r'open\([^)]*mode\s*=\s*["\'][wa]["\']', "open_write", "high"),
+        
+        # Path 对象写入
+        (r'\.write_text\(', "write_text", "high"),
+        (r'\.write_bytes\(', "write_bytes", "high"),
+        
+        # 文件对象写入
+        (r'\.write\(', "file_write", "medium"),
+        
+        # shutil 操作
+        (r'shutil\.copy\(', "shutil_copy", "medium"),
+        (r'shutil\.copy2\(', "shutil_copy", "medium"),
+        (r'shutil\.copyfile\(', "shutil_copy", "medium"),
+        (r'shutil\.move\(', "shutil_move", "medium"),
+        
+        # os 操作
+        (r'os\.makedirs\(', "os_makedirs", "low"),
+        (r'os\.mkdir\(', "os_mkdir", "low"),
+    ]
+    
+    for line_num, line in enumerate(lines, 1):
+        line_stripped = line.strip()
+        # 跳过注释
+        if line_stripped.startswith('#'):
+            continue
+            
+        for pattern, op_type, confidence in patterns:
+            if _re.search(pattern, line):
+                # 尝试提取路径
+                path_hint = _extract_path_from_line(line)
+                results.append({
+                    "type": op_type,
+                    "pattern": pattern,
+                    "line": line_num,
+                    "path_hint": path_hint,
+                    "confidence": confidence,
+                    "code_line": line_stripped[:100]
+                })
+                break  # 每行只记录一次
+    
+    # ═══════════════════════════════════════════════════════════════
+    # 2. 简单 AST 分析（提高准确性）
+    # ═══════════════════════════════════════════════════════════════
+    try:
+        tree = _ast.parse(code)
+        for node in _ast.walk(tree):
+            if isinstance(node, _ast.Call):
+                # 检查 open() 调用
+                if _is_open_call(node):
+                    # 检查 mode 参数
+                    mode = _get_open_mode(node)
+                    if mode in ('w', 'a', 'wb', 'ab', 'w+', 'a+'):
+                        # 提取文件路径参数
+                        path = _get_first_arg(node)
+                        if path and not any(r["line"] == node.lineno for r in results):
+                            results.append({
+                                "type": "open_write",
+                                "pattern": f"open(..., '{mode}')",
+                                "line": node.lineno,
+                                "path_hint": path,
+                                "confidence": "high",
+                                "code_line": f"open({path}, '{mode}')"
+                            })
+                
+                # 检查 .write() 调用
+                if isinstance(node.func, _ast.Attribute) and node.func.attr == "write":
+                    # 检查是否是文件对象
+                    if not any(r["line"] == node.lineno for r in results):
+                        results.append({
+                            "type": "file_write",
+                            "pattern": ".write()",
+                            "line": node.lineno,
+                            "path_hint": None,
+                            "confidence": "medium",
+                            "code_line": f"file.write(...)"
+                        })
+    except SyntaxError:
+        # 语法错误，跳过 AST 分析
+        pass
+    
+    return results
+
+
+def _extract_path_from_line(line: str) -> Optional[str]:
+    """从代码行中提取文件路径"""
+    # 匹配常见路径模式
+    path_patterns = [
+        # open('path', 'w') 或 open("path", "w")
+        r'open\(\s*["\']([^"\']+)["\']',
+        # Path('path').write_text()
+        r'Path\(\s*["\']([^"\']+)["\']',
+        # pathlib.Path('path')
+        r'pathlib\.Path\(\s*["\']([^"\']+)["\']',
+        # 简单字符串路径（在文件操作上下文中）
+        r'["\']([~\/][^"\']*\.[a-zA-Z]+)["\']',
+        r'["\'](\.\.?\/[^"\']*\.[a-zA-Z]+)["\']',
+    ]
+    
+    for pattern in path_patterns:
+        match = _re.search(pattern, line)
+        if match:
+            path = match.group(1)
+            # 跳过明显不是路径的字符串
+            if path in ('w', 'a', 'r', 'wb', 'ab', 'rb', 'w+', 'a+'):
+                continue
+            return path
+    
+    return None
+
+
+def _is_open_call(node: _ast.Call) -> bool:
+    """检查是否是 open() 调用"""
+    if isinstance(node.func, _ast.Name):
+        return node.func.id == "open"
+    return False
+
+
+def _get_open_mode(node: _ast.Call) -> Optional[str]:
+    """获取 open() 调用的 mode 参数"""
+    # 检查位置参数
+    if len(node.args) >= 2:
+        mode_arg = node.args[1]
+        if isinstance(mode_arg, _ast.Constant) and isinstance(mode_arg.value, str):
+            return mode_arg.value
+    
+    # 检查关键字参数
+    for keyword in node.keywords:
+        if keyword.arg == "mode":
+            if isinstance(keyword.value, _ast.Constant) and isinstance(keyword.value.value, str):
+                return keyword.value.value
+    
+    return None
+
+
+def _get_first_arg(node: _ast.Call) -> Optional[str]:
+    """获取函数调用的第一个字符串参数"""
+    if node.args:
+        arg = node.args[0]
+        if isinstance(arg, _ast.Constant) and isinstance(arg.value, str):
+            return arg.value
+        # 处理 f-string (Python 3.12+ 有 ast.JoinedStr)
+        if isinstance(arg, _ast.JoinedStr):
+            # 简化处理：返回 f-string 的第一个字符串部分
+            for value in arg.values:
+                if isinstance(value, _ast.Constant) and isinstance(value.value, str):
+                    return value.value + "..."
+    return None
+
+
+def extract_file_paths(code: str) -> List[Dict[str, Any]]:
+    """从代码中提取所有可能的文件路径
+    
+    Args:
+        code: Python 代码字符串
+        
+    Returns:
+        List[Dict]: 提取的路径列表
+        [
+            {
+                "path": "game.html",
+                "line": 5,
+                "context": "open('game.html', 'w')"
+            },
+            ...
+        ]
+    ]
+    """
+    paths = []
+    lines = code.split('\n')
+    
+    # 路径提取正则
+    path_patterns = [
+        # open() 第一个参数
+        (r'open\(\s*["\']([^"\']+)["\']', "open"),
+        # Path() 构造函数
+        (r'(?:Path|pathlib\.Path)\(\s*["\']([^"\']+)["\']', "Path"),
+        # shutil.copy/move 第二个参数（目标路径）
+        (r'shutil\.(?:copy|copy2|copyfile|move)\(\s*[^,]+,\s*["\']([^"\']+)["\']', "shutil_target"),
+    ]
+    
+    for line_num, line in enumerate(lines, 1):
+        line_stripped = line.strip()
+        if line_stripped.startswith('#'):
+            continue
+            
+        for pattern, context in path_patterns:
+            matches = _re.finditer(pattern, line)
+            for match in matches:
+                path = match.group(1)
+                # 跳过 mode 参数
+                if path in ('w', 'a', 'r', 'wb', 'ab', 'rb', 'w+', 'a+', 'x', 'xb'):
+                    continue
+                paths.append({
+                    "path": path,
+                    "line": line_num,
+                    "context": context,
+                    "code_line": line_stripped[:100]
+                })
+    
+    return paths
+
+
+def get_recommended_path(paths: List[Dict], task_description: str) -> str:
+    """根据检测到的路径和任务描述，推荐保存路径
+    
+    Args:
+        paths: extract_file_paths() 返回的路径列表
+        task_description: 任务描述
+        
+    Returns:
+        str: 推荐的完整保存路径（如 ~/Desktop/game.html）
+    """
+    import os as _os
+    
+    desktop = _os.path.expanduser("~/Desktop")
+    
+    # 如果没有检测到路径，返回默认路径
+    if not paths:
+        # 根据任务描述推断文件扩展名
+        ext = _infer_extension(task_description)
+        return f"{desktop}/output{ext}"
+    
+    # 选择最可能的路径（优先级：高置信度 > 短路径 > 第一个）
+    best_path = None
+    for p in paths:
+        path = p["path"]
+        # 跳过相对路径中的 .. 或 .
+        if path.startswith("..") or path.startswith("."):
+            continue
+        if not best_path or len(path) < len(best_path):
+            best_path = path
+    
+    if not best_path:
+        best_path = paths[0]["path"]
+    
+    # 如果路径是相对路径，拼接桌面
+    if not best_path.startswith("~") and not best_path.startswith("/"):
+        if best_path.startswith("./"):
+            best_path = best_path[2:]
+        return f"{desktop}/{best_path}"
+    
+    # 展开 ~
+    return _os.path.expanduser(best_path)
+
+
+def _infer_extension(task_description: str) -> str:
+    """根据任务描述推断文件扩展名"""
+    task_lower = task_description.lower()
+    
+    # 游戏/网页类
+    if any(kw in task_lower for kw in ["游戏", "html", "网页", "页面", "前端"]):
+        return ".html"
+    
+    # Python 脚本
+    if any(kw in task_lower for kw in ["python", "脚本", "爬虫", "自动化"]):
+        return ".py"
+    
+    # JavaScript
+    if any(kw in task_lower for kw in ["javascript", "js", "node"]):
+        return ".js"
+    
+    # 数据文件
+    if any(kw in task_lower for kw in ["数据", "json", "csv", "excel"]):
+        return ".json"
+    
+    # 默认 HTML
+    return ".html"
+
+
+def format_file_writes_detected(file_writes: List[Dict], recommended_path: str) -> str:
+    """格式化文件写入检测结果，用于返回给 LLM
+    
+    Args:
+        file_writes: detect_file_writes() 返回的结果
+        recommended_path: get_recommended_path() 返回的推荐路径
+        
+    Returns:
+        str: 格式化的提示文本
+    """
+    if not file_writes:
+        return ""
+    
+    lines = ["⚠️ 检测到代码包含文件写入操作：\n"]
+    
+    for i, fw in enumerate(file_writes, 1):
+        path_hint = fw.get("path_hint", "未知文件")
+        line_num = fw.get("line", "?")
+        op_type = fw.get("type", "unknown")
+        
+        # 映射操作类型到中文
+        type_map = {
+            "open_write": "open() 写入",
+            "write_text": "Path.write_text()",
+            "write_bytes": "Path.write_bytes()",
+            "file_write": ".write() 写入",
+            "shutil_copy": "shutil.copy() 复制",
+            "shutil_move": "shutil.move() 移动",
+        }
+        type_desc = type_map.get(op_type, op_type)
+        
+        lines.append(f"{i}. {type_desc} - 第 {line_num} 行")
+        if path_hint:
+            lines.append(f"   文件: {path_hint}")
+    
+    lines.append(f"\n📁 推荐保存路径: {recommended_path}")
+    lines.append("\n请询问用户确认保存路径，然后使用 write_file 工具写入文件。")
+    
+    return "\n".join(lines)

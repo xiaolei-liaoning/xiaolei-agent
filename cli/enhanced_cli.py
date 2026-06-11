@@ -1165,7 +1165,6 @@ export default async function() {{
 
     const results = await parallel(
         topics.map((t, i) => () => agent(`深入分析: ${{t}}`, {{
-            agentType: "analyst",
             label: `子任务${{i+1}}: ${{t.substring(0, 20)}}`,
             timeout: 120,
         }}))
@@ -1177,7 +1176,6 @@ export default async function() {{
 
     const context = good.map((r, i) => `【子任务${{i+1}}】\\n${{r.substring(0, 500)}}`).join("\\n\\n")
     return await agent(`综合以下对各个维度的分析结果，给出整体结论:\\n\\n${{context}}`, {{
-        agentType: "analyst",
         label: "综合汇总",
         timeout: 180,
     }})
@@ -1220,8 +1218,7 @@ export default async function() {{
                 "  - phase(title)              - 标记阶段\n"
                 "  - log(msg)                  - 输出日志\n"
                 "  - agent(prompt, opts)       - 调用子Agent（返回纯文本字符串）\n"
-                "    opts: { agentType, label, timeout, schema, model }\n"
-                "    agentType: \"analyst\" | \"Explore\" | \"Plan\" | \"code-reviewer\"\n"
+                "    opts: { label, timeout, schema, model }\n"
                 "  - parallel([thunks])        - 并行执行（数组里是 () => agent(...)）\n"
                 "  - pipeline(items, ...stages) - 无屏障流水线\n"
                 "  - budget.remaining()        - 剩余预算\n\n"
@@ -1244,11 +1241,11 @@ export default async function() {{
                 "  export default async function() {\n"
                 '    phase("调研")\n'
                 "    const results = await parallel([\n"
-                '      () => agent("分析Rust特性", {agentType: "analyst", label: "Rust"}),\n'
-                '      () => agent("分析Go特性", {agentType: "analyst", label: "Go"}),\n'
+                '      () => agent("分析Rust特性", {label: "Rust"}),\n'
+                '      () => agent("分析Go特性", {label: "Go"}),\n'
                 "    ])\n"
                 '    phase("汇总")\n'
-                '    return await agent("对比以上结果", {agentType: "analyst", label: "汇总"})\n'
+                '    return await agent("对比以上结果", {label: "汇总"})\n'
                 "  }\n\n"
                 "重要规则：\n"
                 "  1. 直接输出脚本代码，不要解释，不要 markdown 代码块\n"
@@ -1256,7 +1253,14 @@ export default async function() {{
                 "  3. 变量名用英文，不要中文\n"
                 "  4. 根据任务复杂度决定用 agent() / parallel() / pipeline()\n"
                 "  5. 复杂任务拆成多个 phase，每个 phase 聚焦一个步骤\n"
-                "  6. schema 必须是 JSON Schema 对象，不是字符串\n\n"
+                "  6. schema 必须是 JSON Schema 对象，不是字符串\n"
+                "  7. 不要指定 agentType，让系统自动判断使用什么工具\n\n"
+                "  ⚠️ 创建文件类任务（游戏/HTML/脚本/代码）的特殊规则：\n"
+                "  - 必须在单个 agent() 调用中完成所有文件创建\n"
+                "  - agent 的 prompt 必须明确要求：用 write_file 工具一次性写入完整文件\n"
+                "  - 不要把创建任务拆成多个 phase（如：先写框架、再写逻辑、再写样式）\n"
+                "  - 正确示例：agent('用 write_file 在桌面创建完整的植物大战僵尸HTML游戏，包含CSS和JS', {label:'创建游戏'})\n"
+                "  - 错误示例：分3个phase分别写HTML结构、CSS样式、JS逻辑\n\n"
                 f"任务描述：{task[:500]}\n\n"
                 "开始生成："
             )

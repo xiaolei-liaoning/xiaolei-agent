@@ -24,6 +24,11 @@ beautifulsoup4==4.12.3
 # ===== 向量数据库 =====
 chromadb==0.5.4
 
+# ===== 中文Embedding模型 =====
+sentence-transformers>=2.2.0
+transformers>=4.30.0
+torch>=2.0.0
+
 # ===== 浏览器自动化 =====
 playwright==1.45.0
 

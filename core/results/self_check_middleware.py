@@ -9,7 +9,7 @@
 - 完整的可观测性：记录每轮得分、反馈、迭代历史
 
 使用示例:
-    from core.self_check_middleware import SelfCheckMiddleware
+    from core.results.self_check_middleware import SelfCheckMiddleware
     
     # 创建中间件实例
     checker = SelfCheckMiddleware(pass_score=80, max_retry=3)

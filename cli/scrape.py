@@ -14,10 +14,9 @@ async def handle_scrape(args):
     print_info(f"动作: {action}")
 
     try:
-        from skills.web_scraper.handler import get_scraper_handler
+        from mcp._impl.web_scraper.handler import scraper_dispatcher
 
-        handler = get_scraper_handler()
-        result = handler.handle(site, action)
+        result = scraper_dispatcher.execute(site_name=site, action=action)
 
         if result.get("success"):
             print_success("爬取完成")
@@ -37,10 +36,9 @@ async def handle_scrape_list(args):
     print_header("支持的爬虫站点")
 
     try:
-        from skills.web_scraper.handler import get_scraper_handler
+        from mcp._impl.web_scraper.handler import scraper_dispatcher, _SITE_ALIASES
 
-        handler = get_scraper_handler()
-        sites = handler.get_registered_sites()
+        sites = list(_SITE_ALIASES.keys())
 
         print_info(f"共 {len(sites)} 个站点支持:")
         for site in sites:

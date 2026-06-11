@@ -69,7 +69,17 @@ class SharedBus:
     # ─── 消息通信 ───────────────────────────────────────────
 
     async def publish(self, topic: str, message: Message) -> None:
-        """发布消息到主题 — 所有订阅者收到（支持通配符订阅）"""
+        """发布消息到主题 — 所有订阅者收到（支持通配符订阅）
+
+        .. deprecated::
+            publish/subscribe 在 V2 中无调用者，已被 store_knowledge/search_knowledge 替代。
+            将在未来版本移除。
+        """
+        import warnings
+        warnings.warn(
+            "SharedBus.publish 已废弃，使用 store_knowledge/search_knowledge 替代",
+            DeprecationWarning, stacklevel=2,
+        )
         async with self._lock:
             # 获取精确匹配的订阅者
             callbacks = self._subscriptions.get(topic, set()).copy()
@@ -103,7 +113,17 @@ class SharedBus:
         return bool(re.fullmatch(regex, topic))
 
     async def subscribe(self, topic: str, callback: Callable) -> None:
-        """订阅主题"""
+        """订阅主题
+
+        .. deprecated::
+            publish/subscribe 在 V2 中无调用者，已被 store_knowledge/search_knowledge 替代。
+            将在未来版本移除。
+        """
+        import warnings
+        warnings.warn(
+            "SharedBus.subscribe 已废弃，使用 store_knowledge/search_knowledge 替代",
+            DeprecationWarning, stacklevel=2,
+        )
         async with self._lock:
             self._subscriptions[topic].add(callback)
 

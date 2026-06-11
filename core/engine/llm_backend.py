@@ -149,13 +149,50 @@ class GLMBackend:
         self.api_key = api_key or os.getenv("ZHIPU_API_KEY", "")
         self.model = model or DEFAULT_MODEL
         self.client = None
+        self.local_client = None
+        self.local_model = None
         self.free_client = None
         self._token_stats = TokenStats()
         self._rate_limiter = RateLimiter(RATE_LIMIT_RPM)
         self._model_lock = threading.Lock()
+        self.timeout = llm_config.timeout  # 使用配置中的超时设置
         self._init_client()
 
     def _init_client(self):
+        # 1. 尝试初始化本地 LM Studio (OpenAI 兼容)
+        local_url = os.getenv("LOCAL_LLM_URL", "http://192.168.66.236:1234")
+        if local_url:
+            try:
+                # 使用 requests 直接调用 LM Studio API
+                import requests
+                self.local_url = local_url
+                self.local_model = os.getenv("LOCAL_LLM_MODEL", "qwen/qwen3-vl-4b")
+                self.local_client = True  # 标记为可用
+                logger.info("本地 LM Studio 初始化成功: %s", local_url)
+            except Exception as e:
+                logger.warning("本地 LM Studio 初始化失败: %s", e)
+                self.local_client = None
+        else:
+            self.local_client = None
+
+        # 2. 初始化 DeepSeek (OpenAI 兼容) — 从 ANTHROPIC_AUTH_TOKEN 读取 key
+        self.deepseek_client = None
+        self.deepseek_model = os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL", "deepseek-chat")
+        deepseek_key = os.getenv("ANTHROPIC_AUTH_TOKEN", "")
+        if deepseek_key:
+            try:
+                import openai
+                self.deepseek_client = openai.AsyncOpenAI(
+                    api_key=deepseek_key,
+                    base_url="https://api.deepseek.com/v1",
+                )
+                logger.info("DeepSeek 客户端初始化成功: model=%s", self.deepseek_model)
+            except ImportError:
+                logger.warning("openai 未安装，DeepSeek 客户端不可用")
+            except Exception as e:
+                logger.warning("DeepSeek 客户端初始化失败: %s", e)
+
+        # 3. 初始化 GLM API (fallback)
         if self.api_key:
             try:
                 from zhipuai import ZhipuAI
@@ -213,7 +250,7 @@ class GLMBackend:
             return False
 
     async def _call_free_api(self, messages, model, temperature=0.7,
-                             max_tokens=2000, stream=False):
+                             max_tokens=2000, stream=False, tools=None, tool_choice=None):
         if model not in self.FREE_API_ENDPOINTS:
             return None
         url = self.FREE_API_ENDPOINTS[model]
@@ -236,8 +273,11 @@ class GLMBackend:
                     headers["Authorization"] = f"Bearer {api_key}"
             payload = {"model": model, "messages": messages,
                        "temperature": temperature, "max_tokens": max_tokens, "stream": stream}
+            if tools:
+                payload["tools"] = tools
+                payload["tool_choice"] = tool_choice or "auto"
             import aiohttp
-            timeout = aiohttp.ClientTimeout(total=10)
+            timeout = aiohttp.ClientTimeout(total=30)
             async with self.free_client.post(url, headers=headers, json=payload, timeout=timeout) as resp:
                 resp.raise_for_status()
                 return await resp.json() if not stream else resp
@@ -250,14 +290,46 @@ class GLMBackend:
         if not await self._rate_limiter.acquire(timeout=30.0):
             return "请求过于频繁，请稍后再试"
 
-        # 1. GLM 官方 API
+        # 0. DeepSeek (OpenAI 兼容) — 优先，用户已配置 key
+        if self.deepseek_client:
+            try:
+                payload = dict(model=self.deepseek_model, messages=messages,
+                               temperature=temperature, max_tokens=max_tokens)
+                if tools:
+                    payload["tools"] = tools
+                    payload["tool_choice"] = "auto"
+
+                logger.info("LLM → DeepSeek (%s, tools=%s)", self.deepseek_model, bool(tools))
+                response = await self.deepseek_client.chat.completions.create(**payload)
+                self._record_usage_from_response(response.model_dump() if hasattr(response, 'model_dump') else {}, self.deepseek_model)
+                if hasattr(response, 'choices') and response.choices:
+                    message = response.choices[0].message
+                    content = getattr(message, 'content', None) or ""
+                    tc = getattr(message, 'tool_calls', None)
+                    logger.info("LLM DeepSeek返回: content_len=%d tool_calls=%s", len(content), bool(tc))
+                    if tc:
+                        tc_list = [{"id": getattr(t, 'id', ''),
+                                    "type": getattr(t, 'type', 'function'),
+                                    "function": {"name": t.function.name,
+                                                 "arguments": t.function.arguments}}
+                                   for t in tc]
+                        return json.dumps({"choices": [{"message": {"role": "assistant",
+                                        "content": content, "tool_calls": tc_list}}]},
+                                          ensure_ascii=False)
+                    return content or ""
+                else:
+                    logger.warning("DeepSeek 返回空响应")
+            except Exception as e:
+                logger.error(f"DeepSeek API 调用异常: {e}（将尝试GLM API）")
+
+        # 1. GLM 官方 API (fallback)
         logger.info("LLM.chat: api_key=%s client=%s tools=%s",
                      bool(self.api_key), bool(self.client), bool(tools))
         if self.client and self.api_key:
             try:
                 kwargs = dict(model="glm-4-flash", messages=messages,
                               temperature=temperature, max_tokens=max_tokens,
-                              stream=False, timeout=30)
+                              stream=False, timeout=self.timeout)
                 if tools:
                     kwargs["tools"] = tools
                     kwargs["tool_choice"] = "auto"
@@ -280,18 +352,71 @@ class GLMBackend:
                                       ensure_ascii=False)
                 return content or ""
             except Exception as e:
-                logger.error(f"GLM API 调用异常: {e}（将尝试fallback）")
+                logger.error(f"GLM API 调用异常: {e}（将尝试本地LM Studio）")
+
+        # 1. 本地 LM Studio (保底)
+        if self.local_client:
+            try:
+                import requests
+                
+                payload = {
+                    "model": self.local_model,
+                    "messages": messages,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                    "stream": False
+                }
+                if tools:
+                    payload["tools"] = tools
+                    payload["tool_choice"] = "auto"
+
+                logger.info("LLM → 本地 LM Studio (%s, tools=%s)", self.local_model, bool(tools))
+                response = requests.post(
+                    f"{self.local_url}/v1/chat/completions",
+                    json=payload,
+                    timeout=self.timeout
+                )
+                response.raise_for_status()
+                data = response.json()
+                
+                # 检查响应格式
+                if not data or "choices" not in data or not data["choices"]:
+                    logger.error("本地 LM Studio 返回空响应")
+                    raise ValueError("Empty response from local LM Studio")
+                
+                choice = data["choices"][0]
+                if "message" not in choice:
+                    logger.error("本地 LM Studio 返回空消息")
+                    raise ValueError("Empty message from local LM Studio")
+                
+                message = choice["message"]
+                content = message.get("content", "") or ""
+                tc = message.get("tool_calls", [])
+                logger.info("LLM 本地返回: content_len=%d tool_calls=%s", len(content), bool(tc))
+                if tc:
+                    return json.dumps({"choices": [{"message": {"role": "assistant",
+                                    "content": content, "tool_calls": tc}}]},
+                                      ensure_ascii=False)
+                return content or ""
+            except Exception as e:
+                logger.error(f"本地 LM Studio 调用异常: {e}（将尝试fallback）")
 
         # 2. 免费 API fallback（仅当没有主API key时）
         can_use_free = await self._init_free_client()
         logger.info("LLM fallback检查: free_client=%s api_key=%s", can_use_free, bool(self.api_key))
         if can_use_free and not self.api_key:
             for free_model in ["openrouter-qwen", "openrouter-llama", "llama-3.1-8b-instant", "gemma2-9b-it"]:
-                logger.info("LLM → 免费API: %s", free_model)
-                data = await self._call_free_api(messages, free_model, temperature, max_tokens)
+                logger.info("LLM → 免费API: %s (tools=%s)", free_model, bool(tools))
+                data = await self._call_free_api(messages, free_model, temperature, max_tokens, tools=tools, tool_choice="auto" if tools else None)
                 if data and "choices" in data and data["choices"]:
-                    content = data["choices"][0]["message"]["content"]
-                    logger.info("LLM freeAPI成功: %s len=%d", free_model, len(content))
+                    message = data["choices"][0].get("message", {})
+                    content = message.get("content", "") or ""
+                    tc = message.get("tool_calls", [])
+                    logger.info("LLM freeAPI成功: %s len=%d tool_calls=%s", free_model, len(content), bool(tc))
+                    if tc:
+                        return json.dumps({"choices": [{"message": {"role": "assistant",
+                                        "content": content, "tool_calls": tc}}]},
+                                          ensure_ascii=False)
                     self._record_usage_from_response(data, free_model)
                     return content or ""
                 logger.warning("LLM freeAPI失败: %s", free_model)
@@ -306,12 +431,53 @@ class GLMBackend:
         if not await self._rate_limiter.acquire(timeout=30.0):
             yield "请求过于频繁"
             return
+
+        # 0. 本地 LM Studio (优先)
+        if self.local_client:
+            try:
+                import requests
+                
+                payload = {
+                    "model": self.local_model,
+                    "messages": messages,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                    "stream": True
+                }
+
+                logger.info("LLM → 本地 LM Studio 流式 (%s)", self.local_model)
+                response = requests.post(
+                    f"{self.local_url}/v1/chat/completions",
+                    json=payload,
+                    timeout=self.timeout,
+                    stream=True
+                )
+                response.raise_for_status()
+                
+                for line in response.iter_lines():
+                    if line:
+                        line = line.decode('utf-8')
+                        if line.startswith('data: '):
+                            data = line[6:]
+                            if data == '[DONE]':
+                                break
+                            try:
+                                chunk = json.loads(data)
+                                if chunk.get('choices') and chunk['choices'][0].get('delta', {}).get('content'):
+                                    yield chunk['choices'][0]['delta']['content']
+                            except json.JSONDecodeError:
+                                continue
+                return
+            except Exception as e:
+                logger.error("本地 LM Studio 流式调用异常: %s", e)
+
+        # 1. GLM API
         if self.client and self.api_key:
             try:
                 response = self.client.chat.completions.create(
                     model="glm-4-flash", messages=messages,
                     temperature=temperature, max_tokens=max_tokens,
-                    stream=True, timeout=30)
+                    stream=True, timeout=self.timeout)
                 for chunk in response:
                     if chunk.choices and chunk.choices[0].delta.content:
                         yield chunk.choices[0].delta.content

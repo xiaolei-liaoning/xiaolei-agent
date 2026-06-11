@@ -196,11 +196,6 @@ class ToolManager:
                     limits=limits,
                     context=context
                 )
-            elif language == "javascript":
-                result = await sandbox.execute_javascript(
-                    code=code,
-                    limits=limits
-                )
             elif language == "shell":
                 result = await sandbox.execute_shell(
                     command=code,

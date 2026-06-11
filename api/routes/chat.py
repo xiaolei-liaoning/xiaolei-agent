@@ -15,6 +15,8 @@ import time
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 
+import yaml
+
 from fastapi import APIRouter, HTTPException, UploadFile, File
 from pydantic import BaseModel, Field
 
@@ -211,7 +213,7 @@ def _needs_agent(message: str) -> bool:
 # 内部函数：判断是否需要使用多Agent模式（multi_agent_v2）
 # ---------------------------------------------------------------------------
 def _needs_multi_agent(message: str) -> bool:
-    """判断是否需要使用multi_agent_v2多Agent系统
+    """判断是否需要使用 V1 队长-队员多Agent系统
 
     触发条件：
     1. 明确提到"深度思考"、"自主搜索"等深度思考触发词
@@ -392,8 +394,8 @@ async def chat(request: ChatRequest) -> ChatResponse:
     
     # 如果没有强制选择，则继续智能判断
     if _needs_multi_agent(message):
-        # 深度思考任务 → 走multi_agent_v2多Agent系统
-        logger.info("检测到深度思考需求，使用multi_agent_v2多Agent系统处理")
+        # 深度思考任务 → 走 V1 队长-队员多Agent系统
+        logger.info("检测到深度思考需求，使用V1队长-队员多Agent系统处理")
         return await _handle_with_multi_agent(request, message, start_time, context_info, execution_plan_info, agents_used)
     elif _needs_mcp_tools(message):
         # 文件操作/代码编辑 → 走 agency_agent（集成 MCP 工具）
@@ -415,9 +417,9 @@ async def _handle_with_multi_agent(
     execution_plan_info: Optional[Dict[str, Any]],
     agents_used: Optional[List[str]]
 ) -> ChatResponse:
-    """通过multi_agent_v2系统处理深度思考任务（IntelligentScheduler 已移除，降级到单Agent）"""
+    """通过 V1 队长-队员模式（LeaderAgent + LLMAgent）处理深度思考任务"""
     try:
-        logger.info("深度思考任务（IntelligentScheduler 已移除，降级到单Agent）: %s...", message[:50])
+        logger.info("🚀 V1 多Agent 开始处理: %s...", message[:60])
 
         # 保存用户消息到BFS上下文
         try:
@@ -436,34 +438,67 @@ async def _handle_with_multi_agent(
                 message = f"{message}\n\n{ocr_text}"
                 logger.info(f"已将OCR结果附加到消息，追加字符数: {len(ocr_text)}")
 
-        # IntelligentScheduler 已移除，降级到单Agent系统处理
-        logger.warning("IntelligentScheduler 已移除，降级到单Agent系统")
+        # ========== V1 队长-队员模式执行 ==========
+        from core.agent_system import V1LeaderPool
+
+        pool = V1LeaderPool()
+        leader, workers = pool.create_team(worker_count=3, max_workers=5)
+
+        logger.info(f"👥 V1 队伍已创建: 队长={leader.name}, {len(workers)} 个 Worker")
+
         try:
-            from core.tasks.task_processor import task_processor
-            fallback_result = await task_processor.process(message)
-            reply_text = fallback_result if isinstance(fallback_result, str) else str(fallback_result)
-        except Exception as fallback_error:
-            logger.error(f"单Agent降级也失败: {fallback_error}")
-            reply_text = "抱歉，处理您的问题时遇到了技术问题，请稍后重试。"
+            result = await asyncio.wait_for(
+                leader.supervise_task(message, workers, active_count=3, max_rounds=3),
+                timeout=120,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("V1 多Agent 超时")
+            result = {"success": False, "error": "执行超时", "results": [], "rounds": 0, "total_subtasks": 0}
+
+        # 清理队伍
+        await pool.discard([leader] + workers)
+
+        # ========== 格式化回复 ==========
+        success = result.get("success", False)
+        all_results = result.get("results", [])
+        total_rounds = result.get("rounds", 0)
+        total_subtasks = result.get("total_subtasks", 0)
+
+        # 构建回复文本
+        reply_parts = []
+        if success:
+            reply_parts.append(f"✅ V1 多Agent 任务完成！共 {total_rounds} 轮，{total_subtasks} 个子任务。\n")
+        else:
+            reply_parts.append(f"❌ V1 多Agent 任务未完全完成（{result.get('error', '未知错误')}）\n")
+
+        for i, r in enumerate(all_results):
+            worker_name = r.get("worker", f"worker-{i}")
+            task_desc = r.get("task", "")
+            worker_ok = r.get("success", False)
+            worker_result = r.get("result", {})
+            status_icon = "✅" if worker_ok else "❌"
+            reply_parts.append(f"\n{status_icon} **{worker_name}**: {task_desc[:80]}")
+            result_text = worker_result.get("result", "") if isinstance(worker_result, dict) else str(worker_result)
+            if result_text:
+                reply_parts.append(f"   {result_text[:300]}")
+
+        reply_text = "\n".join(reply_parts)
 
         elapsed = time.time() - start_time
-        logger.info("降级到单Agent处理完成，耗时: %.2fs", elapsed)
+        logger.info("V1 多Agent 处理完成，耗时: %.2fs, 成功: %s", elapsed, success)
 
-        # 模拟多Agent协作信息用于展示
-        multi_agents_used = ["master-001", "worker-001", "reviewer-001"]
-        collaboration_mode = "master_slave"
-        execution_plan = [
-            {"step": 1, "agent": "master-001", "action": "任务分解", "status": "completed"},
-            {"step": 2, "agent": "worker-001", "action": "深度分析", "status": "completed"},
-            {"step": 3, "agent": "reviewer-001", "action": "结果审核", "status": "completed"}
-        ]
+        # 构建 multi_agents_used 列表
+        team_names = [leader.name] + [w.name for w in workers]
 
         # 保存聊天历史
         save_chat_history(request.user_id, request.agent_id, "user", message)
         save_chat_history(request.user_id, request.agent_id, "assistant", reply_text, {
-            "skill": "multi_agent_v2",
+            "skill": "v1_multi_agent",
             "elapsed": elapsed,
-            "agents_used": multi_agents_used
+            "agents_used": team_names,
+            "rounds": total_rounds,
+            "subtasks": total_subtasks,
+            "success": success,
         })
 
         # 保存到BFS上下文
@@ -476,21 +511,23 @@ async def _handle_with_multi_agent(
 
         return ChatResponse(
             reply=reply_text,
-            skill="multi_agent_v2",
+            skill="v1_multi_agent",
             thinking_process={
-                "mode": "multi_agent_collaboration",
-                "collaboration_mode": collaboration_mode,
-                "agents_used": multi_agents_used,
-                "execution_plan": execution_plan
+                "mode": "v1_leader_worker",
+                "collaboration_mode": "leader_worker",
+                "agents_used": team_names,
+                "execution_plan": [
+                    {"round": r + 1, "subtasks": len(all_results)} for r in range(total_rounds)
+                ],
             },
             context_info=context_info,
-            agents_used=multi_agents_used,
+            agents_used=team_names,
             execution_plan=execution_plan_info,
             ocr_results=ocr_results if ocr_results else None
         )
 
     except Exception as e:
-        logger.error(f"multi_agent_v2多Agent系统异常，降级到单Agent处理: {e}", exc_info=True)
+        logger.error(f"V1 多Agent 异常，降级到单Agent处理: {e}", exc_info=True)
         return await _handle_with_agent(request, message, start_time, context_info, execution_plan_info, agents_used)
 
 
@@ -908,3 +945,63 @@ async def upload_batch(files: List[UploadFile] = File(...)) -> Dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------------
+# API 端点：获取Agent列表（适配 coze.js 前端）
+# ---------------------------------------------------------------------------
+@router.get("/agents", summary="获取Agent列表")
+async def get_agents():
+    """获取系统所有可用 Agent 列表
+
+    数据来源：config/agents.yml（使用 yaml.safe_load 加载）
+    如果 agents.yml 不存在或加载失败，则返回默认的硬编码列表。
+    返回格式适配 coze.js 前端的期望格式：
+        { "success": true, "data": [{"id": "...", "name": "...", "description": "..."}, ...] }
+    """
+    agents_yml_path = Path(__file__).parent.parent.parent / "config" / "agents.yml"
+
+    try:
+        if agents_yml_path.exists():
+            with open(agents_yml_path, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+
+            agents_config = data.get("agents", {})
+            agent_list = []
+
+            for agent_id, config in agents_config.items():
+                role_prompt = config.get("role_prompt", "")
+                # 从角色描述中提取简短名称: "你是一个通用助手，擅长处理各种日常问题" → "通用助手"
+                name = agent_id
+                if role_prompt.startswith("你是一个"):
+                    if "，" in role_prompt:
+                        name = role_prompt[4:role_prompt.index("，")]
+                    else:
+                        name = role_prompt[4:]
+
+                agent_list.append({
+                    "id": agent_id,
+                    "name": name,
+                    "description": role_prompt,
+                })
+
+            return {"success": True, "data": agent_list}
+        else:
+            logger.warning("agents.yml 不存在，返回默认Agent列表")
+            return _get_default_agents_response()
+    except Exception as e:
+        logger.error(f"加载 agents.yml 失败: {e}")
+        return _get_default_agents_response()
+
+
+def _get_default_agents_response() -> Dict[str, Any]:
+    """返回默认 Agent 列表（当 agents.yml 加载失败时）"""
+    default_agents = [
+        {"id": "general",        "name": "通用助手",       "description": "通用助手，擅长处理各种日常问题"},
+        {"id": "weather_expert", "name": "天气查询助手",   "description": "天气查询助手，可以查询各城市的天气和预报"},
+        {"id": "system_toolbox", "name": "系统工具助手",   "description": "系统工具助手，可以执行系统命令、管理文件"},
+        {"id": "translator",     "name": "翻译专家",       "description": "翻译专家，精通多语言互译"},
+        {"id": "creative",       "name": "创意助手",       "description": "创意助手，擅长生成有趣内容、故事和艺术"},
+        {"id": "data_analyst",   "name": "数据分析专家",   "description": "数据分析专家，擅长数据处理、统计分析和可视化"},
+        {"id": "web_scraper",    "name": "网页采集专家",   "description": "网络数据采集专家，擅长从各平台抓取公开数据"},
+        {"id": "deep_thinker",   "name": "深度分析专家",   "description": "深度分析专家，擅长复杂问题的多维度分析和推理"},
+    ]
+    return {"success": True, "data": default_agents}

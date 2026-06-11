@@ -427,8 +427,122 @@ def reset() -> None:
     pass
 
 
+async def parallel(
+    tasks: List[Dict[str, Any]],
+    timeout: int = 120,
+) -> List[AgentResult]:
+    """并行执行多个子任务。
+
+    Args:
+        tasks: 任务列表，每个任务是 dict:
+            {
+                "prompt": str,           # 任务描述
+                "label": str,            # 显示标签 (可选)
+                "subagent_type": str,    # 子代理类型 (可选)
+                "model": str,            # 指定模型 (可选)
+                "timeout": int,          # 单任务超时 (可选)
+            }
+        timeout: 整体超时秒数
+
+    Returns:
+        List[AgentResult] — 与 tasks 顺序对应的结果列表
+
+    Example:
+        results = await parallel([
+            {"prompt": "搜索腾讯财报数据", "label": "财务分析"},
+            {"prompt": "搜索腾讯负面新闻", "label": "舆情分析"},
+            {"prompt": "搜索行业趋势", "label": "行业分析"},
+        ])
+    """
+
+    async def _run_one(task: Dict[str, Any]) -> AgentResult:
+        prompt = task.get("prompt", "")
+        label = task.get("label", prompt[:40])
+        opts = {}
+        if "model" in task:
+            opts["model"] = task["model"]
+        if "subagent_type" in task:
+            opts["agentType"] = task["subagent_type"]
+        if "timeout" in task:
+            opts["timeout"] = task["timeout"]
+        return await agent(prompt, opts)
+
+    try:
+        results = await asyncio.wait_for(
+            asyncio.gather(*[_run_one(t) for t in tasks], return_exceptions=True),
+            timeout=timeout,
+        )
+        # Convert exceptions to AgentResult
+        final = []
+        for i, r in enumerate(results):
+            if isinstance(r, Exception):
+                final.append(AgentResult(
+                    success=False,
+                    error=str(r),
+                    label=tasks[i].get("label", tasks[i].get("prompt", "")[:40]),
+                ))
+            else:
+                final.append(r)
+        return final
+    except asyncio.TimeoutError:
+        return [
+            AgentResult(success=False, error="并行执行超时", label=t.get("label", ""))
+            for t in tasks
+        ]
+
+
+async def pipeline(
+    steps: List[Dict[str, Any]],
+    timeout_per_step: int = 120,
+) -> AgentResult:
+    """流水线执行：前一步的输出作为后一步的输入。
+
+    Args:
+        steps: 步骤列表，每个步骤是 dict:
+            {
+                "prompt": str,           # 任务描述模板 (可用 {prev_output} 引用上一步结果)
+                "label": str,            # 显示标签 (可选)
+                "subagent_type": str,    # 子代理类型 (可选)
+            }
+        timeout_per_step: 每步超时秒数
+
+    Returns:
+        AgentResult — 最后一步的结果
+
+    Example:
+        result = await pipeline([
+            {"prompt": "搜索百度热搜数据", "label": "获取数据"},
+            {"prompt": "分析以下数据并生成报告:\n{prev_output}", "label": "分析报告"},
+        ])
+    """
+    prev_output = ""
+    for i, step in enumerate(steps):
+        prompt_template = step.get("prompt", "")
+        label = step.get("label", f"步骤{i+1}")
+
+        # 替换 {prev_output} 占位符
+        prompt = prompt_template.replace("{prev_output}", prev_output[:3000])
+
+        opts = {"timeout": timeout_per_step}
+        if "subagent_type" in step:
+            opts["agentType"] = step["subagent_type"]
+
+        result = await agent(prompt, opts)
+
+        if not result.success:
+            result.error = f"流水线在步骤 [{label}] 失败: {result.error}"
+            return result
+
+        prev_output = str(result.output) if result.output else ""
+
+    return result
+
+
 __all__ = [
     "agent",
+    "parallel",
+    "pipeline",
     "AgentResult",
+    "AgentPool",
     "reset",
 ]

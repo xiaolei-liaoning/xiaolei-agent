@@ -5,28 +5,69 @@ VectorMemoryStore 单例类：
 - PersistentClient + Settings(anonymized_telemetry=False)
 - 集合：long_term_memory
 - category 支持：general / fact / preference / experience
-- 可配置 embedding 模型：在线（sentence-transformers）或离线（TF-IDF）
+- 可配置 embedding 模型：
+  - bge-small-zh-v1.5: 智源小模型，快速
+  - bge-base-zh-v1.5: 智源标准模型
+  - bge-large-zh-v1.5: 智源大模型，高性能
+  - bge-m3: 智源多语言多任务模型
+  - qwen3-embedding: 阿里巴巴通义千问最新模型
+  - local: 本地 TF-IDF（备选方案）
 """
+
 import os
+
 os.environ["CHROMADB_TELEMETRY_DISABLED"] = "1"
+
+import logging
+import math
+import re
+import threading
+import time
+from datetime import datetime
+from typing import Any, Callable, Dict, List, Optional
 
 import chromadb
 from chromadb.config import Settings
-import threading
-import time
-import logging
-import re
-import math
-from typing import Optional, List, Dict, Any, Callable
-from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
 # ─── Embedding 模型配置 ────────────────────────────────────────────────────────
-# 设置 EMBEDDING_MODEL="local" 强制使用本地 TF-IDF
-_EMBEDDING_MODEL_NAME = os.environ.get("EMBEDDING_MODEL", "local")
-_EMBEDDING_DEVICE = "cpu"
+# 设置环境变量 EMBEDDING_MODEL 来选择模型
+# 可选值: bge-small-zh-v1.5, bge-base-zh-v1.5, bge-large-zh-v1.5, bge-m3, qwen3, local
+_EMBEDDING_MODEL_NAME = os.environ.get("EMBEDDING_MODEL", "bge-small-zh-v1.5")
+_EMBEDDING_DEVICE = os.environ.get("EMBEDDING_DEVICE", "cpu")
 _EMBEDDING_BATCH_SIZE = 32
+
+# 模型映射配置
+_MODEL_CONFIGS = {
+    "bge-small-zh-v1.5": {
+        "model_name": "BAAI/bge-small-zh-v1.5",
+        "dim": 512,
+        "description": "智源小模型，快速轻量",
+    },
+    "bge-base-zh-v1.5": {
+        "model_name": "BAAI/bge-base-zh-v1.5",
+        "dim": 768,
+        "description": "智源标准模型，平衡性能",
+    },
+    "bge-large-zh-v1.5": {
+        "model_name": "BAAI/bge-large-zh-v1.5",
+        "dim": 1024,
+        "description": "智源大模型，高性能",
+    },
+    "bge-m3": {
+        "model_name": "BAAI/bge-m3",
+        "dim": 1024,
+        "description": "智源多语言多任务模型",
+    },
+    "qwen3": {
+        "model_name": "Alibaba-NLP/gte-Qwen3-7B-instruct",
+        "dim": 4096,
+        "description": "阿里巴巴通义千问最新模型",
+    },
+    "local": {"model_name": "local", "dim": 768, "description": "本地TF-IDF备选方案"},
+}
+
 
 class LocalEmbeddingFunction:
     """本地 TF-IDF Embedding 函数（离线备选方案）
@@ -45,7 +86,7 @@ class LocalEmbeddingFunction:
 
     def _tokenize(self, text: str) -> List[str]:
         """简单分词"""
-        tokens = re.findall(r'[\w]+', text.lower())
+        tokens = re.findall(r"[\w]+", text.lower())
         return tokens
 
     def _build_vocab(self, texts: List[str]):
@@ -57,7 +98,9 @@ class LocalEmbeddingFunction:
                     vocab[token] = len(vocab)
         return vocab
 
-    def _compute_tfidf(self, text: str, vocab: Dict[str, int], idf: Dict[str, float]) -> List[float]:
+    def _compute_tfidf(
+        self, text: str, vocab: Dict[str, int], idf: Dict[str, float]
+    ) -> List[float]:
         """计算 TF-IDF 向量"""
         tokens = self._tokenize(text)
         tf = {}
@@ -83,6 +126,7 @@ class LocalEmbeddingFunction:
 
         try:
             from sklearn.feature_extraction.text import TfidfVectorizer
+
             vectorizer = TfidfVectorizer()
             vectors = vectorizer.fit_transform(input).toarray()
             return vectors.tolist()
@@ -123,44 +167,57 @@ class LocalEmbeddingFunction:
         return 768
 
 
-class BGEEmbeddingFunction:
-    """Embedding 函数封装（适配 ChromaDB API）
+class SentenceTransformerEmbeddingFunction:
+    """Sentence-Transformers Embedding 函数封装（适配 ChromaDB API）
 
-    使用 shibing624/text2vec-base-chinese 模型，支持中文语义匹配
-    - 中文语义embedding效果好
-    - 支持最长序列 256 tokens
-    - 输出维度 768
+    支持多种优秀的中文embedding模型：
+    - BGE系列（智源研究院）: bge-small-zh-v1.5, bge-base-zh-v1.5, bge-large-zh-v1.5, bge-m3
+    - Qwen3系列（阿里巴巴）: qwen3
+    - 中文语义embedding效果出色
+    - 完全免费商用
     """
 
     def __init__(
         self,
-        model_name: str = _EMBEDDING_MODEL_NAME,
+        model_type: str = _EMBEDDING_MODEL_NAME,
         device: str = _EMBEDDING_DEVICE,
         normalize_embeddings: bool = True,
         batch_size: int = _EMBEDDING_BATCH_SIZE,
     ):
-        self.model_name = model_name
+        self.model_type = model_type
         self.device = device
         self.normalize_embeddings = normalize_embeddings
         self.batch_size = batch_size
         self._model = None
         self._max_seq_length = 512
 
+        # 获取模型配置
+        self.model_config = _MODEL_CONFIGS.get(
+            model_type, _MODEL_CONFIGS["bge-small-zh-v1.5"]
+        )
+        self.model_name = self.model_config["model_name"]
+
     def _load_model(self):
         """延迟加载模型"""
         if self._model is None:
             try:
                 from sentence_transformers import SentenceTransformer
-                logger.info(f"正在加载 BGE 模型: {self.model_name}...")
+
+                logger.info(
+                    f"正在加载模型: {self.model_name} ({self.model_config['description']})..."
+                )
                 self._model = SentenceTransformer(
                     self.model_name,
                     device=self.device,
-                    cache_folder=os.path.expanduser("~/.cache/bge"),
+                    cache_folder=os.path.expanduser("~/.cache/embedding_models"),
                 )
                 self._model.max_seq_length = self._max_seq_length
-                logger.info(f"BGE 模型加载成功，设备: {self.device}, 输出维度: {self._model.get_sentence_embedding_dimension()}")
+                actual_dim = self._model.get_sentence_embedding_dimension()
+                logger.info(
+                    f"模型加载成功！设备: {self.device}, 输出维度: {actual_dim}"
+                )
             except Exception as e:
-                logger.error(f"BGE 模型加载失败: {e}")
+                logger.error(f"模型加载失败: {e}, 回退到本地TF-IDF方案")
                 raise
 
     def __call__(self, input: List[str]) -> List[List[float]]:
@@ -175,9 +232,8 @@ class BGEEmbeddingFunction:
         if not input:
             return []
 
-        self._load_model()
-
         try:
+            self._load_model()
             embeddings = self._model.encode(
                 input,
                 batch_size=self.batch_size,
@@ -188,7 +244,10 @@ class BGEEmbeddingFunction:
             return embeddings.tolist()
         except Exception as e:
             logger.error(f"Embedding 生成失败: {e}")
-            raise
+            # 回退到本地TF-IDF
+            logger.info("回退到本地TF-IDF方案")
+            local_embed = LocalEmbeddingFunction()
+            return local_embed(input)
 
     def embed_query(self, text: str) -> List[float]:
         """单独查询的 embedding
@@ -201,16 +260,56 @@ class BGEEmbeddingFunction:
         """
         return self(input=[text])[0]
 
+    def get_dimension(self) -> int:
+        """获取 embedding 向量维度"""
+        return self.model_config["dim"]
+
 
 _bge_embedding_function = None
 
+
 def get_bge_embedding_function():
-    """获取全局 embedding 函数单例（直接使用本地 TF-IDF）"""
+    """获取全局 embedding 函数单例（支持多种中文embedding模型）
+
+    根据环境变量 EMBEDDING_MODEL 选择：
+    - bge-small-zh-v1.5: 智源小模型（默认，快速）
+    - bge-base-zh-v1.5: 智源标准模型
+    - bge-large-zh-v1.5: 智源大模型
+    - bge-m3: 智源多语言模型
+    - qwen3: 阿里巴巴通义千问
+    - local: 本地TF-IDF备选方案
+
+    所有模型均免费商用！
+    """
     global _bge_embedding_function
     if _bge_embedding_function is None:
-        logger.info("使用本地 TF-IDF Embedding")
-        _bge_embedding_function = LocalEmbeddingFunction()
+        model_type = _EMBEDDING_MODEL_NAME.lower()
+
+        if model_type == "local":
+            logger.info("使用本地 TF-IDF Embedding")
+            _bge_embedding_function = LocalEmbeddingFunction()
+        else:
+            try:
+                config = _MODEL_CONFIGS.get(model_type)
+                if config:
+                    logger.info(f"正在初始化 {config['description']}...")
+                    _bge_embedding_function = SentenceTransformerEmbeddingFunction(
+                        model_type=model_type
+                    )
+                else:
+                    logger.warning(
+                        f"未知模型类型: {model_type}, 使用默认 bge-small-zh-v1.5"
+                    )
+                    _bge_embedding_function = SentenceTransformerEmbeddingFunction(
+                        model_type="bge-small-zh-v1.5"
+                    )
+            except Exception as e:
+                logger.error(
+                    f"加载 Sentence-Transformers 模型失败: {e}, 回退到本地TF-IDF"
+                )
+                _bge_embedding_function = LocalEmbeddingFunction()
     return _bge_embedding_function
+
 
 # ─── 支持的记忆类别 ──────────────────────────────────────────────────────────
 VALID_CATEGORIES = {"general", "fact", "preference", "experience"}
@@ -237,8 +336,11 @@ class VectorMemoryStore:
 
         self.persist_dir = persist_dir or os.environ.get(
             "VECTOR_DB_PATH",
-            "/Volumes/xiaaolei/ai-agent-data/vector_db" if os.path.exists("/Volumes/xiaaolei") 
-            else os.path.expanduser("~/.小雷版小龙虾/vector_db")
+            (
+                "/Volumes/xiaaolei/ai-agent-data/vector_db"
+                if os.path.exists("/Volumes/xiaaolei")
+                else os.path.expanduser("~/.小雷版小龙虾/vector_db")
+            ),
         )
         os.makedirs(self.persist_dir, exist_ok=True)
 
@@ -255,19 +357,19 @@ class VectorMemoryStore:
         self._last_flush_time = time.time()
         self._buffer_size = 10
         self._flush_interval = 30  # 秒
-        
+
         # 定时备份配置
         self._backup_enabled = True
         self._backup_interval = 86400  # 24小时（秒）
         self._last_backup_time = time.time()
         self._backup_thread = None
-        
+
         logger.info("VectorMemoryStore 初始化完成, persist_dir=%s", self.persist_dir)
-        
+
         # 启动定时备份线程
         if self._backup_enabled:
             self._start_backup_scheduler()
-    
+
     def _start_backup_scheduler(self):
         """启动定时备份调度器"""
         self._backup_stop = threading.Event()
@@ -295,9 +397,9 @@ class VectorMemoryStore:
     def shutdown(self):
         """优雅关闭备份线程"""
         self._backup_enabled = False
-        if hasattr(self, '_backup_stop'):
+        if hasattr(self, "_backup_stop"):
             self._backup_stop.set()
-        if hasattr(self, '_backup_thread') and self._backup_thread.is_alive():
+        if hasattr(self, "_backup_thread") and self._backup_thread.is_alive():
             self._backup_thread.join(timeout=10)
             if self._backup_thread.is_alive():
                 logger.warning("备份线程未能在10秒内结束")
@@ -325,8 +427,13 @@ class VectorMemoryStore:
             self._collection = None
 
     # ── 写入 ─────────────────────────────────────────────────────────────────
-    def add_memory(self, user_id: int, content: str, category: str = "general",
-                   metadata: Dict[str, Any] = None) -> Optional[str]:
+    def add_memory(
+        self,
+        user_id: int,
+        content: str,
+        category: str = "general",
+        metadata: Dict[str, Any] = None,
+    ) -> Optional[str]:
         """添加一条记忆（缓冲写入）
 
         Args:
@@ -348,18 +455,23 @@ class VectorMemoryStore:
 
         memory_id = f"mem_{user_id}_{int(time.time() * 1000)}"
         meta = metadata or {}
-        meta.update({
-            "user_id": str(user_id),
-            "category": category,
-            "timestamp": datetime.now().isoformat(),
-        })
+        meta.update(
+            {
+                "user_id": str(user_id),
+                "category": category,
+                "timestamp": datetime.now().isoformat(),
+            }
+        )
 
         with self._buffer_lock:
             self._memory_buffer.append((memory_id, content, meta))
             buffer_count = len(self._memory_buffer)
             time_since_flush = time.time() - self._last_flush_time
 
-            if buffer_count >= self._buffer_size or time_since_flush > self._flush_interval:
+            if (
+                buffer_count >= self._buffer_size
+                or time_since_flush > self._flush_interval
+            ):
                 self._flush_buffer()
 
         logger.debug("记忆入缓冲: %s (缓冲=%d)", memory_id, buffer_count)
@@ -384,8 +496,9 @@ class VectorMemoryStore:
             self._last_flush_time = time.time()
 
     # ── 检索 ─────────────────────────────────────────────────────────────────
-    def search_memories(self, query: str, user_id: int = None,
-                        top_k: int = 5) -> List[Dict[str, Any]]:
+    def search_memories(
+        self, query: str, user_id: int = None, top_k: int = 5
+    ) -> List[Dict[str, Any]]:
         """向量检索记忆（带 distance）
 
         Args:
@@ -418,15 +531,21 @@ class VectorMemoryStore:
                     results["metadatas"][0],
                     results["distances"][0],
                 ):
-                    memories.append({
-                        "id": mem_id,
-                        "content": doc,
-                        "metadata": meta,
-                        "distance": dist,
-                    })
+                    memories.append(
+                        {
+                            "id": mem_id,
+                            "content": doc,
+                            "metadata": meta,
+                            "distance": dist,
+                        }
+                    )
 
-            logger.debug("向量检索: query=%s, user_id=%s, 命中=%d",
-                         query[:30], user_id, len(memories))
+            logger.debug(
+                "向量检索: query=%s, user_id=%s, 命中=%d",
+                query[:30],
+                user_id,
+                len(memories),
+            )
             return memories
         except Exception as e:
             logger.error("向量检索失败: %s", e)
@@ -497,44 +616,48 @@ class VectorMemoryStore:
             to_delete = [item[0] for item in items[keep_last:]]
             if to_delete:
                 self._collection.delete(ids=to_delete)
-                logger.info("清理旧记忆: 删除 %d 条, 保留 %d 条",
-                            len(to_delete), keep_last)
+                logger.info(
+                    "清理旧记忆: 删除 %d 条, 保留 %d 条", len(to_delete), keep_last
+                )
 
             return len(to_delete)
         except Exception as e:
             logger.error("清理旧记忆失败: %s", e)
             return 0
-    
+
     def backup_memory(self, backup_dir: str = None) -> bool:
         """备份向量存储
-        
+
         Args:
             backup_dir: 备份目录，默认为 persist_dir/backups
-            
+
         Returns:
             是否备份成功
         """
         try:
-            import shutil
             import datetime
-            
+            import shutil
+
             if backup_dir is None:
                 backup_dir = os.path.join(self.persist_dir, "backups")
             os.makedirs(backup_dir, exist_ok=True)
-            
+
             # 创建带时间戳的备份目录
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             backup_path = os.path.join(backup_dir, f"backup_{timestamp}")
-            
+
             # 检查备份目录是否已存在（避免重复备份）
             if os.path.exists(backup_path):
                 logger.warning("备份目录已存在，跳过: %s", backup_path)
                 return True
-            
+
             # 只复制chromadb数据文件，不复制backups目录
-            chroma_files = [f for f in os.listdir(self.persist_dir) 
-                          if not f.startswith('.') and f != 'backups']
-            
+            chroma_files = [
+                f
+                for f in os.listdir(self.persist_dir)
+                if not f.startswith(".") and f != "backups"
+            ]
+
             if chroma_files:
                 os.makedirs(backup_path, exist_ok=True)
                 for item in chroma_files:
@@ -544,8 +667,10 @@ class VectorMemoryStore:
                         shutil.copytree(src, dst)
                     else:
                         shutil.copy2(src, dst)
-                
-                logger.info("向量存储备份成功: %s (共%d个文件)", backup_path, len(chroma_files))
+
+                logger.info(
+                    "向量存储备份成功: %s (共%d个文件)", backup_path, len(chroma_files)
+                )
                 return True
             else:
                 logger.warning("没有可备份的文件")
@@ -553,35 +678,35 @@ class VectorMemoryStore:
         except Exception as e:
             logger.error("备份向量存储失败: %s", e)
             return False
-    
+
     def restore_memory(self, backup_path: str) -> bool:
         """从备份恢复向量存储
-        
+
         Args:
             backup_path: 备份路径
-            
+
         Returns:
             是否恢复成功
         """
         try:
             import shutil
-            
+
             if not os.path.exists(backup_path):
                 logger.error("备份路径不存在: %s", backup_path)
                 return False
-            
+
             # 停止当前连接
             if self._collection:
                 # 这里可以添加关闭连接的逻辑
                 pass
-            
+
             # 备份当前数据（以防万一）
             self.backup_memory()
-            
+
             # 清空当前目录并复制备份
             shutil.rmtree(self.persist_dir)
             shutil.copytree(backup_path, self.persist_dir)
-            
+
             # 重新初始化
             self._ensure_initialized()
             logger.info("向量存储从备份恢复成功: %s", backup_path)
@@ -589,10 +714,10 @@ class VectorMemoryStore:
         except Exception as e:
             logger.error("恢复向量存储失败: %s", e)
             return False
-    
+
     def get_memory_stats(self) -> Dict[str, Any]:
         """获取内存统计信息
-        
+
         Returns:
             统计信息
         """
@@ -602,9 +727,9 @@ class VectorMemoryStore:
             "buffer_size": len(self._memory_buffer),
             "last_flush_time": self._last_flush_time,
             "buffer_flush_interval": self._flush_interval,
-            "buffer_max_size": self._buffer_size
+            "buffer_max_size": self._buffer_size,
         }
-        
+
         # 分类统计
         try:
             if self._collection:
@@ -617,9 +742,9 @@ class VectorMemoryStore:
                 stats["category_distribution"] = categories
         except Exception as e:
             logger.error("获取分类统计失败: %s", e)
-        
+
         return stats
-    
+
     def optimize_memory(self):
         """优化内存存储
 
@@ -633,16 +758,10 @@ class VectorMemoryStore:
             self.backup_memory()
 
             logger.info("内存优化完成，删除了 %d 条旧记忆", deleted)
-            return {
-                "deleted_count": deleted,
-                "success": True
-            }
+            return {"deleted_count": deleted, "success": True}
         except Exception as e:
             logger.error("内存优化失败: %s", e)
-            return {
-                "success": False,
-                "error": str(e)
-            }
+            return {"success": False, "error": str(e)}
 
     def get_embedding_dimension(self) -> int:
         """获取 embedding 向量维度
@@ -652,14 +771,14 @@ class VectorMemoryStore:
         """
         try:
             embed_fn = get_bge_embedding_function()
-            
-            if hasattr(embed_fn, 'get_dimension'):
+
+            if hasattr(embed_fn, "get_dimension"):
                 return embed_fn.get_dimension()
-            
-            if hasattr(embed_fn, '_load_model'):
+
+            if hasattr(embed_fn, "_load_model"):
                 embed_fn._load_model()
                 return embed_fn._model.get_sentence_embedding_dimension()
-            
+
             return 768
         except Exception as e:
             logger.error("获取 embedding 维度失败: %s", e)
@@ -677,13 +796,13 @@ class VectorMemoryStore:
             test_texts = [
                 "深度学习是机器学习的一个分支",
                 "人工智能改变了我们的生活方式",
-                "Python是一门强大的编程语言"
+                "Python是一门强大的编程语言",
             ]
 
             embeddings = embed_fn(test_texts)
 
-            model_name = getattr(embed_fn, 'model_name', 'Local TF-IDF')
-            device = getattr(embed_fn, 'device', 'local')
+            model_name = getattr(embed_fn, "model_name", "Local TF-IDF")
+            device = getattr(embed_fn, "device", "local")
 
             return {
                 "success": True,
@@ -691,14 +810,16 @@ class VectorMemoryStore:
                 "dimension": len(embeddings[0]) if embeddings else 0,
                 "device": device,
                 "test_count": len(test_texts),
-                "sample_norm": round(sum(sum(e * e for e in emb) ** 0.5 for emb in embeddings) / len(embeddings), 4) if embeddings else 0
+                "sample_norm": (
+                    round(
+                        sum(sum(e * e for e in emb) ** 0.5 for emb in embeddings)
+                        / len(embeddings),
+                        4,
+                    )
+                    if embeddings
+                    else 0
+                ),
             }
         except Exception as e:
             logger.error("Embedding 测试失败: %s", e)
-            return {
-                "success": False,
-                "error": str(e)
-            }
-
-
-
+            return {"success": False, "error": str(e)}

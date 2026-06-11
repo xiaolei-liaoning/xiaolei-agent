@@ -28,16 +28,14 @@ export default async function () {
   log("开始并行调研...")
 
   // ── agent() 调用子Agent ──
-  //    参数: prompt + opts { label, agentType, timeout, schema, model }
+  //    参数: prompt + opts { label, timeout, schema, model }
   //    返回: 子Agent的输出文本
   const r1 = await agent("Rust 2026年的生态现状", {
-    agentType: "analyst",
     label: "Rust调研",
     timeout: 60,
   })
 
   const r2 = await agent("Go 1.24 的新特性", {
-    agentType: "analyst",
     label: "Go调研",
     timeout: 60,
   })
@@ -48,13 +46,11 @@ export default async function () {
   const [r3, r4] = await parallel([
     () =>
       agent("Zig语言的亮点", {
-        agentType: "analyst",
         label: "Zig",
         timeout: 60,
       }),
     () =>
       agent("Mojo语言的亮点", {
-        agentType: "analyst",
         label: "Mojo",
         timeout: 60,
       }),

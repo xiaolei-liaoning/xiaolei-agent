@@ -17,9 +17,13 @@ from dataclasses import dataclass, field
 from enum import Enum
 from uuid import uuid4
 
-from core.engine.llm_backend import get_llm_router
-
 logger = logging.getLogger(__name__)
+
+
+def _get_llm_router():
+    """懒加载 LLM router，避免模块级导入触发 LLM 后端初始化"""
+    from core.engine.llm_backend import get_llm_router
+    return get_llm_router()
 
 
 # =============================================================================
@@ -79,20 +83,31 @@ _llm_semaphore = asyncio.Semaphore(3)  # 限制最多 3 个并发 LLM 调用，�
 
 
 async def _llm_json(system_prompt: str, user_message: str, max_tokens: int = 800) -> dict:
-    """调用 LLM 并返回解析后的 JSON"""
-    try:
-        router = get_llm_router()
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_message},
-        ]
-        async with _llm_semaphore:
-            response = await router.chat(messages, temperature=0.7, max_tokens=max_tokens)
-        cleaned = (response or "").strip().strip("```json").strip("```").strip()
-        return json.loads(cleaned)
-    except Exception as e:
-        logger.warning(f"LLM 调用/解析失败: {e}")
-        return {}
+    """调用 LLM 并返回解析后的 JSON（含 1 次重试）"""
+    last_error = None
+    for attempt in range(2):  # 原始 + 1 次重试
+        try:
+            router = _get_llm_router()
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message},
+            ]
+            async with _llm_semaphore:
+                response = await router.chat(messages, temperature=0.7, max_tokens=max_tokens)
+            cleaned = (response or "").strip().strip("```json").strip("```").strip()
+            return json.loads(cleaned)
+        except json.JSONDecodeError as e:
+            last_error = str(e)
+            if attempt == 0:
+                logger.warning(f"LLM JSON 解析失败，重试中: {e}")
+                user_message += f"\n\n（注意：上次返回的 JSON 格式无效，错误: {e}。请确保只输出有效 JSON。）"
+            else:
+                logger.warning(f"LLM JSON 解析重试仍失败: {e}")
+        except Exception as e:
+            logger.warning(f"LLM 调用/解析失败: {e}/{e.__class__.__name__}")
+            return {}
+    logger.warning(f"LLM JSON 解析最终失败: {last_error}")
+    return {}
 
 
 # =============================================================================
@@ -223,7 +238,7 @@ class LLMAgent:
             decision = reflection.get("decision", "continue")
             confidence = reflection.get("confidence", 0.0)
 
-            if decision == "continue" or confidence >= 0.85:
+            if confidence >= 0.85:
                 result["confidence"] = confidence
                 result["kepa_iterations"] = attempt + 1
                 return result
@@ -373,8 +388,7 @@ class LeaderAgent(LLMAgent):
                 retry_tasks = analysis.get("retry_tasks", [])
                 needed = analysis.get("needed_count", 0)
                 if needed > 0 and (self.active_worker_count + needed) <= self.max_workers:
-                    self.active_worker_count = min(self.active_worker_count + needed, self.max_workers)
-                    logger.info(f"📈 唤醒更多 Worker: 当前 {self.active_worker_count} 个")
+                    await self._activate_worker(needed)
                 remaining = retry_tasks
 
         success = len(remaining) == 0
@@ -401,7 +415,8 @@ class LeaderAgent(LLMAgent):
             user = f"参考知识库信息后分解任务：\n{rag_context}\n\n任务:\n{task_description}"
 
         result = await _llm_json(system, user, max_tokens=800)
-        subtasks = result.get("subtasks", [])
+        raw_subtasks = result.get("subtasks", [])
+        subtasks = [s for s in raw_subtasks if isinstance(s, str)]
         if not subtasks:
             # 降级：直接返回原任务作为唯一子任务
             return [task_description]
@@ -435,9 +450,9 @@ class LeaderAgent(LLMAgent):
             try:
                 data = json.loads(result_str)
                 is_ok = data.get("success", True) and data.get("status") != "failed"
-            except Exception:
-                data = {"raw": result_str[:200]}
-                is_ok = True
+            except Exception as e:
+                data = {"raw": result_str[:200], "error": str(e)}
+                is_ok = False
             return {
                 "worker": worker.name,
                 "task": task_content,
@@ -449,7 +464,7 @@ class LeaderAgent(LLMAgent):
         results = []
         for item in batch:
             if isinstance(item, Exception):
-                results.append({"success": False, "error": str(item)})
+                results.append({"success": False, "error": str(item), "worker": "unknown", "task": "", "result": {}})
             else:
                 results.append(item)
         return results
@@ -459,7 +474,7 @@ class LeaderAgent(LLMAgent):
         summary_lines = []
         for r in batch_results:
             status = "✅" if r.get("success", False) else "❌"
-            summary_lines.append(f"{status} Worker {r.get('worker', '?')}: {json.dumps(r.get('result', {}), ensure_ascii=False)[:200]}")
+            summary_lines.append(f"{status} Worker {r.get('worker', '?')}: {json.dumps(r.get('result', {}), ensure_ascii=False)[:500]}")
 
         system = (
             "你是队长Agent。你的职责是分析队员(Worker)的执行结果。\n\n"
@@ -522,26 +537,9 @@ class V1LeaderPool:
         return leader, workers
 
     async def share_memory(self, agents: List[LLMAgent]) -> None:
-        """执行后广播每个 Agent 的执行摘要"""
-        try:
-            from core.multi_agent_v2.infrastructure.shared_bus import get_shared_bus, Message, MessageType
-            bus = get_shared_bus()
-            for agent in agents:
-                summary = {
-                    "agent_id": agent.name,
-                    "role": agent.role.value,
-                    "context": agent.context.get_recent(),
-                    "status": agent.status,
-                }
-                msg = Message(
-                    type=MessageType.AGENT_BROADCAST,
-                    sender=agent.name,
-                    topic=f"memory:share:v1:{agent.name}",
-                    payload=summary,
-                )
-                await bus.publish(f"memory:share:v1:{agent.name}", msg)
-        except Exception as e:
-            logger.debug(f"V1 share_memory 失败: {e}")
+        """执行后广播每个 Agent 的执行摘要（V1 简单记录，不依赖 V2）"""
+        for agent in agents:
+            logger.info(f"V1 share_memory: agent={agent.name} role={agent.role.value} status={agent.status}")
 
     async def discard(self, agents: List[LLMAgent]) -> None:
         """清理 Agent"""

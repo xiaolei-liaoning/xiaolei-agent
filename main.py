@@ -14,7 +14,7 @@ from typing import Any, Optional
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 load_dotenv()
@@ -38,11 +38,10 @@ app = FastAPI(
     description="工业级 AI Agent 系统 - 意图识别 / 多步任务 / 工作流自动化 / 用户管理",
 )
 
-# CORS
-allowed_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost,http://127.0.0.1").split(",")
+# CORS — 放宽以支持 Live Server 开发
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -55,6 +54,27 @@ if static_dir.exists():
     logger.info("静态文件目录已挂载: %s", static_dir)
 else:
     logger.warning("静态文件目录不存在: %s", static_dir)
+
+# 前端页面路由
+templates_dir = Path(__file__).parent / "templates"
+HTML_FILES = {
+    "/": "index.html",
+    "/coze": "coze.html",
+    "/chat": "chat.html",
+}
+
+def _make_route(fp: Path):
+    async def _handler():
+        return FileResponse(str(fp))
+    return _handler
+
+for route, filename in HTML_FILES.items():
+    fp = templates_dir / filename
+    if fp.exists():
+        app.get(route, name=filename)(_make_route(fp))
+        logger.info("前端页面已挂载: %s → %s", route, fp)
+    else:
+        logger.warning("前端页面不存在: %s", fp)
 
 # ---------------------------------------------------------------------------
 # 全局状态（AppContext 模式）
@@ -132,15 +152,6 @@ async def startup_event() -> None:
         logger.info("短期记忆加载完成，共恢复 %d 个用户的记忆", len(user_ids))
     except Exception as e:
         logger.warning("短期记忆加载失败（首次启动或数据库未就绪）: %s", e)
-
-    # Agent 协调器
-    try:
-        from core.agent_coordinator import get_agent_coordinator
-        coordinator = get_agent_coordinator()
-        await coordinator.start()
-        logger.info("Agent协调器初始化完成")
-    except Exception as e:
-        logger.error("Agent协调器初始化失败: %s", e, exc_info=True)
 
     # 文件 watcher
     from core.watcher_setup import setup_file_watcher

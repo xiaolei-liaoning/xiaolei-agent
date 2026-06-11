@@ -70,12 +70,8 @@ class SystemInitializer:
     async def _step_init_other_components(self):
         components = [
             ("TaskProcessor", "core.tasks.task_processor", "task_processor"),
-            ("深度思考引擎", "core.reasoning_engine", "get_reasoning_engine"),
             ("自主搜索引擎", "core.search.rag_search_engine", "RAGSearchEngine"),
-            ("Agent协调器", "core.agent_coordinator", "get_agent_coordinator"),
             ("监控管理器", "core.monitoring", "monitoring_manager"),
-            ("内存优化器", "core.memory_optimizer", "memory_optimizer"),
-            ("缓存管理器", "core.cache_manager", "get_cache_manager"),
         ]
         for name, module, obj in components:
             try:

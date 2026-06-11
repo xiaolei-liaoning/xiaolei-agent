@@ -127,6 +127,8 @@ class MCPClientManager:
             "web-scraper-mcp": ("web_scraper_mcp_server.py", "网页爬虫MCP"),
             "data-analysis-mcp": ("data_analysis_mcp_server.py", "数据分析MCP"),
             "gui-automation-mcp": ("gui_automation_mcp_server.py", "GUI自动化MCP"),
+            "sandbox-executor": ("sandbox_executor_mcp_server.py", "代码沙盒执行器"),
+            "web-search": ("web_search_mcp_server.py", "联网搜索"),
         }
 
         for name, (script, label) in server_map.items():
@@ -536,6 +538,14 @@ class MCPClientManager:
 
     async def connect_text_processing_server(self) -> bool:
         return await self._connect_mcp_server("text-processing-mcp", "text_processing_mcp_server.py", "文本处理MCP")
+
+    async def connect_sandbox_executor_server(self) -> bool:
+        """连接代码沙盒执行器服务器"""
+        return await self._connect_mcp_server("sandbox-executor", "sandbox_executor_mcp_server.py", "代码沙盒执行器")
+
+    async def connect_web_search_server(self) -> bool:
+        """连接联网搜索服务器"""
+        return await self._connect_mcp_server("web-search", "web_search_mcp_server.py", "联网搜索")
 
     async def _connect_mcp_server(self, server_name: str, script_name: str, label: str) -> bool:
         """通用 MCP 服务器连接"""

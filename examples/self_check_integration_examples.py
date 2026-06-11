@@ -11,7 +11,7 @@ from pathlib import Path
 # 添加项目根目录到路径
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from core.self_check_middleware import SelfCheckMiddleware, get_self_check_middleware
+from core.results.self_check_middleware import SelfCheckMiddleware, get_self_check_middleware
 from core.engine.llm_backend import get_llm_router
 
 

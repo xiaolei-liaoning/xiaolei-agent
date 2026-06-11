@@ -1,0 +1,85 @@
+` 工具创建一个包含完整 HTML 结构、内联 CSS 样式和 JavaScript 游戏逻辑的 HTML 文件。这个文件将包含游戏面板、用于交换数字的按钮以及游戏逻辑。
+
+### 第1步: 设计游戏界面
+
+1. 创建一个 3x3 的网格来显示数字。
+2. 每个格子包含一个数字，初始时数字 1 到 8 按顺序排列，数字 8 在空白格子的位置。
+3. 添加一个按钮来交换空白格子旁边的数字。
+
+### 第2步: 初始化游戏状态
+
+1. 初始化游戏面板的数字。
+2. 设置初始时空白格子的位置。
+
+现在，我将开始编写代码。execute_python
+"""
+def create_html_game():
+    html = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>八数码游戏</title>
+        <style>
+            .game-grid {
+                display: grid;
+                grid-template-columns: repeat(3, 100px);
+                grid-gap: 10px;
+            }
+            .grid-item {
+                width: 100px;
+                height: 100px;
+                background-color: #f0f0f0;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                font-size: 24px;
+                border: 1px solid #ccc;
+            }
+            .swap-btn {
+                margin-top: 10px;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="game-grid">
+            <!-- 游戏面板将在这里生成 -->
+        </div>
+        <button class="swap-btn" onclick="swap()">交换</button>
+        <script>
+            // 游戏面板的数字
+            const numbers = [1, 2, 3, 4, 5, 6, 7, 8, 0];
+            // 初始化游戏面板
+            function initGameGrid() {
+                const grid = document.querySelector);
+                numbers.forEach(num => {
+                    const item = document.createElement('div');
+                    item.className = 'grid-item';
+                    item.textContent = num;
+                    grid.appendChild(item);
+                });
+            }
+            // 交换数字
+            function swap() {
+                const gridItems = document.querySelectorAll('.grid-item');
+                const blankIndex = numbers.indexOf(0);
+                const adjacentIndexes = [blankIndex - 1, blankIndex + 1, blankIndex - 3, blankIndex + 3];
+                for (let index of adjacentIndexes) {
+                    if (index >= 0 && index < numbers.length && numbers[index] !== 0) {
+                        [numbers[blankIndex], numbers[index]] = [numbers[index], numbers[blankIndex]];
+                        break;
+                    }
+                }
+                gridItems.forEach((item, index) => {
+                    item.textContent = numbers[index];
+                });
+            }
+            initGameGrid();
+        </script>
+    </body>
+    </html>
+    """
+    return html
+
+html_game = create_html_game()
+html_game
+"""

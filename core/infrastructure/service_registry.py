@@ -25,7 +25,6 @@ from .service_interfaces import (
     IDatabase,
     ICacheManager,
     IMonitoringManager,
-    IAgentCoordinator,
     ISandboxExecutor,
     IClarificationService,
 )
@@ -182,17 +181,7 @@ class ServiceRegistry:
             factory=create_monitoring_manager
         )
         logger.debug("注册服务: IMonitoringManager")
-        
-        def create_agent_coordinator():
-            from ...agents.agent_coordinator import get_agent_coordinator
-            return get_agent_coordinator()
-        
-        self.container.register_singleton(
-            IAgentCoordinator,
-            factory=create_agent_coordinator
-        )
-        logger.debug("注册服务: IAgentCoordinator")
-    
+
     def _register_external_services(self, config: AppConfig) -> None:
         """注册外部服务"""
         

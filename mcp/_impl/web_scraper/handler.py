@@ -24,39 +24,39 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 # 站点名称 → (模块路径, 类名) 映射
 _SCRAPER_REGISTRY: Dict[str, Dict[str, str]] = {
     '微博': {
-        'module': 'skills.web_scraper.weibo_scraper',
+        'module': 'mcp._impl.web_scraper.weibo_scraper',
         'class': 'WeiboScraper',
     },
     '百度': {
-        'module': 'skills.web_scraper.baidu_scraper',
+        'module': 'mcp._impl.web_scraper.baidu_scraper',
         'class': 'BaiduScraper',
     },
     'B站': {
-        'module': 'skills.web_scraper.bilibili_scraper',
+        'module': 'mcp._impl.web_scraper.bilibili_scraper',
         'class': 'BilibiliScraper',
     },
     'bilibili': {
-        'module': 'skills.web_scraper.bilibili_scraper',
+        'module': 'mcp._impl.web_scraper.bilibili_scraper',
         'class': 'BilibiliScraper',
     },
     '抖音': {
-        'module': 'skills.web_scraper.douyin_scraper',
+        'module': 'mcp._impl.web_scraper.douyin_scraper',
         'class': 'DouyinScraper',
     },
     'GitHub': {
-        'module': 'skills.web_scraper.github_scraper',
+        'module': 'mcp._impl.web_scraper.github_scraper',
         'class': 'GitHubTrendingScraper',
     },
     '搜索引擎': {
-        'module': 'skills.web_scraper.search_scraper',
+        'module': 'mcp._impl.web_scraper.search_scraper',
         'class': 'SearchEngineScraper',
     },
     '知乎': {
-        'module': 'skills.web_scraper.zhihu_scraper',
+        'module': 'mcp._impl.web_scraper.zhihu_scraper',
         'class': 'ZhihuScraper',
     },
     '今日头条': {
-        'module': 'skills.web_scraper.toutiao_scraper',
+        'module': 'mcp._impl.web_scraper.toutiao_scraper',
         'class': 'ToutiaoScraper',
     },
 }

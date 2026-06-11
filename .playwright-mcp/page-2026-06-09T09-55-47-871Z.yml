@@ -1,0 +1,234 @@
+- generic [ref=e1]:
+  - region "Notifications alt+T"
+  - generic [ref=e5]:
+    - navigation [ref=e8]:
+      - generic [ref=e9]:
+        - link "LM Studio" [ref=e11] [cursor=pointer]:
+          - /url: /
+          - img "LM Studio" [ref=e13]
+        - generic [ref=e14]:
+          - link "Models" [ref=e16] [cursor=pointer]:
+            - /url: /models
+          - link "Docs" [ref=e18] [cursor=pointer]:
+            - /url: /docs/developer
+          - link "Blog" [ref=e20] [cursor=pointer]:
+            - /url: /blog
+          - link "Enterprise" [ref=e22] [cursor=pointer]:
+            - /url: /enterprise
+          - generic [ref=e23]:
+            - link "LM Link" [ref=e24] [cursor=pointer]:
+              - /url: /link
+              - generic [ref=e25]:
+                - img [ref=e26]
+                - text: LM Link
+            - generic [ref=e32]: New
+      - list [ref=e34]:
+        - link "Download" [ref=e35] [cursor=pointer]:
+          - /url: /download
+          - listitem [ref=e36]:
+            - img [ref=e37]
+            - text: Download
+        - link "Login" [ref=e42] [cursor=pointer]:
+          - /url: /login
+      - generic:
+        - separator
+        - generic:
+          - link "Login or Signup":
+            - /url: /login
+            - paragraph: Login or Signup
+          - link "Models":
+            - /url: /models
+            - paragraph: Models
+          - link "Developer Docs":
+            - /url: /docs
+            - paragraph: Developer Docs
+          - link "LM Link New":
+            - /url: /link
+            - generic:
+              - img
+              - paragraph: LM Link
+            - generic: New
+          - link "Careers We're Hiring":
+            - /url: /careers
+            - paragraph: Careers
+            - generic: We're Hiring
+        - separator
+        - generic:
+          - generic:
+            - link "Blog":
+              - /url: /blog
+              - paragraph: Blog
+            - link:
+              - /url: /rss.xml
+              - img
+          - link "Changelog":
+            - /url: /changelog
+            - paragraph: Changelog
+          - link "Enterprise Solutions":
+            - /url: /enterprise
+            - paragraph: Enterprise Solutions
+          - link "Privacy Policy":
+            - /url: /app-privacy
+            - paragraph: Privacy Policy
+          - link "Terms of Use":
+            - /url: /app-terms
+            - paragraph: Terms of Use
+          - generic:
+            - link:
+              - /url: https://discord.gg/lmstudio
+              - button:
+                - img
+            - link:
+              - /url: https://github.com/lmstudio-ai
+              - button:
+                - img
+            - link:
+              - /url: https://www.linkedin.com/company/lmstudio-ai/
+              - button:
+                - img
+            - link:
+              - /url: https://twitter.com/lmstudio
+              - button:
+                - img
+    - generic [ref=e44]:
+      - generic [ref=e50]:
+        - heading "Logo Download LM Studio Experiment with LLMs on your computer. Chat interface and programmable API." [level=1] [ref=e51]:
+          - generic [ref=e52]:
+            - img "Logo" [ref=e53]
+            - generic [ref=e54]: Download LM Studio
+          - generic [ref=e55]: Experiment with LLMs on your computer. Chat interface and programmable API.
+        - generic [ref=e56]:
+          - generic [ref=e57]:
+            - generic [ref=e58]:
+              - generic [ref=e59]: LM Studio for
+              - combobox [ref=e60] [cursor=pointer]:
+                - generic:
+                  - generic:
+                    - img "darwin"
+                    - paragraph: macOS
+                - img [ref=e61]
+              - generic [ref=e63]: running
+              - combobox [ref=e64] [cursor=pointer]:
+                - generic: M series
+                - img [ref=e65]
+              - generic [ref=e67]: version
+              - combobox [ref=e68] [cursor=pointer]:
+                - generic:
+                  - text: 0.4.16
+                  - generic: (build 2)
+                - img [ref=e69]
+            - generic [ref=e71]:
+              - link "Download for macOS 0.4.16" [active] [ref=e73] [cursor=pointer]:
+                - /url: /download/latest/darwin/arm64
+                - generic [ref=e74]:
+                  - img [ref=e76]
+                  - paragraph [ref=e79]: Download for macOS
+                - paragraph [ref=e80]: 0.4.16
+              - generic [ref=e81]:
+                - paragraph [ref=e82]:
+                  - text: Release notes
+                  - link "v0.4.16" [ref=e83] [cursor=pointer]:
+                    - /url: /changelog/lmstudio-v0.4.16
+                - paragraph [ref=e84]:
+                  - text: Available under the
+                  - link "terms of use" [ref=e85] [cursor=pointer]:
+                    - /url: /terms
+          - img "lmmy" [ref=e87]
+          - generic [ref=e88]:
+            - generic [ref=e89]:
+              - heading "Install llmster" [level=2] [ref=e90]
+              - paragraph [ref=e91]: llmster is LM Studio's headless daemon for servers, cloud instances, and CI.
+            - generic [ref=e92]:
+              - generic [ref=e93]:
+                - img [ref=e94]
+                - img [ref=e96]
+                - generic [ref=e98]: Mac / Linux
+              - generic [ref=e99]:
+                - code [ref=e101]: curl -fsSL https://lmstudio.ai/install.sh | bash
+                - button "Copy code" [ref=e102] [cursor=pointer]:
+                  - img [ref=e103]
+            - generic [ref=e106]:
+              - generic [ref=e107]:
+                - img [ref=e108]
+                - generic [ref=e110]: Windows
+              - generic [ref=e111]:
+                - code [ref=e113]: irm https://lmstudio.ai/install.ps1 | iex
+                - button "Copy code" [ref=e114] [cursor=pointer]:
+                  - img [ref=e115]
+      - generic [ref=e123]:
+        - heading "🧪 Beta and Experimental Releases Link to this section" [level=2] [ref=e124]:
+          - generic [ref=e125]: 🧪 Beta and Experimental Releases
+          - link "Link to this section" [ref=e126] [cursor=pointer]:
+            - /url: "#-beta-and-experimental-releases"
+            - img [ref=e127]
+        - paragraph [ref=e130]:
+          - emphasis [ref=e131]:
+            - text: Beta releases can be found under
+            - link "https://lmstudio.ai/beta-releases" [ref=e132] [cursor=pointer]:
+              - /url: /beta-releases
+            - text: .
+    - contentinfo [ref=e133]:
+      - generic [ref=e134]:
+        - generic [ref=e135]:
+          - generic [ref=e136]:
+            - paragraph [ref=e137]: Product
+            - link "Download the app" [ref=e138] [cursor=pointer]:
+              - /url: /download
+            - link "Models" [ref=e139] [cursor=pointer]:
+              - /url: /models
+            - link "LM Link New" [ref=e140] [cursor=pointer]:
+              - /url: /link
+              - text: LM Link
+              - generic [ref=e141]: New
+            - link "LM Studio Hub" [ref=e142] [cursor=pointer]:
+              - /url: /login
+            - link "Beta Releases" [ref=e143] [cursor=pointer]:
+              - /url: /beta-releases
+            - link "Changelog" [ref=e144] [cursor=pointer]:
+              - /url: /changelog
+          - generic [ref=e145]:
+            - paragraph [ref=e146]: Developer
+            - link "Developer Docs" [ref=e147] [cursor=pointer]:
+              - /url: /docs/developer
+            - link "lmstudio-js" [ref=e148] [cursor=pointer]:
+              - /url: /docs/typescript
+            - link "lmstudio-python" [ref=e149] [cursor=pointer]:
+              - /url: /docs/python
+            - link "LM Studio CLI (lms)" [ref=e150] [cursor=pointer]:
+              - /url: /docs/cli
+            - link "llms.txt" [ref=e151] [cursor=pointer]:
+              - /url: /llms.txt
+            - link "llms-full.txt" [ref=e152] [cursor=pointer]:
+              - /url: /llms-full.txt
+          - generic [ref=e153]:
+            - paragraph [ref=e154]: Company
+            - link "Careers We're Hiring!" [ref=e155] [cursor=pointer]:
+              - /url: /careers
+              - text: Careers
+              - generic [ref=e156]: We're Hiring!
+            - generic [ref=e157]:
+              - link "Blog" [ref=e158] [cursor=pointer]:
+                - /url: /blog
+              - link [ref=e159] [cursor=pointer]:
+                - /url: /rss.xml
+                - img [ref=e160]
+            - link "Enterprise Solutions" [ref=e164] [cursor=pointer]:
+              - /url: /enterprise
+          - generic [ref=e165]:
+            - paragraph [ref=e166]: Legal
+            - link "Terms" [ref=e167] [cursor=pointer]:
+              - /url: /terms
+            - link "Privacy" [ref=e168] [cursor=pointer]:
+              - /url: /privacy
+        - generic [ref=e169]:
+          - generic [ref=e170]: 👾 Element Labs, Inc. © 2026
+          - generic [ref=e171]:
+            - link "LinkedIn" [ref=e172] [cursor=pointer]:
+              - /url: https://www.linkedin.com/company/lmstudio-ai/
+            - link "GitHub" [ref=e173] [cursor=pointer]:
+              - /url: https://github.com/lmstudio-ai
+            - link "Discord" [ref=e174] [cursor=pointer]:
+              - /url: https://discord.gg/lmstudio
+            - link "Twitter / X" [ref=e175] [cursor=pointer]:
+              - /url: https://twitter.com/lmstudio
+  - alert [ref=e176]

@@ -55,16 +55,27 @@ class RunContext:
     final_answer: str = ""
     react_depth: int = 0
     consecutive_failures: Dict[str, int] = field(default_factory=dict)
+    consecutive_idle_rounds: int = 0  # 连续空转轮次计数
 
     # ── 计划（plan-then-execute）──
     plan: List[PlanStep] = field(default_factory=list)
     plan_generation: int = 0         # 计划版本号，每次 re-plan 递增
     _step_retries: Dict[int, int] = field(default_factory=dict)
 
+    # ── 工具调用上下文（由 on_wrap_tool_call 设置）──
+    _current_tool_name: str = ""
+    _current_tool_arguments: Dict = field(default_factory=dict)
+
     # ── 中间件数据 ──
     confidence_total: float = 0.0
     confidence_scores: List[float] = field(default_factory=list)
     reflection_history: List[Dict] = field(default_factory=list)
+
+    # ── 知识上下文（KEPA 注入，独立于 task_description）──
+    knowledge_context: str = ""
+
+    # ── 强制指令（独立于 task_description，不污染原始任务）──
+    forced_instructions: str = ""
 
     # MiddlewareChain 引用（由 run_react 设置）
     _chain: Optional[Any] = None
@@ -170,6 +181,11 @@ class MiddlewareChain:
                     return hr
             except Exception as e:
                 logger.warning(f"Middleware {mw} on_start error: {e}")
+                mw_name = type(mw).__name__
+                if "ReActCore" in mw_name or "Core" in mw_name:
+                    ctx.interrupted = True
+                    ctx.last_error = f"核心 middleware 异常: {e}"
+                    return HookResult(jump_to="end")
         return HookResult()
 
     async def on_think_start(self, ctx: RunContext) -> HookResult:
@@ -182,6 +198,12 @@ class MiddlewareChain:
                     return hr
             except Exception as e:
                 logger.warning(f"Middleware {mw} on_think_start error: {e}")
+                # 核心 middleware 失败时中断执行，避免静默空转
+                mw_name = type(mw).__name__
+                if "ReActCore" in mw_name or "Core" in mw_name:
+                    ctx.interrupted = True
+                    ctx.last_error = f"核心 middleware 异常: {e}"
+                    return HookResult(jump_to="end")
         return HookResult()
 
     async def on_think_end(self, ctx: RunContext) -> HookResult:
@@ -229,6 +251,10 @@ class MiddlewareChain:
         return await _run_chain(0)
 
     async def on_wrap_tool_call(self, ctx: RunContext, tool_args: Dict) -> Dict:
+        # 设置工具调用信息到 ctx，供 PermissionMiddleware 等中间件使用
+        ctx._current_tool_name = tool_args.get("name", "")
+        ctx._current_tool_arguments = tool_args.get("arguments", {})
+
         async def _run_chain(index: int) -> Dict:
             if index >= len(self._middlewares):
                 from core.multi_agent_v2.tools.tool_registry import get_tool_registry
@@ -239,6 +265,9 @@ class MiddlewareChain:
                 if handler:
                     try:
                         result = await handler(args)
+                        # 检查统一 ok/err 协议：ok=False 视为失败
+                        if isinstance(result, dict) and result.get("ok") is False:
+                            return {"success": False, "error": result.get("error", "工具执行失败"), "result": result, "tool_call": tool_args}
                         return {"success": True, "result": result, "tool_call": tool_args}
                     except Exception as e:
                         return {"success": False, "error": str(e), "tool_call": tool_args}

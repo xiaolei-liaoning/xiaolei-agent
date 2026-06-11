@@ -581,8 +581,6 @@ TOOL_ICONS = {
     "search":             "🔍",
     "rag_search":         "🧠",
     "fetch_url":          "🌐",
-    "file":               "📁",
-    "call_api":           "🔗",
     "skill_execute":      "🎯",
     "kepa_reflect":       "🔄",
     "ask_clarification":  "❓",

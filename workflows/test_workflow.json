@@ -1,4 +1,5 @@
 {
+  "id": "test_workflow",
   "name": "test_workflow",
   "description": "测试工作流（steps 格式）",
   "steps": [

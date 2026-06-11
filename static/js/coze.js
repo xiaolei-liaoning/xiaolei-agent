@@ -1,5 +1,8 @@
 // ==================== Coze 平台 JavaScript ====================
 
+// API 基础地址 — 后端默认 8001 端口
+const API_BASE = 'http://localhost:8001';
+
 // 全局变量
 let currentAgentId = 'auto';  // 默认使用智能匹配
 let currentAgentInfo = {
@@ -661,7 +664,7 @@ function sendMessage() {
         const isGroupMode = isGroupModeEnabled();
         
         // 根据是否是组模式选择不同的API端点
-        const apiUrl = isGroupMode ? '/api/agent-groups/current/execute' : '/api/chat';
+        const apiUrl = isGroupMode ? `${API_BASE}/api/agent-groups/current/execute` : `${API_BASE}/api/chat`;
         
         // 构建请求体
         const requestBody = isGroupMode ? {
@@ -991,7 +994,7 @@ function handleGroupModeChange(event) {
 // 检查当前选中的小组
 async function checkCurrentGroup() {
     try {
-        const response = await fetch('/api/agent-groups/current/selected');
+        const response = await fetch(`${API_BASE}/api/agent-groups/current/selected`);
         const data = await response.json();
         
         if (!data.success || !data.data.group) {
@@ -1012,7 +1015,7 @@ async function checkCurrentGroup() {
 // 从后端加载 Agent 列表
 async function loadAgentList() {
     try {
-        const response = await fetch('/api/agents');
+        const response = await fetch(`${API_BASE}/api/agents`);
         const data = await response.json();
         
         if (data.success && data.data) {
@@ -1234,7 +1237,7 @@ function createNewPlan(event) {
     console.log('计划目标:', goal);
     
     // 调用后端API创建计划
-    fetch('/api/plans', {
+    fetch(`${API_BASE}/api/plans`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -1266,7 +1269,7 @@ function loadPlans() {
     console.log('加载计划列表...');
     
     // 加载计划统计数据
-    fetch('/api/plans/stats')
+    fetch(`${API_BASE}/api/plans/stats`)
     .then(response => response.json())
     .then(stats => {
         // 更新统计数据
@@ -1283,7 +1286,7 @@ function loadPlans() {
     });
     
     // 加载计划列表
-    fetch('/api/plans?limit=50')
+    fetch(`${API_BASE}/api/plans?limit=50`)
     .then(response => response.json())
     .then(data => {
         const plansList = document.getElementById('plans-list');
@@ -1378,7 +1381,7 @@ function viewPlanDetails(event, planName) {
     }
     
     // 调用后端API获取计划详情
-    fetch(`/api/plans/${planId}`)
+    fetch(`${API_BASE}/api/plans/${planId}`)
     .then(response => response.json())
     .then(data => {
         if (data.id) {
@@ -1433,7 +1436,7 @@ function deletePlan(event, planName) {
         }
         
         // 调用后端API删除计划
-        fetch(`/api/plans/${planId}`, {
+        fetch(`${API_BASE}/api/plans/${planId}`, {
             method: 'DELETE'
         })
         .then(response => response.json())
@@ -1676,7 +1679,7 @@ async function saveGroup() {
         if (groupId) {
             // 编辑模式 - 更新现有小组
             console.log('更新小组:', groupId);
-            response = await fetch(`/api/agent-groups/${groupId}`, {
+            response = await fetch(`${API_BASE}/api/agent-groups/${groupId}`, {
                 method: 'PUT',
                 headers: {
                     'Content-Type': 'application/json'
@@ -1712,7 +1715,7 @@ async function saveGroup() {
         } else {
             // 创建模式 - 新建小组
             console.log('创建小组');
-            response = await fetch('/api/agent-groups', {
+            response = await fetch(`${API_BASE}/api/agent-groups`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
@@ -1752,7 +1755,7 @@ async function saveGroup() {
 // 加载Agent小组列表
 async function loadAgentGroups() {
     try {
-        const response = await fetch('/api/agent-groups');
+        const response = await fetch(`${API_BASE}/api/agent-groups`);
         if (!response.ok) {
             throw new Error('获取小组列表失败');
         }
@@ -1858,7 +1861,7 @@ async function deleteGroup(groupId, groupName) {
     }
     
     try {
-        const response = await fetch(`/api/agent-groups/${groupId}`, {
+        const response = await fetch(`${API_BASE}/api/agent-groups/${groupId}`, {
             method: 'DELETE'
         });
         
@@ -1886,7 +1889,7 @@ async function openEditGroupModal(groupId) {
     
     try {
         // 获取小组详情
-        const response = await fetch(`/api/agent-groups/${groupId}`);
+        const response = await fetch(`${API_BASE}/api/agent-groups/${groupId}`);
         if (!response.ok) {
             throw new Error('获取小组详情失败');
         }
@@ -1946,7 +1949,7 @@ async function toggleGroupStatus(groupId, action, groupName) {
     
     try {
         const endpoint = action === 'start' ? 'start' : 'stop';
-        const response = await fetch(`/api/agent-groups/${groupId}/${endpoint}`, {
+        const response = await fetch(`${API_BASE}/api/agent-groups/${groupId}/${endpoint}`, {
             method: 'POST'
         });
         
@@ -2191,7 +2194,7 @@ async function processFiles(files) {
             const formData = new FormData();
             formData.append('file', file);
             
-            const response = await fetch('/api/upload', {
+            const response = await fetch(`${API_BASE}/api/upload`, {
                 method: 'POST',
                 body: formData
             });
@@ -2369,7 +2372,7 @@ if (originalSendMessage) {
                 responseStartTime = Date.now();
                 
                 // 发送包含文件路径的请求
-                const response = await fetch('/api/chat', {
+                const response = await fetch(`${API_BASE}/api/chat`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'

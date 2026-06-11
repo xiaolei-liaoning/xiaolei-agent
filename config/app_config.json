@@ -7,7 +7,7 @@
     "default_model": "glm-4-free",
     "max_tokens": 4096,
     "temperature": 0.7,
-    "timeout": 60,
+    "timeout": 120,
     "max_retries": 3,
     "rate_limit_rpm": 120,
     "backoff_base": 1.0,
