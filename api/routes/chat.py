@@ -339,9 +339,7 @@ def _get_bfs_context(user_id: int, depth: int = 3, limit: int = 20) -> Dict[str,
 async def chat(request: ChatRequest) -> ChatResponse:
     """核心聊天 API 入口
 
-    流程决策：
-    - 简单任务 → SkillDispatcher → 直接执行 Skill（跳过 Agent）
-    - 复杂任务（深度思考等）→ ChatAgent 系统
+    Web 统一走 V1 队长-队员多Agent系统（LeaderAgent + LLMAgent）。
 
     特性：
     - 使用BFS管理上下文
@@ -379,34 +377,8 @@ async def chat(request: ChatRequest) -> ChatResponse:
         except Exception as e:
             logger.warning(f"智能选择失败: {e}")
 
-    # 首先检查是否有强制模式选择
-    if request.force_multi_agent:
-        # 用户强制选择多Agent模式
-        logger.info("用户选择多Agent协作模式")
-        return await _handle_with_multi_agent(request, message, start_time, context_info, execution_plan_info, agents_used)
-    elif request.force_single_agent:
-        # 用户强制选择单Agent模式
-        logger.info("用户选择单Agent模式")
-        if _needs_agent(message):
-            return await _handle_with_agent(request, message, start_time, context_info, execution_plan_info, agents_used)
-        else:
-            return await _handle_direct(request, message, start_time, context_info, execution_plan_info, agents_used)
-    
-    # 如果没有强制选择，则继续智能判断
-    if _needs_multi_agent(message):
-        # 深度思考任务 → 走 V1 队长-队员多Agent系统
-        logger.info("检测到深度思考需求，使用V1队长-队员多Agent系统处理")
-        return await _handle_with_multi_agent(request, message, start_time, context_info, execution_plan_info, agents_used)
-    elif _needs_mcp_tools(message):
-        # 文件操作/代码编辑 → 走 agency_agent（集成 MCP 工具）
-        logger.info("检测到文件操作需求，使用 agency_agent 处理")
-        return await _handle_with_agency_agent(request, message, start_time, context_info)
-    elif _needs_agent(message):
-        # 复杂任务 → 走单Agent系统
-        return await _handle_with_agent(request, message, start_time, context_info, execution_plan_info, agents_used)
-    else:
-        # 简单任务 → 直接走SkillDispatcher
-        return await _handle_direct(request, message, start_time, context_info, execution_plan_info, agents_used)
+    # Web 统一走 V1 队长-队员多Agent系统（忽略 force_single_agent / force_multi_agent）
+    return await _handle_with_multi_agent(request, message, start_time, context_info, execution_plan_info, agents_used)
 
 
 async def _handle_with_multi_agent(
@@ -417,7 +389,7 @@ async def _handle_with_multi_agent(
     execution_plan_info: Optional[Dict[str, Any]],
     agents_used: Optional[List[str]]
 ) -> ChatResponse:
-    """通过 V1 队长-队员模式（LeaderAgent + LLMAgent）处理深度思考任务"""
+    """通过 V1 队长-队员模式（LeaderAgent + LLMAgent）处理 Web 聊天请求"""
     try:
         logger.info("🚀 V1 多Agent 开始处理: %s...", message[:60])
 
