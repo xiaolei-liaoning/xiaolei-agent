@@ -14,7 +14,7 @@ from typing import Any, Optional
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 load_dotenv()
@@ -55,26 +55,8 @@ if static_dir.exists():
 else:
     logger.warning("静态文件目录不存在: %s", static_dir)
 
-# 前端页面路由
-templates_dir = Path(__file__).parent / "templates"
-HTML_FILES = {
-    "/": "index.html",
-    "/coze": "coze.html",
-    "/chat": "chat.html",
-}
-
-def _make_route(fp: Path):
-    async def _handler():
-        return FileResponse(str(fp))
-    return _handler
-
-for route, filename in HTML_FILES.items():
-    fp = templates_dir / filename
-    if fp.exists():
-        app.get(route, name=filename)(_make_route(fp))
-        logger.info("前端页面已挂载: %s → %s", route, fp)
-    else:
-        logger.warning("前端页面不存在: %s", fp)
+# 前端页面路由 — 统一由 api/pages.py 提供
+# main.py 不再重复注册 /、/chat、/coze 等页面路由
 
 # ---------------------------------------------------------------------------
 # 全局状态（AppContext 模式）
