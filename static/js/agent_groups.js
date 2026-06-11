@@ -8,6 +8,7 @@
  */
 
 // Agent小组管理器
+const _apiBase = window.location.port === '5500' ? 'http://localhost:8001' : '';
 class AgentGroupManager {
     constructor() {
         this.groups = [];
@@ -30,7 +31,7 @@ class AgentGroupManager {
     }
 
     async loadAvailableAgents() {
-        const response = await fetch('/api/agent-groups/available-agents');
+        const response = await fetch(`${_apiBase}/api/agent-groups/available-agents`);
         const data = await response.json();
         this.availableAgents = data;
         console.log('📋 加载可用Agent完成:', data);
@@ -38,7 +39,7 @@ class AgentGroupManager {
     }
 
     async loadGroups() {
-        const response = await fetch('/api/agent-groups');
+        const response = await fetch(`${_apiBase}/api/agent-groups`);
         this.groups = await response.json();
         console.log('📋 加载Agent小组完成:', this.groups);
         return this.groups;
@@ -53,7 +54,7 @@ class AgentGroupManager {
             circuit_breaker = true
         } = options;
 
-        const response = await fetch('/api/agent-groups', {
+        const response = await fetch(`${_apiBase}/api/agent-groups`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -77,7 +78,7 @@ class AgentGroupManager {
     }
 
     async updateGroup(groupId, updateData) {
-        const response = await fetch(`/api/agent-groups/${groupId}`, {
+        const response = await fetch(`${_apiBase}/api/agent-groups/${groupId}`, {
             method: 'PUT',
             headers: {
                 'Content-Type': 'application/json'
@@ -91,21 +92,21 @@ class AgentGroupManager {
     }
 
     async deleteGroup(groupId) {
-        await fetch(`/api/agent-groups/${groupId}`, {
+        await fetch(`${_apiBase}/api/agent-groups/${groupId}`, {
             method: 'DELETE'
         });
         await this.loadGroups();
     }
 
     async activateGroup(groupId) {
-        await fetch(`/api/agent-groups/${groupId}/activate`, {
+        await fetch(`${_apiBase}/api/agent-groups/${groupId}/activate`, {
             method: 'POST'
         });
         await this.loadGroups();
     }
 
     async deactivateGroup(groupId) {
-        await fetch(`/api/agent-groups/${groupId}/deactivate`, {
+        await fetch(`${_apiBase}/api/agent-groups/${groupId}/deactivate`, {
             method: 'POST'
         });
         await this.loadGroups();

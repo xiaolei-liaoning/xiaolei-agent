@@ -14,7 +14,7 @@ class ChatHistoryManager {
         this.storageKey = 'chat_history';
         this.maxHistorySize = 1000;
         this.history = this.loadHistory();
-        this.apiBase = '/api';
+        this.apiBase = window.location.port === '5500' ? 'http://localhost:8001/api' : '/api';
         this.defaultUserId = 1;
     }
 
