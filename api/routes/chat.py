@@ -452,7 +452,7 @@ async def _handle_with_multi_agent(
             reply_parts.append(f"\n{status_icon} **{worker_name}**: {task_desc[:80]}")
             result_text = worker_result.get("result", "") if isinstance(worker_result, dict) else str(worker_result)
             if result_text:
-                reply_parts.append(f"   {result_text[:300]}")
+                reply_parts.append(f"   {result_text[:2000]}")
 
         reply_text = "\n".join(reply_parts)
 
