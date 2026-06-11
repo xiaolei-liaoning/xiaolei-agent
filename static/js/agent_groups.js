@@ -47,7 +47,7 @@ class AgentGroupManager {
 
     async createGroup(name, description, agents, options = {}) {
         const {
-            strategy = 'weighted_round_robin',
+            strategy = 'pipeline',
             failure_strategy = 'retry',
             circuit_strategy = 'count_based',
             timeout = 30,

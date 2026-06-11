@@ -1628,7 +1628,7 @@ function openCreateGroupModal() {
     });
     
     // 重置选择框
-    document.getElementById('scheduling-strategy').value = 'weighted_round_robin';
+    document.getElementById('scheduling-strategy').value = 'pipeline';
     document.getElementById('circuit-breaker').checked = false;
     document.getElementById('elastic-scaling').checked = false;
     
@@ -1653,16 +1653,34 @@ async function saveGroup() {
         return;
     }
     
-    // 获取选中的成员
-    const members = [];
+    // 获取选中的成员并转换为后端需要的 agents 格式
+    const memberIds = [];
     document.querySelectorAll('.agent-member-checkbox:checked').forEach(cb => {
-        members.push(cb.value);
+        memberIds.push(cb.value);
     });
     
-    if (members.length === 0) {
+    if (memberIds.length === 0) {
         alert('请至少选择一个Agent成员');
         return;
     }
+
+    // 从 availableAgents 中查找完整信息，构建 agents 数组
+    const allAgents = [
+        ...(agentGroupManager.availableAgents.character_agents || []),
+        ...(agentGroupManager.availableAgents.tool_agents || [])
+    ];
+    const agents = memberIds.map(id => {
+        const found = allAgents.find(a => a.agent_id === id);
+        return found ? {
+            agent_id: found.agent_id,
+            agent_type: found.agent_type || 'tool',
+            agent_name: found.agent_name || found.name || id,
+            description: found.description || '',
+            skills: found.skills || [],
+            priority: 1.0,
+            enabled: true
+        } : { agent_id: id, agent_type: 'tool', agent_name: id, skills: [], priority: 1.0, enabled: true };
+    });
     
     // 获取其他配置
     const strategy = document.getElementById('scheduling-strategy').value;
@@ -1686,7 +1704,7 @@ async function saveGroup() {
                 },
                 body: JSON.stringify({
                     name: groupName,
-                    members: members,
+                    agents: agents,
                     strategy: strategy,
                     circuit_breaker: circuitBreaker,
                     elastic_scaling: elasticScaling
@@ -1711,7 +1729,7 @@ async function saveGroup() {
             await loadAgentGroups();
             
             // 显示成功提示
-            alert(`✅ 小组"${groupName}"更新成功！\n\n成员: ${members.join(', ')}\n策略: ${groupData.strategy}\n熔断: ${circuitBreaker ? '开启' : '关闭'}\n弹性伸缩: ${elasticScaling ? '开启' : '关闭'}`);
+            alert(`✅ 小组"${groupName}"更新成功！\n\n成员: ${agents.map(a => a.agent_name).join(', ')}\n策略: ${groupData.strategy}\n熔断: ${circuitBreaker ? '开启' : '关闭'}\n弹性伸缩: ${elasticScaling ? '开启' : '关闭'}`);
         } else {
             // 创建模式 - 新建小组
             console.log('创建小组');
@@ -1722,7 +1740,7 @@ async function saveGroup() {
                 },
                 body: JSON.stringify({
                     name: groupName,
-                    members: members,
+                    agents: agents,
                     strategy: strategy,
                     circuit_breaker: circuitBreaker,
                     elastic_scaling: elasticScaling
@@ -1744,7 +1762,7 @@ async function saveGroup() {
             await loadAgentGroups();
             
             // 显示成功提示
-            alert(`✅ 小组"${groupName}"创建成功！\n\n成员: ${members.join(', ')}\n策略: ${groupData.strategy}\n熔断: ${circuitBreaker ? '开启' : '关闭'}\n弹性伸缩: ${elasticScaling ? '开启' : '关闭'}`);
+            alert(`✅ 小组"${groupName}"创建成功！\n\n成员: ${agents.map(a => a.agent_name).join(', ')}\n策略: ${groupData.strategy}\n熔断: ${circuitBreaker ? '开启' : '关闭'}\n弹性伸缩: ${elasticScaling ? '开启' : '关闭'}`);
         }
     } catch (error) {
         console.error('保存小组失败:', error);
@@ -1914,15 +1932,16 @@ async function openEditGroupModal(groupId) {
         });
         
         // 设置调度策略
-        const strategyKey = Object.keys({
-            '加权轮询': 'weighted_round_robin',
-            '最小负载': 'least_load',
-            '随机选择': 'random',
-            '优先级调度': 'priority'
-        }).find(key => key === groupData.strategy);
+        const strategyMap = {
+            '流水线模式': 'pipeline',
+            '并行评审': 'parallel_review',
+            '主从模式': 'master_slave',
+            '动态拍卖': 'dynamic_auction'
+        };
+        const strategyKey = Object.keys(strategyMap).find(key => strategyMap[key] === groupData.strategy);
         
         if (strategyKey) {
-            document.getElementById('scheduling-strategy').value = strategyKey;
+            document.getElementById('scheduling-strategy').value = strategyMap[strategyKey];
         }
         
         // 设置开关
@@ -1948,7 +1967,7 @@ async function toggleGroupStatus(groupId, action, groupName) {
     }
     
     try {
-        const endpoint = action === 'start' ? 'start' : 'stop';
+        const endpoint = action === 'start' ? 'activate' : 'deactivate';
         const response = await fetch(`${API_BASE}/api/agent-groups/${groupId}/${endpoint}`, {
             method: 'POST'
         });
