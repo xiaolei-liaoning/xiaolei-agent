@@ -56,6 +56,7 @@ class RunContext:
     react_depth: int = 0
     consecutive_failures: Dict[str, int] = field(default_factory=dict)
     consecutive_idle_rounds: int = 0  # 连续空转轮次计数
+    _failed_code_hashes: Dict[str, int] = field(default_factory=dict)  # code_hash → fail count
 
     # ── 计划（plan-then-execute）──
     plan: List[PlanStep] = field(default_factory=list)

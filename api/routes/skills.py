@@ -393,6 +393,7 @@ def _get_cached_skills() -> list:
     return _skills_cache
 
 
+@router.get("", summary="获取可用技能列表（短路径）")
 @router.get("/list", summary="获取可用技能列表")
 async def list_skills():
     """获取所有可用技能。"""

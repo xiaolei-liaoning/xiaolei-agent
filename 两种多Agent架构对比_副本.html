@@ -272,6 +272,302 @@ flowchart TB
   </div>
 </div>
 
+<!-- ============================== V1 执行流程详解 ============================== -->
+<div class="section" style="border-left: 4px solid #1565C0;">
+  <div class="section-title">V1 执行流程详解 — ReAct 循环 + 工具调用</div>
+  <span class="section-badge badge-keep">core/agent_system.py · 7 张流程图覆盖全链路</span>
+
+  <!-- 图1: 主流程 -->
+  <div style="margin-top:20px;margin-bottom:8px;font-size:16px;font-weight:600;color:#1565C0;">1. 主流程 — 队长 ReAct 循环</div>
+  <div class="mermaid-wrap" id="mermaid-v1-main">
+    <div class="zoom-controls">
+      <button class="zoom-btn" onclick="zoomIn('mermaid-v1-main')" title="放大">+</button>
+      <button class="zoom-btn" onclick="zoomOut('mermaid-v1-main')" title="缩小">&minus;</button>
+      <button class="zoom-btn zoom-reset" onclick="zoomReset('mermaid-v1-main')" title="重置">1:1</button>
+      <span class="zoom-level" id="zoom-level-mermaid-v1-main">100%</span>
+    </div>
+<pre class="mermaid">
+flowchart TB
+  classDef entry fill:#d3f9d8,stroke:#2f9e44,color:#000
+  classDef result fill:#c5f6fa,stroke:#0c8599,color:#000
+  classDef loop fill:#f8f9fa,stroke:#868e96
+
+  Start(["用户任务输入"]) --> Supervise["LeaderAgent.supervise_task()"]
+
+  subgraph react["ReAct 主循环"]
+    direction TB
+    Round{"round < max_rounds?"}
+    Think["_react_think() 队长思考"]
+    DoneCheck{"thought.done?"}
+    Act["_react_act() 执行行动"]
+    Observe["记录 Observation"]
+    Publish["publish_progress()"]
+
+    Round -->|"是"| Think
+    Think --> DoneCheck
+    DoneCheck -->|"是"| Round
+    DoneCheck -->|"否"| Act
+    Act --> Observe
+    Observe --> Publish
+    Publish --> Round
+  end
+
+  Supervise --> react
+  Round -->|"否 / 完成"| Result["返回执行结果"]
+
+  class Start entry
+  class Result result
+  class react loop
+</pre>
+  </div>
+
+  <!-- 图2: Thought 阶段 -->
+  <div style="margin-top:28px;margin-bottom:8px;font-size:16px;font-weight:600;color:#1565C0;">2. Thought 阶段 — 队长决策 + 工具注册 + 提示</div>
+  <div class="mermaid-wrap" id="mermaid-v1-think">
+    <div class="zoom-controls">
+      <button class="zoom-btn" onclick="zoomIn('mermaid-v1-think')" title="放大">+</button>
+      <button class="zoom-btn" onclick="zoomOut('mermaid-v1-think')" title="缩小">&minus;</button>
+      <button class="zoom-btn zoom-reset" onclick="zoomReset('mermaid-v1-think')" title="重置">1:1</button>
+      <span class="zoom-level" id="zoom-level-mermaid-v1-think">100%</span>
+    </div>
+<pre class="mermaid">
+flowchart TB
+  classDef purple fill:#e5dbff,stroke:#5f3dc4,color:#000
+  classDef orange fill:#fff4e6,stroke:#e67700,color:#000
+  classDef red fill:#ffe3e3,stroke:#c92a2a,color:#000
+  classDef green fill:#d3f9d8,stroke:#2f9e44,color:#000
+  classDef cyan fill:#c5f6fa,stroke:#0c8599,color:#000
+
+  ThinkStart(["_react_think()"]) --> BuildCtx["构建上下文 history + results"]
+
+  BuildCtx --> GetTools["_get_tools_for_task()"]
+  GetTools --> Registry["ToolRegistry 工具注册表"]
+  Registry --> Builtin["16 内置 handler"]
+  Registry --> MCP["MCP 动态发现"]
+  Registry --> Skill["skill_execute 技能"]
+
+  Builtin --> ToolList["返回最多15个工具定义"]
+  MCP --> ToolList
+  Skill --> ToolList
+
+  ToolList --> SystemPrompt["SYSTEM_PROMPT + TOOL_USAGE_SECTION<br/>告知 LLM 可用工具列表 + 调用格式"]
+
+  SystemPrompt --> TaskType{"任务类型提示<br/>额外引导"}
+
+  TaskType -->|"天气/气温"| Hint1["提示: skill_execute weather"]
+  TaskType -->|"搜索/爬取"| Hint2["提示: web_search"]
+  TaskType -->|"翻译"| Hint3["提示: skill_execute translator"]
+  TaskType -->|"写/创建/文件"| Hint4["提示: write_file"]
+  TaskType -->|"执行/代码"| Hint5["提示: execute_python"]
+  TaskType -->|"其他"| Hint6["无额外提示"]
+
+  Hint1 --> LLM["LLM 输出 JSON<br/>可调用任意已注册工具"]
+  Hint2 --> LLM
+  Hint3 --> LLM
+  Hint4 --> LLM
+  Hint5 --> LLM
+  Hint6 --> LLM
+
+  LLM --> Parse{"解析成功?"}
+  Parse -->|"是"| Return["返回 thought + tool_calls"]
+  Parse -->|"否"| Fallback["返回 done=True"]
+
+  class ThinkStart purple
+  class Registry cyan
+  class ToolList green
+  class LLM orange
+  class Fallback red
+</pre>
+  </div>
+
+  <!-- 图3: Action 阶段 -->
+  <div style="margin-top:28px;margin-bottom:8px;font-size:16px;font-weight:600;color:#1565C0;">3. Action 阶段 — tool 直接调用 vs delegate 分配</div>
+  <div class="mermaid-wrap" id="mermaid-v1-act">
+    <div class="zoom-controls">
+      <button class="zoom-btn" onclick="zoomIn('mermaid-v1-act')" title="放大">+</button>
+      <button class="zoom-btn" onclick="zoomOut('mermaid-v1-act')" title="缩小">&minus;</button>
+      <button class="zoom-btn zoom-reset" onclick="zoomReset('mermaid-v1-act')" title="重置">1:1</button>
+      <span class="zoom-level" id="zoom-level-mermaid-v1-act">100%</span>
+    </div>
+<pre class="mermaid">
+flowchart TB
+  classDef purple fill:#e5dbff,stroke:#5f3dc4,color:#000
+  classDef orange fill:#ffe8cc,stroke:#d9480f,color:#000
+  classDef cyan fill:#c5f6fa,stroke:#0c8599,color:#000
+
+  ActStart(["_react_act()"]) --> ActionType{"action.type?"}
+
+  ActionType -->|"tool"| ToolName{"tool_name 存在?"}
+  ToolName -->|"是"| ExecTool["_execute_tool(tool_name, args)"]
+  ToolName -->|"否"| ToolErr["返回 error: 未指定工具"]
+
+  ActionType -->|"delegate"| HasWorker{"有可用 Worker?"}
+  HasWorker -->|"是"| SendMsg["发送 AgentMessage → worker.process_message()"]
+  HasWorker -->|"否"| WorkerErr["返回 error: 无可用 Worker"]
+
+  ActionType -->|"其他"| UnknownErr["返回 error: 未知类型"]
+
+  ExecTool --> ToolResult["返回工具执行结果"]
+  SendMsg --> ParseResult["解析 Worker 结果"]
+  ParseResult --> WorkerResult["返回 Worker 结果"]
+
+  class ActStart purple
+  class ExecTool orange
+  class SendMsg cyan
+</pre>
+  </div>
+
+  <!-- 图4: Worker 执行流程 -->
+  <div style="margin-top:28px;margin-bottom:8px;font-size:16px;font-weight:600;color:#1565C0;">4. Worker 执行流程 — _handle_message() 全链路</div>
+  <div class="mermaid-wrap" id="mermaid-v1-worker">
+    <div class="zoom-controls">
+      <button class="zoom-btn" onclick="zoomIn('mermaid-v1-worker')" title="放大">+</button>
+      <button class="zoom-btn" onclick="zoomOut('mermaid-v1-worker')" title="缩小">&minus;</button>
+      <button class="zoom-btn zoom-reset" onclick="zoomReset('mermaid-v1-worker')" title="重置">1:1</button>
+      <span class="zoom-level" id="zoom-level-mermaid-v1-worker">100%</span>
+    </div>
+<pre class="mermaid">
+flowchart TB
+  classDef green fill:#d3f9d8,stroke:#2f9e44,color:#000
+  classDef cyan fill:#c5f6fa,stroke:#0c8599,color:#000
+  classDef red fill:#ffe3e3,stroke:#c92a2a,color:#000
+  classDef blue fill:#e7f5ff,stroke:#1971c2,color:#000
+
+  MsgIn(["收到 AgentMessage"]) --> RoleConfig["获取角色配置 role + desc + fmt"]
+  RoleConfig --> RAG["RAG 检索 _rag_query()"]
+  RAG --> GetTools["_get_tools_for_task(task)<br/>从 ToolRegistry 获取最多15个工具"]
+  GetTools --> HasTools{"有工具?"}
+
+  HasTools -->|"有"| LLMTools["_llm_with_tools()<br/>LLM + 函数调用 (tools 参数)"]
+  HasTools -->|"无"| LLMJson["_llm_json()<br/>纯 JSON 输出"]
+
+  LLMTools --> ToolCalls{"返回 tool_calls?"}
+  ToolCalls -->|"有"| ExecCalls["_execute_tool_calls()<br/>通过 ToolRegistry.get_handler() 并行执行"]
+  ToolCalls -->|"无"| SkipExec["跳过工具执行"]
+
+  ExecCalls --> ProcessResults["_process_tool_results()<br/>汇总结果"]
+  SkipExec --> KEPA
+
+  LLMJson --> KEPA["_kepa_reflect()<br/>置信度 >=0.85 通过"]
+  ProcessResults --> KEPA
+
+  KEPA --> KEPADecision{"KEPA 决策"}
+  KEPADecision -->|"continue + >=0.85"| OK["返回成功结果"]
+  KEPADecision -->|"retry"| Retry["重试 最多3次"]
+  KEPADecision -->|"fail"| Fail["返回失败"]
+
+  Retry --> LLMTools
+
+  class MsgIn green
+  class OK cyan
+  class Fail red
+  class GetTools blue
+  class ExecCalls blue
+</pre>
+  </div>
+
+  <!-- 图5: LLM 响应解析 -->
+  <div style="margin-top:28px;margin-bottom:8px;font-size:16px;font-weight:600;color:#1565C0;">5. LLM 响应解析 — JSON 优先 + 文本回退</div>
+  <div class="mermaid-wrap" id="mermaid-v1-parse">
+    <div class="zoom-controls">
+      <button class="zoom-btn" onclick="zoomIn('mermaid-v1-parse')" title="放大">+</button>
+      <button class="zoom-btn" onclick="zoomOut('mermaid-v1-parse')" title="缩小">&minus;</button>
+      <button class="zoom-btn zoom-reset" onclick="zoomReset('mermaid-v1-parse')" title="重置">1:1</button>
+      <span class="zoom-level" id="zoom-level-mermaid-v1-parse">100%</span>
+    </div>
+<pre class="mermaid">
+flowchart TB
+  classDef orange fill:#fff4e6,stroke:#e67700,color:#000
+  classDef green fill:#d3f9d8,stroke:#2f9e44,color:#000
+  classDef orange2 fill:#ffe8cc,stroke:#d9480f,color:#000
+  classDef red fill:#ffe3e3,stroke:#c92a2a,color:#000
+
+  LLMResp(["LLM 响应"]) --> IsDict{"是 dict?"}
+  IsDict -->|"是"| DirectReturn["直接返回"]
+  IsDict -->|"否"| Clean["清洗文本 strip json/code 标记"]
+  Clean --> JsonParse{"JSON 解析成功?"}
+  JsonParse -->|"是"| ParsedReturn["返回解析结果"]
+  JsonParse -->|"否"| TextExtract["_extract_tool_calls_from_text() 正则提取工具调用"]
+  TextExtract --> HasMatch{"匹配到工具?"}
+  HasMatch -->|"是"| TextResult["返回 tool_calls"]
+  HasMatch -->|"否"| EmptyResult["返回空 dict"]
+
+  class LLMResp orange
+  class DirectReturn green
+  class TextExtract orange2
+  class EmptyResult red
+</pre>
+  </div>
+
+  <!-- 图6: 端到端数据流 -->
+  <div style="margin-top:28px;margin-bottom:8px;font-size:16px;font-weight:600;color:#1565C0;">6. 端到端数据流 — 用户 → 队长 → 队员 → 结果</div>
+  <div class="mermaid-wrap" id="mermaid-v1-e2e">
+    <div class="zoom-controls">
+      <button class="zoom-btn" onclick="zoomIn('mermaid-v1-e2e')" title="放大">+</button>
+      <button class="zoom-btn" onclick="zoomOut('mermaid-v1-e2e')" title="缩小">&minus;</button>
+      <button class="zoom-btn zoom-reset" onclick="zoomReset('mermaid-v1-e2e')" title="重置">1:1</button>
+      <span class="zoom-level" id="zoom-level-mermaid-v1-e2e">100%</span>
+    </div>
+<pre class="mermaid">
+flowchart LR
+  classDef green fill:#d3f9d8,stroke:#2f9e44,color:#000
+  classDef purple fill:#e5dbff,stroke:#5f3dc4,color:#000
+  classDef cyan fill:#c5f6fa,stroke:#0c8599,color:#000
+
+  User["用户"] -->|"任务描述"| Leader["队长 LeaderAgent"]
+  Leader -->|"ReAct: Thought"| Leader
+  Leader -->|"tool: 直接调用"| Tools["工具执行"]
+  Leader -->|"delegate: 分配子任务"| Worker1["队员1"]
+  Leader -->|"delegate: 分配子任务"| Worker2["队员2"]
+  Leader -->|"delegate: 分配子任务"| Worker3["队员3"]
+
+  Worker1 -->|"process_message"| WorkerExec1["工具调用 + KEPA"]
+  Worker2 -->|"process_message"| WorkerExec2["工具调用 + KEPA"]
+  Worker3 -->|"process_message"| WorkerExec3["工具调用 + KEPA"]
+
+  WorkerExec1 -->|"结果"| Leader
+  WorkerExec2 -->|"结果"| Leader
+  WorkerExec3 -->|"结果"| Leader
+
+  Tools -->|"结果"| Leader
+  Leader -->|"analyze: 分析结果"| Leader
+  Leader -->|"完成"| Result["最终结果"]
+
+  class User green
+  class Leader purple
+  class Worker1 cyan
+  class Worker2 cyan
+  class Worker3 cyan
+  class Result green
+</pre>
+  </div>
+
+  <!-- 图7: 调用栈 -->
+  <div style="margin-top:28px;margin-bottom:8px;font-size:16px;font-weight:600;color:#1565C0;">7. 关键方法调用栈</div>
+  <pre style="background:#f8f8f8;border:1px solid #e0e0e0;border-radius:6px;padding:16px;font-size:13px;line-height:1.8;overflow-x:auto;"><code>LeaderAgent.supervise_task()
+  ├── _react_think()           ← 队长思考 → LLM 决策
+  │   └── _get_tools_for_task() ← ToolRegistry 获取工具定义
+  ├── _react_act()             ← 执行行动
+  │   ├── [tool]     → _execute_tool()          ← 通过 ToolRegistry.get_handler() 执行
+  │   └── [delegate] → worker.process_message()  ← 分配给队员
+  │       └── _handle_message()
+  │           ├── _rag_query()                   ← RAG 检索
+  │           ├── _get_tools_for_task()           ← ToolRegistry 获取工具列表
+  │           ├── _llm_with_tools() / _llm_json() ← LLM 调用 (tools=工具定义)
+  │           ├── _execute_tool_calls()           ← 并行执行 ToolRegistry handler
+  │           ├── _process_tool_results()         ← 汇总工具结果
+  │           └── _kepa_reflect()                ← KEPA 置信度评估
+  └── (循环直到 done 或 max_rounds)
+
+  ToolRegistry 内置 16 个 handler:
+  write_file | execute_python | execute_shell | git | rag_search
+  skill_execute | kepa_reflect | ask_clarification | self_reflect
+  fetch_url | web_search | read_file | edit_file
+  glob_search | grep_search | todo_write
+  + MCP 动态发现 + skill_execute 技能调用</code></pre>
+
+</div>
+
 <!-- ============================== JS Workflow 脚本示例 ============================== -->
 <div class="section" style="border-left: 4px solid #F57C00;">
   <div class="section-title">JS Workflow 脚本 — 编排入口</div>
@@ -405,7 +701,7 @@ flowchart LR
 	      <tr><td><strong>编排方式</strong></td><td>Python 硬编码：Leader 的 supervise_task() 主循环</td><td>JS 脚本动态编排，支持 <code>agent() / parallel() / pipeline() / phase() / log() / budget()</code></td></tr>
 	      <tr><td><strong>脚本生成</strong></td><td>无。所有逻辑写在 Python 代码里</td><td><strong>3 种路径</strong>：<br/>① 用户贴 JS 脚本 &rarr; 直接执行<br/>② 用户传 .js 文件 &rarr; 加载执行<br/>③ 说人话 &rarr; LLM 自动写 JS 脚本 &rarr; 执行</td></tr>
 	      <tr><td><strong>中间件</strong></td><td>无。Agent 内 4 方法是独立方法串行调用</td><td><strong>MiddlewareChain 10 层</strong> + HOOKS + HookResult<br/>5 生命周期钩子 + 2 洋葱包裹钩子</td></tr>
-	      <tr><td><strong>工具集成</strong></td><td>无 ToolRegistry 集成，Agent 直接用 LLM 输出</td><td>ToolRegistry 12+ 内置 handler + MCP 自动发现<br/>handler 优先 &rarr; MCP fallback</td></tr>
+	      <tr><td><strong>工具集成</strong></td><td><strong>ToolRegistry 完整集成</strong><br/>16 内置 handler: write_file, execute_python, web_search, fetch_url, read_file, edit_file, glob_search, grep_search, execute_shell, git, rag_search, skill_execute, kepa_reflect, ask_clarification, self_reflect, todo_write<br/>+ MCP 动态发现 + skill_execute 技能调用<br/>_get_tools_for_task() 按任务获取最多15个工具<br/>_execute_tool() 单步执行（30s超时）</td><td>ToolRegistry 16+ 内置 handler + MCP 自动发现<br/>handler 优先 &rarr; MCP fallback<br/>MiddlewareChain 中间件拦截工具调用</td></tr>
 	      <tr><td><strong>生命周期</strong></td><td>create_team() &rarr; supervise_task() &rarr; share_memory() &rarr; discard()</td><td>AgentPool 预热 &rarr; agent() 借/还 &rarr; finally: stop_bus &rarr; reset &rarr; release</td></tr>
     </tbody>
   </table>

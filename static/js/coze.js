@@ -1166,6 +1166,15 @@ function switchTab(tabName) {
         targetSection.classList.remove('hidden');
     }
     
+    // 工作流 iframe 动态加载
+    if (tabName === 'workflow') {
+        const iframe = document.getElementById('workflow-editor-frame');
+        if (iframe && !iframe.src) {
+            const apiBase = window.location.port === '5500' ? 'http://localhost:8001' : window.location.origin;
+            iframe.src = `${apiBase}/workflow_editor`;
+        }
+    }
+    
     // 更新导航按钮状态
     document.querySelectorAll('.nav-btn').forEach(btn => {
         btn.classList.remove('active', 'bg-blue-100', 'text-blue-600');
@@ -1843,7 +1852,7 @@ function addGroupCardToGrid(groupData) {
             <div class="space-y-3">
                 <div class="flex items-center text-sm text-gray-600">
                     <i class="fa fa-users mr-2 text-gray-400"></i>
-                    <span>成员: ${groupData.members.join(', ')}</span>
+                    <span>成员: ${groupData.agents ? groupData.agents.map(a => a.agent_name || a.agent_id).join(', ') : ''}</span>
                 </div>
                 <div class="flex items-center text-sm text-gray-600">
                     <i class="fa fa-random mr-2 text-gray-400"></i>
@@ -1928,7 +1937,7 @@ async function openEditGroupModal(groupId) {
         
         // 设置成员复选框
         document.querySelectorAll('.agent-member-checkbox').forEach(cb => {
-            cb.checked = groupData.members.includes(cb.value);
+            cb.checked = groupData.agents && groupData.agents.some(a => a.agent_id === cb.value);
         });
         
         // 设置调度策略

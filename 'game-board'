@@ -1,0 +1,59 @@
+{"content": "<!DOCTYPE html>
+<html>
+<head>
+<title>八数码游戏</title>
+<style>
+    body {
+        font-family: Arial, sans-serif;
+        text-align: center;
+    }
+    #game-board {
+        display: grid;
+        grid-template-columns: repeat(3, 100px);
+        grid-gap: 5px;
+    }
+    .tile {
+        width: 100px;
+        height: 100px;
+        background-color: #f0f0f0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid #ccc;
+    }
+    .empty {
+        background-color: #fff;
+    }
+</style>
+</head>
+<body>
+<h1>八数码游戏</h1>
+<div id="game-board"></div>
+<script>
+    const board = [1, 2, 3, 4, 5, 6, 7, 8, 0];
+    const target = [1, 2, 3, 4, 5, 6, 7, 8, 0];
+    function shuffleArray(array) {
+        for (let i = array.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [array[i], array[j]] = [array[j], array[i]];
+        }
+    }
+    shuffleArray(board);
+    function displayBoard() {
+        const boardElement = document.getElementById);
+        boardElement.innerHTML = '';
+        board.forEach((number, index) => {
+            const tile = document.createElement('div');
+            tile.classList.add('tile');
+            if (number === 0) {
+                tile.classList.add('empty');
+            } else {
+                tile.textContent = number;
+            }
+            boardElement.appendChild(tile);
+        });
+    }
+    displayBoard();
+</script>
+</body>
+</html>"}

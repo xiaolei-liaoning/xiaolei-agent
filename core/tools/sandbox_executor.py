@@ -215,6 +215,17 @@ class SandboxExecutor:
                 runtime="python"
             )
             
+            # 3.5 文件写入自动导出：检测到文件写入时，在清理前复制到用户目录
+            if result.status.value == "completed":
+                try:
+                    file_writes = detect_file_writes(code)
+                    if file_writes:
+                        detected_paths = extract_file_paths(code)
+                        recommended = get_recommended_path(detected_paths, "")
+                        await self._export_files_before_cleanup(sandbox_id, recommended)
+                except Exception as e:
+                    logger.debug(f"文件导出跳过: {e}")
+            
             return result
             
         except Exception as e:
@@ -255,6 +266,24 @@ class SandboxExecutor:
                 shell=True
             )
             
+            # Shell命令也可能创建文件，清理前导出
+            if result.status.value == "completed":
+                try:
+                    sandbox_home = self.sandbox_dir / sandbox_id
+                    if sandbox_home.exists():
+                        for item in sandbox_home.rglob("*"):
+                            if item.is_file() and not item.name.startswith("."):
+                                dest = os.path.expanduser(f"~/Desktop/{item.name}")
+                                try:
+                                    import shutil as _shutil
+                                    os.makedirs(os.path.dirname(dest), exist_ok=True)
+                                    _shutil.copy2(str(item), dest)
+                                    logger.info(f"Shell沙盒文件已导出: {item.name} → {dest}")
+                                except Exception:
+                                    pass
+                except Exception:
+                    pass
+            
             return result
             
         except Exception as e:
@@ -276,6 +305,26 @@ class SandboxExecutor:
             limits: 资源限制
             skip_module_check: 是否跳过模块导入检查（用户确认后使用）
         """
+        # ── 检测 JavaScript 代码误入 execute_python ──
+        js_indicators = [
+            "function ", "function(", "var ", "let ", "const ",
+            "document.", "window.", "console.log", "=> {",
+            "addEventListener", "getElementById", "querySelector",
+            "innerHTML", "textContent", "onclick",
+            "export default", "export const", "import {",
+        ]
+        code_stripped = code.strip()
+        # 排除注释行
+        code_lines = [l for l in code_stripped.split("\n") if l.strip() and not l.strip().startswith("#")]
+        code_no_comments = "\n".join(code_lines)
+        js_score = sum(1 for ind in js_indicators if ind in code_no_comments)
+        if js_score >= 2:
+            raise SecurityError(
+                "检测到 JavaScript 代码。execute_python 只能执行 Python 代码。\n"
+                "如果要创建 HTML/游戏/文件，请使用 write_file 工具。\n"
+                f"检测到的 JS 特征: {[ind for ind in js_indicators if ind in code_no_comments][:3]}"
+            )
+
         # 检查禁止的模块导入（可跳过——用户已确认）
         if not skip_module_check:
             for module in limits.forbidden_modules:
@@ -496,6 +545,44 @@ class SandboxExecutor:
                 error_message=str(e),
                 sandbox_id=sandbox_id
             )
+    
+    async def _export_files_before_cleanup(self, sandbox_id: str, recommended_path: str):
+        """清理前将沙盒中创建的文件导出到用户目录
+        
+        Args:
+            sandbox_id: 沙盒ID
+            recommended_path: 推荐的导出路径（如 ~/Desktop/game.html）
+        """
+        import shutil as _shutil
+        
+        sandbox_home = self.sandbox_dir / sandbox_id
+        if not sandbox_home.exists():
+            return
+        
+        # 展开用户路径
+        dest_dir = os.path.expanduser(os.path.dirname(recommended_path)) if recommended_path else ""
+        dest_name = os.path.basename(recommended_path) if recommended_path else ""
+        
+        exported = 0
+        for item in sandbox_home.rglob("*"):
+            if item.is_file() and not item.name.startswith(".") and item.name != "sandbox_script.py":
+                if dest_dir and dest_name:
+                    # 导出到推荐路径
+                    dest_path = os.path.join(dest_dir, dest_name)
+                else:
+                    # 无推荐路径时，导出到 ~/Desktop/
+                    dest_path = os.path.expanduser(f"~/Desktop/{item.name}")
+                
+                try:
+                    os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+                    _shutil.copy2(str(item), dest_path)
+                    logger.info(f"沙盒文件已导出: {item.name} → {dest_path}")
+                    exported += 1
+                except Exception as e:
+                    logger.warning(f"导出文件失败 {item.name}: {e}")
+        
+        if exported:
+            logger.info(f"共导出 {exported} 个文件到 {dest_dir or '~/Desktop/'}")
     
     async def _cleanup_sandbox(self, sandbox_id: str):
         """清理沙盒

@@ -2685,7 +2685,7 @@ ${edges.map(edge => `    <edge source="${edge.source}" target="${edge.target}"/>
                 try {
                     showResult('保存中...');
                     
-                    const response = await fetch(window.location.origin.replace(/:8000/, ':8001') + '/api/workflow/execute-data', {
+                    const response = await fetch('/api/workflow/execute-data', {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json'

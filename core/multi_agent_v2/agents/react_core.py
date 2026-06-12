@@ -16,6 +16,7 @@ ReActCore — V2 单 Agent 核心执行器
 import asyncio
 import json
 import logging
+import os
 from typing import Any, Dict, List, Optional
 
 from .middleware import BaseMiddleware, MiddlewareChain, PlanStep, RunContext
@@ -267,8 +268,75 @@ class ReActCoreMiddleware(BaseMiddleware):
             "- 思考过程要**简洁高效**，不要过度纠结\n"
             "- 每轮思考后必须给出**实际响应**（工具调用或最终答案）\n"
             "- **禁止空转**：不要只输出计划/步骤说明而不调用工具，每轮必须有工具调用\n"
+            "- **禁止输出描述性文字**：不要输出'我将...'、'首先...'、'步骤1...'等计划描述，直接调用工具\n"
+            "- **禁止输出部分代码**：不要输出被截断的代码，必须一次性输出完整代码\n"
             "- **创建文件类任务**：一次性写入完整可运行的代码到 write_file 的 content 参数，不要写多行\n"
+            "- **⚠️ 写代码任务的强制路径**：当任务要求'写代码/创建游戏/写HTML/编写XX'时，你的**唯一路径**是：直接调用 write_file(path='~/Desktop/xxx.html', content='完整代码')。**绝对不要**调用 execute_python 来写代码——execute_python 只能执行 Python，不能创建文件，且沙盒会清理临时文件。如果你调用了 execute_python 来写游戏/HTML 代码，一定会失败。\n"
             "</thinking_style>\n\n"
+            "<code_generation_workflow>\n"
+            "## 代码生成流程（必须遵循）\n"
+            "当你需要创建文件（游戏、HTML、脚本等）时，必须严格按照以下流程：\n\n"
+            "### 1. 一次性生成完整代码\n"
+            "- **不要分步写入**：必须在一次 write_file 调用中写入完整代码\n"
+            "- **不要输出计划描述**：直接调用 write_file，不要先说'我将创建...'\n"
+            "- **不要截断代码**：必须包含完整的 HTML 结构、CSS 样式、JavaScript 逻辑\n\n"
+            "### 2. 代码质量要求\n"
+            "- **功能完整**：游戏/应用必须可以正常运行，不要有占位符或 TODO\n"
+            "- **视觉美观**：使用现代 CSS 样式（渐变、动画、阴影等）\n"
+            "- **交互完整**：所有按钮、点击、输入都必须有响应\n"
+            "- **无编译错误**：确保代码语法正确，可以直接在浏览器中运行\n\n"
+            "### 3. HTML 文件必须包含\n"
+            "- `<!DOCTYPE html>` 声明\n"
+            "- `<html>` 和 `</html>` 标签\n"
+            "- `<style>` 标签（CSS 样式）\n"
+            "- `<script>` 标签（JavaScript 游戏逻辑，不能只有注释！）\n"
+            "- 完整的游戏逻辑（初始化、渲染、交互、状态管理）\n\n"
+            "### ⚠️ 禁止拆分文件\n"
+            "- **禁止将 HTML 和 JS 拆分成两个文件**：游戏必须是单个自包含的 HTML 文件\n"
+            "- **所有 JavaScript 必须内联在 `<script>` 标签中**，不要创建单独的 .js 文件\n"
+            "- **所有 CSS 必须内联在 `<style>` 标签中**，不要创建单独的 .css 文件\n"
+            "- 一次 write_file 调用写入完整文件，content 参数必须包含所有代码\n\n"
+            "### 4. 错误恢复\n"
+            "- 如果 write_file 返回'内容不完整'错误，必须重新写入完整代码\n"
+            "- 如果代码被截断（显示为'...'或'backgrou...'），必须重新生成\n"
+            "- 如果 write_file 返回'⚠️ 代码被截断'，说明内容太长被系统截断了\n"
+            "  - 用 write_file 继续生成，content 中只写缺失部分（从断点继续）\n"
+            "  - 系统会自动追加到已有文件后面\n"
+            "  - 不要重复已有内容，只写缺失的标签和代码\n"
+            "- **不要告诉用户'需要自行添加代码'**，你必须自己完成所有代码\n"
+            "</code_generation_workflow>\n\n"
+            "<report_workflow>\n"
+            "## 报告/数据页面生成流程（必须遵循）\n"
+            "当任务要求生成报告、数据汇总、热搜报告、分析页面、dashboard 等非游戏类文件时：\n\n"
+            "### 1. 数据采集（必须先做！）\n"
+            "- **禁止凭空编造数据**：报告中的数据必须来自真实抓取\n"
+            "- 使用 web_search 搜索相关数据（如：web_search(query='百度热搜')）\n"
+            "- 使用 fetch_url 抓取具体网页/API（如：fetch_url(url='https://top.baidu.com/api/board?tab=realtime')）\n"
+            "- 确认数据已获取，看到真实内容后，再进入报告生成\n\n"
+            "### 2. 生成报告\n"
+            "- 使用 write_file 生成 HTML 报告\n"
+            "- **报告中必须包含真实数据**（直接嵌入 HTML），不要用占位符或模板\n"
+            "- 报告结构：标题、数据列表/表格、来源标注、样式美化\n\n"
+            "### 3. 禁止事项\n"
+            "- **禁止在 HTML/JS 中调用 fetch_url/web_search**：这些是服务端工具，不是浏览器 API\n"
+            "- **禁止跳过数据采集直接生成报告模板**\n"
+            "- **禁止用游戏模板替代报告**\n"
+            "</report_workflow>\n\n"
+            "<task_classification>\n"
+            "## 任务类型识别\n"
+            "执行前先判断任务类型，使用对应策略：\n\n"
+            "| 任务类型 | 关键词 | 执行策略 |\n"
+            "|---------|--------|----------|\n"
+            "| 创建游戏/应用 | 游戏、猜数字、贪吃蛇、连连看、写一个XX | 直接 write_file 生成完整代码 |\n"
+            "| 生成报告/数据页面 | 报告、热搜报告、数据汇总、分析页面、dashboard | **先** web_search/fetch_url 获取数据 → **再** write_file 生成报告 |\n"
+            "| 信息查询 | 查一下、搜索、找、百度热搜 | web_search |\n"
+            "| 代码执行 | 运行、执行、调试、跑一下 | execute_python |\n\n"
+            "**报告类任务的强制路径**：\n"
+            "1. 调用 web_search 或 fetch_url 获取真实数据\n"
+            "2. 看到工具返回的数据后\n"
+            "3. 用 write_file 生成包含真实数据的 HTML 报告\n"
+            "**绝对不要**跳过第1步直接生成报告模板！\n"
+            "</task_classification>\n\n"
             "<tool_usage>\n"
             "## 工具使用规范\n"
             "- 根据工具的 description 和 parameters 判断何时使用\n"
@@ -307,7 +375,8 @@ class ReActCoreMiddleware(BaseMiddleware):
             "  - 完整的 JavaScript 游戏逻辑（<script> 标签）\n"
             "  - 游戏画面、交互、计分系统\n"
             "  - 示例：植物大战僵尸需要包含：草坪网格、植物选择、僵尸生成、阳光系统、攻击逻辑\n"
-            "  - 用一次 write_file 写入完整文件，不要分多次写入\n\n"
+            "  - 用一次 write_file 写入完整文件，不要分多次写入\n"
+            "- **写入文件后不要输出描述性文字**：不要说'文件已创建'、'你可以通过以下链接查看'，直接结束\n\n"
             "## 代码执行与文件保存流程\n"
             "- **调试代码**：使用 execute_python(mode='sandbox') 在沙盒中调试代码\n"
             "- **保存文件**：sandbox 执行成功后，如果提示'⚠️ 检测到文件写入操作'，必须询问用户确认保存路径\n"
@@ -325,6 +394,9 @@ class ReActCoreMiddleware(BaseMiddleware):
             "5. **结果验证**: 工具返回结果后，先快速验证有效性再继续\n"
             "6. **渐进输出**: 复杂任务分步输出中间结果，最终给出完整总结\n"
             "7. **完整输出**: 搜索结果、列表、数据等必须全部展示，禁止截断、省略或用'更多'代替。用户需要看到每一条结果\n"
+            "8. **禁止在生成的HTML中嵌入工具调用**: fetch_url、web_search 等是服务端工具，不是浏览器 API。生成的 HTML 文件中不能包含对这些工具的调用。必须先用工具获取数据，再将数据作为静态内容写入 HTML\n"
+            "9. **报告类任务必须先获取数据**: 生成报告/数据页面时，必须先用 web_search 或 fetch_url 获取真实数据，再用 write_file 生成报告。禁止跳过数据采集直接生成模板\n"
+            "10. **HTML游戏必须单文件**: 创建游戏/HTML时，所有 JavaScript 和 CSS 必须内联在同一个 HTML 文件中，禁止拆分成 .html + .js + .css 多个文件\n"
             "</critical_reminders>\n\n"
             "<tool_selection>\n"
             "## 工具选择指南\n"
@@ -336,6 +408,7 @@ class ReActCoreMiddleware(BaseMiddleware):
             "| 执行Python脚本/运行代码 | execute_python | execute_shell |\n"
             "| 执行shell命令 | execute_shell | execute_python |\n"
             "| 创建游戏/HTML/文件 | **write_file** | 无 |\n"
+            "| **生成报告/数据页面** | **先 web_search → 再 write_file** | fetch_url → write_file |\n"
             "| 读取文件 | execute_python | fetch_url |\n"
             "| 数据分析/图表 | execute_python | rag_search |\n"
             "| 打开应用 | open_app | execute_shell |\n"
@@ -344,6 +417,9 @@ class ReActCoreMiddleware(BaseMiddleware):
             "- **创建游戏/HTML/文件必须用 write_file**: 传入 path 和 content，绝对不要用 execute_python\n"
             "- **⚠️ execute_python 无法创建文件**: 沙盒会清理临时文件，用它写游戏/HTML 会丢失所有代码\n"
             "- **创建游戏时**: 必须在一次 write_file 调用中写入完整的代码（Python/HTML+CSS+JS），不要分步写入\n"
+            "- **生成报告时**: 必须先用 web_search/fetch_url 获取真实数据，再用 write_file 生成报告\n"
+            "- **报告中的数据必须是真实的**: 禁止编造/模拟数据，所有数据必须来自工具获取的结果\n"
+            "- **禁止在生成的 HTML 中调用 fetch_url/web_search**: 这些是服务端工具，不是浏览器 API\n"
             "- **execute_python 仅用于**: 在沙盒中执行Python代码、调试逻辑、调用内置爬虫模块\n"
             "- **抓取网页数据优先用爬虫**: 用 execute_python 调用 BaiduScraper/GitHubScraper 等，不要用 Playwright\n"
             "- **减少轮次**: 一轮中并行调用多个无依赖的工具\n"
@@ -442,7 +518,7 @@ class ReActCoreMiddleware(BaseMiddleware):
                 # 游戏/代码生成任务需要更多 token
                 task_lower = ctx.task_description.lower()
                 is_code_task = any(kw in task_lower for kw in ["游戏", "html", "代码", "脚本", "python", "javascript", "create", "write", "写"])
-                llm_max_tokens = 8000 if (ctx.react_depth <= 2 and is_code_task) else (4000 if ctx.react_depth <= 2 else 2000)
+                llm_max_tokens = 16000 if (ctx.react_depth <= 2 and is_code_task) else (8000 if ctx.react_depth <= 2 else 4000)
                 _model = ctx.model_override or None
                 return await asyncio.wait_for(
                     router.chat(
@@ -511,13 +587,26 @@ class ReActCoreMiddleware(BaseMiddleware):
             has_code_block = "```" in text
 
             # ── 检测0: 放弃性语言（LLM 试图放弃/逃避）──
-            surrender_keywords = [
-                "很抱歉", "抱歉", "无法", "没办法", "做不到", "不能",
-                "找不到", "没有找到", "不存在", "请告诉我", "请提供",
-                "我不确定", "我无法", "建议您", "请检查",
+            # 注意: "找不到" "无法" 等常用于报告错误，不一定是放弃
+            # 只有同时没有工具调用 + 纯放弃性语言时才判定为放弃
+            surrender_keywords_strict = [
+                "很抱歉", "抱歉", "没办法", "做不到", "不能完成",
+                "请告诉我", "请提供", "我不确定", "我无法完成",
+                "建议您", "请检查一下", "请您",
             ]
-            has_surrender = any(kw in text for kw in surrender_keywords)
-            if has_surrender and ctx.tool_results:
+            has_surrender_strict = any(kw in text for kw in surrender_keywords_strict)
+            # 轻度放弃词（需要结合是否有工具调用来判断）
+            surrender_keywords_mild = ["无法", "找不到", "没有找到", "不存在", "不能"]
+            has_surrender_mild = any(kw in text for kw in surrender_keywords_mild)
+            # 检查文本中是否有工具调用（即使被标记为放弃，如果有工具调用说明在积极修复）
+            has_tool_call_in_text = any(t in text for t in ["write_file(", "execute_python", "execute_shell", "web_search", "browser_"])
+            has_action_plan = any(kw in text for kw in ["执行", "运行", "安装", "尝试", "修复", "解决"])
+            
+            # 严格放弃词 → 直接判定
+            # 轻度放弃词 + 无工具调用 + 无行动计划 → 判定为放弃
+            is_surrender = has_surrender_strict or (has_surrender_mild and not has_tool_call_in_text and not has_action_plan)
+            
+            if is_surrender and ctx.tool_results:
                 # 有工具结果 + 放弃性语言 → LLM 在逃避，强制结束
                 print(f"{prefix}    \033[1;31m🚫 检测到放弃性语言，强制结束\033[0m")
                 ctx.final_answer = text
@@ -544,7 +633,25 @@ class ReActCoreMiddleware(BaseMiddleware):
                 elif re.search(r'第\d+步|第[一二三四五六七八九十]+步', text):
                     is_intermediate_step = True
 
-            # ── 检测2: 短文本 + 包含行动指令关键词 + 没有实际数据输出 → 可能是空转 ──
+            # ── 检测2: 报告类任务必须先获取数据 ──
+            if not is_intermediate_step:
+                task_lower = ctx.task_description.lower()
+                is_report_task = any(kw in task_lower for kw in 
+                    ["报告", "数据报告", "汇总", "热搜报告", "分析页面", "dashboard", "数据页面", "热榜"])
+                if is_report_task and not ctx.tool_results and ctx.react_depth <= 1:
+                    # 报告任务第一轮必须先获取数据
+                    has_fetch = any(t in text for t in ["web_search", "fetch_url"])
+                    if not has_fetch:
+                        is_intermediate_step = True
+                        ctx.forced_instructions = (
+                            "这是报告生成任务！你必须先获取数据！\n"
+                            "禁止直接生成报告模板！\n"
+                            "第一步：调用 web_search(query='百度热搜') 或 fetch_url 获取真实数据\n"
+                            "第二步：等工具返回数据后，再用 write_file 生成包含真实数据的报告\n"
+                            "现在立即调用 web_search 或 fetch_url 工具获取数据！"
+                        )
+
+            # ── 检测3: 短文本 + 包含行动指令关键词 + 没有实际数据输出 → 可能是空转 ──
             if not is_intermediate_step and len(text) < 300:
                 action_keywords = ["请用", "请使用", "下一步", "接下来", "然后", "需要", "应该", "可以", "试试", "建议", "推荐"]
                 has_action = any(kw in text for kw in action_keywords)
@@ -570,7 +677,14 @@ class ReActCoreMiddleware(BaseMiddleware):
                 return
 
             if is_intermediate_step and ctx.react_depth < ctx.max_iterations:
-                # 这是中间步骤说明，不是最终答案，诱导LLM继续调用工具
+                # ── 已有成功工具结果 + LLM 输出描述文字 → 任务已完成，直接结束 ──
+                if ctx.tool_results and any(r.get("success") for r in ctx.tool_results):
+                    print(f"{prefix}    \033[1;32m✅ 已有工具结果，任务完成，直接结束\033[0m")
+                    ctx.final_answer = text
+                    ctx.interrupted = True
+                    return
+
+                # 没有工具结果的空转，诱导继续执行
                 idle_hint = ""
                 if ctx.consecutive_idle_rounds >= 1:
                     idle_hint = f"\n⚠️ 你已经连续{ctx.consecutive_idle_rounds + 1}轮没有调用工具了！"
@@ -601,7 +715,7 @@ class ReActCoreMiddleware(BaseMiddleware):
                     return
 
             # 完整性校验：写 HTML 文件后检查是否包含 JS 逻辑
-            if ctx.tool_results and not has_code_block:
+            if ctx.tool_results:
                 write_results = [r for r in ctx.tool_results
                     if r.get("tool_call", {}).get("name") == "write_file" and r.get("success")]
                 if write_results:
@@ -610,13 +724,82 @@ class ReActCoreMiddleware(BaseMiddleware):
                         path = args.get("path", "") if isinstance(args, dict) else ""
                         content = args.get("content", "") if isinstance(args, dict) else ""
                         if path.endswith(".html"):
-                            has_style = "<style" in content
-                            has_script = "<script" in content
-                            if not has_script:
-                                logger.warning(f"HTML文件 {path} 缺少 <script> 标签，游戏无法交互")
+                            # ── 磁盘验证：读回实际文件对比 ──
+                            actual_content = ""
+                            abs_path = os.path.expanduser(path)
+                            try:
+                                with open(abs_path, "r", encoding="utf-8") as f:
+                                    actual_content = f.read()
+                            except Exception as e:
+                                logger.warning(f"无法读回文件 {path}: {e}")
+
+                            # 对比实际文件 vs 传入内容
+                            if actual_content and len(actual_content) < len(content) * 0.5:
+                                logger.warning(f"文件 {path} 实际大小({len(actual_content)}) 远小于传入内容({len(content)})，可能写入不完整")
                                 ctx.forced_instructions = (
-                                    f"文件 {path} 缺少 JavaScript 游戏逻辑（<script> 标签）！"
-                                    "请重新用一次 write_file 写入包含完整 <style> 和 <script> 的 HTML 文件。"
+                                    f"文件 {path} 写入不完整！传入了{len(content)}字符但文件只有{len(actual_content)}字符。\n"
+                                    "请重新用 write_file 写入完整代码。确保：\n"
+                                    "1. content 参数包含完整的 HTML（从 <!DOCTYPE html> 到 </html>）\n"
+                                    "2. 包含 <style> CSS样式\n"
+                                    "3. 包含 <script> JavaScript游戏逻辑\n"
+                                    "4. 不要用省略号或占位符\n"
+                                    "直接调用 write_file(path='{path}', content='完整代码')"
+                                )
+                                return
+
+                            # 用实际文件内容做后续检查
+                            check_content = actual_content if actual_content else content
+                            content_stripped = check_content.rstrip()
+                            is_truncated = (not content_stripped.endswith("</html>") and 
+                                          not content_stripped.endswith("</HTML>") and
+                                          not content_stripped.endswith("</body>") and
+                                          not content_stripped.endswith("</script>"))
+                            
+                            if is_truncated and len(check_content) < 2000:
+                                logger.warning(f"HTML文件 {path} 内容被截断 ({len(check_content)}字符)，末尾: ...{check_content[-50:]}")
+                                ctx.forced_instructions = (
+                                    f"文件 {path} 内容被截断（只有{len(check_content)}字符），不是完整代码！\n"
+                                    "你必须用 write_file 一次性写入完整的 HTML 文件，包括：\n"
+                                    "- <!DOCTYPE html> 声明\n"
+                                    "- <style> 标签（CSS样式）\n"
+                                    "- <script> 标签（JavaScript游戏逻辑）\n"
+                                    "- </html> 结束标签\n\n"
+                                    "例如：write_file(path='~/Desktop/game.html', content='<!DOCTYPE html>...完整的HTML代码...')\n"
+                                    "不要输出计划描述，直接调用工具！"
+                                )
+                                return
+                            
+                            has_style = "<style" in check_content
+                            has_script = "<script" in check_content
+                            has_doctype = "<!doctype" in check_content.lower() or "<!DOCTYPE" in check_content
+                            has_closing_html = "</html>" in check_content.lower()
+                            
+                            # 检查script标签内容是否为空
+                            has_script_content = False
+                            if has_script:
+                                import re as _re
+                                script_match = _re.search(r'<script>(.*?)</script>', check_content, _re.DOTALL)
+                                if script_match:
+                                    script_content = script_match.group(1).strip()
+                                    # 排除纯注释或空内容
+                                    script_content_clean = _re.sub(r'//.*?$', '', script_content, flags=_re.MULTILINE)
+                                    script_content_clean = _re.sub(r'/\*.*?\*/', '', script_content_clean, flags=_re.DOTALL)
+                                    has_script_content = len(script_content_clean.strip()) > 10
+                            
+                            if not has_script or not has_style or not has_doctype or not has_closing_html or not has_script_content:
+                                missing = []
+                                if not has_doctype: missing.append("DOCTYPE")
+                                if not has_script: missing.append("JavaScript逻辑(<script>)")
+                                elif not has_script_content: missing.append("JavaScript代码内容(当前只有注释)")
+                                if not has_style: missing.append("CSS样式(<style>)")
+                                if not has_closing_html: missing.append("</html>结束标签")
+                                logger.warning(f"HTML文件 {path} 缺少: {', '.join(missing)}")
+                                ctx.forced_instructions = (
+                                    f"文件 {path} 不完整，缺少: {', '.join(missing)}\n"
+                                    "请重新用 write_file 写入包含完整 HTML 结构的文件。\n"
+                                    "你的 <script> 标签中必须包含实际的JavaScript游戏逻辑代码，不能只有注释！\n"
+                                    "格式：write_file(path='~/Desktop/game.html', content='<!DOCTYPE html>...')\n"
+                                    "你的回复必须是工具调用，不能是纯文本！"
                                 )
                                 return
 
@@ -738,7 +921,8 @@ class ReActCoreMiddleware(BaseMiddleware):
             detail = ""
             if ok:
                 result_preview = str(result.get("result", ""))[:80]
-                if result_preview and name not in ("write_file", "execute_python"):
+                # write_file 也显示结果摘要
+                if result_preview:
                     detail = f" → {result_preview[:60]}"
             else:
                 # 错误可能在顶层 (MiddlewareChain) 或 result.error 下 (超时/异常)
@@ -775,31 +959,55 @@ class ReActCoreMiddleware(BaseMiddleware):
             if ok and name == "write_file":
                 path = args.get("path", "") if isinstance(args, dict) else ""
                 content = args.get("content", "") if isinstance(args, dict) else ""
+                
+                # ── 磁盘验证：读回实际文件对比 ──
+                abs_path = os.path.expanduser(path) if path else ""
+                actual_content = ""
+                if abs_path:
+                    try:
+                        with open(abs_path, "r", encoding="utf-8") as f:
+                            actual_content = f.read()
+                    except Exception as e:
+                        logger.warning(f"无法读回文件 {path}: {e}")
+                        actual_content = ""
+
+                if not actual_content:
+                    # 文件不存在或无法读取 → 强制重写
+                    logger.error(f"文件 {path} 写入后无法读取！传入了{len(content)}字符")
+                    print(f"{prefix}    \033[1;31m❌ 文件 {path} 写入失败（磁盘上不存在）！\033[0m")
+                    ctx.forced_instructions = (
+                        f"文件 {path} 写入失败！磁盘上不存在该文件。\n"
+                        "请重新调用 write_file 写入完整代码。\n"
+                        f"路径: {path}\n"
+                        "内容必须包含完整的 HTML/CSS/JavaScript。"
+                    )
+                elif len(actual_content) < len(content) * 0.5 and len(content) > 100:
+                    # 文件比传入内容小很多 → 写入不完整
+                    logger.warning(f"文件 {path} 实际大小({len(actual_content)}) 远小于传入内容({len(content)})")
+                    print(f"{prefix}    \033[1;33m⚠️ 文件写入不完整: 传入{len(content)}字符, 实际{len(actual_content)}字符\033[0m")
+                    ctx.forced_instructions = (
+                        f"文件 {path} 写入不完整！传入了{len(content)}字符但文件只有{len(actual_content)}字符。\n"
+                        "请重新用 write_file 写入完整代码。"
+                    )
+                elif content and len(actual_content) < len(content) * 0.8:
+                    # 文件略有截断但不算严重
+                    logger.info(f"文件 {path} 略有截断: 传入{len(content)}, 实际{len(actual_content)}")
+                
                 if content:
                     # 根据文件扩展名进行完整性校验
                     needs_regeneration = False
                     missing_parts = []
                     
-                    # HTML 文件校验
+                    # HTML 文件校验 — 只检查基本结构，不强制 script/style（静态报告不需要）
                     if path.endswith((".html", ".htm")):
                         content_lower = content.lower()
                         has_doctype = "<!doctype" in content_lower or "<!DOCTYPE" in content
                         has_html = "<html" in content_lower
-                        has_head = "<head" in content_lower
-                        has_body = "<body" in content_lower
-                        has_style = "<style" in content_lower
-                        has_script = "<script" in content_lower
                         
-                        if not has_script:
+                        # 只有 DOCTYPE 和 html 标签都缺失才需要重新生成
+                        if not has_doctype and not has_html:
                             needs_regeneration = True
-                            missing_parts.append("JavaScript 游戏逻辑 (<script> 标签)")
-                        if not has_style:
-                            needs_regeneration = True
-                            missing_parts.append("CSS 样式 (<style> 标签)")
-                        if not has_doctype:
-                            missing_parts.append("DOCTYPE 声明")
-                        if not has_html:
-                            missing_parts.append("<html> 标签")
+                            missing_parts.append("基本 HTML 结构 (DOCTYPE + <html>)")
                     
                     # Python 文件校验
                     elif path.endswith(".py"):
@@ -852,6 +1060,48 @@ class ReActCoreMiddleware(BaseMiddleware):
                     elif missing_parts:
                         # 轻微问题，只警告不强制
                         logger.info(f"文件 {path} 可能缺少: {', '.join(missing_parts)}")
+                
+                # ── 截断检测：读回文件检查是否缺少闭合标签，注入续写指令 ──
+                if actual_content and path.endswith(('.html', '.htm')):
+                    actual_lower = actual_content.lower()
+                    missing_close = []
+                    if '<script' in actual_lower and '</script>' not in actual_lower:
+                        missing_close.append("</script>")
+                    if '<style' in actual_lower and '</style>' not in actual_lower:
+                        missing_close.append("</style>")
+                    if '<body' in actual_lower and '</body>' not in actual_lower:
+                        missing_close.append("</body>")
+                    if '</html>' not in actual_lower:
+                        missing_close.append("</html>")
+                    
+                    if missing_close:
+                        print(f"{prefix}    \033[1;33m⚠️ 文件被截断，缺少: {', '.join(missing_close)}，注入续写指令\033[0m")
+                        ctx.forced_instructions = (
+                            f"代码被截断！文件 {path} 缺少: {', '.join(missing_close)}\n"
+                            f"当前文件已有 {len(actual_content)} 字符。\n"
+                            "请使用 write_file 继续生成剩余代码。\n"
+                            "重要：在 content 参数中只写缺失的部分（从断点继续），不要重复已有内容。\n"
+                            f"路径: {path}\n"
+                            "示例：write_file(path='同上', content='缺失的HTML/JS代码...')"
+                        )
+                    # 检测 <script> 只有注释没有实际代码
+                    elif '<script' in actual_lower:
+                        import re
+                        script_match = re.search(r'<script[^>]*>(.*?)</script>', actual_content, re.DOTALL | re.IGNORECASE)
+                        if script_match:
+                            script_body = script_match.group(1).strip()
+                            # 去掉注释后检查是否有实际代码
+                            code_only = re.sub(r'//.*?\n', '\n', script_body)
+                            code_only = re.sub(r'/\*.*?\*/', '', code_only, flags=re.DOTALL)
+                            code_only = code_only.strip()
+                            if len(code_only) < 20:
+                                print(f"{prefix}    \033[1;33m⚠️ <script> 中只有注释没有实际代码，注入补充指令\033[0m")
+                                ctx.forced_instructions = (
+                                    f"文件 {path} 的 <script> 标签中只有注释，没有实际的 JavaScript 代码！\n"
+                                    "你必须用 write_file 写入包含完整游戏逻辑的代码。\n"
+                                    "content 参数必须包含完整的 HTML+CSS+JavaScript，不能只有注释。\n"
+                                    f"路径: {path}"
+                                )
 
             # ── Tail Call 自动机：自动执行链式调用（最多 depth=3）──
             tail_call_data = result.get("tail_call")
@@ -1090,8 +1340,35 @@ class ReActCoreMiddleware(BaseMiddleware):
             tool_name = tc.get("function", {}).get("name", "")
             fail_count = tool_fail_counts.get(tool_name, 0)
 
-            # 连续失败超过3次，降级
-            if fail_count >= 3 and tool_name != "execute_python":
+            # ── 相同代码重复失败检测 ──
+            # 对 execute_python：如果同一段代码已失败2次，直接跳过并注入错误提示
+            if tool_name == "execute_python" and ctx:
+                try:
+                    _args = json.loads(tc.get("function", {}).get("arguments", "{}"))
+                    _code = _args.get("code", "")
+                    if _code:
+                        import hashlib
+                        _code_hash = hashlib.md5(_code.encode()).hexdigest()[:12]
+                        _prev_fails = ctx._failed_code_hashes.get(_code_hash, 0)
+                        if _prev_fails >= 2:
+                            logger.warning(f"🔄 相同代码已失败{_prev_fails}次，跳过执行: {_code[:60]}...")
+                            return {
+                                "success": False,
+                                "result": {
+                                    "error": f"相同代码已失败{_prev_fails}次。请不要重复执行相同代码。\n"
+                                    f"建议：如果是创建文件任务，请使用 write_file 工具；\n"
+                                    f"如果是执行代码，请修改代码后再试。"
+                                },
+                                "quality": "fail",
+                                "tool_call": {"name": tool_name, "arguments": _args},
+                                "_skipped_duplicate": True,
+                            }
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+            # 连续失败超过3次，降级（execute_python 也包含在内）
+            # 注意：write_file 降级时不要降到 execute_python，否则文件永远写不进去
+            if fail_count >= 3:
                 # 优先用 RecoveryManager 查降级工具
                 fallback_tool = None
                 if _recovery_mgr:
@@ -1101,7 +1378,11 @@ class ReActCoreMiddleware(BaseMiddleware):
                         pass
 
                 if not fallback_tool:
-                    fallback_tool = "execute_python"
+                    # write_file 降级时仍用 write_file（强制重试），不降级到 execute_python
+                    if tool_name == "write_file":
+                        fallback_tool = "write_file"
+                    else:
+                        fallback_tool = "execute_python"
 
                 degraded_tc = json.loads(json.dumps(tc))
                 degraded_tc["function"]["name"] = fallback_tool
@@ -1123,6 +1404,19 @@ class ReActCoreMiddleware(BaseMiddleware):
                     tool_fail_counts[tool_name] = 0
                 else:
                     tool_fail_counts[tool_name] = fail_count + 1
+                    # ── 记录失败代码的 hash ──
+                    if tool_name == "execute_python" and ctx:
+                        try:
+                            _args = json.loads(tc.get("function", {}).get("arguments", "{}"))
+                            _code = _args.get("code", "")
+                            if _code:
+                                import hashlib
+                                _code_hash = hashlib.md5(_code.encode()).hexdigest()[:12]
+                                ctx._failed_code_hashes[_code_hash] = (
+                                    ctx._failed_code_hashes.get(_code_hash, 0) + 1
+                                )
+                        except (json.JSONDecodeError, TypeError):
+                            pass
                 return result
             except Exception as e:
                 tool_fail_counts[tool_name] = fail_count + 1
@@ -1231,6 +1525,33 @@ class ReActCoreMiddleware(BaseMiddleware):
         """从纯文本参数构建工具调用"""
         import re
 
+        def _fix_json_escapes(s: str) -> str:
+            """修复 LLM 生成的 JSON 中的无效转义序列"""
+            valid_escapes = set('"\\/\bfnrtu')
+            result = []
+            i = 0
+            in_string = False
+            while i < len(s):
+                ch = s[i]
+                if ch == '"' and (i == 0 or s[i-1] != '\\'):
+                    in_string = not in_string
+                    result.append(ch)
+                elif ch == '\\' and in_string and i + 1 < len(s):
+                    next_ch = s[i + 1]
+                    if next_ch in valid_escapes:
+                        result.append(ch)
+                    else:
+                        # 无效转义 → 双转义 (\\s → \\\\s)
+                        result.append('\\')
+                        result.append('\\')
+                        result.append(next_ch)
+                        i += 2  # 跳过这两个字符
+                        continue
+                else:
+                    result.append(ch)
+                i += 1
+            return ''.join(result)
+
         # For execute_python: extract the code string
         if tool_name == "execute_python":
             # Remove surrounding quotes if present
@@ -1283,7 +1604,35 @@ class ReActCoreMiddleware(BaseMiddleware):
                             }
                         }]
                 except _json.JSONDecodeError:
-                    pass
+                    pass  # 继续尝试下面的修复策略
+
+                # JSON 截断修复: LLM 输出被 max_tokens 截断，JSON 不完整
+                if not arg_stripped.endswith("}"):
+                    # 尝试补全截断的 JSON
+                    # 策略: 找到最后一个完整的 "content": " 值，截断并闭合
+                    import re as _re
+                    # 找到 path 值
+                    path_match = _re.search(r'"path"\s*:\s*"([^"]*)"', arg_stripped)
+                    # 找到 content 的起始位置
+                    content_start = _re.search(r'"content"\s*:\s*"', arg_stripped)
+                    if path_match and content_start:
+                        path_val = path_match.group(1)
+                        content_start_pos = content_start.end()
+                        # 从 content 起始到字符串末尾就是 content 值（可能被截断）
+                        raw_content = arg_stripped[content_start_pos:]
+                        # 移除末尾可能的不完整转义
+                        raw_content = raw_content.rstrip('\\')
+                        # 修复无效转义
+                        raw_content = _fix_json_escapes('"' + raw_content + '"')[1:-1]
+                        logger.warning(f"write_file JSON截断修复: path={path_val}, content_len={len(raw_content)}")
+                        return [{
+                            "id": f"call_{int(__import__('time').time())}",
+                            "type": "function",
+                            "function": {
+                                "name": "write_file",
+                                "arguments": _json.dumps({"path": path_val, "content": raw_content}),
+                            }
+                        }]
             
             # 格式1: path: xxx\ncontent: xxx
             # 格式2: "path", "content"

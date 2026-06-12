@@ -66,11 +66,11 @@
 
   // cSpell 拼写检查 - 项目专有名词白名单
   "cSpell.words": [
-    "wechat",
-    "xiaolei",
+    "fromlist",
     "jieba",
     "monokai",
     "osascript",
-    "fromlist"
+    "wechat",
+    "xiaolei"
   ]
 }

@@ -19,6 +19,8 @@ ROUTE_MANIFEST = [
     ("api.routes.agent_groups_collab", "collab_router"),
     ("api.routes.self_check", "router"),
     ("api.routes.plans", "router"),
+    ("api.routes.frontend_agent", "router"),
+    ("api.routes.simple_chat", "router"),  # 简化聊天 API
 ]
 
 

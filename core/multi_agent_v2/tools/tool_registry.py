@@ -452,69 +452,50 @@ class ToolDefinition:
 
 
 async def _http_get(url: str, timeout: int = 10) -> str:
-    """纯 asyncio HTTP GET（使用 asyncio.open_connection, 无 run_in_executor）
+    """HTTP GET — 使用 aiohttp，自动跟随重定向，SSL 验证优先开启"""
+    import aiohttp
+    import ssl as _ssl
 
-    asyncio.wait_for 取消此协程时，socket 立即关闭，不留僵尸线程。
-    """
-    from urllib.parse import urlparse
-
-    parsed = urlparse(url)
-    host = parsed.hostname or "localhost"
-    port = parsed.port or (443 if parsed.scheme == "https" else 80)
-    path = parsed.path or "/"
-    if parsed.query:
-        path = f"{path}?{parsed.query}"
-
-    reader, writer = None, None
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        "Accept": "text/html,application/json,*/*",
+    }
+    
+    # 先尝试 SSL 验证
     try:
-        if parsed.scheme == "https":
-            import ssl
-
-            ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
-            reader, writer = await asyncio.wait_for(
-                asyncio.open_connection(host, port, ssl=ctx), timeout=timeout
-            )
-        else:
-            reader, writer = await asyncio.wait_for(
-                asyncio.open_connection(host, port), timeout=timeout
-            )
-
-        request = (
-            f"GET {path} HTTP/1.1\r\n"
-            f"Host: {host}\r\n"
-            f"User-Agent: Mozilla/5.0\r\n"
-            f"Accept: text/html,application/json\r\n"
-            f"Connection: close\r\n"
-            f"\r\n"
-        )
-        writer.write(request.encode())
-        await writer.drain()
-
-        # 读取响应（按块读取，不过量）
-        chunks = []
-        while True:
-            chunk = await asyncio.wait_for(reader.read(65536), timeout=timeout)
-            if not chunk:
-                break
-            chunks.append(chunk)
-
-        data = b"".join(chunks)
-        # 尝试从响应头分离body
-        try:
-            header_end = data.index(b"\r\n\r\n") + 4
-            body = data[header_end:]
-        except ValueError:
-            body = data
-        return body.decode("utf-8", errors="replace")
-    finally:
-        if writer:
-            try:
-                writer.close()
-                await writer.wait_closed()
-            except Exception:
-                pass
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                url,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=timeout),
+                max_redirects=10,
+            ) as resp:
+                body = await resp.text(encoding="utf-8", errors="replace")
+                return body
+    except (aiohttp.ClientConnectorError, aiohttp.ClientOSError, _ssl.SSLError):
+        pass
+    
+    # SSL 验证失败时，禁用验证重试
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                url,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=timeout),
+                ssl=False,
+                max_redirects=10,
+            ) as resp:
+                body = await resp.text(encoding="utf-8", errors="replace")
+                return body
+    except Exception:
+        # aiohttp 失败时 fallback 到 urllib
+        import urllib.request
+        ctx = _ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = _ssl.CERT_NONE
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+            return resp.read().decode("utf-8", errors="replace")
 
 
 async def _handle_fetch_url(args: Dict) -> Dict:
@@ -1017,15 +998,53 @@ async def _handle_search(args: Dict) -> Dict:
     return ok(merged)
 
 
+def _detect_code_language(code: str) -> tuple:
+    """检测代码语言 — 委托给 gemini_enhanced_tools 共享实现"""
+    from core.tools.gemini_enhanced_tools import detect_code_language
+    return detect_code_language(code)
+
+
 async def _handle_execute_python(args: Dict) -> Dict:
     """执行 Python 代码 — 默认沙盒隔离，mode=local 需显式指定
     
     sandbox 模式：执行后检测文件写入操作，如有则提示用户确认保存路径
     local 模式：需要用户确认后执行（无安全隔离）
+    非 Python 代码（JS/HTML/CSS等）：自动 redirect 到 write_file
     """
     code = args.get("code", "")
     if not code:
         return {"result": {"content": [{"text": "缺少 code 参数"}]}}
+
+    # ── 非 Python 语言检测 → 自动 redirect 到 write_file ──
+    lang, ext, default_name = _detect_code_language(code)
+    if lang != "python":
+        logger.info(f"检测到 {lang} 代码，自动 redirect 到 write_file")
+        # 推荐保存路径
+        import os
+        desktop = os.path.expanduser("~/Desktop")
+        save_path = os.path.join(desktop, f"{default_name}{ext}")
+
+        # 调用 write_file handler
+        write_result = await _handle_write_file({"path": save_path, "content": code})
+        # 附加 redirect 提示
+        result_text = ""
+        if write_result and isinstance(write_result.get("result"), dict):
+            contents = write_result["result"].get("content", [])
+            if contents:
+                result_text = contents[0].get("text", "")
+        redirect_msg = (
+            f"\n\n🔄 已自动将 {lang} 代码保存到文件（execute_python 只能执行 Python）。\n"
+            f"保存路径: {save_path}\n"
+            f"如需修改路径，请直接调用 write_file(path='新路径', content=代码)"
+        )
+        return {
+            "result": {
+                "content": [{"text": result_text + redirect_msg}],
+                "redirected_to": "write_file",
+                "language": lang,
+                "saved_path": save_path,
+            }
+        }
     mode = args.get("mode", "sandbox")  # sandbox(默认,隔离) | local(显式指定,可写桌面文件)
     timeout = int(args.get("timeout", 30))
     
@@ -1422,6 +1441,8 @@ async def _handle_git(args: Dict) -> Dict:
 async def _handle_write_file(args: Dict) -> Dict:
     """写文件到指定路径 — 兼容多种参数名"""
     from core.multi_agent_v2.tools.tool_result import ok, err
+    from core.multi_agent_v2.tools.omission_detector import detect_omission_placeholders
+    from core.multi_agent_v2.tools.content_corrector import ensure_correct_content, detect_encoding_issues
 
     path = args.get("path", "")
     content = args.get("content", "")
@@ -1431,6 +1452,21 @@ async def _handle_write_file(args: Dict) -> Dict:
     if not content:
         logger.warning(f"write_file: 参数中没有 content/code/text/html，args keys={list(args.keys())}")
         return err("需要 content 参数")
+    
+    # 省略占位符检测（移植自 gemini-cli）
+    omissions = detect_omission_placeholders(content)
+    if omissions:
+        logger.warning(f"write_file: 检测到省略占位符 {omissions} (path={path})")
+        return err(f"❌ 内容包含省略占位符 {omissions}，请提供完整内容，不要使用 'rest of methods ...' 等占位符！")
+    
+    # 内容修正（移植自 gemini-cli）
+    content = ensure_correct_content(content, aggressive_unescape=True)
+    
+    # 检测编码问题
+    encoding_issues = detect_encoding_issues(content)
+    if encoding_issues:
+        logger.warning(f"write_file: 检测到编码问题 {encoding_issues} (path={path})")
+    
     # 中文路径映射
     desktop = os.path.expanduser("~/Desktop")
     if path.startswith("桌面上/"):
@@ -1438,19 +1474,127 @@ async def _handle_write_file(args: Dict) -> Dict:
     elif path.startswith("桌面/"):
         path = desktop + path[2:]
     path = os.path.expanduser(path)
+    
+    # ── 自动合并：如果写入 .js/.css 但存在同名 .html，自动合并到 HTML 中 ──
+    if path.endswith(('.js', '.ts')) or path.endswith(('.css', '.scss', '.less')):
+        html_path = path.rsplit('.', 1)[0] + '.html'
+        if not os.path.exists(html_path):
+            html_path = path.rsplit('.', 1)[0] + '.htm'
+        if os.path.exists(html_path):
+            try:
+                html_content = open(html_path, 'r', encoding='utf-8').read()
+                # 提取纯代码（去掉可能的 <script>...</script> 包裹）
+                code = content
+                if code.strip().startswith('<script') and code.strip().endswith('</script>'):
+                    code = code.strip()[8:-9].strip()
+                elif code.strip().startswith('<style') and code.strip().endswith('</style>'):
+                    code = code.strip()[7:-8].strip()
+                
+                if path.endswith(('.js', '.ts')):
+                    # 注入到 <script> 标签中
+                    if '</script>' in html_content:
+                        # 替换空的或注释的 script 内容
+                        import re
+                        html_content = re.sub(
+                            r'<script>\s*(?://.*?\n\s*)?</script>',
+                            f'<script>\n{code}\n</script>',
+                            html_content,
+                            count=1
+                        )
+                    else:
+                        # 没有 script 标签，在 </body> 前插入
+                        html_content = html_content.replace('</body>', f'<script>\n{code}\n</script>\n</body>')
+                elif path.endswith(('.css', '.scss', '.less')):
+                    # 注入到 <style> 标签中
+                    if '</style>' in html_content:
+                        import re
+                        html_content = re.sub(
+                            r'<style>\s*</style>',
+                            f'<style>\n{code}\n</style>',
+                            html_content,
+                            count=1
+                        )
+                    else:
+                        html_content = html_content.replace('</head>', f'<style>\n{code}\n</style>\n</head>')
+                
+                # 写入合并后的 HTML
+                Path(html_path).parent.mkdir(parents=True, exist_ok=True)
+                Path(html_path).write_text(html_content, encoding='utf-8')
+                logger.info(f"write_file: 自动合并 {os.path.basename(path)} → {html_path}")
+                return ok(f"✅ 已合并到 {html_path} ({len(html_content)} 字符)")
+            except Exception as e:
+                logger.warning(f"自动合并失败: {e}，回退到单独写入")
+    
     # 内容质量校验：代码文件不能太短或只是计划文本
     is_code_file = any(path.endswith(ext) for ext in (".html", ".htm", ".py", ".js", ".ts", ".jsx", ".tsx", ".css", ".java", ".cpp", ".c", ".go", ".rs"))
-    if is_code_file and len(content) < 500:
+    # CSS 文件可以很小，不检查 500 字符限制
+    is_css = path.endswith(('.css', '.scss', '.less'))
+    if is_code_file and not is_css and len(content) < 500:
         # 太短的"代码"很可能是计划文本，拒绝写入
         import re
         has_code_indicators = bool(re.search(r'(?:def |class |function|<html|<!DOCTYPE|from |import |print\()', content))
         if not has_code_indicators:
             logger.warning(f"write_file: 内容疑似为计划文本非实际代码 (path={path}, len={len(content)})")
             return err(f"❌ 内容疑似为计划文本而非实际代码！请写入完整的可运行代码（包括所有 HTML 结构、CSS、JavaScript 逻辑），当前内容只有 {len(content)} 字符。建议使用 write_file 一次性写入完整文件。")
+    
+    # HTML文件完整性校验 — 只要求基本结构，不强制 <script>（静态报告不需要JS）
+    if path.endswith(('.html', '.htm')):
+        content_lower = content.lower()
+        has_doctype = '<!doctype' in content_lower
+        has_html_tag = '<html' in content_lower
+        has_closing_html = '</html>' in content_lower
+        has_body = '<body' in content_lower
+        
+        # 只有 DOCTYPE + html 标签都缺失才拒绝（纯文本伪装HTML）
+        if not has_doctype and not has_html_tag:
+            logger.warning(f"write_file: HTML文件缺少基本结构 (path={path}, len={len(content)})")
+            return err(f"❌ HTML文件缺少基本结构！请包含 <!DOCTYPE html> 和 <html> 标签。当前内容 {len(content)} 字符。")
+        # 有基本结构就允许写入，缺失的部分（如 script、body）只警告不阻断
+        missing_warnings = []
+        if not has_body: missing_warnings.append("缺少 <body>")
+        if not has_closing_html: missing_warnings.append("缺少 </html>")
+        if missing_warnings:
+            logger.info(f"write_file: HTML文件有小问题: {', '.join(missing_warnings)} (path={path})")
     try:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
-        Path(path).write_text(content, encoding="utf-8")
-        return ok(f"✅ 已写入文件: {path} ({len(content)} 字符)")
+        
+        # 检测是否为续写（文件已存在且内容较短 → 追加模式）
+        is_append = False
+        if Path(path).exists():
+            existing = Path(path).read_text(encoding="utf-8")
+            # 如果已有内容且新内容不包含已有内容的开头 → 追加
+            if existing and len(existing) > 50 and not content.startswith(existing[:50]):
+                is_append = True
+        
+        if is_append:
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(content)
+        else:
+            Path(path).write_text(content, encoding="utf-8")
+        
+        # 截断检测：HTML 文件是否缺少闭合标签
+        truncation_msg = ""
+        if path.endswith(('.html', '.htm')):
+            content_lower = content.lower()
+            missing = []
+            if '<script' in content_lower and '</script>' not in content_lower:
+                missing.append("</script>")
+            if '<style' in content_lower and '</style>' not in content_lower:
+                missing.append("</style>")
+            if '<body' in content_lower and '</body>' not in content_lower:
+                missing.append("</body>")
+            if '</html>' not in content_lower:
+                missing.append("</html>")
+            if missing:
+                truncation_msg = f"\n⚠️ 代码被截断！缺少: {', '.join(missing)}\n请继续生成剩余代码，使用 write_file 追加到同一文件。"
+        
+        result_msg = f"✅ 已写入文件: {path} ({len(content)} 字符)"
+        if is_append:
+            result_msg = f"✅ 已追加到文件: {path} (+{len(content)} 字符, 总计{len(existing) + len(content)} 字符)"
+        if truncation_msg:
+            result_msg += truncation_msg
+        
+        return ok(result_msg)
     except Exception as e:
         return err(f"❌ 写入失败: {type(e).__name__}: {e}")
 
@@ -1615,7 +1759,7 @@ _SANDBOX_TOOL_DEFS = [
         server=SERVER_BUILTIN,
         tags=["file", "write"],
         domains={ToolDomain.FILE},
-        description="写入文件到指定路径。用于创建游戏、脚本、HTML等文件到桌面。必填：path=文件路径(如~/Desktop/game.html或桌面/game.py)，content=完整文件内容(必须！文件的全部代码)。注意：content 参数是文件的完整内容，必须为非空字符串。创建游戏文件请用此工具，不要用 execute_python。",
+        description="写入文件到指定路径。用于创建游戏、脚本、HTML报告、数据页面等文件。必填：path=文件路径(如~/Desktop/game.html)，content=完整文件内容(必须！文件的全部代码)。注意：content 参数是文件的完整内容，必须为非空字符串。HTML游戏必须是单个自包含文件，所有JS和CSS内联，禁止拆分成多个文件。",
         parameters={
             "type": "object",
             "properties": {
@@ -1827,7 +1971,7 @@ _SANDBOX_TOOL_DEFS = [
         server=SERVER_BUILTIN,
         tags=["web", "search"],
         domains={ToolDomain.SEARCH, ToolDomain.WEB},
-        description="网页搜索。支持多种搜索类型。用于获取实时信息、查找资料。",
+        description="网页搜索。支持多种搜索类型。用于获取实时信息、查找资料、收集报告数据。报告/分析类任务应优先使用此工具获取真实数据。",
         parameters={
             "type": "object",
             "properties": {

@@ -306,7 +306,14 @@ class GLMBackend:
                     message = response.choices[0].message
                     content = getattr(message, 'content', None) or ""
                     tc = getattr(message, 'tool_calls', None)
-                    logger.info("LLM DeepSeek返回: content_len=%d tool_calls=%s", len(content), bool(tc))
+                    
+                    # 检测截断信号
+                    finish_reason = getattr(response.choices[0], 'finish_reason', None)
+                    is_truncated = finish_reason == 'length'
+                    if is_truncated:
+                        logger.warning(f"⚠️ LLM输出被截断! finish_reason=length, content_len={len(content)}")
+                    
+                    logger.info("LLM DeepSeek返回: content_len=%d tool_calls=%s truncated=%s", len(content), bool(tc), is_truncated)
                     if tc:
                         tc_list = [{"id": getattr(t, 'id', ''),
                                     "type": getattr(t, 'type', 'function'),
