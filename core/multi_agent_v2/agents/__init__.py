@@ -3,4 +3,15 @@ from .base.base_agent import BaseAgent
 from .base.models import AgentType, Task
 from .base.work_agent import WorkAgent
 
-__all__ = ["BaseAgent", "AgentType", "WorkAgent", "Task"]
+# 拆分后的模块
+from . import tool_evaluator
+from . import tool_parser
+from . import tool_executor
+from . import file_validator
+from . import plan_manager
+
+__all__ = [
+    "BaseAgent", "AgentType", "WorkAgent", "Task",
+    "tool_evaluator", "tool_parser", "tool_executor",
+    "file_validator", "plan_manager",
+]

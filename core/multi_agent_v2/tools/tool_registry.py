@@ -1,17 +1,15 @@
-"""ToolRegistry — 工具注册表（含 12 个内置 handler）
+"""ToolRegistry — 工具注册表（含 10 个内置 handler）
 
 内置工具：
 - fetch_url:      HTTP GET 获取网页/API数据
-- file:           直接读写文件
-- search:         联网搜索（多引擎并发）
+- write_file:     写入文件
+- read_file:      读取文件/目录
+- edit_file:      精确文本替换
+- search_files:   文件搜索（glob 模式或正则内容）
 - execute_python: 沙盒执行 Python 代码
 - execute_shell:  沙盒执行 Shell 命令
-- rag_search:     RAG 增强搜索（向量库 + 知识提取）
-- skill_execute:  执行注册的技能
-- kepa_reflect:   KEPA 反思循环（知识→执行→感知→调整）
-- ask_clarification: 反问澄清
-- self_reflect:   自动复盘反思
-- call_api:       通用 HTTP 客户端（GET/POST/PUT/DELETE）
+- web_search:     联网搜索（多引擎并发）
+- git:            Git 操作
 
 自动发现：MCP 服务器（mcp/ 目录 + .mcp.json）
 """
@@ -21,7 +19,6 @@ import json
 import logging
 import os
 import re
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -29,405 +26,6 @@ from typing import Any, Callable, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 SERVER_BUILTIN = "__builtin__"
-
-# ═══════════════════════════════════════════════════════════════════
-# 工具领域分类系统
-# ═══════════════════════════════════════════════════════════════════
-
-
-class ToolDomain:
-    """工具功能领域 — 用于按域分类、按域筛选"""
-
-    SEARCH = "search"  # 搜索/查询
-    FILE = "file"  # 文件读写
-    CODE = "code"  # 代码执行/编写
-    ANALYSIS = "analysis"  # 数据分析/图表
-    SYSTEM = "system"  # 系统信息/监控
-    TEXT = "text"  # 文本处理
-    TRANSLATE = "translate"  # 翻译
-    WEB = "web"  # 网页抓取
-    GUI = "gui"  # GUI自动化
-    AUTOMATION = "automation"  # 工作流/自动化
-    REFLECT = "reflect"  # 反思/复盘
-    API = "api"  # HTTP API 调用
-    GIT = "git"  # Git 操作
-    FUN = "fun"  # 趣味
-    GAME = "game"  # 游戏
-    WEATHER = "weather"  # 天气
-    ART = "art"  # ASCII 艺术
-    WORKFLOW = "workflow"  # 工作流引擎
-    DATA_SOURCE = "data_source"  # 内置数据源
-    SKILL = "skill"  # 技能执行
-    MISC = "misc"  # 杂项
-
-
-# 任务→领域分类关键词表
-# 每个领域包含一组触发词，任务描述命中任一触发词即匹配该领域
-DOMAIN_CLASSIFIER = {
-    ToolDomain.SEARCH: [
-        "搜索",
-        "查找",
-        "查询",
-        "搜",
-        "寻找",
-        "找一下",
-        "查一下",
-        "搜一下",
-        "百度",
-        "谷歌",
-        "bing",
-        "search",
-        "find",
-        "lookup",
-        "query",
-        "搜索一下",
-        "查查",
-        "github",
-        "GitHub",
-    ],
-    ToolDomain.FILE: [
-        "文件",
-        "保存",
-        "写入",
-        "读取",
-        "打开文件",
-        "创建文件",
-        "读写",
-        "写文件",
-        "读文件",
-        "path",
-        "路径",
-        "file",
-        "save",
-        "write",
-        "read",
-        "存储",
-        "另存为",
-        "导出到",
-    ],
-    ToolDomain.CODE: [
-        "代码",
-        "编写",
-        "编程",
-        "写代码",
-        "写程序",
-        "debug",
-        "debugging",
-        "code",
-        "program",
-        "脚本",
-        "script",
-        "执行",
-        "运行代码",
-        "编译",
-        "实现",
-        "编写一个",
-        "写一个",
-    ],
-    ToolDomain.ANALYSIS: [
-        "分析",
-        "统计",
-        "图表",
-        "plot",
-        "分析数据",
-        "analyze",
-        "csv",
-        "数据",
-        "datasets",
-        "dataset",
-        "绘图",
-        "可视化",
-        "画图",
-        "报告",
-        "报表",
-        "汇总",
-    ],
-    ToolDomain.SYSTEM: [
-        "系统",
-        "cpu",
-        "内存",
-        "磁盘",
-        "进程",
-        "system",
-        "info",
-        "资源",
-        "监控",
-        "监测",
-        "网络",
-        "ip",
-    ],
-    ToolDomain.WEB: [
-        "网页",
-        "抓取",
-        "爬取",
-        "scrape",
-        "fetch",
-        "热搜",
-        "trending",
-        "爬虫",
-        "网站",
-        "页面",
-        "文章",
-        "github",
-        "GitHub",
-    ],
-    ToolDomain.TRANSLATE: [
-        "翻译",
-        "translate",
-        "英文",
-        "中文",
-        "语言",
-        "双语",
-        "译成",
-        "转换语言",
-    ],
-    ToolDomain.REFLECT: [
-        "反思",
-        "复盘",
-        "总结",
-        "review",
-        "reflect",
-        "回顾",
-        "评估",
-        "改进",
-        "优化建议",
-    ],
-    ToolDomain.API: [
-        "api",
-        "接口",
-        "请求",
-        "http",
-        "调用接口",
-        "rest",
-        "post请求",
-        "get请求",
-        "curl",
-    ],
-    ToolDomain.GIT: [
-        "git",
-        "提交",
-        "commit",
-        "push",
-        "pull",
-        "branch",
-        "版本控制",
-    ],
-    ToolDomain.GUI: [
-        "打开应用",
-        "打开软件",
-        "启动",
-        "截图",
-        "screenshot",
-        "音量",
-        "亮度",
-        "自动化操作",
-    ],
-    ToolDomain.AUTOMATION: [
-        "工作流",
-        "自动化",
-        "发送邮件",
-        "邮件",
-        "通知",
-        "日历",
-        "workflow",
-        "automation",
-        "email",
-    ],
-    ToolDomain.WEATHER: [
-        "天气",
-        "weather",
-        "温度",
-        "下雨",
-        "下雪",
-        "预报",
-        "气温",
-    ],
-    ToolDomain.FUN: [
-        "笑话",
-        "谜语",
-        "星座",
-        "运势",
-        "趣闻",
-        "joke",
-        "fun",
-        "冷知识",
-        "娱乐",
-    ],
-    ToolDomain.GAME: [
-        "游戏",
-        "猜数字",
-        "猜拳",
-        "骰子",
-        "game",
-        "play",
-    ],
-    ToolDomain.ART: [
-        "ascii",
-        "艺术",
-        "图案",
-        "打印图案",
-        "画一个",
-        "字符画",
-    ],
-    ToolDomain.WORKFLOW: [
-        "工作流",
-        "工作流引擎",
-        "创建工作流",
-        "执行工作流",
-        "流程编排",
-    ],
-}
-
-# 为每个内置工具预分配领域（一个工具可属多个领域）
-_BUILTIN_DOMAINS = {
-    "execute_python": {ToolDomain.CODE},
-    "execute_shell": {ToolDomain.CODE, ToolDomain.SYSTEM, ToolDomain.FILE},
-    "git": {ToolDomain.GIT},
-    "web_search": {ToolDomain.SEARCH, ToolDomain.WEB},
-    "rag_search": {ToolDomain.SEARCH, ToolDomain.ANALYSIS},
-    "skill_execute": {ToolDomain.SKILL},
-    "kepa_reflect": {ToolDomain.REFLECT},
-    "ask_clarification": {ToolDomain.MISC},
-    "self_reflect": {ToolDomain.REFLECT},
-    "fetch_url": {ToolDomain.WEB, ToolDomain.SEARCH, ToolDomain.API},
-}
-
-# MCP 工具的领域映射（通过服务器名匹配）
-# 已清理与内置工具重叠的MCP服务器，保留有独特价值的
-_MCP_SERVER_DOMAINS = {
-    # 外部MCP（.mcp.json配置）
-    "playwright": {ToolDomain.WEB, ToolDomain.SEARCH, ToolDomain.AUTOMATION},
-    "codegraph": {ToolDomain.CODE, ToolDomain.ANALYSIS},
-    "context7": {ToolDomain.CODE, ToolDomain.ANALYSIS},
-    "deepwiki": {ToolDomain.CODE, ToolDomain.ANALYSIS},
-    # 自定义MCP（mcp/目录，有独特功能）
-    "gui-automation-mcp": {ToolDomain.GUI, ToolDomain.AUTOMATION},
-    "deep-thinking-mcp": {ToolDomain.REFLECT, ToolDomain.MISC},
-    "translator-mcp": {ToolDomain.TRANSLATE},
-    "weather-mcp": {ToolDomain.WEATHER},
-    "skill-mcp": {ToolDomain.SKILL},
-    "openclaw-mcp": {ToolDomain.WORKFLOW},
-    "fun-mcp": {ToolDomain.FUN},
-    "game-mcp": {ToolDomain.GAME},
-    "art-mcp": {ToolDomain.ART},
-    "advanced-automation-mcp": {ToolDomain.AUTOMATION},
-    "awesome-mcp-servers-mcp": {ToolDomain.MISC},
-    "third-party-mcp": {ToolDomain.API, ToolDomain.AUTOMATION},
-}
-
-
-def classify_domains(task) -> set:
-    """将任务描述分类到 1-N 个领域，返回匹配的领域集合"""
-    if not isinstance(task, str):
-        task = str(task) if task else ""
-    desc = task.lower()
-    matched = set()
-    for domain, keywords in DOMAIN_CLASSIFIER.items():
-        for kw in keywords:
-            if kw.lower() in desc:
-                matched.add(domain)
-                break  # 一个领域命中一个关键词即可
-    return matched
-
-
-# ═══════════════════════════════════════════════════════════════════
-# LLM 辅助领域分类 — 用 glm-4-flash 快速语义分类，弥补静态关键词的不足
-# ═══════════════════════════════════════════════════════════════════
-
-_domain_cache: Dict[str, tuple] = {}  # task_hash -> (domains_set, timestamp)
-_DOMAIN_CACHE_TTL = 300  # 5分钟缓存
-
-# 领域→中文名映射（给 LLM prompt 用）
-_DOMAIN_ITEMS = [
-    (1, ToolDomain.SEARCH, "搜索/查询"),
-    (2, ToolDomain.FILE, "文件读写"),
-    (3, ToolDomain.CODE, "代码编写/执行"),
-    (4, ToolDomain.ANALYSIS, "数据分析/图表"),
-    (5, ToolDomain.SYSTEM, "系统信息/监控"),
-    (6, ToolDomain.TEXT, "文本处理"),
-    (7, ToolDomain.TRANSLATE, "翻译"),
-    (8, ToolDomain.WEB, "网页抓取"),
-    (9, ToolDomain.GUI, "GUI自动化"),
-    (10, ToolDomain.AUTOMATION, "自动化/工作流"),
-    (11, ToolDomain.REFLECT, "反思/复盘"),
-    (12, ToolDomain.API, "HTTP请求"),
-    (13, ToolDomain.GIT, "Git操作"),
-    (14, ToolDomain.FUN, "趣味/娱乐"),
-    (15, ToolDomain.GAME, "游戏"),
-    (16, ToolDomain.WEATHER, "天气"),
-    (17, ToolDomain.ART, "ASCII艺术"),
-    (18, ToolDomain.WORKFLOW, "工作流引擎"),
-]
-_DOMAIN_IDX_MAP = {idx: domain for idx, domain, _ in _DOMAIN_ITEMS}
-
-
-async def llm_classify_domains(task) -> Optional[set]:
-    """用 GLM-4-Flash 对任务做快速领域分类
-
-    调用一次 LLM（温度0.05，最多20个token输出），根据语义判断任务领域。
-    失败/超时返回 None → 调用方回退到静态关键词分类。
-    同类任务缓存5分钟，避免重复调用。
-    """
-    if not isinstance(task, str):
-        task = str(task) if task else ""
-    if len(task) < 8:
-        return None  # 太短的任务不需要 LLM
-
-    task_hash = str(hash(task))
-    now = time.time()
-    cached = _domain_cache.get(task_hash)
-    if cached and now - cached[1] < _DOMAIN_CACHE_TTL:
-        return cached[0]
-
-    domain_lines = "\n".join(f"{idx}={name}" for idx, _, name in _DOMAIN_ITEMS)
-    prompt = (
-        f"对任务做领域分类。从以下列表中选择1-3个最匹配的编号：\n{domain_lines}"
-        f"\n\n任务：{task[:150]}"
-        f"\n\n只返回数字，逗号分隔。例如：1,3"
-    )
-
-    try:
-        from core.engine.llm_backend import get_llm_router
-
-        router = get_llm_router()
-
-        resp = await asyncio.wait_for(
-            router.chat(
-                [{"role": "user", "content": prompt}], temperature=0.05, max_tokens=20
-            ),
-            timeout=3.0,
-        )
-        if not resp or "系统正在处理" in resp:
-            return None
-
-        import re as _re
-
-        numbers = _re.findall(r"\d+", resp.strip())
-        domains = set()
-        for n in numbers:
-            n_int = int(n)
-            if n_int in _DOMAIN_IDX_MAP:
-                domains.add(_DOMAIN_IDX_MAP[n_int])
-
-        if domains:
-            _domain_cache[task_hash] = (domains, time.time())
-            logger.info(f'LLM分类: "{task[:40]}…" → {domains}')
-            return domains
-    except asyncio.TimeoutError:
-        logger.debug(f"LLM分类超时: {task[:40]}")
-    except Exception as e:
-        logger.debug(f"LLM分类异常: {e}")
-
-    return None
-
-
-def estimate_tool_token_count(tool_def: "ToolDefinition") -> int:
-    """估算一个工具定义消耗的 token 数（name + description + 参数名）"""
-    base = len(tool_def.name) + len(tool_def.description)
-    if tool_def.parameters:
-        props = tool_def.parameters.get("properties", {})
-        base += sum(len(k) for k in props)
-    return base // 2 + 80  # 中英文混估 + 固定开销
 
 
 @dataclass
@@ -439,7 +37,6 @@ class ToolDefinition:
     tool_name: str = ""
     tags: List[str] = field(default_factory=list)
     handler: Optional[Callable] = None
-    domains: set = field(default_factory=set)  # 工具所属领域集合
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1037,14 +634,7 @@ async def _handle_execute_python(args: Dict) -> Dict:
             f"保存路径: {save_path}\n"
             f"如需修改路径，请直接调用 write_file(path='新路径', content=代码)"
         )
-        return {
-            "result": {
-                "content": [{"text": result_text + redirect_msg}],
-                "redirected_to": "write_file",
-                "language": lang,
-                "saved_path": save_path,
-            }
-        }
+        return ok(result_text + redirect_msg)
     mode = args.get("mode", "sandbox")  # sandbox(默认,隔离) | local(显式指定,可写桌面文件)
     timeout = int(args.get("timeout", 30))
     
@@ -1146,6 +736,17 @@ async def _handle_execute_shell(args: Dict) -> Dict:
     command = args.get("command", "")
     if not command:
         return {"result": {"content": [{"text": "缺少 command 参数"}]}}
+    
+    # 安全检查：使用 ShellGuard 扫描命令
+    try:
+        from core.multi_agent_v2.tools.shell_guard import ShellGuard
+        guard = ShellGuard()
+        issues = guard.scan(command)
+        if issues.get("blocked"):
+            return {"result": {"content": [{"text": f"命令被安全策略阻止: {issues.get('reason', '未知原因')}"}]}}
+    except Exception:
+        pass  # ShellGuard 不可用时跳过检查
+    
     mode = args.get("mode", "sandbox")  # sandbox(默认,隔离) | local(显式指定)
     timeout = int(args.get("timeout", 30))
 
@@ -1196,216 +797,25 @@ async def _handle_execute_shell(args: Dict) -> Dict:
             }
         }
     except asyncio.TimeoutError:
-        return {"result": {"content": [{"text": "[本地] ❌ 执行超时\n\n⚠️ 警告：当前为本地模式，无安全隔离"}]}}
+        # 超时后杀死子进程，防止孤儿进程
+        try:
+            proc.kill()
+            await proc.wait()
+        except Exception:
+            pass
+        return {"result": {"content": [{"text": "[本地] ❌ 执行超时（进程已被杀死）\n\n⚠️ 警告：当前为本地模式，无安全隔离"}]}}
     except Exception as e:
         return {"result": {"content": [{"text": f"[本地] ❌ {e}\n\n⚠️ 警告：当前为本地模式，无安全隔离"[:2000]}]}}
 
 
-async def _handle_rag_search(args: Dict) -> Dict:
-    """RAG 增强搜索 — 向量库 + 知识提取 + 联网搜索"""
-    query = args.get("query", "")
-    if not query:
-        return {"result": {"content": [{"text": "需要 query 参数"}]}}
-    max_results = int(args.get("max_results", 5))
-    learn = args.get("learn", True)
-    try:
-        from core.search.rag_search_engine import RAGSearchEngine
-
-        engine = RAGSearchEngine()
-        result = await engine.search_and_learn(
-            query=query,
-            user_id=1,
-            learn=learn,
-            max_results=max_results,
-            enhance=True,
-        )
-        text_parts = [f"查询: {result.get('query', query)}"]
-        if result.get("from_cache"):
-            text_parts.append("📦 来自缓存")
-        items = result.get("results", [])
-        if items:
-            for i, r in enumerate(items):
-                content = r.get("content", r.get("text", ""))[:500]
-                source = r.get("source", r.get("url", ""))
-                text_parts.append(f"\n【{i+1}】{content[:200]}")
-                if source:
-                    text_parts.append(f"   📎 {source}")
-        else:
-            text_parts.append("未找到相关结果")
-        if result.get("knowledge_extracted"):
-            text_parts.append(
-                f"\n🧠 知识提取: {str(result['knowledge_extracted'])[:200]}"
-            )
-        return {"result": {"content": [{"text": "\n".join(text_parts)[:5000]}]}}
-    except Exception as e:
-        return {"result": {"content": [{"text": f"RAG 搜索失败: {e}"}]}}
 
 
-async def _handle_skill_execute(args: Dict) -> Dict:
-    """执行已注册的技能 — 通过 SkillDispatcher 意图匹配"""
-    skill_name = args.get("skill_name", "")
-    params = args.get("params", {})
-    if not skill_name:
-        return {"result": {"content": [{"text": "需要 skill_name 参数"}]}}
-    try:
-        from core.engine.skill_dispatcher import get_skill_dispatcher
-
-        dispatcher = get_skill_dispatcher()
-        # 先试 SkillRegistry 直接执行
-        try:
-            import inspect
-
-            from core.skill_base import get_skill_registry
-
-            registry = get_skill_registry()
-            skill = registry.get(skill_name)
-            if skill:
-                ctx = {"user_id": 1}
-                if inspect.iscoroutinefunction(skill.execute):
-                    result = await skill.execute(params, context=ctx)
-                else:
-                    result = skill.execute(params, context=ctx)
-                return {
-                    "result": {
-                        "content": [
-                            {
-                                "text": f"[技能] ✅ {skill_name} 执行成功\n{str(result)[:3000]}"
-                            }
-                        ]
-                    }
-                }
-        except Exception:
-            pass
-        # 兜底：通过 dispatcher 匹配
-        matched = dispatcher.match_skill(skill_name)
-        if matched:
-            result = dispatcher.dispatch(skill_name)
-            return {
-                "result": {
-                    "content": [
-                        {"text": f"[技能] ✅ 匹配到 {matched}\n{str(result)[:3000]}"}
-                    ]
-                }
-            }
-        return {
-            "result": {"content": [{"text": f"[技能] ❌ 未找到技能: {skill_name}"}]}
-        }
-    except Exception as e:
-        return {"result": {"content": [{"text": f"技能执行失败: {e}"}]}}
 
 
-async def _handle_kepa_reflect(args: Dict) -> Dict:
-    """KEPA 反思循环 — 知识→执行→感知→调整"""
-    action = args.get("action", "full")
-    context = args.get("context", "")
-    if action not in ("think", "act", "reflect", "full"):
-        return {
-            "result": {"content": [{"text": "action 必须是 think|act|reflect|full"}]}
-        }
-    try:
-        from core.engine.llm_backend import get_llm_router
-
-        router = get_llm_router()
-        results = []
-
-        if action in ("think", "full"):
-            prompt = f"请分析以下上下文，给出深入洞察和执行建议：\n\n{context}\n\n输出格式：\n洞察: ...\n建议: ..."
-            resp = await router.chat(
-                [{"role": "user", "content": prompt}],
-                temperature=0.5,
-                max_tokens=800,
-            )
-            resp_text = resp if isinstance(resp, str) else str(resp)
-            results.append(f"【思考】{resp_text[:500]}")
-
-        if action in ("act", "full") and action != "think":
-            results.append(
-                "【行动】KEPA 行动阶段：基于洞察生成执行方案。请使用其他工具（execute_python/fetch_url等）执行具体操作。"
-            )
-
-        if action in ("reflect", "full"):
-            try:
-                from core.auto_reviewer import get_auto_reviewer
-
-                reviewer = get_auto_reviewer()
-                review = await reviewer.review(
-                    task_id="kepa_reflect",
-                    task_description=context,
-                    execution_logs=context,
-                    task_result=context,
-                )
-                if review:
-                    results.append(f"【感知】做得好的: {review.what_went_well[:200]}")
-                    if review.pitfalls:
-                        results.append(f"【调整】改进: {review.pitfalls[:200]}")
-            except Exception:
-                results.append("【感知】复盘不可用，跳过此阶段")
-
-        text = "\n\n".join(results) if results else "KEPA 循环完成，无输出"
-        return {"result": {"content": [{"text": text[:5000]}]}}
-    except Exception as e:
-        return {"result": {"content": [{"text": f"KEPA 反思失败: {e}"}]}}
 
 
-async def _handle_ask_clarification(args: Dict) -> Dict:
-    """反问澄清 — 当用户输入模糊或执行失败时生成追问"""
-    message = args.get("message", "")
-    error_context = args.get("error_context", "")
-    if not message:
-        return {"result": {"content": [{"text": "需要 message 参数"}]}}
-    try:
-        from core.services.clarification_service import get_clarification_service
-
-        service = get_clarification_service()
-        questions = service.generate_questions(
-            message=message,
-            error_context=error_context or None,
-            check_permission=True,
-        )
-        if questions:
-            lines = ["需要进一步确认："]
-            for i, q in enumerate(questions):
-                lines.append(f"\n{i+1}. {q.question}")
-                if q.options:
-                    opts = " / ".join(o.label for o in q.options)
-                    lines.append(f"   选项: {opts}")
-            return {"result": {"content": [{"text": "\n".join(lines)}]}}
-        return {"result": {"content": [{"text": "无需反问，信息已足够清晰"}]}}
-    except Exception as e:
-        return {"result": {"content": [{"text": f"反问生成失败: {e}"}]}}
 
 
-async def _handle_self_reflect(args: Dict) -> Dict:
-    """自动复盘反思 — 分析执行过程，生成改进建议"""
-    task_desc = args.get("task_description", "")
-    exec_logs = args.get("execution_logs", "")
-    task_result = args.get("task_result", "")
-    if not task_desc:
-        return {"result": {"content": [{"text": "需要 task_description 参数"}]}}
-    try:
-        from core.auto_reviewer import get_auto_reviewer
-
-        reviewer = get_auto_reviewer()
-        review = await reviewer.review(
-            task_id=f"reflect_{int(time.time())}",
-            task_description=task_desc,
-            execution_logs=exec_logs or "(无执行日志)",
-            task_result=task_result or None,
-        )
-        lines = [f"📋 复盘报告"]
-        if review.what_went_well:
-            lines.append(f"\n✅ 做得好的:\n{review.what_went_well[:500]}")
-        if review.pitfalls:
-            lines.append(f"\n⚠️ 踩坑点:\n{review.pitfalls[:500]}")
-        if review.improvement:
-            lines.append(f"\n💡 改进建议:\n{review.improvement[:500]}")
-        if review.is_worth_saving:
-            lines.append(
-                f"\n📌 值得沉淀为技能{' (' + review.skill_name + ')' if review.skill_name else ''}"
-            )
-        return {"result": {"content": [{"text": "\n".join(lines)[:5000]}]}}
-    except Exception as e:
-        return {"result": {"content": [{"text": f"复盘失败: {e}"}]}}
 
 
 async def _handle_git(args: Dict) -> Dict:
@@ -1437,6 +847,59 @@ async def _handle_git(args: Dict) -> Dict:
 
 
 
+def _find_similar_files(path: str, desktop: str) -> List[str]:
+    """查找桌面上类似的文件
+    
+    Args:
+        path: 目标文件路径
+        desktop: 桌面路径
+        
+    Returns:
+        类似文件列表
+    """
+    import glob
+    
+    filename = os.path.basename(path)
+    name_without_ext = os.path.splitext(filename)[0]
+    
+    # 游戏/应用类关键词
+    game_keywords = ['game', 'puzzle', '游戏', '应用', 'app', 'digit', '数码', '八数码', '8数码']
+    
+    similar_files = []
+    seen = set()
+    
+    # 只匹配相同扩展名的文件（.py 不会被 .html 阻挡）
+    target_ext = os.path.splitext(path)[1].lower()
+    # 获取桌面上所有同类文件
+    all_html_files = glob.glob(os.path.join(desktop, f"*{target_ext}"))
+    
+    for filepath in all_html_files:
+        if filepath in seen or filepath == path:
+            continue
+        
+        basename = os.path.basename(filepath).lower()
+        basename_no_ext = os.path.splitext(basename)[0]
+        
+        # 检查是否是游戏/应用类文件
+        is_game_file = any(keyword in basename for keyword in game_keywords)
+        
+        if is_game_file:
+            # 检查文件名相似性
+            # 1. 完全相同的名字
+            if basename_no_ext == name_without_ext.lower():
+                seen.add(filepath)
+                similar_files.append(filepath)
+                continue
+            
+            # 2. 包含相同的关键词
+            for keyword in game_keywords:
+                if keyword in basename and keyword in name_without_ext.lower():
+                    seen.add(filepath)
+                    similar_files.append(filepath)
+                    break
+    
+    return similar_files[:10]  # 最多返回10个
+
 
 async def _handle_write_file(args: Dict) -> Dict:
     """写文件到指定路径 — 兼容多种参数名"""
@@ -1444,133 +907,163 @@ async def _handle_write_file(args: Dict) -> Dict:
     from core.multi_agent_v2.tools.omission_detector import detect_omission_placeholders
     from core.multi_agent_v2.tools.content_corrector import ensure_correct_content, detect_encoding_issues
 
-    path = args.get("path", "")
-    content = args.get("content", "")
-    # 兼容多种参数名
-    if not content:
-        content = args.get("code", "") or args.get("text", "") or args.get("html", "") or args.get("data", "") or args.get("file_content", "")
-    if not content:
-        logger.warning(f"write_file: 参数中没有 content/code/text/html，args keys={list(args.keys())}")
-        return err("需要 content 参数")
-    
-    # 省略占位符检测（移植自 gemini-cli）
-    omissions = detect_omission_placeholders(content)
-    if omissions:
-        logger.warning(f"write_file: 检测到省略占位符 {omissions} (path={path})")
-        return err(f"❌ 内容包含省略占位符 {omissions}，请提供完整内容，不要使用 'rest of methods ...' 等占位符！")
-    
-    # 内容修正（移植自 gemini-cli）
-    content = ensure_correct_content(content, aggressive_unescape=True)
-    
-    # 检测编码问题
-    encoding_issues = detect_encoding_issues(content)
-    if encoding_issues:
-        logger.warning(f"write_file: 检测到编码问题 {encoding_issues} (path={path})")
-    
-    # 中文路径映射
-    desktop = os.path.expanduser("~/Desktop")
-    if path.startswith("桌面上/"):
-        path = desktop + path[3:]
-    elif path.startswith("桌面/"):
-        path = desktop + path[2:]
-    path = os.path.expanduser(path)
-    
-    # ── 自动合并：如果写入 .js/.css 但存在同名 .html，自动合并到 HTML 中 ──
-    if path.endswith(('.js', '.ts')) or path.endswith(('.css', '.scss', '.less')):
-        html_path = path.rsplit('.', 1)[0] + '.html'
-        if not os.path.exists(html_path):
-            html_path = path.rsplit('.', 1)[0] + '.htm'
-        if os.path.exists(html_path):
-            try:
-                html_content = open(html_path, 'r', encoding='utf-8').read()
-                # 提取纯代码（去掉可能的 <script>...</script> 包裹）
-                code = content
-                if code.strip().startswith('<script') and code.strip().endswith('</script>'):
-                    code = code.strip()[8:-9].strip()
-                elif code.strip().startswith('<style') and code.strip().endswith('</style>'):
-                    code = code.strip()[7:-8].strip()
-                
-                if path.endswith(('.js', '.ts')):
-                    # 注入到 <script> 标签中
-                    if '</script>' in html_content:
-                        # 替换空的或注释的 script 内容
-                        import re
-                        html_content = re.sub(
-                            r'<script>\s*(?://.*?\n\s*)?</script>',
-                            f'<script>\n{code}\n</script>',
-                            html_content,
-                            count=1
-                        )
-                    else:
-                        # 没有 script 标签，在 </body> 前插入
-                        html_content = html_content.replace('</body>', f'<script>\n{code}\n</script>\n</body>')
-                elif path.endswith(('.css', '.scss', '.less')):
-                    # 注入到 <style> 标签中
-                    if '</style>' in html_content:
-                        import re
-                        html_content = re.sub(
-                            r'<style>\s*</style>',
-                            f'<style>\n{code}\n</style>',
-                            html_content,
-                            count=1
-                        )
-                    else:
-                        html_content = html_content.replace('</head>', f'<style>\n{code}\n</style>\n</head>')
-                
-                # 写入合并后的 HTML
-                Path(html_path).parent.mkdir(parents=True, exist_ok=True)
-                Path(html_path).write_text(html_content, encoding='utf-8')
-                logger.info(f"write_file: 自动合并 {os.path.basename(path)} → {html_path}")
-                return ok(f"✅ 已合并到 {html_path} ({len(html_content)} 字符)")
-            except Exception as e:
-                logger.warning(f"自动合并失败: {e}，回退到单独写入")
-    
-    # 内容质量校验：代码文件不能太短或只是计划文本
-    is_code_file = any(path.endswith(ext) for ext in (".html", ".htm", ".py", ".js", ".ts", ".jsx", ".tsx", ".css", ".java", ".cpp", ".c", ".go", ".rs"))
-    # CSS 文件可以很小，不检查 500 字符限制
-    is_css = path.endswith(('.css', '.scss', '.less'))
-    if is_code_file and not is_css and len(content) < 500:
-        # 太短的"代码"很可能是计划文本，拒绝写入
-        import re
-        has_code_indicators = bool(re.search(r'(?:def |class |function|<html|<!DOCTYPE|from |import |print\()', content))
-        if not has_code_indicators:
-            logger.warning(f"write_file: 内容疑似为计划文本非实际代码 (path={path}, len={len(content)})")
-            return err(f"❌ 内容疑似为计划文本而非实际代码！请写入完整的可运行代码（包括所有 HTML 结构、CSS、JavaScript 逻辑），当前内容只有 {len(content)} 字符。建议使用 write_file 一次性写入完整文件。")
-    
-    # HTML文件完整性校验 — 只要求基本结构，不强制 <script>（静态报告不需要JS）
-    if path.endswith(('.html', '.htm')):
-        content_lower = content.lower()
-        has_doctype = '<!doctype' in content_lower
-        has_html_tag = '<html' in content_lower
-        has_closing_html = '</html>' in content_lower
-        has_body = '<body' in content_lower
-        
-        # 只有 DOCTYPE + html 标签都缺失才拒绝（纯文本伪装HTML）
-        if not has_doctype and not has_html_tag:
-            logger.warning(f"write_file: HTML文件缺少基本结构 (path={path}, len={len(content)})")
-            return err(f"❌ HTML文件缺少基本结构！请包含 <!DOCTYPE html> 和 <html> 标签。当前内容 {len(content)} 字符。")
-        # 有基本结构就允许写入，缺失的部分（如 script、body）只警告不阻断
-        missing_warnings = []
-        if not has_body: missing_warnings.append("缺少 <body>")
-        if not has_closing_html: missing_warnings.append("缺少 </html>")
-        if missing_warnings:
-            logger.info(f"write_file: HTML文件有小问题: {', '.join(missing_warnings)} (path={path})")
     try:
+        path = args.get("path", "")
+        content = args.get("content", "")
+        # 兼容多种参数名
+        if not content:
+            content = args.get("code", "") or args.get("text", "") or args.get("html", "") or args.get("data", "") or args.get("file_content", "")
+        if not content:
+            logger.warning(f"write_file: 参数中没有 content/code/text/html，args keys={list(args.keys())}")
+            return err("需要 content 参数")
+        
+        # 省略占位符检测（移植自 gemini-cli）
+        omissions = detect_omission_placeholders(content)
+        if omissions:
+            logger.warning(f"write_file: 检测到省略占位符 {omissions} (path={path})")
+            return err(f"❌ 内容包含省略占位符 {omissions}，请提供完整内容，不要使用 'rest of methods ...' 等占位符！")
+        
+        # 内容修正（移植自 gemini-cli）
+        content = ensure_correct_content(content, aggressive_unescape=True)
+        
+        # 检测编码问题
+        encoding_issues = detect_encoding_issues(content)
+        if encoding_issues:
+            logger.warning(f"write_file: 检测到编码问题 {encoding_issues} (path={path})")
+        
+        # 中文路径映射
+        desktop = os.path.expanduser("~/Desktop")
+        if path.startswith("桌面上/"):
+            path = desktop + path[3:]
+        elif path.startswith("桌面/"):
+            path = desktop + path[2:]
+        path = os.path.expanduser(path)
+        
+        # ── 重复文件检测：检查桌面上是否已存在类似的文件 ──
+        force = args.get("force", False)
+        if not force and path.startswith(desktop):
+            existing_similar = _find_similar_files(path, desktop)
+            if existing_similar:
+                filename = os.path.basename(path)
+                name_without_ext = os.path.splitext(filename)[0]
+                # 检查是否是游戏/应用类文件
+                is_game_or_app = any(keyword in content.lower() for keyword in 
+                    ['game', 'puzzle', '游戏', '应用', 'app'])
+                
+                if is_game_or_app and len(existing_similar) > 0:
+                    return err(
+                        f"桌面上已存在类似的文件: " +
+                        ", ".join([f for f in existing_similar[:5]]) +
+                        f"。建议复用已有文件，或使用 force=true 参数覆盖，或选择其他文件名。"
+                    )
+        
+        # ── 自动合并：如果写入 .js/.css 但存在同名 .html，自动合并到 HTML 中 ──
+        if path.endswith(('.js', '.ts')) or path.endswith(('.css', '.scss', '.less')):
+            html_path = path.rsplit('.', 1)[0] + '.html'
+            if not os.path.exists(html_path):
+                html_path = path.rsplit('.', 1)[0] + '.htm'
+            if os.path.exists(html_path):
+                try:
+                    html_content = open(html_path, 'r', encoding='utf-8').read()
+                    code = content
+                    if code.strip().startswith('<script') and code.strip().endswith('</script>'):
+                        code = code.strip()[8:-9].strip()
+                    elif code.strip().startswith('<style') and code.strip().endswith('</style>'):
+                        code = code.strip()[7:-8].strip()
+                    
+                    if path.endswith(('.js', '.ts')):
+                        if '</script>' in html_content:
+                            import re
+                            html_content = re.sub(
+                                r'<script>\s*(?://.*?\n\s*)?</script>',
+                                f'<script>\n{code}\n</script>',
+                                html_content,
+                                count=1
+                            )
+                        else:
+                            html_content = html_content.replace('</body>', f'<script>\n{code}\n</script>\n</body>')
+                    elif path.endswith(('.css', '.scss', '.less')):
+                        if '</style>' in html_content:
+                            import re
+                            html_content = re.sub(
+                                r'<style>\s*</style>',
+                                f'<style>\n{code}\n</style>',
+                                html_content,
+                                count=1
+                            )
+                        else:
+                            html_content = html_content.replace('</head>', f'<style>\n{code}\n</style>\n</head>')
+                    
+                    Path(html_path).parent.mkdir(parents=True, exist_ok=True)
+                    Path(html_path).write_text(html_content, encoding='utf-8')
+                    logger.info(f"write_file: 自动合并 {os.path.basename(path)} → {html_path}")
+                    return ok(f"✅ 已合并到 {html_path} ({len(html_content)} 字符)")
+                except Exception as e:
+                    logger.warning(f"自动合并失败: {e}，回退到单独写入")
+        
+        # 内容长度提示（仅警告，不阻断）
+        if len(content) < 100:
+            logger.info(f"write_file: 内容较短 ({len(content)}字符, path={path})")
+        
+        # HTML文件结构提示（仅警告，不阻断）
+        if path.endswith(('.html', '.htm')):
+            content_lower = content.lower()
+            missing = []
+            if '<!doctype' not in content_lower and '<html' not in content_lower:
+                missing.append("<!DOCTYPE html>/<html>")
+            if '<body' not in content_lower:
+                missing.append("<body>")
+            if '</html>' not in content_lower:
+                missing.append("</html>")
+            if missing:
+                logger.info(f"write_file: HTML文件缺标签: {', '.join(missing)} (path={path})")
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         
         # 检测是否为续写（文件已存在且内容较短 → 追加模式）
         is_append = False
+        is_overwrite = False
+        force = args.get("force", False)  # 支持 force 参数强制覆盖
+        
         if Path(path).exists():
             existing = Path(path).read_text(encoding="utf-8")
-            # 如果已有内容且新内容不包含已有内容的开头 → 追加
-            if existing and len(existing) > 50 and not content.startswith(existing[:50]):
-                is_append = True
+            
+            # 内容完全相同，无需写入
+            if existing == content:
+                return ok(f"✅ 文件内容相同，无需写入: {path}")
+            
+            # 文件已存在且内容不同
+            if not force and existing and len(existing) > 100:
+                # 对于游戏/应用类文件，返回提示让 Agent 确认
+                is_game_or_app = any(keyword in content.lower() for keyword in 
+                    ['<!doctype', '<html', 'game', 'puzzle', '游戏', '应用'])
+                if is_game_or_app:
+                    return err(
+                        f"文件已存在且内容不同: {path} "
+                        f"(现有{len(existing)}字符, 新内容{len(content)}字符)。"
+                        f"请使用 force=true 参数强制覆盖，或选择其他文件名。"
+                    )
+            
+            # HTML/游戏/报告文件始终覆盖，避免多个 <!DOCTYPE 混在一起
+            is_html_file = path.endswith(('.html', '.htm'))
+            if not is_html_file and existing and len(existing) > 50 and not content.startswith(existing[:50]):
+                # 检查是否为明显的代码延续（新内容较短且不含 DOCTYPE/html 标签）
+                if len(content) < 500 and '<!doctype' not in content.lower() and '<html' not in content.lower():
+                    is_append = True
+            else:
+                is_overwrite = True
         
         if is_append:
             with open(path, "a", encoding="utf-8") as f:
                 f.write(content)
         else:
             Path(path).write_text(content, encoding="utf-8")
+
+        # 写后自验证：确认文件已落盘且内容一致
+        if not Path(path).exists():
+            return err(f"❌ 文件写入后无法验证（路径不存在）: {path}")
+        written = Path(path).read_text(encoding="utf-8")
+        if len(written) < len(content) * 0.5:
+            return err(f"❌ 文件写入不完整: 传入{len(content)}字符, 实际{len(written)}字符")
         
         # 截断检测：HTML 文件是否缺少闭合标签
         truncation_msg = ""
@@ -1633,8 +1126,9 @@ async def _handle_read_file(args: Dict) -> Dict:
 
 
 async def _handle_edit_file(args: Dict) -> Dict:
-    """精确文本替换"""
-    from core.multi_agent_v2.tools.tool_result import ok, err
+    """精确文本替换 + diff 预览"""
+    import difflib
+    from core.multi_agent_v2.tools.tool_result import err
 
     path = args.get("path", "")
     old = args.get("old_string", "")
@@ -1658,7 +1152,15 @@ async def _handle_edit_file(args: Dict) -> Dict:
     new_text = text.replace(old, new, -1 if replace_all else 1)
     p.write_text(new_text, encoding="utf-8")
     actual = text.count(old) - new_text.count(old) if replace_all else 1
-    return ok(f"编辑成功: {path} (替换 {actual} 处)")
+
+    # 生成 diff
+    rel_path = p.relative_to(Path.cwd()) if p.is_relative_to(Path.cwd()) else p
+    old_lines = text.splitlines(keepends=True)
+    new_lines = new_text.splitlines(keepends=True)
+    diff_lines = list(difflib.unified_diff(old_lines, new_lines, fromfile=str(rel_path), tofile=str(rel_path), n=3))
+    diff_text = "".join(diff_lines) if diff_lines else ""
+
+    return {"ok": True, "data": f"编辑成功: {path} (替换 {actual} 处)", "diff": diff_text}
 
 
 async def _handle_glob_search(args: Dict) -> Dict:
@@ -1713,21 +1215,26 @@ async def _handle_grep_search(args: Dict) -> Dict:
     return ok(f"找到 {len(results)} 个匹配:\n" + "\n".join(results[:30]))
 
 
-async def _handle_todo_write_tool(args: Dict) -> Dict:
-    """任务列表管理"""
-    from core.multi_agent_v2.tools.tool_result import ok, err
 
-    todos = args.get("todos", [])
-    if not todos:
-        return err("需要 todos 参数")
-    lines = []
-    for t in todos:
-        status = t.get("status", "pending")
-        icon = {"completed": "✅", "in_progress": "🔄", "cancelled": "❌"}.get(status, "⬜")
-        priority = t.get("priority", "")
-        p_icon = {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(priority, "")
-        lines.append(f"{icon} {p_icon} {t.get('content', '')}")
-    return ok("任务列表:\n" + "\n".join(lines))
+async def _handle_search_files(args: Dict) -> Dict:
+    """搜索文件 — 按文件名 glob 模式或按正则内容搜索"""
+    from core.multi_agent_v2.tools.tool_result import ok, err
+    pattern = args.get("pattern", "")
+    content_pattern = args.get("content_pattern", "")
+    search_path = args.get("path", ".")
+    include = args.get("include", "")
+    limit = args.get("limit", 200)
+    if content_pattern:
+        return await _handle_grep_search({
+            "pattern": content_pattern, "path": search_path,
+            "include": include, "limit": limit,
+        })
+    elif pattern:
+        return await _handle_glob_search({
+            "pattern": pattern, "path": search_path, "limit": limit,
+        })
+    else:
+        return err("需要 pattern（文件名搜索）或 content_pattern（内容搜索）参数")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1739,18 +1246,11 @@ _HANDLER_MAP: Dict[str, Callable] = {
     "write_file": _handle_write_file,
     "read_file": _handle_read_file,
     "edit_file": _handle_edit_file,
-    "glob_search": _handle_glob_search,
-    "grep_search": _handle_grep_search,
+    "search_files": _handle_search_files,
     "execute_python": _handle_execute_python,
     "execute_shell": _handle_execute_shell,
     "web_search": _handle_search,
-    "rag_search": _handle_rag_search,
-    "skill_execute": _handle_skill_execute,
-    "kepa_reflect": _handle_kepa_reflect,
-    "ask_clarification": _handle_ask_clarification,
-    "self_reflect": _handle_self_reflect,
     "git": _handle_git,
-    "todo_write": _handle_todo_write_tool,
 }
 
 _SANDBOX_TOOL_DEFS = [
@@ -1758,7 +1258,6 @@ _SANDBOX_TOOL_DEFS = [
         name="write_file",
         server=SERVER_BUILTIN,
         tags=["file", "write"],
-        domains={ToolDomain.FILE},
         description="写入文件到指定路径。用于创建游戏、脚本、HTML报告、数据页面等文件。必填：path=文件路径(如~/Desktop/game.html)，content=完整文件内容(必须！文件的全部代码)。注意：content 参数是文件的完整内容，必须为非空字符串。HTML游戏必须是单个自包含文件，所有JS和CSS内联，禁止拆分成多个文件。",
         parameters={
             "type": "object",
@@ -1774,7 +1273,6 @@ _SANDBOX_TOOL_DEFS = [
         name="execute_python",
         server=SERVER_BUILTIN,
         tags=["code", "sandbox"],
-        domains={ToolDomain.CODE},
         description="执行 Python 代码。默认沙盒隔离执行（安全）；mode=local 本地执行（可写桌面文件，无安全隔离）。",
         parameters={
             "type": "object",
@@ -1802,7 +1300,6 @@ _SANDBOX_TOOL_DEFS = [
         name="execute_shell",
         server=SERVER_BUILTIN,
         tags=["code", "shell"],
-        domains={ToolDomain.CODE, ToolDomain.SYSTEM, ToolDomain.FILE},
         description="Shell 命令执行。默认沙盒隔离执行（安全）；mode=local 本地执行（无安全隔离）。",
         parameters={
             "type": "object",
@@ -1826,7 +1323,6 @@ _SANDBOX_TOOL_DEFS = [
         name="git",
         server=SERVER_BUILTIN,
         tags=["git", "code"],
-        domains={ToolDomain.GIT},
         description="Git 操作 — status/add/commit/log/diff/branch/pull。在当前项目目录执行。",
         parameters={
             "type": "object",
@@ -1859,102 +1355,9 @@ _SANDBOX_TOOL_DEFS = [
         handler=_handle_git,
     ),
     ToolDefinition(
-        name="rag_search",
-        server=SERVER_BUILTIN,
-        tags=["rag", "search", "knowledge"],
-        domains={ToolDomain.SEARCH, ToolDomain.ANALYSIS},
-        description="RAG 增强搜索 — 向量库检索 + 知识提取 + 联网搜索。比 search 更深度，适合研究型问题。",
-        parameters={
-            "type": "object",
-            "properties": {
-                "query": {"type": "string", "description": "搜索查询"},
-                "max_results": {
-                    "type": "integer",
-                    "description": "最大结果数（默认5）",
-                },
-                "learn": {"type": "boolean", "description": "是否提取知识到向量库"},
-            },
-            "required": ["query"],
-        },
-        handler=_handle_rag_search,
-    ),
-    ToolDefinition(
-        name="skill_execute",
-        server=SERVER_BUILTIN,
-        tags=["skill"],
-        domains={ToolDomain.SKILL},
-        description="执行已注册的技能。技能是预定义的功能模块（天气/翻译/自动化等）。",
-        parameters={
-            "type": "object",
-            "properties": {
-                "skill_name": {"type": "string", "description": "技能名称"},
-                "params": {"type": "object", "description": "技能参数"},
-            },
-            "required": ["skill_name"],
-        },
-        handler=_handle_skill_execute,
-    ),
-    ToolDefinition(
-        name="kepa_reflect",
-        server=SERVER_BUILTIN,
-        tags=["kepa", "reflect"],
-        domains={ToolDomain.REFLECT},
-        description="KEPA 反思循环：Knowledge→Execution→Perception→Adjustment。对当前状态进行深度思考和自我调整。action=think(仅思考)|act(仅行动)|reflect(仅反思)|full(完整循环)",
-        parameters={
-            "type": "object",
-            "properties": {
-                "action": {
-                    "type": "string",
-                    "enum": ["think", "act", "reflect", "full"],
-                    "description": "反思阶段",
-                },
-                "context": {"type": "string", "description": "需要反思的上下文信息"},
-            },
-            "required": ["action"],
-        },
-        handler=_handle_kepa_reflect,
-    ),
-    ToolDefinition(
-        name="ask_clarification",
-        server=SERVER_BUILTIN,
-        tags=["clarification"],
-        domains={ToolDomain.MISC},
-        description="反问澄清 — 当用户输入模糊或执行失败时，生成追问来明确需求。",
-        parameters={
-            "type": "object",
-            "properties": {
-                "message": {"type": "string", "description": "需要澄清的消息"},
-                "error_context": {
-                    "type": "string",
-                    "description": "错误上下文（可选）",
-                },
-            },
-            "required": ["message"],
-        },
-        handler=_handle_ask_clarification,
-    ),
-    ToolDefinition(
-        name="self_reflect",
-        server=SERVER_BUILTIN,
-        tags=["reflect"],
-        domains={ToolDomain.REFLECT},
-        description="自动复盘反思 — 分析执行过程，生成改进建议和教训总结。适合在任务完成后调用。",
-        parameters={
-            "type": "object",
-            "properties": {
-                "task_description": {"type": "string", "description": "任务描述"},
-                "execution_logs": {"type": "string", "description": "执行日志"},
-                "task_result": {"type": "string", "description": "执行结果（可选）"},
-            },
-            "required": ["task_description", "execution_logs"],
-        },
-        handler=_handle_self_reflect,
-    ),
-    ToolDefinition(
         name="fetch_url",
         server=SERVER_BUILTIN,
         tags=["web", "fetch"],
-        domains={ToolDomain.WEB, ToolDomain.SEARCH, ToolDomain.API},
         description="HTTP GET 获取网页/API数据。用于抓取网页内容、调用简单 API 接口。",
         parameters={
             "type": "object",
@@ -1970,7 +1373,6 @@ _SANDBOX_TOOL_DEFS = [
         name="web_search",
         server=SERVER_BUILTIN,
         tags=["web", "search"],
-        domains={ToolDomain.SEARCH, ToolDomain.WEB},
         description="网页搜索。支持多种搜索类型。用于获取实时信息、查找资料、收集报告数据。报告/分析类任务应优先使用此工具获取真实数据。",
         parameters={
             "type": "object",
@@ -1987,7 +1389,6 @@ _SANDBOX_TOOL_DEFS = [
         name="read_file",
         server=SERVER_BUILTIN,
         tags=["file", "read"],
-        domains={ToolDomain.FILE},
         description="读取文件或目录。支持分页读取。用于查看文件内容、浏览目录结构。",
         parameters={
             "type": "object",
@@ -2004,8 +1405,7 @@ _SANDBOX_TOOL_DEFS = [
         name="edit_file",
         server=SERVER_BUILTIN,
         tags=["file", "edit", "write"],
-        domains={ToolDomain.FILE},
-        description="精确文本替换。支持替换所有匹配项。用于修改文件中的特定内容。",
+        description="精确字符串替换——修改文件中特定内容。先 read_file 确认当前内容，再用 edit_file 精确定位替换（需提供足够上下文确保唯一匹配）。适合修复 bug、增删函数、修改样式，避免 write_file 重写整个文件。支持 replace_all 替换所有匹配项。",
         parameters={
             "type": "object",
             "properties": {
@@ -2019,67 +1419,21 @@ _SANDBOX_TOOL_DEFS = [
         handler=_handle_edit_file,
     ),
     ToolDefinition(
-        name="glob_search",
+        name="search_files",
         server=SERVER_BUILTIN,
-        tags=["search", "file", "glob"],
-        domains={ToolDomain.SEARCH, ToolDomain.FILE},
-        description="文件模式匹配搜索。支持递归搜索。用于查找符合模式的文件。",
+        tags=["search", "file"],
+        description="搜索文件。按文件名 glob 模式搜索（pattern=*.py）或按正则表达式搜索文件内容（content_pattern=def foo）。二选一。",
         parameters={
             "type": "object",
             "properties": {
-                "pattern": {"type": "string", "description": "Glob模式（如 *.py）"},
+                "pattern": {"type": "string", "description": "Glob 文件名模式（如 *.py, **/*.ts）。与 content_pattern 二选一。"},
+                "content_pattern": {"type": "string", "description": "文件内容正则搜索。与 pattern 二选一。"},
                 "path": {"type": "string", "description": "搜索目录（默认当前目录）"},
+                "include": {"type": "string", "description": "内容搜索时的文件过滤模式（如 *.py）"},
                 "limit": {"type": "integer", "description": "结果数量限制（默认200）"},
             },
-            "required": ["pattern"],
         },
-        handler=_handle_glob_search,
-    ),
-    ToolDefinition(
-        name="grep_search",
-        server=SERVER_BUILTIN,
-        tags=["search", "content", "regex"],
-        domains={ToolDomain.SEARCH, ToolDomain.TEXT},
-        description="正则表达式内容搜索。支持文件过滤。用于在文件中查找特定内容。",
-        parameters={
-            "type": "object",
-            "properties": {
-                "pattern": {"type": "string", "description": "正则表达式模式"},
-                "path": {"type": "string", "description": "搜索路径（文件或目录）"},
-                "include": {"type": "string", "description": "文件过滤模式（如 *.py）"},
-                "limit": {"type": "integer", "description": "结果数量限制（默认200）"},
-            },
-            "required": ["pattern"],
-        },
-        handler=_handle_grep_search,
-    ),
-    ToolDefinition(
-        name="todo_write",
-        server=SERVER_BUILTIN,
-        tags=["task", "todo", "management"],
-        domains={ToolDomain.AUTOMATION},
-        description="任务列表管理。支持创建、更新任务，设置优先级和状态。用于跟踪工作进度。",
-        parameters={
-            "type": "object",
-            "properties": {
-                "todos": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "id": {"type": "string"},
-                            "content": {"type": "string"},
-                            "status": {"type": "string", "enum": ["pending", "in_progress", "completed", "cancelled"]},
-                            "priority": {"type": "string", "enum": ["low", "medium", "high"]},
-                        },
-                        "required": ["content"],
-                    },
-                    "description": "任务列表",
-                },
-            },
-            "required": ["todos"],
-        },
-        handler=_handle_todo_write_tool,
+        handler=_handle_search_files,
     ),
 ]
 
@@ -2089,7 +1443,7 @@ def _safe(raw: str) -> str:
 
 
 class ToolRegistry:
-    """工具注册表 — 12 个内置工具 + 懒加载 MCP + 智能工具筛选"""
+    """工具注册表 — 10 个内置工具 + 懒加载 MCP + Agent 权限过滤"""
 
     def __init__(self):
         self._tools: Dict[str, ToolDefinition] = {}
@@ -2240,7 +1594,6 @@ class ToolRegistry:
                 srv, tools = result
                 if not tools:
                     continue
-                srv_domains = _MCP_SERVER_DOMAINS.get(srv, set())
                 for tool in tools:
                     raw = tool.get("name", "")
                     if not raw:
@@ -2260,7 +1613,6 @@ class ToolRegistry:
                             server=srv,
                             tool_name=raw,
                             tags=["mcp"],
-                            domains=srv_domains,
                         )
                     )
         except Exception:
@@ -2309,193 +1661,27 @@ class ToolRegistry:
         allowed: Optional[List[str]] = None,
         disallowed: Optional[List[str]] = None,
     ) -> List[ToolDefinition]:
-        """按任务相关性排序的工具列表
+        """获取工具列表，应用 Agent 类型的 allowed/disallowed 约束
 
-        领域驱动选择：
-        1. LLM 语义分类（优先）→ 静态关键词分类（兜底）
-        2. 领域内工具优先（内置/MCP 公平竞争），跨领域工具靠关键词补充
-        3. 核心工具条件保留（任务描述含关键词才强制入选）
-        4. 动态 max_tools：根据工具描述长度估算 token 消耗
-        5. Agent 类型硬约束：allowed 白名单 + disallowed 黑名单
+        不再做领域分类/评分排序/条件保留——让 LLM 靠工具 description 自主选工具。
+        只做：
+        1. 所有工具返回
+        2. Agent 类型硬约束：allowed 白名单 + disallowed 黑名单
         """
         if not self._initialized:
             return list(self._tools.values())[:max_tools]
 
-        desc = task.lower()
+        all_tools = list(self._tools.values())
 
-        # ═══ 第一步：LLM 语义分类（优先）+ 静态关键词分类（兜底）═══
-        task_domains = classify_domains(desc)  # 静态保底
-        llm_ok = False
-        try:
-            llm_domains = await llm_classify_domains(task)
-            if llm_domains is not None:
-                task_domains = llm_domains
-                llm_ok = True
-        except Exception:
-            pass  # LLM 失败就用静态结果
-        if llm_ok:
-            logger.info(f"工具筛选: LLM分类+静态→{task_domains}")
-        else:
-            logger.debug(f"工具筛选: 静态分类→{task_domains}")
-
-        # ═══ 第二步：遍历工具，计算相关性评分 ═══
-        scored = []
-        for t in self._tools.values():
-            dl = t.description.lower()
-            nl = t.name.lower()
-
-            # --- 领域匹配（核心信号）---
-            domain_score = 0.0
-            if t.domains and task_domains:
-                overlap = task_domains & t.domains
-                if overlap:
-                    domain_score = 6.0 + 4.0 * (len(overlap) - 1)
-
-            # --- 关键词匹配（辅助信号）--
-            kw_score = 0.0
-            for kw in desc.split():
-                kw = kw.strip().lower()
-                if len(kw) > 1:
-                    if kw in nl:
-                        kw_score += 3.0
-                    elif kw in dl:
-                        kw_score += 2.0
-
-            if len(desc) > 1 and any(c in dl for c in desc if len(c.strip()) > 0):
-                kw_score += 0.5
-
-            # --- 工具名精确匹配（LLM 在计划阶段已指名时最强信号）--
-            exact_match = 8.0 if nl in desc else 0.0
-
-            scored.append(
-                (domain_score + kw_score + exact_match, domain_score, kw_score, t)
-            )
-
-        # ═══ 第三步：按总分降序 ═══
-        scored.sort(key=lambda x: -x[0])
-
-        # ═══ 第四步：分类筛选 ═══
-        domain_matched = []
-        keyword_fallback = []
-
-        for s, domain_s, kw_s, t in scored:
-            if s > 0:
-                if domain_s >= 6.0:
-                    domain_matched.append((s, t))
-                else:
-                    keyword_fallback.append((s, t))
-
-        # ═══ 第五步：构建最终列表 ═══
-        result = []
-        seen = set()
-
-        for s, t in domain_matched:
-            if t.name not in seen:
-                result.append(t)
-                seen.add(t.name)
-
-        for s, t in keyword_fallback:
-            if t.name not in seen:
-                result.append(t)
-                seen.add(t.name)
-
-        # ═══ 第六步：动态估算 max_tools ═══
-        if result:
-            sample = result[:max_tools]
-            avg_tokens = sum(estimate_tool_token_count(t) for t in sample) / len(sample)
-            budget = 3000
-            dynamic_max = min(max_tools, max(8, int(budget / max(avg_tokens, 80))))
-        else:
-            dynamic_max = max_tools
-
-        # ═══ 第七步：条件化核心工具保留 ═══
-        # 只在任务描述暗示会用到时才强制保留，避免浪费名额
-        CONDITIONAL_CORE = {
-            "web_search": [
-                "搜索",
-                "查找",
-                "查询",
-                "搜",
-                "找",
-                "查",
-                "search",
-                "find",
-                "query",
-                "看看",
-                "热搜",
-                "热榜",
-                "trending",
-            ],
-            "write_file": [
-                "写",
-                "创建",
-                "生成",
-                "保存",
-                "桌面",
-                "文件",
-                "游戏",
-                "脚本",
-                "HTML",
-                "Python",
-                "write",
-                "create",
-                "generate",
-                "save",
-            ],
-            "execute_python": [
-                "代码",
-                "python",
-                "脚本",
-                "执行",
-                "运行",
-                "程序",
-                "写一个",
-            ],
-            "execute_shell": ["命令", "shell", "终端", "执行", "运行"],
-            "fetch_url": [
-                "网页",
-                "url",
-                "http",
-                "网站",
-                "api",
-                "接口",
-                "请求",
-                "fetch",
-            ],
-        }
-        for tool_name, keywords in CONDITIONAL_CORE.items():
-            if any(kw.lower() in desc for kw in keywords):
-                t = self._tools.get(tool_name)
-                if t and t.name not in seen:
-                    result.append(t)
-                    seen.add(t.name)
-                    if len(result) > dynamic_max:
-                        # 超出预算，从末尾弹一个非核心 MCP 工具
-                        for i in range(len(result) - 1, -1, -1):
-                            n = result[i].name
-                            if (
-                                n
-                                not in (
-                                    "search",
-                                    "write_file",
-                                    "execute_python",
-                                    "execute_shell",
-                                    "fetch_url",
-                                )
-                                and result[i].server != SERVER_BUILTIN
-                            ):
-                                result.pop(i)
-                                break
-
-        # ═══ 第八步：Agent 类型硬约束过滤 ═══
+        # Agent 类型硬约束过滤
         if allowed is not None:
             allowed_set = set(allowed)
-            result = [t for t in result if t.name in allowed_set]
+            all_tools = [t for t in all_tools if t.name in allowed_set]
         if disallowed is not None:
             disallowed_set = set(disallowed)
-            result = [t for t in result if t.name not in disallowed_set]
+            all_tools = [t for t in all_tools if t.name not in disallowed_set]
 
-        return result[:dynamic_max]
+        return all_tools[:max_tools]
 
     def get_tool(self, name: str) -> Optional[ToolDefinition]:
         return self._tools.get(name)

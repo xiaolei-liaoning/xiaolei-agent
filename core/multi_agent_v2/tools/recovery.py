@@ -243,8 +243,7 @@ DEFAULT_FALLBACK_CONFIG = FallbackConfig(
         "fetch_url": "execute_python",
         "read_file": "execute_python",
         "edit_file": "execute_python",
-        "glob_search": "execute_python",
-        "grep_search": "execute_python",
+        "search_files": "execute_python",
     },
 )
 

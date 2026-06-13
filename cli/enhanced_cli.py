@@ -1149,6 +1149,7 @@ class EnhancedCLI:
 
                 log_status(f"拆解为 {len(topics)} 个子任务", color=CLAUDE)
                 topics_js = json.dumps(topics, ensure_ascii=False)
+                task_safe = task[:300].replace("`", "\\`").replace("$", "\\$")
                 script = f"""
 export const meta = {{
     name: "多Agent自动编排",
@@ -1160,6 +1161,8 @@ export const meta = {{
 }}
 
 export default async function() {{
+    globalThis._globalTask = `{task_safe}`
+
     phase("并行分析")
     const topics = {topics_js}
 
@@ -1169,6 +1172,7 @@ export default async function() {{
             timeout: 120,
         }}))
     )
+    globalThis._prevResults["并行分析"] = results.filter(Boolean).join("\\n\\n")
 
     phase("综合汇总")
     const good = results.filter(r => r && typeof r === 'string' && r.length > 0)
@@ -1178,6 +1182,7 @@ export default async function() {{
     return await agent(`综合以下对各个维度的分析结果，给出整体结论:\\n\\n${{context}}`, {{
         label: "综合汇总",
         timeout: 180,
+        isFinal: true,
     }})
 }}
 """
@@ -1218,10 +1223,15 @@ export default async function() {{
                 "  - phase(title)              - 标记阶段\n"
                 "  - log(msg)                  - 输出日志\n"
                 "  - agent(prompt, opts)       - 调用子Agent（返回纯文本字符串）\n"
-                "    opts: { label, timeout, schema, model }\n"
+                "    opts: { label, timeout, schema, model, isFinal }\n"
+                "    - isFinal: true 表示这是最后一个汇总 agent，保留 schema 约束\n"
+                "    - 中间 agent 不需要加 isFinal，系统会自动去掉 schema 约束\n"
                 "  - parallel([thunks])        - 并行执行（数组里是 () => agent(...)）\n"
                 "  - pipeline(items, ...stages) - 无屏障流水线\n"
                 "  - budget.remaining()        - 剩余预算\n\n"
+                "自动注入的上下文（agent() 会自动携带，不需要手动拼在 prompt 里）：\n"
+                "  - globalThis._globalTask    - 设置全局任务描述（每个子Agent都能看到）\n"
+                "  - globalThis._prevResults    - 保存前序阶段结果供后续使用\n\n"
                 "脚本结构必须：\n"
                 "  export const meta = {\n"
                 '    name: "脚本名",\n'
@@ -1232,20 +1242,34 @@ export default async function() {{
                 "    // 编排逻辑\n"
                 "    return 结果\n"
                 "  }\n\n"
-                "示例（简单的并行分析）：\n"
+                "正确示例（多阶段 + 上下文传递）：\n"
                 "  export const meta = {\n"
-                '    name: "技术调研",\n'
-                '    description: "并行调研多个技术方向",\n'
-                "    phases: [{title: \"调研\"}, {title: \"汇总\"}],\n"
+                '    name: "热搜报告",\n'
+                '    description: "搜索并分析百度热搜数据",\n'
+                "    phases: [\n"
+                '      {title: "搜索数据", detail: "获取热搜列表"},\n'
+                '      {title: "分析数据", detail: "提取有价值信息"},\n'
+                '      {title: "生成报告", detail: "生成HTML报告"},\n'
+                "    ],\n"
                 "  }\n"
                 "  export default async function() {\n"
-                '    phase("调研")\n'
-                "    const results = await parallel([\n"
-                '      () => agent("分析Rust特性", {label: "Rust"}),\n'
-                '      () => agent("分析Go特性", {label: "Go"}),\n'
-                "    ])\n"
-                '    phase("汇总")\n'
-                '    return await agent("对比以上结果", {label: "汇总"})\n'
+                '    globalThis._globalTask = "搜索百度热搜并生成分析报告"\n\n'
+                '    phase("搜索数据")\n'
+                "    const hotData = await agent(\"搜索百度热搜，获取完整的热搜列表，包括每条的热度值\", {\n"
+                '      label: "热搜搜索"\n'
+                "    })\n"
+                '    globalThis._prevResults["搜索数据"] = hotData\n\n'
+                '    phase("分析数据")\n'
+                "    const analysis = await agent(\"基于以下热搜数据，分析热点趋势和主题:\\n\" + hotData, {\n"
+                '      label: "数据分析"\n'
+                "    })\n"
+                '    globalThis._prevResults["分析数据"] = analysis\n\n'
+                '    phase("生成报告")\n'
+                "    return await agent(\"基于以下数据和分析结果，用 write_file 在桌面生成一个完整的HTML分析报告:\\n\\n【热搜数据】\\n\" + hotData + \"\\n\\n【分析结果】\\n\" + analysis, {\n"
+                '      label: "报告生成",\n'
+                "      isFinal: true,\n"
+                "      timeout: 180\n"
+                "    })\n"
                 "  }\n\n"
                 "重要规则：\n"
                 "  1. 直接输出脚本代码，不要解释，不要 markdown 代码块\n"
@@ -1261,6 +1285,13 @@ export default async function() {{
                 "  - 不要把创建任务拆成多个 phase（如：先写框架、再写逻辑、再写样式）\n"
                 "  - 正确示例：agent('用 write_file 在桌面创建完整的植物大战僵尸HTML游戏，包含CSS和JS', {label:'创建游戏'})\n"
                 "  - 错误示例：分3个phase分别写HTML结构、CSS样式、JS逻辑\n\n"
+                "  ⚠️ 多阶段协作规则（重要）：\n"
+                "  - 一个任务拆成 2-3 个 phase：数据采集 → 分析 → 生成\n"
+                "  - 每个 phase 只做一件事，只调用一次 agent()\n"
+                "  - 用 globalThis._prevResults[\"阶段名\"] = 结果 保存每个 phase 的输出\n"
+                "  - 后续 phase 用字符串拼接引用前序结果（如 \"基于以下数据:\" + prevResult）\n"
+                "  - 最后汇总/生成阶段的 agent 加 {isFinal: true}\n"
+                "  - 中间 agent 不需要 schema，输出自然语言即可\n\n"
                 f"任务描述：{task[:500]}\n\n"
                 "开始生成："
             )

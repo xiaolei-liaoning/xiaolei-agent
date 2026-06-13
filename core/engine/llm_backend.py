@@ -41,7 +41,7 @@ def get_llm_config():
         default_model = "glm-4-flash"
         max_retries = 3
         backoff_base = 2.0
-        rate_limit_rpm = 30
+        rate_limit_rpm = 300  # DeepSeek API 支持高并发，提升以支持 parallel 多 Agent 同时调用
         supported_models = [
             "glm-4-flash", "glm-4-plus", "glm-4-air",
             "glm-4.7-flash", "glm-4-free", "glm-3-turbo",
@@ -107,7 +107,7 @@ class RateLimiter:
         self._timestamps: List[float] = []
         self._lock = asyncio.Lock()
 
-    async def acquire(self, timeout: float = 30.0) -> bool:
+    async def acquire(self, timeout: float = 5.0) -> bool:
         deadline = time.time() + timeout
         while time.time() < deadline:
             async with self._lock:
@@ -342,7 +342,7 @@ class GLMBackend:
                     kwargs["tool_choice"] = "auto"
 
                 logger.info("LLM → GLM API (glm-4-flash, tools=%s)", bool(tools))
-                response = self.client.chat.completions.create(**kwargs)
+                response = await asyncio.to_thread(self.client.chat.completions.create, **kwargs)
                 self._record_usage(response)
                 message = response.choices[0].message
                 content = message.content or ""
@@ -378,7 +378,8 @@ class GLMBackend:
                     payload["tool_choice"] = "auto"
 
                 logger.info("LLM → 本地 LM Studio (%s, tools=%s)", self.local_model, bool(tools))
-                response = requests.post(
+                response = await asyncio.to_thread(
+                    requests.post,
                     f"{self.local_url}/v1/chat/completions",
                     json=payload,
                     timeout=self.timeout
@@ -453,7 +454,8 @@ class GLMBackend:
                 }
 
                 logger.info("LLM → 本地 LM Studio 流式 (%s)", self.local_model)
-                response = requests.post(
+                response = await asyncio.to_thread(
+                    requests.post,
                     f"{self.local_url}/v1/chat/completions",
                     json=payload,
                     timeout=self.timeout,
@@ -481,7 +483,8 @@ class GLMBackend:
         # 1. GLM API
         if self.client and self.api_key:
             try:
-                response = self.client.chat.completions.create(
+                response = await asyncio.to_thread(
+                    self.client.chat.completions.create,
                     model="glm-4-flash", messages=messages,
                     temperature=temperature, max_tokens=max_tokens,
                     stream=True, timeout=self.timeout)

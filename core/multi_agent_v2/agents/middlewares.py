@@ -105,27 +105,35 @@ class KEPAMiddleware(BaseMiddleware):
     HOOKS = ("on_think_start", "on_tool_end", "on_finish")
 
     async def on_think_start(self, ctx: RunContext) -> None:
-        """在 LLM 思考前注入跨 Agent 共享知识"""
+        """仅在异常时注入 KEPA 分析（正常执行时不干扰 LLM）"""
         if not ctx.profile.get("use_shared_bus"):
             return
         if not ctx.tool_results or ctx.iteration < 2:
             return
 
+        # 只在有异常时注入: 连续失败 or 成功率低于 50%
+        total = len(ctx.tool_results)
+        success = sum(1 for r in ctx.tool_results if r.get("success"))
+        fail = total - success
+        has_issues = fail >= 2 or (total >= 3 and success / total < 0.5)
+        if not has_issues and not ctx.last_error:
+            return
+
         try:
             shared = await self._fetch_shared_knowledge(ctx)
-            knowledge_text = self._build_knowledge(ctx)
             evaluation_text = self._build_evaluation(ctx)
             planning_text = self._build_planning(ctx)
 
-            lines = [KEPA_PREFIX]
+            lines = [f"\n{KEPA_PREFIX}"]
             if shared:
-                lines.append(f"[跨Agent知识] 其他Agent提供了: {shared}")
-            lines.append(f"知识: {knowledge_text}")
+                lines.append(f"[跨Agent参考] {shared}")
             lines.append(f"评估: {evaluation_text}")
             lines.append(f"规划: {planning_text}")
             lines.append("──")
-            kepa_text = f"\n{chr(10).join(lines)}\n"
+            kepa_text = "\n".join(lines)
             ctx.knowledge_context += kepa_text
+            if len(ctx.knowledge_context) > 3000:
+                ctx.knowledge_context = ctx.knowledge_context[-3000:]
         except Exception as e:
             logger.debug(f"KEPA 分析注入失败: {e}")
 
@@ -235,18 +243,6 @@ class KEPAMiddleware(BaseMiddleware):
         except Exception:
             pass
 
-    def _build_knowledge(self, ctx: RunContext) -> str:
-        if not ctx.tool_results:
-            return "尚未收集到数据"
-        lines = []
-        for r in ctx.tool_results[-5:]:
-            tc = r.get("tool_call", {})
-            name = tc.get("name", "?")
-            ok = "成功" if r.get("success") else "失败"
-            preview = str(r.get("result", ""))[:80]
-            lines.append(f"[{ok}] {name}: {preview}")
-        return "\n".join(lines)
-
     def _build_evaluation(self, ctx: RunContext) -> str:
         if not ctx.tool_results:
             return "尚未开始执行，需要收集数据"
@@ -295,6 +291,13 @@ class LoopDetectionMiddleware(BaseMiddleware):
         self._tool_freq: Dict[str, int] = {}
         self._warned_hashes: set = set()
         self._warned_tools: set = set()
+
+    def reset_task_state(self):
+        """任务开始时重置循环检测状态"""
+        self._history = []
+        self._tool_freq = {}
+        self._warned_hashes = set()
+        self._warned_tools = set()
 
     def _hash_tool_calls(self, tool_calls: List[Dict]) -> str:
         """对一组工具调用取哈希，用于滑动窗口比较"""
@@ -363,9 +366,8 @@ class LoopDetectionMiddleware(BaseMiddleware):
 
         if count >= self.warn_threshold and call_hash not in self._warned_hashes:
             self._warned_hashes.add(call_hash)
-            ctx.task_description += (
-                "\n[循环警告] 你正在重复相同的工具调用。"
-                "请立即停止调用工具，输出最终答案。"
+            ctx.warnings.append(
+                "[循环警告] 你正在重复相同的工具调用。请立即停止调用工具，输出最终答案。"
             )
 
         # Layer 2: 频率检测
@@ -388,10 +390,8 @@ class LoopDetectionMiddleware(BaseMiddleware):
                 and name not in self._warned_tools
             ):
                 self._warned_tools.add(name)
-                ctx.task_description += (
-                    f"\n[循环警告] 工具 {name} 已调用 "
-                    f"{self._tool_freq[name]} 次。"
-                    "请考虑换用其他工具或直接输出结果。"
+                ctx.warnings.append(
+                    f"[循环警告] 工具 {name} 已调用 {self._tool_freq[name]} 次。请考虑换用其他工具或直接输出结果。"
                 )
 
         # Layer 3: 文件写入路径检测（防止反复写同一文件）
@@ -410,6 +410,14 @@ class LoopDetectionMiddleware(BaseMiddleware):
             path_key = f"write:{os.path.basename(path)}"
             self._tool_freq[path_key] = self._tool_freq.get(path_key, 0) + 1
             if self._tool_freq[path_key] >= 3:
+                # 前3次只警告，不中断
+                if self._tool_freq[path_key] == 3:
+                    ctx.warnings.append(
+                        f"[循环警告] 文件 {path} 已被写入3次。"
+                        "请使用 force=true 参数覆盖，或换用其他文件名，或直接输出结果。"
+                    )
+                    return HookResult(jump_to="continue", reason="循环警告")
+                # 第5次才硬终止
                 ctx.interrupted = True
                 ctx.last_error = (
                     f"循环检测：文件 {path} 已被写入 {self._tool_freq[path_key]} 次，"
@@ -483,6 +491,10 @@ class TodoMiddleware(BaseMiddleware):
     def __init__(self):
         self._reminder_count = 0
 
+    def reset_task_state(self):
+        """任务开始时重置提醒计数"""
+        self._reminder_count = 0
+
     async def on_think_end(self, ctx: RunContext) -> None:
         # 仅在 agent 试图输出 final_answer 时检查
         if not ctx.final_answer:
@@ -498,10 +510,8 @@ class TodoMiddleware(BaseMiddleware):
         # 失败过半 + 至少 2 次失败 + 还有提醒额度 → 阻止过早退出
         if fail > success and fail >= 2 and self._reminder_count < self._MAX_REMINDERS:
             self._reminder_count += 1
-            ctx.task_description += (
-                f"\n[任务未完成] 已执行 {total} 次工具调用，"
-                f"其中 {fail} 次失败。"
-                "请检查失败原因并重试，不要过早结束。"
+            ctx.warnings.append(
+                f"[任务未完成] 已执行 {total} 次工具调用，其中 {fail} 次失败。请检查失败原因并重试，不要过早结束。"
             )
             ctx.final_answer = ""
             ctx.interrupted = False  # 不中断，让 ReAct 继续循环
@@ -618,9 +628,8 @@ class PermissionMiddleware(BaseMiddleware):
                     medium_risks = [r for r in scan_result.risks if r.level == "medium"]
                     if medium_risks:
                         risk_desc = "、".join([r.description for r in medium_risks])
-                        ctx.task_description += (
-                            f"\n[安全警告] 检测到中危风险: {risk_desc}。"
-                            "请确保操作安全。"
+                        ctx.warnings.append(
+                            f"[安全警告] 检测到中危风险: {risk_desc}。请确保操作安全。"
                         )
 
         # 权限检查通过，继续执行

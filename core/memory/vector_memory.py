@@ -19,6 +19,22 @@ import os
 os.environ["CHROMADB_TELEMETRY_DISABLED"] = "1"
 
 import logging
+
+# 禁用 posthog 遥测，避免 chromadb 0.5.4 与 posthog 7.x API 不兼容
+# chromadb 用 posthog.capture(user_id, event, props) 3个位置参数
+# posthog 7.x 只接受 capture(event, **kwargs) 1个位置参数
+try:
+    import posthog
+    posthog.disabled = True
+    _orig_capture = posthog.capture
+    def _patched_capture(*args, **kwargs):
+        if posthog.disabled:
+            return None
+        return _orig_capture(*args, **kwargs)
+    posthog.capture = _patched_capture
+except (ImportError, AttributeError):
+    pass
+
 import math
 import re
 import threading

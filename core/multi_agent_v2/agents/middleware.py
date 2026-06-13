@@ -6,6 +6,7 @@ MiddlewareChain — 模块化中间件管道
 五个生命周期钩子，实现关注点分离。
 """
 
+import json
 import logging
 import time
 from dataclasses import dataclass, field
@@ -52,6 +53,7 @@ class RunContext:
     interrupted: bool = False
     tool_results: List[Dict] = field(default_factory=list)
     last_error: Optional[str] = None
+    warnings: List[str] = field(default_factory=list)
     final_answer: str = ""
     react_depth: int = 0
     consecutive_failures: Dict[str, int] = field(default_factory=dict)
@@ -77,6 +79,9 @@ class RunContext:
 
     # ── 强制指令（独立于 task_description，不污染原始任务）──
     forced_instructions: str = ""
+
+    # ── 警告信息（独立于 task_description，不污染原始任务）──
+    warnings: List[str] = field(default_factory=list)
 
     # MiddlewareChain 引用（由 run_react 设置）
     _chain: Optional[Any] = None
@@ -108,6 +113,10 @@ class BaseMiddleware:
 
     def __init__(self):
         self._agent: Any = None
+
+    def reset_task_state(self):
+        """任务开始时重置中间件状态（子类可覆写）"""
+        pass
 
     @property
     def agent(self):
@@ -173,6 +182,13 @@ class MiddlewareChain:
             mw._agent = agent
 
     async def on_start(self, ctx: RunContext) -> HookResult:
+        # 任务开始时重置中间件状态
+        for mw in self._middlewares:
+            try:
+                mw.reset_task_state()
+            except Exception as e:
+                logger.warning(f"Middleware {mw} reset_task_state error: {e}")
+        
         for mw in self._middlewares:
             if mw.HOOKS and "on_start" not in mw.HOOKS:
                 continue
@@ -254,21 +270,29 @@ class MiddlewareChain:
     async def on_wrap_tool_call(self, ctx: RunContext, tool_args: Dict) -> Dict:
         # 设置工具调用信息到 ctx，供 PermissionMiddleware 等中间件使用
         ctx._current_tool_name = tool_args.get("name", "")
-        ctx._current_tool_arguments = tool_args.get("arguments", {})
+        # arguments 可能是 JSON 字符串，需要解析
+        raw_args = tool_args.get("arguments", {})
+        if isinstance(raw_args, str):
+            try:
+                raw_args = json.loads(raw_args)
+            except (json.JSONDecodeError, TypeError):
+                raw_args = {}
+        ctx._current_tool_arguments = raw_args
 
         async def _run_chain(index: int) -> Dict:
             if index >= len(self._middlewares):
                 from core.multi_agent_v2.tools.tool_registry import get_tool_registry
                 registry = get_tool_registry()
                 name = tool_args.get("name", "")
-                args = tool_args.get("arguments", {})
+                args = raw_args
                 handler = registry.get_handler(name)
                 if handler:
                     try:
                         result = await handler(args)
-                        # 检查统一 ok/err 协议：ok=False 视为失败
-                        if isinstance(result, dict) and result.get("ok") is False:
-                            return {"success": False, "error": result.get("error", "工具执行失败"), "result": result, "tool_call": tool_args}
+                        # 统一 ok/err 协议：兼容新旧格式
+                        from core.multi_agent_v2.tools.tool_result import is_ok, extract_error
+                        if not is_ok(result):
+                            return {"success": False, "error": extract_error(result) or "工具执行失败", "result": result, "tool_call": tool_args}
                         return {"success": True, "result": result, "tool_call": tool_args}
                     except Exception as e:
                         return {"success": False, "error": str(e), "tool_call": tool_args}

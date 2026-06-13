@@ -7,10 +7,15 @@ Claude Code 风格的 JavaScript Workflow 引擎
   - 双向 IPC 通信
   - 真实的 schema 验证
   - 完全的官方兼容
+  - Resume 缓存（同会话内自动缓存 agent 调用）
+  - workflow() 嵌套子 Workflow
+  - 多模型路由 + Budget 按模型追踪
 """
 
 import asyncio
+import hashlib
 import json
+import logging
 import os
 import tempfile
 import time
@@ -19,7 +24,8 @@ from typing import Any, Dict, Optional
 
 from core.multi_agent_v2.orchestration.orchestrator import agent as py_agent
 from core.multi_agent_v2.workflow.models import Meta, PhaseRecord, WorkflowResult
-from core.multi_agent_v2.workflow.subagent.registry import get_subagent_registry
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -28,6 +34,8 @@ class WorkflowConfig:
     timeout: int = 600
     max_concurrent_agents: int = 16
     max_agents: int = 1000
+    budget_total: int = 1_000_000  # 默认100万token预算
+    resume_cache: bool = True  # 是否启用 resume 缓存
 
 
 class ClaudeCodeWorkflow:
@@ -39,17 +47,127 @@ class ClaudeCodeWorkflow:
         self._current_phase: Optional[str] = None
         self._log_buffer: list = []
         self._agent_count: int = 0
+        self._resume_cache: Dict[str, Any] = {}  # Resume 缓存
+        self._cache_hits: int = 0
+        self._cache_misses: int = 0
+        self._model_records: Dict[str, int] = {}  # 按模型统计 agent 调用次数
+        # ── 并发控制（修复 parallel 假并行） ──
+        self._ipc_semaphore = asyncio.Semaphore(
+            config.max_concurrent_agents if config else 16
+        )
+        self._ipc_tasks: set = set()
+
+    # ═══════════════════════════════════════════════════════════════
+    # Resume 缓存（同会话）
+    # ═══════════════════════════════════════════════════════════════
+
+    def _make_cache_key(self, prompt: str, opts: Dict) -> str:
+        """生成缓存键 — 排除动态注入的 _workflowContext 等字段"""
+        canonical: Dict[str, Any] = {"prompt": prompt}
+        # 只保留影响输出的静态 opts 字段
+        for key in ("label", "model", "schema", "agentType",
+                     "timeout", "max_turns", "max_rounds",
+                     "temperature", "personality", "role",
+                     "stripSchema"):
+            if key in opts:
+                canonical[key] = opts[key]
+        # 排除纯运行时标志（不影响内容输出）
+        _ = opts.get("fullResult")
+        raw = json.dumps(canonical, sort_keys=True, ensure_ascii=False)
+        return hashlib.md5(raw.encode()).hexdigest()
+
+    def clear_cache(self) -> None:
+        """手动清除 Resume 缓存"""
+        self._resume_cache.clear()
+        self._cache_hits = 0
+        self._cache_misses = 0
+
+    def cache_stats(self) -> Dict[str, Any]:
+        """缓存统计"""
+        return {
+            "size": len(self._resume_cache),
+            "hits": self._cache_hits,
+            "misses": self._cache_misses,
+            "hit_rate": (
+                round(self._cache_hits / (self._cache_hits + self._cache_misses), 3)
+                if (self._cache_hits + self._cache_misses) > 0
+                else 0.0
+            ),
+        }
+
+    # ═══════════════════════════════════════════════════════════════
+    # Workflow 名称解析（用于 workflow() 嵌套）
+    # ═══════════════════════════════════════════════════════════════
+
+    def _resolve_workflow_by_name(self, name: str) -> str:
+        """按名称查找 workflow 脚本
+
+        查找顺序：
+          1. {project_dir}/.claude/workflows/<name>.js
+          2. {project_dir}/workflows/<name>.js
+          3. ~/.claude/workflows/<name>.js
+          4. 如果 name 包含 /，尝试作为相对路径读取
+
+        Raises:
+            FileNotFoundError: 找不到对应 workflow 文件
+        """
+        # 如果 name 本身就是文件路径
+        if os.path.isfile(name):
+            with open(name, "r", encoding="utf-8") as f:
+                return f.read()
+
+        # 带 .js 后缀的 name
+        search_names = [
+            name,
+            name + ".js" if not name.endswith(".js") else name,
+        ]
+
+        search_dirs = [
+            os.path.join(os.getcwd(), ".claude", "workflows"),
+            os.path.join(os.getcwd(), "workflows"),
+            os.path.join(os.path.expanduser("~"), ".claude", "workflows"),
+        ]
+
+        for search_dir in search_dirs:
+            if not os.path.isdir(search_dir):
+                continue
+            # 精确匹配
+            for sname in search_names:
+                filepath = os.path.join(search_dir, sname)
+                if os.path.isfile(filepath):
+                    with open(filepath, "r", encoding="utf-8") as f:
+                        return f.read()
+            # 递归扫描（处理嵌套目录如 "review/code"）
+            for root, _, files in os.walk(search_dir):
+                for f in files:
+                    if not (f.endswith(".js") or f.endswith(".mjs")):
+                        continue
+                    rel_path = os.path.relpath(os.path.join(root, f), search_dir)
+                    stem = os.path.splitext(rel_path)[0]
+                    if stem == name or stem.endswith(f"/{name}"):
+                        with open(os.path.join(root, f), "r", encoding="utf-8") as fh:
+                            return fh.read()
+
+        raise FileNotFoundError(
+            f"Workflow '{name}' not found in {search_dirs}"
+        )
+
+    # ═══════════════════════════════════════════════════════════════
+    # 主入口：run()
+    # ═══════════════════════════════════════════════════════════════
 
     async def run(
         self,
         script: str,
         meta_overrides: Optional[Dict] = None,
+        args: Any = None,
     ) -> WorkflowResult:
         """运行 JavaScript Workflow 脚本
 
         Args:
             script: JS 脚本字符串（export const meta + export default async function 或 export async function run）
             meta_overrides: 可选的 meta 字段覆盖
+            args: 传入子 Workflow 的参数（对 workflow() 嵌套生效，JS 侧通过全局 args 访问）
 
         Returns:
             WorkflowResult
@@ -59,6 +177,10 @@ class ClaudeCodeWorkflow:
         self._current_phase = None
         self._log_buffer = []
         self._agent_count = 0
+        self._model_records = {}  # 每次 run 重置模型统计
+
+        # 序列化 args 供桥接脚本注入
+        args_json = json.dumps(args, ensure_ascii=False) if args is not None else "undefined"
 
         with tempfile.TemporaryDirectory() as temp_dir:
             # 1. 准备脚本文件
@@ -67,9 +189,13 @@ class ClaudeCodeWorkflow:
                 f.write(script)
 
             # 2. 准备 Node.js 桥接脚本
-            bridge_path = os.path.join(temp_dir, "bridge.js")
+            bridge_path = os.path.join(temp_dir, "bridge.mjs")
             with open(bridge_path, "w", encoding="utf-8") as f:
-                f.write(self._generate_node_bridge(temp_dir))
+                f.write(self._generate_node_bridge(
+                    temp_dir,
+                    budget_total=self.config.budget_total,
+                    args_json=args_json,
+                ))
 
             # 3. 启动进程
             process = await asyncio.create_subprocess_exec(
@@ -139,7 +265,13 @@ class ClaudeCodeWorkflow:
                 try:
                     while True:
                         msg = await output_queue.get()
-                        await self._handle_ipc(msg, stdin_queue)
+                        # ⭐ 用 create_task 代替 await：多个 agent 同时执行
+                        #    之前是 await，导致 parallel 假并行
+                        task = asyncio.create_task(
+                            self._ipc_handle_with_sem(msg, stdin_queue)
+                        )
+                        self._ipc_tasks.add(task)
+                        task.add_done_callback(self._ipc_tasks.discard)
                 except asyncio.CancelledError:
                     pass
                 except Exception:
@@ -159,17 +291,17 @@ class ClaudeCodeWorkflow:
             except asyncio.TimeoutError:
                 process.kill()
                 await process.wait()
-                # 清理任务
                 for task in [stdout_task, stderr_task, stdin_task, ipc_task]:
                     task.cancel()
-                # 等待任务完成（忽略取消错误）
                 await asyncio.gather(
-                    stdout_task,
-                    stderr_task,
-                    stdin_task,
-                    ipc_task,
+                    stdout_task, stderr_task, stdin_task, ipc_task,
                     return_exceptions=True,
                 )
+                for t in list(self._ipc_tasks):
+                    t.cancel()
+                if self._ipc_tasks:
+                    await asyncio.gather(*self._ipc_tasks, return_exceptions=True)
+                self._ipc_tasks.clear()
                 return WorkflowResult(
                     success=False,
                     error=f"Timeout after {self.config.timeout}s",
@@ -177,16 +309,20 @@ class ClaudeCodeWorkflow:
                     label="JS Workflow",
                 )
 
-            # 取消所有任务
             for task in [stdout_task, stderr_task, stdin_task, ipc_task]:
                 task.cancel()
-
-            # 等待任务完成（忽略取消错误）
             await asyncio.gather(
-                stdout_task, stderr_task, stdin_task, ipc_task, return_exceptions=True
+                stdout_task, stderr_task, stdin_task, ipc_task,
+                return_exceptions=True,
             )
 
-            # 确保所有流都关闭
+            # 取消还在跑的 IPC 任务（create_task 产生的）
+            for t in list(self._ipc_tasks):
+                t.cancel()
+            if self._ipc_tasks:
+                await asyncio.gather(*self._ipc_tasks, return_exceptions=True)
+            self._ipc_tasks.clear()
+
             if process.stdin:
                 process.stdin.close()
                 await process.stdin.wait_closed()
@@ -197,10 +333,7 @@ class ClaudeCodeWorkflow:
                 with open(result_file, "r", encoding="utf-8") as f:
                     result_data = json.load(f)
                     return self._build_workflow_result(
-                        result_data,
-                        start_time,
-                        time.time(),
-                        meta_overrides,
+                        result_data, start_time, time.time(), meta_overrides,
                     )
 
             return WorkflowResult(
@@ -210,17 +343,98 @@ class ClaudeCodeWorkflow:
                 label="JS Workflow",
             )
 
+    # ═══════════════════════════════════════════════════════════════
+    # IPC 处理
+    # ═══════════════════════════════════════════════════════════════
+
+    async def _ipc_handle_with_sem(self, msg: Dict[str, Any], stdin_queue):
+        """带并发限制的 IPC 处理（最多 max_concurrent_agents 个同时运行）"""
+        async with self._ipc_semaphore:
+            await self._handle_ipc(msg, stdin_queue)
+
     async def _handle_ipc(self, msg: Dict[str, Any], stdin_queue):
-        """处理来自 JS 的 IPC 消息"""
+        """处理来自 JS 的 IPC 消息
+
+        支持的消息类型：
+          - agent:    调用子 Agent（支持 Resume 缓存、多模型追踪）
+          - workflow: 嵌套执行子 Workflow
+          - phase:    标记阶段进度
+          - log:      输出日志
+          - budget:   汇报 token 消耗
+        """
         msg_type = msg.get("type")
         msg_id = msg.get("id")
 
         try:
+            # ── agent: 调用子 Agent ──────────────────────────────
             if msg_type == "agent":
-                # 调用我们的 agent
                 prompt = msg.get("data", {}).get("prompt", "")
                 opts = msg.get("data", {}).get("opts", {})
 
+                label = opts.get("label", prompt[:40])
+                model = opts.get("model", "default")
+
+                # ── Resume 缓存命中检查 ──
+                cache_key = None
+                if self.config.resume_cache:
+                    cache_key = self._make_cache_key(prompt, opts)
+                    if cache_key in self._resume_cache:
+                        self._cache_hits += 1
+                        cached = self._resume_cache[cache_key]
+                        print(f"    \033[36m♻️  {label} (缓存命中, model={model})\033[0m")
+                        response = {
+                            "id": msg_id,
+                            "result": cached,
+                        }
+                        await stdin_queue.put(response)
+                        return
+                    self._cache_misses += 1
+
+                # ── 提取并注入工作流上下文 ──
+                wf_ctx = opts.pop("_workflowContext", {})
+                if wf_ctx:
+                    context_parts = []
+
+                    global_task = wf_ctx.get("globalTask", "")
+                    if global_task:
+                        context_parts.append("## 全局任务\n" + global_task)
+
+                    current_phase = wf_ctx.get("currentPhase", "")
+                    if current_phase:
+                        context_parts.append("## 当前阶段\n" + current_phase)
+
+                    prev_results = wf_ctx.get("previousPhaseResults", {})
+                    if prev_results and isinstance(prev_results, dict):
+                        phase_parts = []
+                        for phase_name, output in prev_results.items():
+                            output_str = str(output)[:3000] if output else "(无输出)"
+                            phase_parts.append(f"### {phase_name}\n{output_str}")
+                        if phase_parts:
+                            context_parts.append(
+                                "## 前序阶段结果\n" + "\n\n".join(phase_parts)
+                            )
+
+                    agent_idx = wf_ctx.get("agentIndex", 0)
+                    if agent_idx:
+                        context_parts.append(
+                            f"## Agent 角色\n你是本次多Agent协作中的第 {agent_idx} 个子任务。"
+                        )
+
+                    if context_parts:
+                        context_header = (
+                            "\n\n<workflow_context>\n"
+                            + "\n\n".join(context_parts)
+                            + "\n</workflow_context>"
+                        )
+                        prompt = context_header + "\n\n" + prompt
+
+                # ── 中间 Agent 自动去掉 schema ──
+                # 默认保留 schema（中间 agent 也可以有结构化输出）
+                # 只有显式 stripSchema: true 才去掉
+                if opts.pop("stripSchema", False):
+                    opts.pop("schema", None)
+
+                # ── 调用 agent ──
                 subagent_type = opts.get("agentType") or opts.get("type")
                 if subagent_type:
                     result = await py_agent(prompt, opts, subagent_type=subagent_type)
@@ -235,56 +449,177 @@ class ClaudeCodeWorkflow:
                     except Exception:
                         pass
 
+                response_result = {
+                    "success": result.success if result else True,
+                    "output": output,
+                    "error": result.error if result else None,
+                    "executionTime": round(result.execution_time, 2) if result else 0.0,
+                    "agentId": result.agent_id if result else "",
+                    "metadata": result.metadata if result else {},
+                }
+
+                # ── 存入 Resume 缓存 ──
+                if self.config.resume_cache and cache_key:
+                    self._resume_cache[cache_key] = response_result
+
+                # ── 多模型记录 ──
+                self._model_records[model] = self._model_records.get(model, 0) + 1
+
+                response = {"id": msg_id, "result": response_result}
+                await stdin_queue.put(response)
+
+            # ── batch_agents: 并行执行一组 Agent（一次 IPC 搞定 parallel） ──
+            elif msg_type == "batch_agents":
+                agents_data = msg.get("data", {}).get("agents", [])
+                batch_timeout = msg.get("data", {}).get("timeout", 120)
+
+                from core.multi_agent_v2.orchestration.orchestrator import (
+                    parallel as py_parallel,
+                )
+
+                tasks = []
+                for i, a in enumerate(agents_data):
+                    prompt = a.get("prompt", "")
+                    opts = a.get("opts", {})
+                    label = opts.get("label", prompt[:40])
+                    tasks.append({
+                        "prompt": prompt,
+                        "label": label,
+                        "model": opts.get("model"),
+                        "subagent_type": opts.get("agentType") or opts.get("type"),
+                        "timeout": opts.get("timeout", batch_timeout),
+                    })
+
+                results = await py_parallel(tasks, timeout=batch_timeout)
+
+                response_results = []
+                for r in results:
+                    response_results.append({
+                        "success": r.success,
+                        "output": r.output,
+                        "error": r.error,
+                        "executionTime": round(r.execution_time, 2) if r else 0.0,
+                        "agentId": r.agent_id if r else "",
+                    })
+
+                await stdin_queue.put({"id": msg_id, "result": response_results})
+
+            # ── workflow: 嵌套子 Workflow ────────────────────────
+            elif msg_type == "workflow":
+                data = msg.get("data", {})
+                name_or_ref = data.get("nameOrRef")
+                wf_args = data.get("args", {})
+
+                print(f"    \033[35m▸ Workflow 嵌套: {name_or_ref}\033[0m")
+
+                # 解析 workflow 来源
+                if isinstance(name_or_ref, str):
+                    script = self._resolve_workflow_by_name(name_or_ref)
+                elif isinstance(name_or_ref, dict) and "scriptPath" in name_or_ref:
+                    sp = name_or_ref["scriptPath"]
+                    if not os.path.isfile(sp):
+                        raise FileNotFoundError(f"Workflow script not found: {sp}")
+                    with open(sp, "r", encoding="utf-8") as f:
+                        script = f.read()
+                else:
+                    await stdin_queue.put({
+                        "id": msg_id,
+                        "error": f"Invalid workflow reference: {name_or_ref}",
+                    })
+                    return
+
+                # 递归执行子 workflow（传入 args）
+                # 保存父 workflow 状态
+                parent_phase = self._phase_records
+                parent_current_phase = self._current_phase
+                parent_log = self._log_buffer
+                parent_count = self._agent_count
+                parent_models = self._model_records
+                
+                sub_result = await self.run(script, args=wf_args)
+                
+                # 保存子 workflow 结果
+                sub_phase = self._phase_records
+                sub_log = self._log_buffer
+                sub_count = self._agent_count
+                sub_models = self._model_records
+                
+                # 恢复父 workflow 状态并合并子结果
+                self._phase_records = parent_phase + sub_phase
+                self._current_phase = parent_current_phase
+                self._log_buffer = parent_log + sub_log
+                self._agent_count = parent_count + sub_count
+                self._model_records = {**parent_models, **sub_models}
+
                 response = {
                     "id": msg_id,
                     "result": {
-                        "success": result.success if result else True,
-                        "output": output,
-                        "error": result.error if result else None,
+                        "success": sub_result.success,
+                        "output": sub_result.output,
+                        "error": sub_result.error,
                     },
                 }
                 await stdin_queue.put(response)
 
+            # ── phase: 标记阶段 ──────────────────────────────────
             elif msg_type == "phase":
                 title = msg.get("data", "")
                 self._current_phase = title
                 self._phase_records.append(
-                    PhaseRecord(
-                        title=title,
-                        detail="",
-                        agent_calls=0,
-                        elapsed=0.0,
-                    )
+                    PhaseRecord(title=title, detail="", agent_calls=0, elapsed=0.0)
                 )
                 await stdin_queue.put({"id": msg_id, "result": "ok"})
 
+            # ── log: 输出日志 ────────────────────────────────────
             elif msg_type == "log":
                 msg_str = msg.get("data", "")
                 self._log_buffer.append({"ts": time.time(), "msg": msg_str})
                 await stdin_queue.put({"id": msg_id, "result": "ok"})
 
-            else:
-                await stdin_queue.put(
-                    {"id": msg_id, "result": {"error": f"Unknown type: {msg_type}"}}
+            # ── budget: token 消耗汇报 ────────────────────────────
+            elif msg_type == "budget_report":
+                spent_data = msg.get("data", {})
+                # 更新全局 budget tracker（如果存在）
+                from core.multi_agent_v2.orchestration.orchestrator import (
+                    get_budget,
                 )
+                bt = get_budget()
+                amount = spent_data.get("amount", 0)
+                model = spent_data.get("model", "default")
+                if bt:
+                    bt.spend(amount, label=model)
+                await stdin_queue.put({"id": msg_id, "result": "ok"})
+
+            else:
+                await stdin_queue.put({
+                    "id": msg_id,
+                    "result": {"error": f"Unknown type: {msg_type}"},
+                })
 
         except Exception as e:
             import traceback
+            await stdin_queue.put({
+                "id": msg_id,
+                "error": str(e),
+                "stack": traceback.format_exc(),
+            })
 
-            await stdin_queue.put(
-                {
-                    "id": msg_id,
-                    "error": str(e),
-                    "stack": traceback.format_exc(),
-                }
-            )
+    # ═══════════════════════════════════════════════════════════════
+    # Node.js 桥接脚本生成
+    # ═══════════════════════════════════════════════════════════════
 
-    def _generate_node_bridge(self, temp_dir: str) -> str:
-        """生成 Node.js 桥接脚本"""
-        return f"""
-import {{ fileURLToPath }} from 'url';
+    def _generate_node_bridge(self, temp_dir: str, budget_total: int = 1_000_000, args_json: str = "undefined") -> str:
+        """生成 Node.js 桥接脚本（ESM 模块）
+
+        Args:
+            temp_dir: 临时目录路径
+            budget_total: 预算上限
+            args_json: 传入的 args JSON 字符串或 "undefined"
+        """
+        return f'''import {{ fileURLToPath }} from 'url';
 import {{ dirname, join }} from 'path';
 import {{ writeFile }} from 'fs/promises';
+import {{ readFileSync }} from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -293,7 +628,7 @@ const TEMP_DIR = "{temp_dir.replace(chr(92), chr(92)*2)}";
 const RESULT_FILE = join(TEMP_DIR, 'result.json');
 
 // ============================================
-// IPC 层
+// IPC 层 — __IPC__: 协议
 // ============================================
 
 let msgId = 0;
@@ -321,9 +656,11 @@ function handleResponse(msg) {{
     }}
 }}
 
+let _inputBuffer = '';
 process.stdin.on('data', data => {{
-    const str = data.toString();
-    const lines = str.split('\\n');
+    _inputBuffer += data.toString();
+    const lines = _inputBuffer.split('\\n');
+    _inputBuffer = lines.pop() || '';
     for (const line of lines) {{
         const trimmed = line.trim();
         if (!trimmed) continue;
@@ -333,7 +670,7 @@ process.stdin.on('data', data => {{
                 handleResponse(msg);
             }}
         }} catch (e) {{
-            console.error('IPC parse error:', e);
+            console.error('[Bridge] IPC parse error:', e);
         }}
     }}
 }});
@@ -346,6 +683,37 @@ let currentPhase = null;
 const phaseRecords = [];
 const logs = [];
 
+// 工作流上下文寄存器（由 JS 脚本设置）
+globalThis._globalTask = '';
+globalThis._prevResults = {{}};
+globalThis._agentCount = 0;
+
+// ── Budget 追踪（支持多模型） ──
+let _budgetSpent = 0;
+const _budgetModelSpent = {{}};
+
+const budget = {{
+    total: {budget_total},
+    spent() {{
+        return _budgetSpent;
+    }},
+    remaining() {{
+        return Math.max(0, this.total - _budgetSpent);
+    }},
+    modelSpent: _budgetModelSpent,
+    /** 汇报 token 消耗给 Python 端（全局 budget 同步） */
+    async report(amount, model = 'default') {{
+        _budgetSpent += amount;
+        _budgetModelSpent[model] = (_budgetModelSpent[model] || 0) + amount;
+        await send('budget_report', {{ amount, model }}).catch(() => {{}});
+    }},
+}};
+globalThis.budget = budget;
+
+// ── args: 外部传入的参数 ──
+globalThis.args = {args_json};
+
+// ── phase() ──
 globalThis.phase = async function(title) {{
     currentPhase = title;
     phaseRecords.push({{ title, start: Date.now() }});
@@ -353,46 +721,72 @@ globalThis.phase = async function(title) {{
     await send('phase', title);
 }};
 
+// ── log() ──
 globalThis.log = async function(msg) {{
     logs.push({{ ts: Date.now(), msg }});
     console.log(`[Log] ${{msg}}`);
     await send('log', msg);
 }};
 
+// ── agent() — 调用子 Agent（支持多模型路由、Resume 缓存） ──
 globalThis.agent = async function(prompt, opts = {{}}) {{
     const label = opts.label || `Agent #${{++globalThis._agentCount}}`;
-    console.log(`[Agent] ${{label}}: ${{prompt.substr(0, 100)}}`);
+    console.log(`[Agent] ${{label}}${{opts.model ? ' [' + opts.model + ']' : ''}}: ${{String(prompt).substr(0, 100)}}`);
 
-    const result = await send('agent', {{ prompt, opts }});
+    // 自动注入工作流上下文
+    const ctx = {{
+        globalTask: globalThis._globalTask || '',
+        currentPhase: currentPhase || '',
+        previousPhaseResults: globalThis._prevResults || {{}},
+        agentIndex: globalThis._agentCount,
+    }};
+    const enhancedOpts = {{...opts, _workflowContext: ctx}};
+
+    const result = await send('agent', {{ prompt, opts: enhancedOpts }});
     if (result.error) {{
         throw new Error(result.error);
     }}
 
+    // Schema 解析
     if (opts.schema && result.output) {{
         try {{
             if (typeof result.output === 'string') {{
                 result.output = JSON.parse(result.output);
             }}
         }} catch (e) {{
-            console.warn('Schema parse failed, keeping as string:', e.message);
+            console.warn('[Agent] Schema parse failed:', e.message);
         }}
     }}
 
+    // fullResult: true 时返回完整元数据（含耗时、agentId 等）
+    // 默认只返回 output（向后兼容）
+    if (opts.fullResult) {{
+        return result;
+    }}
     return result.output;
 }};
 
-globalThis.parallel = async function(thunks) {{
-    console.log(`[Parallel] Starting ${{thunks.length}} tasks...`);
-    const promises = thunks.map(t => typeof t === 'function' ? t() : t);
-    const results = await Promise.all(promises);
-    console.log(`[Parallel] All tasks completed`);
-    return results;
+// ── batchAgents() — 批量并行执行 Agent（一次 IPC 搞定 parallel） ──
+globalThis.batchAgents = async function(agentSpecs, timeout = 120) {{
+    console.log(`[BatchAgents] Starting ${{agentSpecs.length}} agents...`);
+    const result = await send('batch_agents', {{ agents: agentSpecs, timeout }});
+    return result;
 }};
 
+// ── parallel() — 并行执行（有屏障） ──
+globalThis.parallel = async function(thunks) {{
+    console.log(`[Parallel] Starting ${{thunks.length}} tasks...`);
+    const settled = await Promise.allSettled(
+        thunks.map(t => typeof t === 'function' ? t() : t)
+    );
+    console.log(`[Parallel] ${{settled.length}} tasks completed`);
+    return settled.map(r => r.status === 'fulfilled' ? r.value : null);
+}};
+
+// ── pipeline() — 无屏障流水线 ──
 globalThis.pipeline = async function(items, ...stages) {{
     console.log(`[Pipeline] Processing ${{items.length}} items through ${{stages.length}} stages...`);
 
-    // 无屏障流水线：每个 item 独立流过所有 stage
     const results = await Promise.all(
         items.map(async (item, index) => {{
             let current = item;
@@ -412,15 +806,17 @@ globalThis.pipeline = async function(items, ...stages) {{
     return results;
 }};
 
-globalThis.budget = {{
-    total: 1000000,
-    _used: 0,
-    remaining: function() {{
-        return Math.max(0, this.total - this._used);
-    }},
+// ── workflow() — 嵌套子 Workflow ──
+globalThis.workflow = async function(nameOrRef, args = {{}}) {{
+    const nameStr = typeof nameOrRef === 'string' ? nameOrRef : nameOrRef.scriptPath || '';
+    console.log(`[Workflow] Starting sub-workflow: ${{nameStr}}`);
+    const result = await send('workflow', {{ nameOrRef, args }});
+    if (result.error) throw new Error(result.error);
+    if (result.output && typeof result.output === 'string') {{
+        try {{ return JSON.parse(result.output); }} catch (e) {{ return result.output; }}
+    }}
+    return result.output;
 }};
-
-globalThis._agentCount = 0;
 
 // ============================================
 // 主入口
@@ -447,18 +843,23 @@ async function main() {{
             throw new Error('No default export or run() function');
         }}
 
-        // 标记 phase 结束
         phaseRecords.forEach(pr => {{ if (!pr.end) pr.end = Date.now(); }});
 
-        await writeFile(RESULT_FILE, JSON.stringify({{
+        const resultPayload = {{
             success: true,
             output: output,
             meta: meta,
             phaseRecords: phaseRecords,
             logs: logs,
             agentCount: globalThis._agentCount,
-        }}, null, 2));
+            budget: {{
+                total: budget.total,
+                spent: _budgetSpent,
+                modelSpent: _budgetModelSpent,
+            }},
+        }};
 
+        await writeFile(RESULT_FILE, JSON.stringify(resultPayload, null, 2));
         console.log('[Bridge] Done!');
     }} catch (e) {{
         console.error('[Bridge] Error:', e);
@@ -471,7 +872,11 @@ async function main() {{
 }}
 
 main().finally(() => process.stdin?.destroy());
-"""
+'''
+
+    # ═══════════════════════════════════════════════════════════════
+    # 结果构建
+    # ═══════════════════════════════════════════════════════════════
 
     def _build_workflow_result(
         self,
@@ -509,6 +914,12 @@ main().finally(() => process.stdin?.destroy());
             elapsed=end - start,
             label=meta.name,
             phases=phase_records,
+            metadata={
+                "budget": data.get("budget", {}),
+                "agent_count": data.get("agentCount", 0),
+                "cache_stats": self.cache_stats(),
+                "model_records": dict(self._model_records),
+            },
         )
 
 

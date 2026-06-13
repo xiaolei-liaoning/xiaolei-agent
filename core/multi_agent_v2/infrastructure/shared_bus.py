@@ -136,7 +136,7 @@ class SharedBus:
         """发送直接消息 — 接收者从自己的队列消费"""
         async with self._lock:
             if receiver not in self._direct_queues:
-                self._direct_queues[receiver] = asyncio.Queue()
+                self._direct_queues[receiver] = asyncio.Queue(maxsize=1000)
             queue = self._direct_queues[receiver]
         await queue.put(message)
 

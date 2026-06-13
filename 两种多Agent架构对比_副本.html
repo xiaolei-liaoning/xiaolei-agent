@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>多Agent架构 — 小龙虾Agent (JS Workflow 精简版)</title>
+<title>多Agent架构对比 — V1队长-队员 vs V2 JS Workflow</title>
 <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -62,7 +62,7 @@
 <div class="container">
 
 <h1>多Agent 架构总览</h1>
-<p class="subtitle">小雷版小龙虾 Agent · JS Workflow 精简版 · 2026-06-11 V1修复+Web接入</p>
+<p class="subtitle">小雷版小龙虾 Agent · 2026-06-13 · V1问题分析 + V2架构优化</p>
 
 <!-- ============================== 架构总览 ============================== -->
 <div class="section">
@@ -109,7 +109,7 @@ flowchart TB
     P1["① 用户直接贴 JS 脚本<br/>export const meta = ..."]
     P2["② 用户给 .js 文件路径<br/>my_workflow.js"]
     P3["③ LLM 根据任务写脚本<br/>_llm_write_workflow() → JS"]
-    P1 & P2 & P3 --> ExecJS
+    P1 &amp; P2 &amp; P3 --> ExecJS
   end
 
   subgraph JSWorkflow["JS Workflow 引擎"]
@@ -198,17 +198,17 @@ flowchart TB
 
 <!-- ============================== V1 架构（保留历史对比） ============================== -->
 <div class="section">
-  <div class="section-title">V1 遗留架构 — 队长-队员模式</div>
-  <span class="section-badge badge-keep">V1 代码已修复 · core/agent_system.py · 已接入 Web API（chat.py）</span>
+  <div class="section-title">V1 遗留架构 — 队长-队员模式（已知问题）</div>
+  <span class="section-badge badge-remove">V1 存在架构问题 · core/agent_system.py · 需要重构</span>
 
   <div class="legend">
     <span class="legend-item"><span class="legend-dot" style="background:#1565C0"></span> 队长Agent（LeaderAgent）</span>
     <span class="legend-item"><span class="legend-dot" style="background:#66BB6A"></span> 队员Agent（LLMAgent Worker）</span>
     <span class="legend-item"><span class="legend-dot" style="background:#D32F2F"></span> Agent池（V1LeaderPool）</span>
-    <span class="legend-item"><span class="legend-dot" style="background:#FFA726"></span> 执行流程</span>
     <span class="legend-item"><span class="legend-dot" style="background:#7C8BFF"></span> 基础支撑</span>
+    <span class="legend-item"><span class="legend-dot" style="background:#9C27B0"></span> 消息总线（双向通信）</span>
     <span class="legend-item"><span class="legend-arrow">&rarr;</span> 控制流</span>
-    <span class="legend-item"><span class="legend-arrow">..&rarr;</span> 生命周期</span>
+    <span class="legend-item"><span class="legend-arrow">⇌</span> 双向消息</span>
   </div>
 
   <div class="mermaid-wrap" id="mermaid-v1">
@@ -220,55 +220,129 @@ flowchart TB
     </div>
 <pre class="mermaid">
 flowchart TB
-  subgraph V1LeaderPool["V1LeaderPool &mdash; 创建+生命周期管理"]
-    Create["create_team(worker_count=3, max_workers=5)<br/>返回 (LeaderAgent, List[LLMAgent])"]
-    Share["share_memory(agents)<br/>向 SharedBus 发布每个 Agent 的执行摘要"]
-    Discard["discard(agents)<br/>从 _all_agents 字典移除"]
+  subgraph V1LeaderPool["V1LeaderPool &mdash; Worker池化管理"]
+    Create["create_team(worker_count, max_workers)<br/>创建 Leader + Worker"]
+    GetWorker["get_worker(leader_name)<br/>从池中获取空闲Worker"]
+    ReturnWorker["return_worker(worker)<br/>Worker归还池中（不消失）"]
+    PoolStatus["get_pool_status()<br/>查看池状态"]
+    Discard["discard(agents)<br/>Leader注销 / Worker归还池"]
   end
 
-  subgraph Team["1 个 Leader + 最多 5 个 Worker（默认 3 个活跃）"]
-    Leader["LeaderAgent(LLMAgent)<br/>LEADER 角色<br/>supervise_task() 主循环"]
-    W1["LLMAgent 队员1 &bull; 活跃"]
-    W2["LLMAgent 队员2 &bull; 活跃"]
-    W3["LLMAgent 队员3 &bull; 活跃"]
-    W4["LLMAgent 队员4 &bull; 休眠"]
-    W5["LLMAgent 队员5 &bull; 休眠"]
+  subgraph Team["1 个 Leader + Worker池（可复用）"]
+    Leader["LeaderAgent(LLMAgent)<br/>LEADER 角色<br/>supervise_task() 主循环<br/>+ 处理Worker询问<br/>+ 发送控制指令"]
+    subgraph WorkerPool["Worker池（池化复用）"]
+      W1["Worker1<br/>IDLE/EXECUTING/FAILED/ASKING"]
+      W2["Worker2<br/>IDLE/EXECUTING/FAILED/ASKING"]
+      W3["Worker3<br/>IDLE/EXECUTING/FAILED/ASKING"]
+    end
   end
 
-  subgraph Flow["执行流程（分批循环，最多 3 轮）"]
+  subgraph MessageBus["消息总线（双向通信）"]
     direction LR
-    D["① 队长 _decompose_task()<br/>LLM 分解任务为子任务"]
-    A["② 队长 _assign()<br/>round-robin 分配"]
-    E["③ 队长 _execute_batch()<br/>asyncio.gather Workers 并行"]
-    AN["④ 队长 _analyze_results()<br/>LLM 分析 &rarr; decision"]
-    D --> A --> E --> AN
-    AN -->|"retry/reassign"| A
+    Ask["ASK_LEADER<br/>Worker询问主Agent"]
+    Response["LEADER_RESPONSE<br/>主Agent回复Worker"]
+    Control["CONTROL<br/>主Agent发送控制指令"]
+    Status["STATUS_UPDATE<br/>Worker状态更新"]
+  end
+
+  subgraph WorkerStateMachine["Worker状态机"]
+    direction LR
+    Idle["IDLE<br/>空闲等待"]
+    Executing["EXECUTING<br/>执行任务"]
+    Completed["COMPLETED<br/>任务完成"]
+    Failed["FAILED<br/>执行失败"]
+    Asking["ASKING<br/>询问主Agent"]
+    Retrying["RETRYING<br/>重试中"]
+    Idle --> Executing
+    Executing --> Completed
+    Executing --> Failed
+    Failed --> Asking
+    Asking --> Retrying
+    Retrying --> Executing
+  end
+
+  subgraph Flow["执行流程（ReAct循环）"]
+    direction LR
+    T["① Thought: 队长思考"]
+    A["② Action: 执行/分配"]
+    O["③ Observation: 观察结果"]
+    Q["④ 处理Worker询问"]
+    T --> A --> O --> Q
+    Q -->|"继续循环"| T
   end
 
   subgraph LLMAgentInternal["每个 LLMAgent 内部"]
     direction TB
-    Rag["_rag_query() &mdash; RAG 检索增强"]
-    Kepa["_kepa_reflect() &mdash; 反思闭环<br/>置信度 &ge;0.85 退出"]
-    Ask["_ask_user() &mdash; 反问机制"]
-    Ctx["ContextMemory &mdash; 最近20条记录"]
-    Rag --- Kepa --- Ask --- Ctx
+    Rag["_rag_query() &mdash; RAG检索增强"]
+    Kepa["_kepa_reflect() &mdash; 反思闭环"]
+    AskLeader["ask_leader() &mdash; 询问主Agent"]
+    OnFail["on_task_failed() &mdash; 失败时询问"]
+    Ctx["ContextMemory &mdash; 上下文记忆"]
+    Rag --- Kepa --- AskLeader --- OnFail --- Ctx
   end
 
-  subgraph Infra["基础支撑"]
-    LLM["_llm_json() &mdash; 模块级 LLM JSON 解析"]
-  end
-
-  Create --> Leader & W1 & W2 & W3 & W4 & W5
+  Create --> Leader
+  GetWorker --> W1 &amp; W2 &amp; W3
+  W1 &amp; W2 &amp; W3 --> ReturnWorker
   Leader -.->|"supervise_task()"| Flow
-  W1 & W2 & W3 -.->|"process_message()"| E
-  Leader & W1 & W2 & W3 -.-> LLMAgentInternal
-  Leader -.->|"执行完成"| Share --> Discard
-  Leader -.->|"_llm_json()"| LLM
+  W1 &amp; W2 &amp; W3 -.->|"process_message()"| MessageBus
+  Leader -.->|"respond_to_worker()"| MessageBus
+  Leader -.->|"send_control()"| MessageBus
+  MessageBus <--> W1 &amp; W2 &amp; W3
+  W1 &amp; W2 &amp; W3 -.-> WorkerStateMachine
   Leader -.-> LLMAgentInternal
+  W1 &amp; W2 &amp; W3 -.-> LLMAgentInternal
 
-  Leader ~~~ Notes1["&#9733; V1 特点<br/>&bull; 1 Leader + N Worker 分层监管<br/>&bull; LLM 分解&rarr;分配&rarr;并行&rarr;分析&rarr;循环<br/>&bull; 每人有 KEPA/RAG/反问/ContextMemory<br/>&bull; Leader 继承 LLMAgent，增加 supervise_task()<br/>&bull; share_memory() 纯日志记录（V2 依赖已移除）<br/>&bull; 无中间件链，四机制串行调用<br/>&bull; 8 项 bug 已修复 + 26 测试覆盖<br/>&bull; 已接入 Web API（chat.py _handle_with_multi_agent）"]
-  style Notes1 fill:#fff5f5,stroke:#ff6b6b,stroke-dasharray:4
+  Leader ~~~ Notes1["★ V1 已知问题\n• 任务分解: 无DAG依赖分析、无递归分解、无Worker能力匹配\n• 任务分配: 简单轮询 i % len(workers)，不考虑负载和能力\n• 并发退化: ReAct主循环实际退化为「并发收集→串行处理」流水线\n• 状态机形同虚设: WorkerState定义但逻辑分散，重试依赖LLM JSON解析\n• 工具调用硬编码: _react_think()用关键词匹配5种场景，无法扩展\n• 结果分析不可靠: _analyze_results()依赖LLM，JSON不稳定\n• 架构臃肿: 单文件1681行，无模块化\n\n★ V1 改进计划\n• 重构为模块化架构（拆分agent_system.py）\n• 实现DAG任务分解和Worker能力匹配\n• 优化并发执行（真正并行而非串行流水线）\n• 简化状态机，移除LLM依赖的重试决策"]
+  style Notes1 fill:#fff5f5,stroke:#c62828,stroke-dasharray:4
 </pre>
+  </div>
+</div>
+
+<!-- ============================== V1 已知问题和改进计划 ============================== -->
+<div class="section" style="border-left: 4px solid #c62828;">
+  <div class="section-title">V1 已知问题和改进计划</div>
+  <span class="section-badge badge-remove">需要重构 · core/agent_system.py · 1681行单文件</span>
+
+  <div class="hc">
+    <div class="hc-item" style="border-left: 4px solid #c62828;">
+      <div class="hc-title" style="color:#c62828;">❌ 已知问题</div>
+      <ul>
+        <li><strong>任务分解缺陷</strong>：无DAG依赖分析、无递归分解、无Worker能力匹配</li>
+        <li><strong>任务分配缺陷</strong>：简单轮询 <code>i % len(workers)</code>，不考虑负载和能力匹配</li>
+        <li><strong>并发退化</strong>：虽然有 <code>_execute_batch()</code> 支持并发，但ReAct主循环实际退化为「并发收集→串行处理」流水线</li>
+        <li><strong>状态机形同虚设</strong>：<code>WorkerState</code> 定义了状态但逻辑分散，重试决策依赖LLM JSON输出且解析经常失败</li>
+        <li><strong>工具调用硬编码</strong>：<code>_react_think()</code> 用关键词匹配5种场景（天气/搜索/翻译/文件/代码），无法动态扩展</li>
+        <li><strong>结果分析不可靠</strong>：<code>_analyze_results()</code> 依赖LLM判断，JSON输出不稳定，fallback为保守重试</li>
+        <li><strong>架构臃肿</strong>：单文件 <code>agent_system.py</code> 包含1681行代码，无模块化</li>
+      </ul>
+    </div>
+    <div class="hc-item" style="border-left: 4px solid #2e7d32;">
+      <div class="hc-title" style="color:#2e7d32;">✅ 改进计划</div>
+      <ul>
+        <li><strong>重构架构</strong>：拆分 <code>agent_system.py</code> 为多个模块（任务分解、分配、执行、分析）</li>
+        <li><strong>DAG任务分解</strong>：实现任务依赖分析，支持递归分解和Worker能力匹配</li>
+        <li><strong>智能任务分配</strong>：基于Worker能力、负载、历史表现进行智能分配</li>
+        <li><strong>优化并发执行</strong>：实现真正的并行执行，而非串行流水线</li>
+        <li><strong>简化状态机</strong>：移除LLM依赖的重试决策，改用规则引擎</li>
+        <li><strong>动态工具发现</strong>：扩展工具调用格式，支持动态注册和发现</li>
+        <li><strong>可靠结果分析</strong>：引入结构化结果评估，减少LLM依赖</li>
+      </ul>
+    </div>
+  </div>
+
+  <div style="margin-top:20px;padding:16px;background:#fff5f5;border-radius:8px;border:1px solid #ffcdd2;">
+    <div style="font-weight:600;color:#c62828;margin-bottom:8px;">⚠️ 架构对比结论</div>
+    <div style="font-size:14px;line-height:1.8;">
+      V1（队长-队员模式）的核心困境：<strong>架构设计是好的，但实现退化了</strong>。
+      <ul style="margin:8px 0;padding-left:20px;">
+        <li>设计目标：灵活的任务分解和分配</li>
+        <li>实际实现：硬编码的轮询分配和关键词匹配</li>
+        <li>设计目标：可扩展的Worker状态机</li>
+        <li>实际实现：状态定义但逻辑分散，依赖LLM决策</li>
+      </ul>
+      建议：V1需要大规模重构才能达到设计目标，而JS Workflow已经实现了更灵活的编排方式。
+    </div>
   </div>
 </div>
 
@@ -691,17 +765,17 @@ flowchart LR
       </tr>
     </thead>
     <tbody>
-      <tr><td><strong>代码位置</strong></td><td><code>core/agent_system.py</code>（556行）</td><td><code>core/multi_agent_v2/workflow/js_workflow.py</code>（523行）+ <code>orchestration/orchestrator.py</code></td></tr>
-	      <tr><td><strong>架构模式</strong></td><td>1 LeaderAgent + N 个 LLMAgent Worker<br/>Leader 继承 LLMAgent，增加 supervise_task() 主循环</td><td>单一 WorkAgent 类型 + AgentPool 8 池复用。<br/>JS 脚本编排，底层走 orchestrator.agent()</td></tr>
-	      <tr><td><strong>Agent 创建</strong></td><td><code>V1LeaderPool.create_team(worker_count, max_workers)</code><br/>返回 Leader + 5 Worker（3活跃 2休眠）</td><td><code>AgentPool(8)</code> 预热 8 个 Agent<br/><code>acquire()</code> 借用 &rarr; <code>release()</code> 归还复用</td></tr>
-	      <tr><td><strong>执行流程</strong></td><td>Leader 驱动：LLM分解 &rarr; round-robin分配 &rarr; asyncio.gather 并行 &rarr; LLM分析 &rarr; 循环最多3轮</td><td>JS 脚本编排：agent()/parallel()/pipeline() 自由组合<br/>由用户编写或 LLM 动态生成</td></tr>
-	      <tr><td><strong>Agent 内部</strong></td><td>4 机制串行：RAG &rarr; LLM &rarr; KEPA &rarr; 反问<br/>ContextMemory 环形缓冲（最近20条）</td><td><strong>MiddlewareChain 10层</strong>（HOOKS 声明式）：<br/>Summarization → LoopDetection → Clarification → Todo → Permission → Hook → ReActDepth → ReActCore &#9733; → Reflection → KEPA &#9733;<br/>temp_memory 临时记忆 + personality/role 注入</td></tr>
-	      <tr><td><strong>通信方式</strong></td><td>Leader &rarr; Worker 单向调度<br/>share_memory() 纯日志（V2 依赖已移除）</td><td>JS agent() &rarr; IPC &rarr; orchestrator.agent()<br/>SharedBus：pub/sub + direct msg + 知识存储</td></tr>
-	      <tr><td><strong>LLM 后端</strong></td><td><code>_llm_json()</code> 模块级函数，串行 LLM JSON 解析</td><td>GLMBackend + 免费 fallback 链 + MultiLLMRouter<br/>差异化超时（60s/30s）</td></tr>
-	      <tr><td><strong>编排方式</strong></td><td>Python 硬编码：Leader 的 supervise_task() 主循环</td><td>JS 脚本动态编排，支持 <code>agent() / parallel() / pipeline() / phase() / log() / budget()</code></td></tr>
+      <tr><td><strong>代码位置</strong></td><td><code>core/agent_system.py</code>（1681行）<br/><span class="strike">之前标注556行是错误的</span></td><td><code>core/multi_agent_v2/workflow/js_workflow.py</code>（523行）+ <code>orchestration/orchestrator.py</code></td></tr>
+	      <tr><td><strong>架构模式</strong></td><td>1 LeaderAgent + N 个 LLMAgent Worker<br/>Leader 继承 LLMAgent，增加 supervise_task() 主循环<br/><span style="color:#c62828;">⚠️ 单文件1681行，无模块化</span></td><td>单一 WorkAgent 类型 + AgentPool 8 池复用。<br/>JS 脚本编排，底层走 orchestrator.agent()</td></tr>
+	      <tr><td><strong>Agent 创建</strong></td><td><code>V1LeaderPool.create_team(worker_count, max_workers)</code><br/>创建 Leader + Worker池（可复用）<br/><code>get_worker()</code> 从池中获取<br/><code>return_worker()</code> 归还池中<br/><span style="color:#c62828;">⚠️ 无Worker能力匹配</span></td><td><code>AgentPool(8)</code> 预热 8 个 Agent<br/><code>acquire()</code> 借用 &rarr; <code>release()</code> 归还复用</td></tr>
+	      <tr><td><strong>执行流程</strong></td><td>Leader 驱动：LLM分解 &rarr; round-robin分配 &rarr; asyncio.gather 并行 &rarr; LLM分析 &rarr; 循环最多3轮<br/><span style="color:#c62828;">⚠️ 并发退化为串行流水线</span></td><td>JS 脚本编排：agent()/parallel()/pipeline() 自由组合<br/>由用户编写或 LLM 动态生成</td></tr>
+	      <tr><td><strong>Agent 内部</strong></td><td>4 机制串行：RAG &rarr; LLM &rarr; KEPA &rarr; 反问<br/>ContextMemory 环形缓冲（最近20条）<br/><span style="color:#c62828;">⚠️ 状态机形同虚设，重试依赖LLM JSON解析</span></td><td><strong>MiddlewareChain 10层</strong>（HOOKS 声明式）：<br/>Summarization → LoopDetection → Clarification → Todo → Permission → Hook → ReActDepth → ReActCore &#9733; → Reflection → KEPA &#9733;<br/>temp_memory 临时记忆 + personality/role 注入</td></tr>
+	      <tr><td><strong>通信方式</strong></td><td>双向消息总线<br/>ASK_LEADER / LEADER_RESPONSE / CONTROL / STATUS_UPDATE<br/>Worker可询问主Agent，主Agent可发送控制指令</td><td>JS agent() &rarr; IPC &rarr; orchestrator.agent()<br/>SharedBus：pub/sub + direct msg + 知识存储</td></tr>
+	      <tr><td><strong>LLM 后端</strong></td><td><code>_llm_json()</code> 模块级函数，串行 LLM JSON 解析<br/><span style="color:#c62828;">⚠️ 工具调用格式硬编码5种场景</span></td><td>GLMBackend + 免费 fallback 链 + MultiLLMRouter<br/>差异化超时（60s/30s）</td></tr>
+	      <tr><td><strong>编排方式</strong></td><td>Python 硬编码：Leader 的 supervise_task() 主循环<br/><span style="color:#c62828;">⚠️ 无DAG依赖分析、无递归分解</span></td><td>JS 脚本动态编排，支持 <code>agent() / parallel() / pipeline() / phase() / log() / budget()</code></td></tr>
 	      <tr><td><strong>脚本生成</strong></td><td>无。所有逻辑写在 Python 代码里</td><td><strong>3 种路径</strong>：<br/>① 用户贴 JS 脚本 &rarr; 直接执行<br/>② 用户传 .js 文件 &rarr; 加载执行<br/>③ 说人话 &rarr; LLM 自动写 JS 脚本 &rarr; 执行</td></tr>
 	      <tr><td><strong>中间件</strong></td><td>无。Agent 内 4 方法是独立方法串行调用</td><td><strong>MiddlewareChain 10 层</strong> + HOOKS + HookResult<br/>5 生命周期钩子 + 2 洋葱包裹钩子</td></tr>
-	      <tr><td><strong>工具集成</strong></td><td><strong>ToolRegistry 完整集成</strong><br/>16 内置 handler: write_file, execute_python, web_search, fetch_url, read_file, edit_file, glob_search, grep_search, execute_shell, git, rag_search, skill_execute, kepa_reflect, ask_clarification, self_reflect, todo_write<br/>+ MCP 动态发现 + skill_execute 技能调用<br/>_get_tools_for_task() 按任务获取最多15个工具<br/>_execute_tool() 单步执行（30s超时）</td><td>ToolRegistry 16+ 内置 handler + MCP 自动发现<br/>handler 优先 &rarr; MCP fallback<br/>MiddlewareChain 中间件拦截工具调用</td></tr>
+	      <tr><td><strong>工具集成</strong></td><td><strong>ToolRegistry 完整集成</strong><br/>16 内置 handler: write_file, execute_python, web_search, fetch_url, read_file, edit_file, glob_search, grep_search, execute_shell, git, rag_search, skill_execute, kepa_reflect, ask_clarification, self_reflect, todo_write<br/>+ MCP 动态发现 + skill_execute 技能调用<br/>_get_tools_for_task() 按任务获取最多15个工具<br/>_execute_tool() 单步执行（30s超时）<br/><span style="color:#c62828;">⚠️ _react_think()用关键词匹配5种场景，无法扩展</span></td><td>ToolRegistry 16+ 内置 handler + MCP 自动发现<br/>handler 优先 &rarr; MCP fallback<br/>MiddlewareChain 中间件拦截工具调用</td></tr>
 	      <tr><td><strong>生命周期</strong></td><td>create_team() &rarr; supervise_task() &rarr; share_memory() &rarr; discard()</td><td>AgentPool 预热 &rarr; agent() 借/还 &rarr; finally: stop_bus &rarr; reset &rarr; release</td></tr>
     </tbody>
   </table>
@@ -772,8 +846,56 @@ flowchart LR
   }, 2000);
 </script>
 
+<!-- ============================== V2 最近改动 ============================== -->
+<div class="section" style="border-left: 4px solid #2e7d32;">
+  <div class="section-title">V2 最近改动（2026-06-13）</div>
+  <span class="section-badge badge-keep">模块化重构 · 质量校验 · 文件管理增强</span>
+
+  <div class="hc">
+    <div class="hc-item" style="border-left: 4px solid #2e7d32;">
+      <div class="hc-title" style="color:#2e7d32;">✅ 模块化拆分</div>
+      <ul>
+        <li><code>react_core.py</code> 从768行拆分为5个独立模块</li>
+        <li><code>tool_evaluator.py</code> — 工具结果评估与格式化</li>
+        <li><code>tool_parser.py</code> — 工具调用解析</li>
+        <li><code>tool_executor.py</code> — 工具执行与并行调度</li>
+        <li><code>file_validator.py</code> — 文件内容检测与补全</li>
+        <li><code>plan_manager.py</code> — 计划生成与Replan</li>
+      </ul>
+    </div>
+    <div class="hc-item" style="border-left: 4px solid #1565C0;">
+      <div class="hc-title" style="color:#1565C0;">🔧 功能增强</div>
+      <ul>
+        <li><code>code_quality_checker.py</code> — 新增代码质量校验器</li>
+        <li>检测括号不匹配、逻辑错误</li>
+        <li>write_file 增强：文件存在性检查、重复文件检测</li>
+        <li>支持 <code>force=True</code> 参数强制覆盖</li>
+        <li>RunContext 添加 <code>warnings</code> 属性</li>
+      </ul>
+    </div>
+  </div>
+
+  <table style="margin-top:16px;">
+    <thead>
+      <tr>
+        <th style="width:25%">改动类型</th>
+        <th style="width:35%">文件</th>
+        <th style="width:40%">内容</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td><strong>重构</strong></td><td><code>react_core.py</code></td><td>拆分为5个模块，提高可维护性</td></tr>
+      <tr><td><strong>新增</strong></td><td><code>code_quality_checker.py</code></td><td>代码质量校验器（括号、逻辑检查）</td></tr>
+      <tr><td><strong>新增</strong></td><td><code>file_validator.py</code></td><td>文件校验（集成质量检查）</td></tr>
+      <tr><td><strong>增强</strong></td><td><code>tool_registry.py</code></td><td>write_file 增强 + 重复文件检测</td></tr>
+      <tr><td><strong>修复</strong></td><td><code>middleware.py</code></td><td>RunContext 添加 warnings 属性</td></tr>
+      <tr><td><strong>精简</strong></td><td><code>tool_registry.py</code></td><td>移除 ToolDomain 分类系统</td></tr>
+    </tbody>
+  </table>
+</div>
+
 <footer style="text-align:center;font-size:12px;color:#999;margin-top:32px;">
-  小雷版小龙虾 Agent 架构文档 · 2026-06-11 · V1 8项bug修复 + Web接入
+  小雷版小龙虾 Agent 架构文档 · 2026-06-13 · V1问题分析 + V2架构优化 + 模块化重构
 </footer>
 
 </body>

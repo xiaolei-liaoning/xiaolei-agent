@@ -13,6 +13,19 @@ import os
 import sys
 import logging
 import shutil
+
+# 禁用 posthog 遥测，避免 chromadb 与 posthog 7.x API 不兼容
+try:
+    import posthog
+    posthog.disabled = True
+    _orig_capture = posthog.capture
+    def _patched_capture(*args, **kwargs):
+        if posthog.disabled:
+            return None
+        return _orig_capture(*args, **kwargs)
+    posthog.capture = _patched_capture
+except (ImportError, AttributeError):
+    pass
 from pathlib import Path
 from typing import List, Dict, Any
 import time
@@ -26,20 +39,27 @@ logger = logging.getLogger(__name__)
 
 def get_all_skill_dirs() -> List[Path]:
     """获取所有技能目录"""
-    skills_dir = Path(__file__).parent / "skills"
-    
-    if not skills_dir.exists():
-        logger.error("skills目录不存在: %s", skills_dir)
-        return []
+    # 支持多个 skills 目录
+    project_root = Path(__file__).parent.parent
+    candidates = [
+        project_root / "core" / "skills",
+        project_root / "plugin" / "skills",
+        project_root / ".opencode" / "skills",
+    ]
     
     skill_dirs = []
-    for item in skills_dir.iterdir():
-        # 跳过特殊目录和文件
-        if item.is_dir() and not item.name.startswith('_') and not item.name.startswith('.'):
-            # 检查是否有SKILL.md文件
-            skill_md = item / "SKILL.md"
-            if skill_md.exists():
-                skill_dirs.append(item)
+    for skills_dir in candidates:
+        if not skills_dir.exists():
+            continue
+        for item in skills_dir.iterdir():
+            if item.is_dir() and not item.name.startswith('_') and not item.name.startswith('.'):
+                skill_md = item / "SKILL.md"
+                if skill_md.exists():
+                    skill_dirs.append(item)
+    
+    if not skill_dirs:
+        logger.error("未找到任何技能目录（已搜索: %s）", [str(c) for c in candidates])
+        return []
     
     logger.info("找到 %d 个技能目录", len(skill_dirs))
     return skill_dirs

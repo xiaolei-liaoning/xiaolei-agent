@@ -18,9 +18,22 @@ def err(error: str) -> Dict[str, Any]:
 
 
 def is_ok(result: Any) -> bool:
-    """检查是否成功"""
+    """检查是否成功（兼容新旧格式）"""
     if isinstance(result, dict):
-        return result.get("ok", True)  # 无 ok 字段视为成功（兼容旧格式）
+        # 新格式：显式 ok 字段
+        if "ok" in result:
+            return result["ok"]
+        # 旧格式：从 content text 推断
+        result_data = result.get("result", {})
+        if isinstance(result_data, dict):
+            content = result_data.get("content", [])
+            if isinstance(content, list) and content:
+                text = content[0].get("text", "") if isinstance(content[0], dict) else ""
+                # 错误关键词模式
+                error_prefixes = ("缺少", "未知", "失败", "被安全策略阻止", "超时", "❌", "错误", "阻止")
+                if any(text.startswith(p) or p in text[:30] for p in error_prefixes):
+                    return False
+        return True
     return True
 
 

@@ -37,3 +37,4 @@ class WorkflowResult:
     phases: List[PhaseRecord] = field(default_factory=list)
     elapsed: float = 0.0
     label: str = ""
+    metadata: Dict[str, Any] = field(default_factory=dict)  # 附加元数据（budget, cache_stats 等）

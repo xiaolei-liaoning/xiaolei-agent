@@ -90,21 +90,37 @@ async def simple_chat(request: SimpleChatRequest) -> SimpleChatResponse:
 
         # 构建回复文本
         reply_parts = []
-        if success:
-            reply_parts.append(f"✅ 任务完成！共 {total_rounds} 轮 ReAct 循环。\n")
+        
+        # 统计成功/失败
+        success_count = sum(1 for r in all_results if r.get("success"))
+        fail_count = len(all_results) - success_count
+        
+        if success and fail_count == 0:
+            reply_parts.append(f"✅ 任务完成！共 {total_rounds} 轮 ReAct 循环，{success_count} 个子任务全部成功。\n")
+        elif success_count > 0:
+            reply_parts.append(f"⚠️ 任务部分完成（{success_count} 成功 / {fail_count} 失败），共 {total_rounds} 轮。\n")
         else:
-            error_msg = result.get("error", "任务未完全完成")
-            reply_parts.append(f"⚠️ {error_msg}\n")
+            error_msg = result.get("error", "任务未完成")
+            reply_parts.append(f"❌ {error_msg}（{total_rounds} 轮，{len(all_results)} 个结果）\n")
 
-        # 添加执行结果
-        for i, r in enumerate(all_results[:5]):  # 最多显示5个结果
-            if r.get("success"):
-                res = r.get("result", {})
-                if isinstance(res, dict):
-                    content = res.get("content", res.get("text", res.get("result", str(res))))
-                else:
-                    content = str(res)
-                reply_parts.append(f"\n📌 结果{i+1}: {content[:500]}")
+        # 添加执行结果详情
+        for i, r in enumerate(all_results[:8]):  # 最多显示8个结果
+            res = r.get("result", {})
+            is_success = r.get("success", False)
+            
+            # 提取内容
+            if isinstance(res, dict):
+                content = res.get("content", res.get("text", res.get("result", str(res))))
+                tool_name = res.get("tool_name", r.get("tool_call", {}).get("name", ""))
+            else:
+                content = str(res)
+                tool_name = ""
+            
+            # 格式化显示
+            status_icon = "✅" if is_success else "❌"
+            tool_info = f" [{tool_name}]" if tool_name else ""
+            content_preview = content[:300] if content else "(无内容)"
+            reply_parts.append(f"\n{status_icon} 步骤{i+1}{tool_info}: {content_preview}")
 
         reply_text = "\n".join(reply_parts) if reply_parts else "任务已处理，但无具体结果。"
 
@@ -114,6 +130,8 @@ async def simple_chat(request: SimpleChatRequest) -> SimpleChatResponse:
             "collaboration_mode": "leader_worker_react",
             "agents_used": [leader.name] + [w.name for w in workers],
             "rounds": total_rounds,
+            "success_count": success_count,
+            "fail_count": fail_count,
             "react_steps": [
                 {
                     "round": h.get("round"),

@@ -78,7 +78,7 @@ class AgentPool:
                 agent.agent_name = orig_name
             self._pool.put_nowait(agent)
         except asyncio.QueueFull:
-            pass
+            logger.warning(f"Agent pool 已满，丢弃 agent {getattr(agent, 'agent_id', 'unknown')}")
 
     @property
     def available(self) -> int:
@@ -312,9 +312,17 @@ async def _execute_agent(
 
         for retry in range(max_retries):
             try:
-                result = await asyncio.wait_for(
-                    pool_agent.execute(task), timeout=timeout
-                )
+                # 创建任务以便超时时可以取消
+                exec_task = asyncio.ensure_future(pool_agent.execute(task))
+                try:
+                    result = await asyncio.wait_for(exec_task, timeout=timeout)
+                except asyncio.TimeoutError:
+                    exec_task.cancel()
+                    try:
+                        await exec_task
+                    except asyncio.CancelledError:
+                        pass
+                    raise
                 elapsed = time.time() - start
 
                 ar = AgentResult(
@@ -515,6 +523,9 @@ async def pipeline(
             {"prompt": "分析以下数据并生成报告:\n{prev_output}", "label": "分析报告"},
         ])
     """
+    if not steps:
+        return AgentResult(success=True, output="", error=None, execution_time=0.0)
+    
     prev_output = ""
     for i, step in enumerate(steps):
         prompt_template = step.get("prompt", "")

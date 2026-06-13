@@ -48,6 +48,27 @@ class TaskStatus(Enum):
     REFLECTING = "反思中"
 
 
+class WorkerState(Enum):
+    """Worker 状态机"""
+    IDLE = "idle"              # 空闲，等待任务
+    EXECUTING = "executing"    # 正在执行任务
+    COMPLETED = "completed"    # 任务完成，等待主Agent确认
+    FAILED = "failed"          # 执行失败，等待主Agent指示
+    ASKING = "asking"          # 正在询问主Agent
+    RETRYING = "retrying"      # 重试中
+
+
+# 消息类型常量
+class MessageType:
+    TASK_ASSIGN = "task_assign"          # 主Agent分配任务给Worker
+    TASK_RESULT = "task_result"          # Worker返回任务结果
+    ASK_LEADER = "ask_leader"            # Worker询问主Agent
+    LEADER_RESPONSE = "leader_response"  # 主Agent回复Worker
+    CONTROL = "control"                  # 主Agent发送控制指令（停止/重试/调整）
+    STATUS_UPDATE = "status_update"      # Worker状态更新
+    PROGRESS = "progress"                # 进度汇报
+
+
 @dataclass
 class Task:
     id: str
@@ -133,39 +154,8 @@ SYSTEM_PROMPT_TEMPLATE = """你是一个{role}Agent。你的职责是{descriptio
 
 {extra_context}
 
-{tool_usage_section}
-
 输出格式（JSON，不要包含其他内容）：
 {output_format}"""
-
-TOOL_USAGE_SECTION = """
-## 工具使用
-你有权使用以下工具来完成任务：
-- **write_file**: 写入文件（参数：path, content）
-- **execute_python**: 执行 Python 代码（参数：code）
-- **execute_shell**: 执行 Shell 命令（参数：command）
-- **web_search**: 搜索网页（参数：query, engine）
-- **fetch_url**: 获取网页内容（参数：url）
-- **read_file**: 读取文件（参数：path）
-- **edit_file**: 编辑文件（参数：path, old_text, new_text）
-
-### 工具调用格式
-如果你想使用工具，请在 JSON 输出中包含 "tool_calls" 字段：
-```json
-{
-  "tool_calls": [
-    {"name": "工具名", "arguments": {"参数名": "参数值"}}
-  ],
-  "reasoning": "调用工具的原因"
-}
-```
-
-### 重要规则
-1. 工具调用是**单步执行**，不是循环。调用一次工具后，结果会返回给你。
-2. 如果工具返回了结果，你需要基于结果继续完成任务。
-3. 创建文件类任务**必须使用 write_file**，不要用 execute_python 写文件。
-4. 一次可以调用多个无依赖的工具（并行执行）。
-"""
 
 OUTPUT_FORMATS = {
     "decompose": """{"task": "原始任务","subtasks": [...],"estimated_steps": 数字,"strategy": "策略"}""",
@@ -216,7 +206,16 @@ class LLMAgent:
         self.tool_registry = tool_registry  # V2 ToolRegistry 引用
         self.comm_center = comm_center  # 通信中心引用
         self._tool_cache = None  # 缓存的工具列表
+        self._tool_cache_time = 0  # 缓存时间戳（用于TTL）
         self._task_id = None  # 当前任务 ID
+        
+        # Worker 状态机
+        self.state = WorkerState.IDLE
+        self.state_history = []  # 状态变更历史
+        self.current_task = None  # 当前执行的任务
+        self.last_result = None  # 上一次执行结果
+        self.leader_name = None  # 所属主Agent名称（用于询问）
+        self._ask_future = None  # 用于等待主Agent回复的Future
 
     def _get_role_config(self) -> tuple:
         configs = {
@@ -225,8 +224,9 @@ class LLMAgent:
         }
         return configs.get(self.role, ("通用", "处理各类任务", "execute"))
 
-    async def _rag_query(self, query: str) -> str:
-        """RAG 检索增强 — 从知识库获取相关信息"""
+    @staticmethod
+    async def _do_rag_query(query: str) -> str:
+        """RAG 检索增强 — 共享实现（V1和V2复用）"""
         try:
             from core.search.rag_search_engine import RAGSearchEngine
             engine = RAGSearchEngine()
@@ -259,6 +259,122 @@ class LLMAgent:
         except Exception as e:
             logger.debug(f"反问失败: {e}")
             return None
+
+    # ─── Worker 状态机方法 ───────────────────────────────────────────
+
+    def _update_state(self, new_state: WorkerState, reason: str = "") -> None:
+        """更新 Worker 状态"""
+        old_state = self.state
+        self.state = new_state
+        self.status = new_state.value
+        self.state_history.append({
+            "from": old_state.value,
+            "to": new_state.value,
+            "reason": reason,
+            "timestamp": time.time(),
+        })
+        logger.debug(f"🔄 {self.name} 状态变更: {old_state.value} → {new_state.value} ({reason})")
+
+    async def _report_status(self) -> None:
+        """向主Agent报告状态更新"""
+        if not self.leader_name:
+            return
+        status_msg = {
+            "type": MessageType.STATUS_UPDATE,
+            "worker": self.name,
+            "state": self.state.value,
+            "current_task": self.current_task,
+            "last_result": self.last_result,
+        }
+        await self.send_message(self.leader_name, status_msg, MessageType.STATUS_UPDATE)
+
+    # ─── Worker 询问主Agent 机制 ──────────────────────────────────────
+
+    async def ask_leader(self, question: str, context: Dict = None, timeout: int = 30) -> Optional[Dict]:
+        """询问主Agent，等待回复
+        
+        Args:
+            question: 问题描述
+            context: 附加上下文（如失败原因、当前状态等）
+            timeout: 超时时间（秒）
+        
+        Returns:
+            主Agent的回复字典，或 None（超时）
+        """
+        if not self.leader_name:
+            logger.warning(f"{self.name}: 未设置主Agent名称，无法询问")
+            return None
+        
+        self._update_state(WorkerState.ASKING, f"询问主Agent: {question[:50]}")
+        
+        # 构建询问消息
+        ask_msg = {
+            "type": MessageType.ASK_LEADER,
+            "worker": self.name,
+            "question": question,
+            "context": context or {},
+            "current_task": self.current_task,
+            "timestamp": time.time(),
+        }
+        
+        # 发送询问
+        self._ask_future = asyncio.get_event_loop().create_future()
+        await self.send_message(self.leader_name, ask_msg, MessageType.ASK_LEADER)
+        
+        try:
+            # 等待主Agent回复
+            response = await asyncio.wait_for(self._ask_future, timeout=timeout)
+            return response
+        except asyncio.TimeoutError:
+            logger.warning(f"{self.name}: 等待主Agent回复超时")
+            self._ask_future = None
+            return None
+        finally:
+            self._ask_future = None
+
+    def handle_leader_response(self, response: Dict) -> None:
+        """处理主Agent的回复"""
+        if self._ask_future and not self._ask_future.done():
+            self._ask_future.set_result(response)
+            logger.debug(f"{self.name}: 收到主Agent回复")
+
+    async def on_task_failed(self, error: str, can_retry: bool = True) -> Optional[Dict]:
+        """任务执行失败时，询问主Agent是否重试/放弃/更换策略
+        
+        Args:
+            error: 错误信息
+            can_retry: 是否可以重试
+        
+        Returns:
+            主Agent的指示
+        """
+        self._update_state(WorkerState.FAILED, f"失败: {error[:50]}")
+        
+        question = f"任务执行失败: {error}"
+        if can_retry:
+            question += "\n是否重试？"
+        
+        context = {
+            "error": error,
+            "can_retry": can_retry,
+            "task": self.current_task,
+        }
+        
+        response = await self.ask_leader(question, context)
+        
+        if response:
+            action = response.get("action", "retry")
+            if action == "retry":
+                self._update_state(WorkerState.RETRYING, "主Agent指示重试")
+            elif action == "skip":
+                self._update_state(WorkerState.COMPLETED, "主Agent指示跳过")
+            elif action == "abort":
+                self._update_state(WorkerState.IDLE, "主Agent指示中止")
+            return response
+        
+        # 超时默认重试
+        self._update_state(WorkerState.RETRYING, "超时默认重试")
+        return {"action": "retry", "reason": "超时默认重试"}
 
     # ─── 消息总线方法 ───────────────────────────────────────────
 
@@ -315,7 +431,45 @@ class LLMAgent:
 
     def on_message_received(self, message: dict) -> None:
         """消息接收回调（可被子类覆盖）"""
-        logger.debug(f"{self.name} 收到消息: {message.get('message_type', '?')} from {message.get('sender', '?')}")
+        msg_type = message.get("message_type", "?")
+        sender = message.get("sender", "?")
+        logger.debug(f"{self.name} 收到消息: {msg_type} from {sender}")
+        
+        # 处理主Agent的回复
+        if msg_type == MessageType.LEADER_RESPONSE:
+            content = message.get("content", {})
+            if isinstance(content, dict) and content.get("type") == MessageType.LEADER_RESPONSE:
+                self.handle_leader_response(content)
+                return
+        
+        # 处理控制指令
+        if msg_type == MessageType.CONTROL:
+            content = message.get("content", {})
+            if isinstance(content, dict):
+                self._handle_control_message(content)
+
+    def _handle_control_message(self, content: Dict) -> None:
+        """处理来自主Agent的控制指令"""
+        action = content.get("action", "")
+        logger.info(f"🎛️ {self.name} 收到控制指令: {action}")
+        
+        if action == "stop":
+            # 停止当前任务
+            self._update_state(WorkerState.IDLE, "主Agent指示停止")
+        elif action == "retry":
+            # 重试当前任务
+            self._update_state(WorkerState.RETRYING, "主Agent指示重试")
+        elif action == "adjust":
+            # 调整任务参数
+            new_params = content.get("params", {})
+            if new_params:
+                self.current_task = new_params.get("task", self.current_task)
+                self._update_state(WorkerState.EXECUTING, "主Agent指示调整并继续")
+        elif action == "abort":
+            # 中止任务
+            self._update_state(WorkerState.IDLE, "主Agent指示中止")
+        else:
+            logger.warning(f"{self.name}: 未知控制指令 {action}")
 
     async def _execute_tool(self, tool_name: str, arguments: Dict) -> Dict:
         """执行单个工具调用"""
@@ -342,29 +496,35 @@ class LLMAgent:
             return {"success": False, "error": f"工具 {tool_name} 执行失败: {str(e)}"}
 
     async def _get_tools_for_task(self, task: str) -> List[Dict]:
-        """获取任务相关的工具定义（用于 LLM 函数调用）"""
+        """获取任务相关的工具定义（用于 LLM 函数调用），缓存 TTL 300 秒"""
         if not self.tool_registry:
             return []
-        
-        if self._tool_cache is None:
-            try:
-                # 尝试获取任务相关工具
-                tools = await self.tool_registry.get_tools_for_task(task, max_tools=15)
-                self._tool_cache = [
-                    {
-                        "type": "function",
-                        "function": {
-                            "name": t.name,
-                            "description": t.description,
-                            "parameters": t.parameters,
-                        }
+
+        now = time.time()
+        cache_ttl = 300
+        # 缓存有效则直接返回
+        if self._tool_cache is not None and (now - self._tool_cache_time) < cache_ttl:
+            return self._tool_cache
+
+        try:
+            tools = await self.tool_registry.get_tools_for_task(task, max_tools=15)
+            self._tool_cache = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": t.name,
+                        "description": t.description,
+                        "parameters": t.parameters,
                     }
-                    for t in tools
-                ]
-            except Exception as e:
-                logger.debug(f"获取工具列表失败: {e}")
+                }
+                for t in tools
+            ]
+            self._tool_cache_time = time.time()
+        except Exception as e:
+            logger.debug(f"获取工具列表失败: {e}")
+            if self._tool_cache is None:
                 self._tool_cache = []
-        
+
         return self._tool_cache
 
     async def _kepa_reflect(self, result: dict, max_retries: int = 3) -> dict:
@@ -416,10 +576,61 @@ class LLMAgent:
         # 设置任务 ID
         self._task_id = f"{message.from_agent}_{message.to_agent}_{int(time.time())}"
         
+        # 更新状态为执行中
+        self.current_task = message.content[:200]
+        self._update_state(WorkerState.EXECUTING, f"收到任务: {message.content[:50]}")
+        await self._report_status()
+        
         # 发布开始执行消息
         await self.publish_progress("开始执行")
         
-        result = await self._handle_message(message)
+        # 执行任务（带重试机制）
+        max_retries = 2
+        for attempt in range(max_retries + 1):
+            result = await self._handle_message(message)
+            
+            # 解析结果
+            try:
+                result_data = json.loads(result) if isinstance(result, str) else result
+            except json.JSONDecodeError:
+                result_data = {"status": "completed", "message": result}
+            
+            # 检查是否成功
+            if result_data.get("success", True) and result_data.get("status") != "failed":
+                # 成功
+                self._update_state(WorkerState.COMPLETED, "任务完成")
+                self.last_result = result_data
+                await self._report_status()
+                break
+            
+            # 失败，询问主Agent是否重试
+            if attempt < max_retries:
+                error = result_data.get("error", "未知错误")
+                self._update_state(WorkerState.FAILED, f"失败: {error[:50]}")
+                
+                # 询问主Agent
+                response = await self.on_task_failed(error, can_retry=True)
+                
+                if response:
+                    action = response.get("action", "retry")
+                    if action == "skip":
+                        # 跳过，返回失败结果但标记为已处理
+                        result_data["skipped"] = True
+                        result = json.dumps(result_data, ensure_ascii=False)
+                        break
+                    elif action == "abort":
+                        # 中止，返回错误
+                        self._update_state(WorkerState.IDLE, "主Agent中止")
+                        result = json.dumps({
+                            "status": "failed",
+                            "error": f"任务中止: {error}",
+                            "aborted_by_leader": True,
+                        }, ensure_ascii=False)
+                        break
+                    # action == "retry" 继续循环
+            
+            # 发布进度
+            await self.publish_progress(f"尝试 {attempt + 1}/{max_retries + 1}")
         
         # 发布执行完成消息
         await self.publish_progress("执行完成")
@@ -433,7 +644,7 @@ class LLMAgent:
         output_format = OUTPUT_FORMATS.get(fmt_type, OUTPUT_FORMATS["execute"])
 
         # RAG 检索
-        rag_context = await self._rag_query(message.content)
+        rag_context = await self._do_rag_query(message.content)
 
         extra_context = ""
         if rag_context:
@@ -444,11 +655,10 @@ class LLMAgent:
 
         # 获取任务相关的工具
         tools = await self._get_tools_for_task(message.content)
-        tool_section = TOOL_USAGE_SECTION if tools else ""
 
         system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
             role=role, description=desc, extra_context=extra_context,
-            tool_usage_section=tool_section, output_format=output_format
+            output_format=output_format
         )
 
         # 如果有工具，使用支持函数调用的 LLM
@@ -640,6 +850,101 @@ class LeaderAgent(LLMAgent):
         self.workers: Dict[str, LLMAgent] = {}
         self.max_workers = max_workers
         self.active_worker_count = 3
+        self.worker_states: Dict[str, WorkerState] = {}  # 跟踪Worker状态
+        self._pending_questions: Dict[str, asyncio.Future] = {}  # 等待回复的询问
+
+    def on_message_received(self, message: dict) -> None:
+        """处理来自Worker的消息（覆盖父类方法）"""
+        msg_type = message.get("message_type", "?")
+        sender = message.get("sender", "?")
+        content = message.get("content", {})
+        
+        logger.debug(f"👑 {self.name} 收到消息: {msg_type} from {sender}")
+        
+        # 处理Worker的询问
+        if msg_type == MessageType.ASK_LEADER:
+            if isinstance(content, dict) and content.get("type") == MessageType.ASK_LEADER:
+                # 记录Worker状态
+                worker_name = content.get("worker", sender)
+                if worker_name in self.workers:
+                    self.worker_states[worker_name] = WorkerState.ASKING
+                
+                # 将询问放入队列，由主循环处理
+                question_id = f"{worker_name}_{int(time.time() * 1000)}"
+                self._pending_questions[question_id] = {
+                    "worker": worker_name,
+                    "question": content.get("question", ""),
+                    "context": content.get("context", {}),
+                }
+                logger.info(f"❓ Worker {worker_name} 询问: {content.get('question', '')[:80]}")
+        
+        # 处理Worker状态更新
+        elif msg_type == MessageType.STATUS_UPDATE:
+            if isinstance(content, dict):
+                worker_name = content.get("worker", sender)
+                state_str = content.get("state", "idle")
+                try:
+                    self.worker_states[worker_name] = WorkerState(state_str)
+                except ValueError:
+                    pass
+                logger.debug(f"📊 Worker {worker_name} 状态: {state_str}")
+
+    async def respond_to_worker(self, worker_name: str, action: str, reason: str = "") -> None:
+        """回复Worker的询问
+        
+        Args:
+            worker_name: Worker名称
+            action: 动作（retry/skip/abort/adjust）
+            reason: 原因说明
+        """
+        if worker_name not in self.workers:
+            logger.warning(f"Worker {worker_name} 不在队伍中")
+            return
+        
+        response = {
+            "type": MessageType.LEADER_RESPONSE,
+            "worker": worker_name,
+            "action": action,
+            "reason": reason,
+            "timestamp": time.time(),
+        }
+        
+        # 发送回复给Worker
+        await self.send_message(worker_name, response, MessageType.LEADER_RESPONSE)
+        
+        # 更新Worker状态
+        if action == "retry":
+            self.worker_states[worker_name] = WorkerState.RETRYING
+        elif action in ("skip", "abort"):
+            self.worker_states[worker_name] = WorkerState.IDLE
+        
+        logger.info(f"👑 主Agent回复 {worker_name}: {action} ({reason})")
+
+    async def send_control(self, worker_name: str, action: str, params: Dict = None) -> None:
+        """发送控制指令给Worker
+        
+        Args:
+            worker_name: Worker名称
+            action: 控制动作（stop/retry/adjust/abort）
+            params: 附加参数
+        """
+        if worker_name not in self.workers:
+            logger.warning(f"Worker {worker_name} 不在队伍中")
+            return
+        
+        control_msg = {
+            "type": MessageType.CONTROL,
+            "action": action,
+            "params": params or {},
+            "timestamp": time.time(),
+        }
+        
+        await self.send_message(worker_name, control_msg, MessageType.CONTROL)
+        logger.info(f"🎛️ 主Agent发送控制指令给 {worker_name}: {action}")
+
+    def get_worker_states(self) -> Dict[str, str]:
+        """获取所有Worker的状态"""
+        return {name: state.value for name, state in self.worker_states.items()}
 
     async def supervise_task(self, task_description: str, workers: List[LLMAgent],
                              active_count: int = 3, max_rounds: int = 10) -> Dict:
@@ -673,9 +978,16 @@ class LeaderAgent(LLMAgent):
         context_history = []  # 记录每轮的 Thought/Action/Observation
         round_num = 0
 
+        # 为Worker设置主Agent名称
+        for w in workers:
+            w.leader_name = self.name
+
         while round_num < max_rounds:
             round_num += 1
             logger.info(f"🔄 ReAct 第 {round_num} 轮")
+
+            # ========== 处理 Worker 询问 ==========
+            await self._process_worker_questions()
 
             # ========== Thought: 队长思考 ==========
             thought = await self._react_think(
@@ -692,7 +1004,7 @@ class LeaderAgent(LLMAgent):
             action_type = action.get("type", "unknown")
             
             action_result = await self._react_act(
-                action_type, action, workers, task_description
+                action_type, action, workers, task_description, context_history
             )
             
             # ========== Observation: 观察结果 ==========
@@ -711,15 +1023,73 @@ class LeaderAgent(LLMAgent):
             logger.info(f"👁️ ReAct 第 {round_num} 轮观察: {action_type} - {'成功' if action_result.get('success') else '失败'}")
 
         success = len(all_results) > 0 and all(r.get("success") for r in all_results)
-        logger.info(f"{'✅' if success else '❌'} ReAct 任务完成: 共 {round_num} 轮, {len(all_results)} 个结果")
+        
+        # 统计子任务总数（支持批量分配的嵌套结构）
+        total_subtasks = 0
+        for r in all_results:
+            result_data = r.get("result", {})
+            if isinstance(result_data, dict) and "batch_results" in result_data:
+                total_subtasks += len(result_data["batch_results"])
+            else:
+                total_subtasks += 1
+        
+        logger.info(f"{'✅' if success else '❌'} ReAct 任务完成: 共 {round_num} 轮, {total_subtasks} 个子任务")
 
         return {
             "success": success,
             "results": all_results,
             "rounds": round_num,
-            "total_subtasks": len(all_results),
+            "total_subtasks": total_subtasks,
             "react_history": context_history,
         }
+
+    async def _process_worker_questions(self) -> None:
+        """处理Worker的询问请求"""
+        if not self._pending_questions:
+            return
+        
+        # 复制并清空队列
+        questions = dict(self._pending_questions)
+        self._pending_questions.clear()
+        
+        for q_id, q_info in questions.items():
+            worker_name = q_info["worker"]
+            question = q_info["question"]
+            context = q_info["context"]
+            
+            logger.info(f"❓ 处理 {worker_name} 的询问: {question[:60]}")
+            
+            # 使用LLM决定如何回复
+            system = (
+                "你是队长Agent，需要处理Worker的询问。\n\n"
+                "Worker可能遇到的情况：\n"
+                "1. 任务执行失败，询问是否重试\n"
+                "2. 不确定如何执行，请求澄清\n"
+                "3. 需要更多资源或权限\n\n"
+                "请决定如何回复，输出JSON：\n"
+                '{"action": "retry/skip/abort", "reason": "原因说明"}\n\n'
+                "- retry: 让Worker重试\n"
+                "- skip: 跳过这个子任务\n"
+                "- abort: 中止整个任务"
+            )
+            
+            user = (
+                f"Worker {worker_name} 询问:\n{question}\n\n"
+                f"上下文: {json.dumps(context, ensure_ascii=False)[:200]}"
+            )
+            
+            response = await _llm_json(system, user, max_tokens=200)
+            
+            if response and isinstance(response, dict):
+                action = response.get("action", "retry")
+                reason = response.get("reason", "队长决定")
+            else:
+                # 默认重试
+                action = "retry"
+                reason = "超时默认重试"
+            
+            # 回复Worker
+            await self.respond_to_worker(worker_name, action, reason)
 
     async def _react_think(self, task_description: str, history: List[Dict], 
                            results: List[Dict], round_num: int) -> Dict:
@@ -775,12 +1145,26 @@ class LeaderAgent(LLMAgent):
             "当前状态分析后，输出下一步行动的 JSON：\n\n"
             "选项1 - 调用工具（适合单步操作）:\n"
             '{"done": false, "thinking": "分析...", "action": {"type": "tool", "tool_name": "工具名", "args": {...}}}\n\n'
-            "选项2 - 分配子任务给Worker（适合复杂任务）:\n"
+            "选项2 - 分配单个子任务给Worker（适合简单子任务）:\n"
             '{"done": false, "thinking": "分析...", "action": {"type": "delegate", "task": "子任务描述"}}\n\n'
-            "选项3 - 任务完成:\n"
+            "选项3 - 批量分配子任务给多个Worker并行执行（适合复杂任务分解）:\n"
+            '{"done": false, "thinking": "分析...", "action": {"type": "batch_delegate", "tasks": ["子任务1", "子任务2", "子任务3"]}}\n\n'
+            "选项4 - 处理前一轮的batch_delegate结果（并发→串行的关键环节）:\n"
+            '{"done": false, "thinking": "基于上一轮并发结果...", "action": {"type": "process_results", "task": "综合分析并生成报告"}}\n\n'
+            "选项5 - 任务完成:\n"
             '{"done": true, "thinking": "任务已完成..."}\n\n'
             "可调用的工具: write_file, read_file, edit_file, execute_python, execute_shell, "
-            "web_search, fetch_url, glob_search, grep_search, git, rag_search, todo_write, skill_execute\n\n"
+            "web_search, fetch_url, search_files, git\n\n"
+            "决策指南:\n"
+            "- 简单任务（如写文件、搜索）→ 使用 tool\n"
+            "- 需要多个独立步骤的任务 → 使用 batch_delegate，将任务分解为可并行的子任务\n"
+            "- 单个复杂子任务 → 使用 delegate\n"
+            "- 处理前一轮并发结果 → 使用 process_results\n\n"
+            "混合调度策略（重要！）:\n"
+            "- 并发→串行：先用 batch_delegate 并发收集数据，下一轮用 process_results 串行处理结果\n"
+            "- 串行→并发：先用 delegate 串行准备，下一轮用 batch_delegate 并发拆解执行\n"
+            "- 引用前一轮结果：在 thinking 中说明「基于上一轮结果...」\n"
+            "- 阶段性规划：在 thinking 中说明当前阶段（如「数据收集阶段」「处理阶段」「输出阶段」）\n\n"
             f"{tool_hints}\n"
             "输出纯JSON，不要其他内容。"
         )
@@ -795,7 +1179,8 @@ class LeaderAgent(LLMAgent):
         return result
 
     async def _react_act(self, action_type: str, action: Dict, 
-                         workers: List[LLMAgent], original_task: str) -> Dict:
+                         workers: List[LLMAgent], original_task: str,
+                         context_history: List[Dict] = None) -> Dict:
         """ReAct Action 阶段：执行具体行动"""
         
         if action_type == "tool":
@@ -841,6 +1226,90 @@ class LeaderAgent(LLMAgent):
                 "worker": worker.name,
             }
 
+        elif action_type == "batch_delegate":
+            # 批量分配子任务给多个 Worker 并行执行
+            tasks = action.get("tasks", [])
+            if not tasks:
+                # 如果没有提供任务列表，则分解原始任务
+                tasks = await self._decompose_task(original_task)
+            
+            if not tasks:
+                return {"success": False, "error": "无可用子任务"}
+            
+            # 使用轮询分配子任务给 Worker
+            active_workers = workers[:self.active_worker_count]
+            assignments = self._assign(tasks, active_workers)
+            
+            # 并行执行所有子任务
+            batch_results = await self._execute_batch(assignments, workers)
+            
+            # 分析执行结果
+            analysis = await self._analyze_results(batch_results, original_task, 1)
+            
+            # 统计成功数量
+            success_count = sum(1 for r in batch_results if r.get("success"))
+            
+            return {
+                "success": success_count > 0,
+                "result": {
+                    "batch_results": batch_results,
+                    "analysis": analysis,
+                    "success_count": success_count,
+                    "total_count": len(batch_results),
+                },
+                "workers": [r.get("worker") for r in batch_results],
+            }
+
+        elif action_type == "process_results":
+            # 处理前一轮的batch_delegate结果（并发→串行的关键环节）
+            # 从context_history中获取上一轮的batch_results
+            prev_results = []
+            for h in reversed(context_history):
+                if h.get("action_type") == "batch_delegate" and h.get("result", {}).get("success"):
+                    prev_results = h["result"].get("result", {}).get("batch_results", [])
+                    break
+            
+            if not prev_results:
+                return {"success": False, "error": "没有找到可处理的前一轮结果"}
+            
+            # 提取任务描述（从action中获取，或使用原始任务）
+            process_task = action.get("task", f"综合分析以下结果并生成报告：{original_task}")
+            
+            # 将前一轮结果作为上下文传递给Worker
+            result_context = "\n".join([
+                f"结果{i+1}: {r.get('result', {}).get('raw', str(r.get('result', '')))[:200]}"
+                for i, r in enumerate(prev_results[:5])  # 限制数量避免上下文过长
+            ])
+            
+            enhanced_task = f"{process_task}\n\n【需要处理的结果】\n{result_context}"
+            
+            # 选择第一个空闲 Worker 串行处理
+            worker = workers[0] if workers else None
+            if not worker:
+                return {"success": False, "error": "无可用 Worker"}
+            
+            msg = AgentMessage(
+                from_agent=self.name,
+                to_agent=worker.name,
+                content=enhanced_task,
+                message_type="task",
+            )
+            result_str = await worker.process_message(msg)
+            
+            try:
+                data = json.loads(result_str)
+                is_ok = data.get("success") is True and data.get("status") != "failed"
+            except Exception:
+                data = {"raw": result_str[:500]}
+                is_ok = False
+            
+            return {
+                "success": is_ok,
+                "result": data,
+                "worker": worker.name,
+                "processed_count": len(prev_results),
+            }
+
         else:
             return {"success": False, f"error": f"未知的行动类型: {action_type}"}
 
@@ -853,7 +1322,7 @@ class LeaderAgent(LLMAgent):
         )
         user = f"请将以下任务分解为{self.active_worker_count}个左右的子任务：\n{task_description}\n\n注意：不要输出JSON外的其他内容。"
 
-        rag_context = await self._rag_query(task_description)
+        rag_context = await self._do_rag_query(task_description)
         if rag_context:
             user = f"请参考知识库信息后，将以下任务分解为{self.active_worker_count}个左右的子任务：\n\n【知识库参考】\n{rag_context}\n\n【原始任务】\n{task_description}\n\n注意：不要输出JSON外的其他内容。"
 
@@ -974,24 +1443,23 @@ class LeaderAgent(LLMAgent):
 # =============================================================================
 
 class V1LeaderPool:
-    """队长模式 Agent 池 — 1 个队长 + 最多 max_workers 个 Worker"""
+    """队长模式 Agent 池 — 1 个队长 + 最多 max_workers 个 Worker（支持池化复用）"""
 
     def __init__(self):
         self._all_agents: Dict[str, LLMAgent] = {}
         self._tool_registry = None
         self._comm_center = None
+        # Worker 池化管理
+        self._worker_pool: List[LLMAgent] = []  # 空闲Worker池
+        self._busy_workers: Dict[str, LLMAgent] = {}  # 忙碌中的Worker
+        self._pool_lock = asyncio.Lock()  # 池操作锁
 
     async def _ensure_tool_registry(self):
-        """确保工具注册表已初始化"""
+        """确保工具注册表已初始化（工具发现由 V2 ReActCoreMiddleware.on_start 负责）"""
         if self._tool_registry is None:
             try:
                 from core.multi_agent_v2.tools.tool_registry import get_tool_registry
                 self._tool_registry = get_tool_registry()
-                # 尝试发现工具
-                try:
-                    await asyncio.wait_for(self._tool_registry.discover_all(), timeout=10)
-                except asyncio.TimeoutError:
-                    logger.warning("工具发现超时，使用已注册的工具")
             except Exception as e:
                 logger.warning(f"初始化工具注册表失败: {e}")
                 self._tool_registry = None
@@ -1074,17 +1542,108 @@ class V1LeaderPool:
                 except Exception as e:
                     logger.debug(f"存储 agent 摘要失败: {e}")
 
+    # ─── Worker 池化管理 ──────────────────────────────────────────────
+
+    async def get_worker(self, leader_name: str = None) -> Optional[LLMAgent]:
+        """从池中获取一个空闲Worker
+        
+        Args:
+            leader_name: 主Agent名称（用于设置Worker的leader_name）
+        
+        Returns:
+            空闲Worker，或 None（池空且无法创建新Worker）
+        """
+        async with self._pool_lock:
+            # 优先从池中获取
+            if self._worker_pool:
+                worker = self._worker_pool.pop()
+                worker._update_state(WorkerState.IDLE, "从池中取出")
+                if leader_name:
+                    worker.leader_name = leader_name
+                self._busy_workers[worker.name] = worker
+                logger.debug(f"📦 从池中取出 Worker: {worker.name}")
+                return worker
+            
+            # 池空，尝试创建新Worker
+            if len(self._busy_workers) < 10:  # 最多10个Worker
+                team_id = uuid4().hex[:8]
+                worker = LLMAgent(
+                    name=f"队员_{team_id}",
+                    role=AgentRole.WORKER,
+                    tool_registry=self._tool_registry,
+                    comm_center=self._comm_center,
+                )
+                if leader_name:
+                    worker.leader_name = leader_name
+                
+                # 注册到通信中心
+                if self._comm_center:
+                    try:
+                        await self._comm_center.register_agent(
+                            worker.name, worker.name, "worker",
+                            callbacks={"message_received": worker.on_message_received}
+                        )
+                    except Exception as e:
+                        logger.warning(f"注册Worker失败: {e}")
+                
+                self._all_agents[worker.name] = worker
+                self._busy_workers[worker.name] = worker
+                logger.debug(f"✨ 创建新 Worker: {worker.name}")
+                return worker
+            
+            logger.warning("Worker池已满，无法获取更多Worker")
+            return None
+
+    async def return_worker(self, worker: LLMAgent) -> None:
+        """将Worker归还到池中（任务完成后）
+        
+        Args:
+            worker: 要归还的Worker
+        """
+        async with self._pool_lock:
+            # 从忙碌列表移除
+            self._busy_workers.pop(worker.name, None)
+            
+            # 重置Worker状态
+            worker._update_state(WorkerState.IDLE, "任务完成归还池")
+            worker.current_task = None
+            worker.last_result = None
+            
+            # 放回池中
+            if worker not in self._worker_pool:
+                self._worker_pool.append(worker)
+                logger.debug(f"📦 Worker 归还池: {worker.name}")
+
+    def get_pool_status(self) -> Dict[str, Any]:
+        """获取Worker池状态"""
+        return {
+            "pool_size": len(self._worker_pool),
+            "busy_count": len(self._busy_workers),
+            "total_agents": len(self._all_agents),
+            "idle_workers": [w.name for w in self._worker_pool],
+            "busy_workers": list(self._busy_workers.keys()),
+        }
+
     async def discard(self, agents: List[LLMAgent]) -> None:
-        """清理 Agent 并从通信中心注销"""
+        """清理 Agent — Worker放回池中，Leader注销
+        
+        注意：Worker不会被删除，而是放回池中以供复用。
+        只有Leader会被完全清理。
+        """
         for agent in agents:
-            self._all_agents.pop(agent.name, None)
-            # 从通信中心注销
-            if self._comm_center:
-                try:
-                    await self._comm_center.unregister_agent(agent.name)
-                except Exception as e:
-                    logger.debug(f"注销 agent 失败: {e}")
-        logger.debug(f"V1LeaderPool: 清理了 {len(agents)} 个 Agent")
+            if agent.role == AgentRole.LEADER:
+                # Leader 直接清理
+                self._all_agents.pop(agent.name, None)
+                if self._comm_center:
+                    try:
+                        await self._comm_center.unregister_agent(agent.name)
+                    except Exception as e:
+                        logger.debug(f"注销 Leader 失败: {e}")
+                logger.debug(f"V1LeaderPool: 清理 Leader {agent.name}")
+            else:
+                # Worker 放回池中
+                await self.return_worker(agent)
+                logger.debug(f"V1LeaderPool: Worker {agent.name} 归还池")
 
     def get_agent(self, name: str) -> Optional[LLMAgent]:
         return self._all_agents.get(name)

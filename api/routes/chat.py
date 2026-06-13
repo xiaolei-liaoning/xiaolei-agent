@@ -413,21 +413,45 @@ async def _handle_with_multi_agent(
         # ========== V1 队长-队员模式执行 ==========
         from core.agent_system import V1LeaderPool
 
-        pool = V1LeaderPool()
-        leader, workers = pool.create_team(worker_count=3, max_workers=5)
+        # 使用全局池（Worker可复用）
+        if not hasattr(_handle_with_multi_agent, '_pool'):
+            _handle_with_multi_agent._pool = V1LeaderPool()
+        pool = _handle_with_multi_agent._pool
+
+        # 从池中获取Worker
+        workers = []
+        for _ in range(3):
+            w = await pool.get_worker()
+            if w:
+                workers.append(w)
+
+        if not workers:
+            # 降级：创建临时队伍
+            leader, workers = await pool.create_team(worker_count=3, max_workers=3)
+            is_temp_team = True
+        else:
+            # 创建临时Leader
+            from core.agent_system import LeaderAgent
+            leader = LeaderAgent(
+                name=f"leader_{int(time.time())}",
+                max_workers=len(workers),
+                tool_registry=pool._tool_registry,
+                comm_center=pool._comm_center,
+            )
+            is_temp_team = False
 
         logger.info(f"👥 V1 队伍已创建: 队长={leader.name}, {len(workers)} 个 Worker")
 
         try:
             result = await asyncio.wait_for(
-                leader.supervise_task(message, workers, active_count=3, max_rounds=3),
+                leader.supervise_task(message, workers, active_count=len(workers), max_rounds=3),
                 timeout=120,
             )
         except asyncio.TimeoutError:
             logger.warning("V1 多Agent 超时")
             result = {"success": False, "error": "执行超时", "results": [], "rounds": 0, "total_subtasks": 0}
 
-        # 清理队伍
+        # 清理队伍（Worker放回池中，Leader注销）
         await pool.discard([leader] + workers)
 
         # ========== 格式化回复 ==========
