@@ -20,8 +20,8 @@ logger = logging.getLogger(__name__)
 # 技能文件限制
 FILE_LIMIT = 10
 
-# 默认技能目录
-DEFAULT_SKILLS_DIR = ".opencode/skills"
+# 默认技能目录（多个路径）
+DEFAULT_SKILLS_DIRS = [".opencode/skills", os.path.expanduser("~/.opencode/ecc-skills")]
 
 
 @dataclass
@@ -61,7 +61,7 @@ class SkillTool(Tool[SkillInput, SkillOutput]):
             timeout=30,
             max_retries=1
         )
-        self._skills_dir = DEFAULT_SKILLS_DIR
+        self._skills_dirs = DEFAULT_SKILLS_DIRS
         self._skills: Dict[str, SkillInfo] = {}
 
     def get_input_schema(self) -> Dict[str, Any]:
@@ -132,39 +132,35 @@ class SkillTool(Tool[SkillInput, SkillOutput]):
         """扫描技能目录"""
         self._skills.clear()
 
-        # 检查技能目录是否存在
-        if not os.path.exists(self._skills_dir):
-            logger.warning(f"技能目录不存在: {self._skills_dir}")
-            return
-
-        # 扫描子目录
-        for entry in os.listdir(self._skills_dir):
-            entry_path = os.path.join(self._skills_dir, entry)
-            if not os.path.isdir(entry_path):
+        for skills_dir in self._skills_dirs:
+            if not os.path.exists(skills_dir):
+                logger.warning(f"技能目录不存在: {skills_dir}")
                 continue
 
-            # 查找SKILL.md文件
-            skill_md_path = os.path.join(entry_path, "SKILL.md")
-            if os.path.exists(skill_md_path):
-                try:
-                    with open(skill_md_path, 'r', encoding='utf-8') as f:
-                        content = f.read()
+            for entry in os.listdir(skills_dir):
+                entry_path = os.path.join(skills_dir, entry)
+                if not os.path.isdir(entry_path):
+                    continue
 
-                    # 获取技能文件列表
-                    files = self._list_skill_files(entry_path)
+                skill_md_path = os.path.join(entry_path, "SKILL.md")
+                if os.path.exists(skill_md_path):
+                    try:
+                        with open(skill_md_path, 'r', encoding='utf-8') as f:
+                            content = f.read()
 
-                    # 解析技能名称
-                    skill_name = self._parse_skill_name(content, entry)
+                        files = self._list_skill_files(entry_path)
+                        skill_name = self._parse_skill_name(content, entry)
 
-                    self._skills[skill_name] = SkillInfo(
-                        name=skill_name,
-                        location=skill_md_path,
-                        content=content,
-                        files=files
-                    )
+                        if skill_name not in self._skills:
+                            self._skills[skill_name] = SkillInfo(
+                                name=skill_name,
+                                location=skill_md_path,
+                                content=content,
+                                files=files
+                            )
 
-                except Exception as e:
-                    logger.error(f"加载技能失败 {entry}: {e}")
+                    except Exception as e:
+                        logger.error(f"加载技能失败 {entry}: {e}")
 
     def _list_skill_files(self, directory: str) -> List[str]:
         """列出技能文件"""
@@ -182,11 +178,21 @@ class SkillTool(Tool[SkillInput, SkillOutput]):
 
     def _parse_skill_name(self, content: str, fallback: str) -> str:
         """解析技能名称"""
-        # 尝试从内容中解析名称
-        for line in content.split('\n'):
+        lines = content.split('\n')
+        if lines and lines[0].strip() == '---':
+            end_idx = None
+            for i in range(1, len(lines)):
+                if lines[i].strip() == '---':
+                    end_idx = i
+                    break
+            if end_idx:
+                for line in lines[1:end_idx]:
+                    if line.startswith('name:'):
+                        return line[5:].strip()
+        for line in lines:
             if line.startswith('# Skill:'):
                 return line[8:].strip()
-            elif line.startswith('## '):
+            if line.startswith('## '):
                 return line[3:].strip()
         return fallback
 

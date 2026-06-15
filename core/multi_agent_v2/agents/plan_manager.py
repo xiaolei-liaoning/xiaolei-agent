@@ -235,12 +235,18 @@ def update_step_status(ctx: RunContext, prefix: str = "") -> None:
     # 如果步骤指定了工具，检查是否都已调用成功
     if current_step.tool_names:
         step_tools = set(current_step.tool_names)
-        # 所有步骤指定的工具都已成功调用，才标记为完成
-        if step_tools.issubset(succeeded_tools):
+        all_tools_done = step_tools.issubset(succeeded_tools)
+
+        # ── 质量门：write_file 后有 forced_instructions（review/improve）→ 不标记 done ──
+        if all_tools_done and ctx.forced_instructions:
+            last_tc = last_result.get("tool_call", {})
+            if last_tc.get("name") == "write_file":
+                logger.info(f"步骤 {current_step.index} write_file 完成，但 review 指令待执行，暂不标记 done")
+                return
+
+        if all_tools_done:
             current_step.status = "done"
-        # else: 未完成，保持 pending 状态，等待下一轮
     else:
-        # 没有指定工具名：不自动完成，等 LLM 真正调了合适的工具再说
         pass
 
     # 兜底：有实质进展且步骤已运行多轮 → 推进

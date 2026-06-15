@@ -10,7 +10,10 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Literal, Optional, Callable
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Callable
+
+if TYPE_CHECKING:
+    from .context_budget import ContextBudgetManager
 
 logger = logging.getLogger(__name__)
 
@@ -74,14 +77,17 @@ class RunContext:
     confidence_scores: List[float] = field(default_factory=list)
     reflection_history: List[Dict] = field(default_factory=list)
 
+    # ── 并发控制 ──
+    max_concurrent_tools: int = 5
+
     # ── 知识上下文（KEPA 注入，独立于 task_description）──
     knowledge_context: str = ""
 
     # ── 强制指令（独立于 task_description，不污染原始任务）──
     forced_instructions: str = ""
 
-    # ── 警告信息（独立于 task_description，不污染原始任务）──
-    warnings: List[str] = field(default_factory=list)
+    # ── 上下文预算管理（ContextBudgetManager，可选）──
+    context_budget: Optional[Any] = None
 
     # MiddlewareChain 引用（由 run_react 设置）
     _chain: Optional[Any] = None
@@ -282,9 +288,17 @@ class MiddlewareChain:
         async def _run_chain(index: int) -> Dict:
             if index >= len(self._middlewares):
                 from core.multi_agent_v2.tools.tool_registry import get_tool_registry
+                from core.multi_agent_v2.agents.tool_cache import get_tool_cache
                 registry = get_tool_registry()
+                cache = get_tool_cache()
                 name = tool_args.get("name", "")
                 args = raw_args
+
+                # 缓存检查
+                cached = await cache.get(name, args)
+                if cached is not None:
+                    return dict(cached)
+
                 handler = registry.get_handler(name)
                 if handler:
                     try:
@@ -293,7 +307,9 @@ class MiddlewareChain:
                         from core.multi_agent_v2.tools.tool_result import is_ok, extract_error
                         if not is_ok(result):
                             return {"success": False, "error": extract_error(result) or "工具执行失败", "result": result, "tool_call": tool_args}
-                        return {"success": True, "result": result, "tool_call": tool_args}
+                        response = {"success": True, "result": result, "tool_call": tool_args}
+                        await cache.set(name, args, response)
+                        return response
                     except Exception as e:
                         return {"success": False, "error": str(e), "tool_call": tool_args}
                 return {"success": False, "error": f"no handler for {name}", "tool_call": tool_args}

@@ -21,6 +21,7 @@ import os
 import re
 from typing import Any, Dict, List, Optional
 
+from .context_budget import ContextBudgetManager
 from .middleware import BaseMiddleware, MiddlewareChain, PlanStep, RunContext
 
 # 导入拆分后的模块
@@ -365,6 +366,7 @@ class ReActCoreMiddleware(BaseMiddleware):
                 tool_calls,
                 ctx=ctx,
                 execute_fn=lambda tc, c: self._execute(tc, c),
+                max_concurrent=ctx.max_concurrent_tools,
             )
 
             # 处理结果
@@ -384,6 +386,8 @@ class ReActCoreMiddleware(BaseMiddleware):
                     ok,
                     arguments
                 )
+                from core.multi_agent_v2.agents.output_bounder import bound_tool_output
+                result_text = bound_tool_output(tool_name, result_text)
                 
                 # 保存到上下文
                 ctx.tool_results.append({
@@ -416,9 +420,7 @@ class ReActCoreMiddleware(BaseMiddleware):
                     path = arguments.get("path", "")
                     content = arguments.get("content", "")
                     if path and content:
-                        # 展开 ~ 路径后再检查
                         expanded_path = os.path.expanduser(path)
-                        # 读取实际文件内容（使用 with 避免文件句柄泄漏）
                         try:
                             if os.path.exists(expanded_path):
                                 with open(expanded_path, 'r', encoding='utf-8') as f:
@@ -427,11 +429,39 @@ class ReActCoreMiddleware(BaseMiddleware):
                                 actual = None
                         except:
                             actual = None
-                        # 直接传 actual（可能是 None），让 validator 检测文件不存在的情况
                         validate_file_content(path, content, actual, ctx, agent=None)
-                        # 代码质量检查
                         from core.multi_agent_v2.agents.file_validator import validate_code_quality
-                        validate_code_quality(path, content, ctx, agent=None)
+                        qa_passed = validate_code_quality(path, content, ctx, agent=None)
+
+                        # ── 迭代式质量改进：Write → Review → Improve ──
+                        if qa_passed and not ctx.forced_instructions:
+                            _iter_key = f"write_iter:{path}"
+                            if not hasattr(ctx, '_file_iterations'):
+                                ctx._file_iterations = {}
+                            count = ctx._file_iterations.get(_iter_key, 0) + 1
+                            ctx._file_iterations[_iter_key] = count
+
+                            if count == 1:
+                                ctx.forced_instructions = (
+                                    f"【质量改进】文件 {path} 第一版已完成，内容正确。\n"
+                                    "现在请执行质量管理流程：\n"
+                                    "1. 先 read_file 读取你刚写入的文件\n"
+                                    "2. 按以下标准逐项检查：\n"
+                                    "   - 功能完整性：所有功能都已实现？有无 TODO/占位符？\n"
+                                    "   - 交互性：有无事件监听(keydown/click)？操作后界面是否更新？\n"
+                                    "   - 视觉质量：UI 是否美观？有无样式缺陷？\n"
+                                    "3. 如果发现可改进项，用 edit_file 精确修改\n"
+                                    "4. 如果已满意，直接输出最终结果"
+                                )
+                            elif count == 2:
+                                ctx.forced_instructions = (
+                                    f"【二次改进】文件 {path} 已改进过一次。\n"
+                                    "请再审视一次代码质量：\n"
+                                    "1. read_file 读取最新内容\n"
+                                    "2. 检查：有无边界情况未处理？UX 是否流畅？\n"
+                                    "3. 如需改进用 edit_file，满意则输出最终结果\n"
+                                    "本轮是最后一次改进机会。"
+                                )
 
     async def _execute(self, tc: dict, ctx: Optional[RunContext] = None) -> dict:
         """执行单个工具调用（委托给 tool_executor）"""
@@ -565,6 +595,9 @@ async def run_react(
     ctx.allowed_tools = allowed_tools
     ctx.disallowed_tools = disallowed_tools
 
+    # 默认启用上下文预算管理
+    ctx.context_budget = ContextBudgetManager()
+
     chain = build_default_chain()
     if agent:
         chain.bind_agent(agent)
@@ -609,6 +642,12 @@ async def run_react(
         if ctx.react_depth == ctx.max_iterations - 1:
             print(f"{prefix}    \033[1;31m⚠️ 最后轮次 — 直接输出最终答案\033[0m")
             ctx.warnings.append("[最后轮次] 本轮后结束。如果主要任务已经完成，直接输出结果。")
+
+        # ── 上下文预算检查（主动压缩）──
+        if ctx.context_budget is not None:
+            compacted = ctx.context_budget.check_and_compact(ctx)
+            if compacted:
+                print(f"{prefix}    \033[1;33m📦 上下文压缩: 释放了 tokens 预算\033[0m")
 
         hr_start = await chain.on_think_start(ctx)
         if hr_start and hr_start.jump_to == "end":

@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 # ── 配置 ──────────────────────────────────────────────────────────────
 SKILLS_BASE = os.path.expanduser(
-    "~/Desktop/claude/everything-claude-code-main/.agents/skills"
+    "~/.opencode/ecc-skills"
 )
 PROJECT_SKILLS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "skills")
 
