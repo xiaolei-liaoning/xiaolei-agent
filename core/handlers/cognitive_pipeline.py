@@ -10,97 +10,15 @@ CognitivePipeline — 认知闭环编排中枢
 核心设计原则：任何步骤异常都不向上抛出，而是转换成反问问题让用户决策。
 """
 
-import asyncio
 import logging
 from typing import Dict, Any, Optional, List
 
-from ..services.clarification_service import (
-    get_clarification_service, ClarificationService,
-    ClarificationQuestion, ClarificationResult,
+from cli.clarification_service import (
+    ClarificationService, ClarificationQuestion,
 )
-from ..memory.short_term_memory import ShortTermMemoryManager
 from ..context import ExecutionContext
-from ..workflow.bfs_processor import get_bfs_processor
-from dataclasses import dataclass
-
-
-@dataclass
-class ReflectionTriggerConfig:
-    """反思触发配置（原从 collaboration.strategies 导入，已内联）"""
-    max_reflections: int = 3
-
-
-class ReflectionDecision:
-    CONTINUE = "continue"
-    FAIL = "fail"
-    RETRY = "retry"
-    ADD_STEPS = "add_steps"
-    REORDER = "reorder"
-
-class ReflectionPrompt:
-    pass
-
-class StepResult:
-    pass
-
-class AdaptivePipelineWithReflection:
-    def __init__(self, executor, trigger_config=None):
-        self.executor = executor
-    async def execute(self, plan):
-        return []
-
-class LLMReflection:
-    def reflect(self, context):
-        return ReflectionDecision.CONTINUE
 
 logger = logging.getLogger(__name__)
-
-
-class _LLMReflectionAdapter:
-    """桥接 llm_backend.get_llm_router() 到 LLMReflection 期望的接口
-
-    LLMReflection.reflect() 内部调用 llm_facade.generate(dict) → str
-    此适配器将实际 LLM Router 的 simple_chat() 包装为该接口。
-    """
-
-    def __init__(self, context: Optional['ExecutionContext'] = None):
-        self._router = None
-        self._ctx = context
-
-    async def _ensure_router(self):
-        if self._router is not None:
-            return self._router
-        # 优先用上下文中的 llm_router
-        if self._ctx and self._ctx.llm_router:
-            self._router = self._ctx.llm_router
-            return self._router
-        try:
-            from ..engine.llm_backend import get_llm_router
-            self._router = get_llm_router()
-        except Exception:
-            self._router = False  # 标记不可用
-        return self._router
-
-    async def generate(self, prompt_dict: dict) -> str:
-        router = await self._ensure_router()
-        if not router or not hasattr(router, 'simple_chat'):
-            raise RuntimeError("LLM不可用")
-
-        prompt_text = prompt_dict.get("prompt", "")
-        if not prompt_text:
-            raise ValueError("prompt_dict 缺少 'prompt' 字段")
-
-        # 从 prompt_dict 拆出 system 和 user 消息
-        parts = prompt_text.split("\n\n", 1)
-        system_prompt = parts[0] if len(parts) > 1 else ""
-        user_prompt = parts[1] if len(parts) > 1 else prompt_text
-
-        response = await router.simple_chat(
-            user_message=user_prompt,
-            system_prompt=system_prompt,
-            temperature=0.3,
-        )
-        return response or ""
 
 
 class CognitivePipeline:
@@ -121,17 +39,14 @@ class CognitivePipeline:
         self.short_term_memory = self.ctx.short_term_memory
         self.bfs = self.ctx.bfs_processor
 
-        # 初始化 LLM 反思引擎（尝试接入真实 LLM，失败也保底走启发式）
-        try:
-            llm_adapter = _LLMReflectionAdapter(context=self.ctx)
-            self.reflection_trigger = AdaptivePipelineWithReflection(
-                llm_facade=llm_adapter,
-                trigger_config=ReflectionTriggerConfig(max_reflections=3),
-            )
-        except Exception:
-            self.reflection_trigger = AdaptivePipelineWithReflection(
-                trigger_config=ReflectionTriggerConfig(max_reflections=3),
-            )
+        # 初始化 LLM Router（反思用）
+        self._llm_router = getattr(self.ctx, 'llm_router', None)
+        if not self._llm_router:
+            try:
+                from ..engine.llm_backend import get_llm_router
+                self._llm_router = get_llm_router()
+            except Exception:
+                self._llm_router = None
 
         # 跨模块共享状态
         self._current_message: str = ""
@@ -414,35 +329,58 @@ class CognitivePipeline:
     async def _reflect(
         self, result: Dict[str, Any], context: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """反思评估核心"""
+        """反思评估核心 — 调用 llm_router.simple_chat() 做总结"""
         success = result.get("success", False)
         error = result.get("error", "")
-        execution_time = result.get("execution_time", 0.0)
+        reply = result.get("reply", result.get("result", ""))
 
-        step = RStep(
-            step_id=f"step_{self._round}",
-            step_name=self._current_skill,
-            step_type="execution",
-            success=success,
-            output=result.get("reply", result.get("result")),
-            error=error,
-            execution_time=execution_time if isinstance(execution_time, (int, float)) else 0.0,
+        # 没有 LLM 可用时返回默认通过
+        if not self._llm_router or not hasattr(self._llm_router, 'simple_chat'):
+            return {
+                "decision": "continue",
+                "confidence": 0.6,
+                "reasoning": "LLM 不可用，默认通过",
+                "success": success,
+            }
+
+        system_prompt = (
+            "你是一个任务反思评估助手。根据执行结果判断是否需要重试、追问或完成。\n"
+            "请用 JSON 格式回复，格式: {\"decision\": \"continue|retry|fail\", \"reasoning\": \"原因\"}\n"
+            "- continue: 执行成功，继续\n"
+            "- retry: 结果不满意，需要重试\n"
+            "- fail: 结果有问题，需要追问用户"
+        )
+        user_prompt = (
+            f"任务: {self._current_message}\n"
+            f"技能: {self._current_skill}\n"
+            f"成功: {success}\n"
+            f"错误: {error or '无'}\n"
+            f"执行结果摘要: {str(reply)[:500]}"
         )
 
-        prompt = ReflectionPrompt(
-            completed_steps=[step],
-            remaining_steps=[],
-            original_goal=self._current_message,
-            task_context=context,
+        response = await self._llm_router.simple_chat(
+            user_message=user_prompt,
+            system_prompt=system_prompt,
+            temperature=0.3,
         )
 
-        ref = self.reflection_trigger.reflection_engine
-        ref_result = await ref.reflect(prompt)
+        if not response:
+            return {"decision": "continue", "confidence": 0.5, "reasoning": "LLM 无响应，默认通过", "success": success}
+
+        # 尝试解析 JSON
+        import json
+        try:
+            data = json.loads(response.strip().removeprefix("```json").removesuffix("```").strip())
+            decision = data.get("decision", "continue")
+            reasoning = data.get("reasoning", "")
+        except (json.JSONDecodeError, AttributeError):
+            decision = "continue"
+            reasoning = response[:200]
 
         return {
-            "decision": ref_result.decision.value,
-            "confidence": ref_result.confidence,
-            "reasoning": ref_result.reasoning,
+            "decision": decision,
+            "confidence": 0.7,
+            "reasoning": reasoning,
             "success": success,
             "error": error,
         }
@@ -453,18 +391,17 @@ class CognitivePipeline:
 
     def _decide_action(self, reflection: Dict[str, Any], result: Dict[str, Any]) -> str:
         """根据反思结果决定下一步动作"""
-        if reflection.get("success") and reflection.get("decision") in (
-            ReflectionDecision.CONTINUE.value, "continue"
-        ):
+        success = reflection.get("success", False)
+        decision = reflection.get("decision", "continue")
+
+        if success and decision == "continue":
             return "done"
 
-        decision = reflection.get("decision", "")
-
-        if decision == ReflectionDecision.FAIL.value:
+        if decision == "fail":
             return "clarify"
-        elif decision == ReflectionDecision.RETRY.value:
+        elif decision == "retry":
             return "retry" if self._round < 2 else "clarify"
-        elif decision in (ReflectionDecision.ADD_STEPS.value, ReflectionDecision.REORDER.value):
+        elif decision in ("add_steps", "reorder"):
             return "escalate"
 
         return "done"
