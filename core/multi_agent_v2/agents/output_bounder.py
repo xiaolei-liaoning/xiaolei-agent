@@ -1,52 +1,20 @@
 """
-OutputBounder — 工具输出自动截断
+OutputBounder — 工具输出自动截断（委托给 tool_result.bound_result）
 
-拦截工具执行结果，在返回给 LLM 之前按规则截断，
-避免超长输出浪费 tokens。
-
-每工具类型有独立的字符上限：
-  - read/write/edit/grep/glob: 3000
-  - websearch/webfetch:        4000
-  - bash/shell:                5000
-  - task/todo/plan:            2000
-  - 其他:                      3000
+所有截断逻辑已合并到 core.multi_agent_v2.tools.tool_result.bound_result，
+此模块仅保留 BounderStats 向后兼容和 bound_tool_output 别名。
 """
 
 import logging
 from typing import Dict
 
+from core.multi_agent_v2.tools.tool_result import bound_result as _bound_result
+
 logger = logging.getLogger(__name__)
-
-# ── 每工具类型的截断上限 ──
-TOOL_OUTPUT_LIMITS: Dict[str, int] = {
-    "read": 3000,
-    "read_file": 3000,
-    "write": 3000,
-    "write_file": 3000,
-    "edit": 3000,
-    "edit_file": 3000,
-    "grep": 3000,
-    "glob": 3000,
-    "search_files": 3000,
-    "web_search": 4000,
-    "websearch": 4000,
-    "fetch_url": 4000,
-    "webfetch": 4000,
-    "bash": 5000,
-    "shell": 5000,
-    "execute_shell": 5000,
-    "execute_python": 5000,
-    "task": 2000,
-    "todo": 2000,
-    "plan": 2000,
-    "write_todos": 2000,
-}
-
-DEFAULT_LIMIT = 3000
 
 
 class BounderStats:
-    """截断统计"""
+    """截断统计（保留向后兼容）"""
 
     def __init__(self):
         self.total_truncated = 0
@@ -81,46 +49,11 @@ def get_bound_stats() -> BounderStats:
     return _bound_stats
 
 
-def _get_limit(tool_name: str) -> int:
-    """根据工具名获取截断上限"""
-    # 精确匹配
-    if tool_name in TOOL_OUTPUT_LIMITS:
-        return TOOL_OUTPUT_LIMITS[tool_name]
-    # 模糊匹配：取最接近的工具类型
-    for key, limit in TOOL_OUTPUT_LIMITS.items():
-        if key in tool_name or tool_name in key:
-            return limit
-    return DEFAULT_LIMIT
-
-
 def bound_tool_output(tool_name: str, text: str) -> str:
-    """智能截断工具输出
+    """别名：委托给 tool_result.bound_result
 
-    保留头部和尾部，中间用标识替换。
-    Args:
-        tool_name: 工具名
-        text: 原始输出文本
-    Returns:
-        截断后的文本（如未超限则原样返回）
+    保留原签名 (tool_name, text: str) -> str 以保持向后兼容。
     """
     if not isinstance(text, str):
         text = str(text)
-
-    max_chars = _get_limit(tool_name)
-
-    if len(text) <= max_chars:
-        return text
-
-    head_len = int(max_chars * 0.6)
-    tail_len = max_chars - head_len - 30  # 预留标识符空间
-
-    head = text[:head_len]
-    tail = text[-tail_len:] if tail_len > 0 else ""
-
-    truncated_count = len(text) - max_chars
-    result = f"{head}\n\n... [截断 {truncated_count} 字符] ...\n\n{tail}"
-
-    _bound_stats.record(tool_name, len(text), len(result))
-    logger.info(f"输出截断: {tool_name} {len(text)}→{len(result)}字符 (节省{truncated_count})")
-
-    return result
+    return _bound_result(tool_name, text)

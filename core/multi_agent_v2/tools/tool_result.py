@@ -1,10 +1,91 @@
 """
-统一 Handler 返回格式 — ok()/err() 协议
+统一 Handler 返回格式 — ok()/err() 协议 + 统一输出截断
 
 借鉴 gemini-cli 的 ToolResult{llmContent, error?} 设计。
 所有 handler 返回统一格式，_format_tool_result() 只需一条路径解析。
 """
+
+import logging
 from typing import Any, Dict
+
+logger = logging.getLogger(__name__)
+
+
+# ════════════════════════════════════════════════════════════════
+# 统一输出截断（注册表层，对标 opencode boundOutput）
+# ════════════════════════════════════════════════════════════════
+
+TOOL_OUTPUT_LIMITS: Dict[str, int] = {
+    "read": 3000,
+    "read_file": 3000,
+    "write": 3000,
+    "write_file": 3000,
+    "edit": 3000,
+    "edit_file": 3000,
+    "grep": 3000,
+    "glob": 3000,
+    "search_files": 3000,
+    "web_search": 4000,
+    "websearch": 4000,
+    "fetch_url": 4000,
+    "webfetch": 4000,
+    "bash": 5000,
+    "shell": 5000,
+    "execute_shell": 5000,
+    "execute_python": 5000,
+    "git": 2000,
+    "task": 2000,
+    "todo": 2000,
+    "plan": 2000,
+    "write_todos": 2000,
+}
+DEFAULT_OUTPUT_LIMIT = 3000
+
+
+def bound_result(tool_name: str, raw: Any) -> Any:
+    """注册表层统一截断工具输出
+
+    Args:
+        tool_name: 工具名
+        raw: handler 原始返回（dict, str, 或 None）
+
+    Returns:
+        截断后的结果（保持原格式结构）
+    """
+    limit = TOOL_OUTPUT_LIMITS.get(tool_name, DEFAULT_OUTPUT_LIMIT)
+
+    if isinstance(raw, dict):
+        if "ok" in raw:
+            data = raw.get("data", "")
+            if isinstance(data, str) and len(data) > limit:
+                raw["data"] = _truncate(data, limit, tool_name)
+            return raw
+        result = raw.get("result", {})
+        if isinstance(result, dict):
+            content = result.get("content", [])
+            if isinstance(content, list) and content:
+                first = content[0]
+                if isinstance(first, dict):
+                    text = first.get("text", "")
+                    if isinstance(text, str) and len(text) > limit:
+                        first["text"] = _truncate(text, limit, tool_name)
+        return raw
+
+    if isinstance(raw, str) and len(raw) > limit:
+        return _truncate(raw, limit, tool_name)
+
+    return raw
+
+
+def _truncate(text: str, max_chars: int, tool_name: str = "") -> str:
+    head_len = int(max_chars * 0.6)
+    tail_len = max_chars - head_len - 30
+    head = text[:head_len]
+    tail = text[-tail_len:] if tail_len > 0 else ""
+    truncated_count = len(text) - max_chars
+    result = f"{head}\n\n... [截断 {truncated_count} 字符] ...\n\n{tail}"
+    logger.info(f"输出截断: {tool_name} {len(text)}→{len(result)}字符 (节省{truncated_count})")
+    return result
 
 
 def ok(data: str) -> Dict[str, Any]:

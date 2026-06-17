@@ -6,6 +6,7 @@ MiddlewareChain — 模块化中间件管道
 五个生命周期钩子，实现关注点分离。
 """
 
+import asyncio
 import json
 import logging
 import time
@@ -54,6 +55,7 @@ class RunContext:
     # ── 执行状态（每轮变动）──
     iteration: int = 0
     interrupted: bool = False
+    interrupted_reason: str = ""
     tool_results: List[Dict] = field(default_factory=list)
     last_error: Optional[str] = None
     warnings: List[str] = field(default_factory=list)
@@ -85,9 +87,14 @@ class RunContext:
 
     # ── 强制指令（独立于 task_description，不污染原始任务）──
     forced_instructions: str = ""
+    # 标记当前是否处于审查/质量改进阶段，防止写入步骤被阻塞
+    review_pending: bool = False
 
     # ── 上下文预算管理（ContextBudgetManager，可选）──
     context_budget: Optional[Any] = None
+
+    # ── 对话历史累积（LLM 在后续轮次能看到之前的工具结果）──
+    _conversation_history: List[Dict] = field(default_factory=list)
 
     # MiddlewareChain 引用（由 run_react 设置）
     _chain: Optional[Any] = None
@@ -142,6 +149,10 @@ class BaseMiddleware:
 
     async def on_think_end(self, ctx: RunContext) -> Optional[HookResult]:
         """LLM 思考后"""
+        pass
+
+    async def on_plan_check(self, ctx: RunContext) -> Optional[HookResult]:
+        """LLM 回复解析后、工具执行前 — 检查是否应执行计划中的工具调用"""
         pass
 
     async def on_tool_end(self, ctx: RunContext) -> Optional[HookResult]:
@@ -202,6 +213,8 @@ class MiddlewareChain:
                 hr = await mw.on_start(ctx)
                 if hr and hr.jump_to != "continue":
                     return hr
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 logger.warning(f"Middleware {mw} on_start error: {e}")
                 mw_name = type(mw).__name__
@@ -241,6 +254,19 @@ class MiddlewareChain:
                 logger.warning(f"Middleware {mw} on_think_end error: {e}")
         return HookResult()
 
+    async def on_plan_check(self, ctx: RunContext) -> HookResult:
+        """LLM 回复解析后、工具执行前调用"""
+        for mw in self._middlewares:
+            if mw.HOOKS and "on_plan_check" not in mw.HOOKS:
+                continue
+            try:
+                hr = await mw.on_plan_check(ctx)
+                if hr and hr.jump_to != "continue":
+                    return hr
+            except Exception as e:
+                logger.warning(f"[{type(mw).__name__}] on_plan_check 异常: {e}")
+        return HookResult()
+
     async def on_tool_end(self, ctx: RunContext) -> HookResult:
         for mw in self._middlewares:
             if mw.HOOKS and "on_tool_end" not in mw.HOOKS:
@@ -265,6 +291,8 @@ class MiddlewareChain:
                 logger.warning(f"Middleware {mw} on_finish error: {e}")
         return HookResult()
 
+    # TODO: on_wrap_model_call 当前未被调用（react_core.py 直接调 router.chat_structured）。
+    # 如需给 LLM 调用加拦截（日志/限流/缓存），将 run_react 中的 LLM 调用改为走此链。
     async def on_wrap_model_call(self, ctx: RunContext, llm_fn: Callable) -> Any:
         async def _run_chain(index: int) -> Any:
             if index >= len(self._middlewares):
@@ -301,8 +329,29 @@ class MiddlewareChain:
 
                 handler = registry.get_handler(name)
                 if handler:
+                    # 参数校验：执行前校验参数合法性
+                    # 对标 Opencode 的 InvalidArgumentsError 回传机制：
+                    # 校验失败 → 不执行 handler → forced_instructions 驱动 LLM 重试
+                    valid, error_msg = registry.validate_arguments(name, args)
+                    if not valid:
+                        logger.warning(f"参数校验失败: {name} - {error_msg[:200]}")
+                        ctx.forced_instructions = (
+                            f"⚠️ 【参数错误】上一轮工具调用 '{name}' 的参数不正确，必须修正后重试：\n"
+                            f"{error_msg}\n\n"
+                            f"请根据正确的参数 Schema 重新调用 {name}，不要输出文本答案，不要执行其他无关操作。"
+                        )
+                        return {
+                            "success": False,
+                            "error": error_msg,
+                            "result": {"error": error_msg},
+                            "tool_call": tool_args,
+                            "_validation_error": True,  # 标记校验错误，on_think_end 据此跳过历史记录
+                        }
                     try:
                         result = await handler(args)
+                        # 注册表层统一输出截断（对标 opencode boundOutput）
+                        from core.multi_agent_v2.tools.tool_result import bound_result
+                        result = bound_result(name, result)
                         # 统一 ok/err 协议：兼容新旧格式
                         from core.multi_agent_v2.tools.tool_result import is_ok, extract_error
                         if not is_ok(result):

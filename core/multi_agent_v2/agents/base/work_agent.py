@@ -82,66 +82,43 @@ class WorkAgent(BaseAgent):
         print(f"\n    \033[1;36m⚡ 开始任务: {desc[:80]}\033[0m")
 
         try:
-            # ── 简单对话检测 ──
-            _TOOL_KW = [
-                "搜索",
-                "查找",
-                "写",
-                "创建",
-                "生成",
-                "分析",
-                "报告",
-                "爬",
-                "保存",
-                "文件",
-                "数据",
-                "代码",
-                "游戏",
-                "脚本",
-                "curl",
-                "fetch",
-                "http",
-                "api",
-                "百度",
-                "谷歌",
-                "翻译",
-                "打开",
-                "启动",
-                "运行",
-                "执行",
-                "open",
-                "launch",
-            ]
-            is_simple = len(desc) < 30 and not any(kw in desc for kw in _TOOL_KW)
-            if is_simple:
-                from core.engine.llm_backend import get_llm_router
-
-                router = get_llm_router()
-                if router and router.is_available():
-                    print(f"    \033[1;36m\U0001f914 LLM直接回答...\033[0m")
-                    model = task.context.get("model", "")
-                    resp = await router.chat(
-                        [{"role": "user", "content": desc}], model=model or None
-                    )
-                    answer = str(resp) if resp else ""
-                    elapsed = time.time() - start
-                    is_mock = "[LLM_MOCK]" in answer
-                    return ActionResult(
-                        success=bool(answer) and not is_mock,
-                        output=answer if not is_mock else "LLM暂不可用，请稍后重试",
-                        execution_time=elapsed,
-                        metadata={
-                            "light_mode": True,
-                            "direct_reply": True,
-                            "mock": is_mock,
-                        },
-                    )
-
-            # ── 复杂任务：走 ReActCore 中间件链 ──
+            # ── 统一走 ReActCore 中间件链 ──
             _mr = task.context.get("max_rounds", 0)
             max_rounds = max(_mr, 10) if _mr else 10
             logger.info(f"WorkAgent → ReActCore (max_rounds={max_rounds})")
             from core.multi_agent_v2.agents.react_core import run_react
+
+            # ── 双重人设：内置类型（工具权限）+ Skill 角色（领域人格）累加 ──
+            try:
+                from core.skills.agency_agents.worker_role_matcher import (
+                    get_worker_role_matcher,
+                )
+                matcher = get_worker_role_matcher()
+                role = await matcher.match_role_for_task(desc)
+                if role:
+                    pt = matcher.get_role_prompt(role.get("id", ""))
+                    if pt:
+                        if self.personality:
+                            self.personality = (
+                                f"{self.personality}\n\n"
+                                f"---\n"
+                                f"【当前任务专家身份】\n"
+                                f"{pt[:1000]}"
+                            )
+                        else:
+                            self.personality = pt[:2000]
+                        logger.info(f"✅ 已注入角色: {role.get('name', '未知')}")
+                else:
+                    # ponytail: 匹配失败时降级到关键词，不静默跳过
+                    logger.warning("角色匹配返回空，尝试关键词降级")
+                    fallback = matcher.matcher._keyword_fallback(desc, 1)
+                    if fallback:
+                        pt = fallback[0].get("description", "")
+                        if pt:
+                            self.personality = pt[:2000]
+                            logger.info(f"✅ 关键词降级匹配: {fallback[0].get('name')}")
+            except Exception as e:
+                logger.warning(f"角色匹配异常: {e}")
 
             result = await run_react(
                 desc,

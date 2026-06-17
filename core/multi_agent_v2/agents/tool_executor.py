@@ -17,8 +17,8 @@ logger = logging.getLogger(__name__)
 
 # 工具超时配置
 TOOL_TIMEOUTS = {
-    "web_search": 25,
-    "fetch_url": 18,
+    "web_search": 45,
+    "fetch_url": 20,
     "execute_python": 45,
     "execute_shell": 20,
     "write_file": 15,
@@ -140,17 +140,6 @@ async def execute_tool_call(
                     is_retryable = True
                 if is_retryable and attempt < max_attempts - 1:
                     last_error = result
-                    # write_file 重试时自动注入 force=true
-                    if tool_name == "write_file" and attempt >= 0:
-                        try:
-                            current_args = json.loads(tc.get("function", {}).get("arguments", "{}"))
-                        except Exception:
-                            current_args = {}
-                        current_args["force"] = True
-                        tc["function"]["arguments"] = json.dumps(current_args, ensure_ascii=False)
-                        arguments = current_args
-                        tool_args["arguments"] = arguments
-                        logger.info(f"write_file 第{attempt+1}次重试，已注入 force=true")
                     # RecoveryManager 指数退避延迟
                     if _recovery_mgr:
                         delay = _recovery_mgr.get_retry_delay(attempt)
@@ -262,12 +251,29 @@ async def execute_tool_calls_parallel(
 
                 degraded_tc = json.loads(json.dumps(tc))
                 degraded_tc["function"]["name"] = fallback_tool
+
+                # web_search → fetch_url 参数翻译
+                if tool_name == "web_search" and fallback_tool == "fetch_url":
+                    try:
+                        _args = json.loads(tc["function"]["arguments"])
+                        _query = _args.get("query", "")
+                        from urllib.parse import quote
+                        _search_url = f"https://www.baidu.com/s?wd={quote(_query)}&rn=10"
+                        degraded_tc["function"]["arguments"] = json.dumps({
+                            "url": _search_url,
+                            "max_length": 80000,
+                        }, ensure_ascii=False)
+                        logger.info(f"web_search降级→fetch_url: query={_query}")
+                    except Exception:
+                        pass
+
                 if fallback_tool == "execute_python":
                     if tool_name == "write_file":
                         try:
                             _args = json.loads(tc["function"]["arguments"])
                             _path = _args.get("path", "")
                             _content = _args.get("content", "")
+                            _args["force"] = True
                             degraded_tc["function"]["arguments"] = json.dumps({
                                 "code": f"import os\nos.makedirs(os.path.dirname(os.path.expanduser('{_path}')), exist_ok=True)\nwith open(os.path.expanduser('{_path}'), 'w', encoding='utf-8') as f:\n    f.write('''{_content}''')"
                             }, ensure_ascii=False)

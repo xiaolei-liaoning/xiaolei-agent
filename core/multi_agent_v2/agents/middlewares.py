@@ -742,32 +742,29 @@ class TruncationMiddleware(BaseMiddleware):
 # ════════════════════════════════════════════════════════════════
 
 class CompactionMiddleware(BaseMiddleware):
-    """智能上下文压缩中间件（替代 TruncationMiddleware）
+    """智能上下文压缩中间件 — 委托给 ContextBudgetManager
 
-    对标 Opencode compaction 系统：
-    - Token 感知溢出检测
-    - LLM 结构化摘要（替代硬截断）
-    - tail_start 指针标记保留轮次
-    - [summary, tail, new] 上下文重排
-    - 压缩后重放用户任务意图
-    - 结果持久化到 SQLite
-
-    在 on_think_start 阶段（LLM 调用前）检查是否需要压缩，
-    确保 LLM 看到的是精简后的上下文。
+    所有压缩逻辑已合并到 context_budget.ContextBudgetManager，
+    此中间件仅做适配桥接，去除重复的 LLM 调用和上下文重建逻辑。
     """
     HOOKS = ("on_think_start",)
 
     def __init__(
         self,
-        token_budget: int = 6000,
+        max_context_chars: int = 80000,
+        safety_margin: int = 20000,
         protected_recent_turns: int = 3,
-        min_turns_before_compact: int = 4,
-        use_llm: bool = True,
+        min_rounds_before_compact: int = 4,
+        use_llm_compaction: bool = True,
     ):
-        self.token_budget = token_budget
-        self.protected_recent_turns = protected_recent_turns
-        self.min_turns_before_compact = min_turns_before_compact
-        self.use_llm = use_llm
+        from .context_budget import ContextBudgetManager
+        self.budget = ContextBudgetManager(
+            max_context_chars=max_context_chars,
+            safety_margin=safety_margin,
+            protected_recent_turns=protected_recent_turns,
+            min_rounds_before_compact=min_rounds_before_compact,
+            use_llm_compaction=use_llm_compaction,
+        )
         self._compacted_rounds: set = set()
 
     def reset_task_state(self):
@@ -775,160 +772,11 @@ class CompactionMiddleware(BaseMiddleware):
 
     async def on_think_start(self, ctx: RunContext) -> None:
         """LLM 调用前检查上下文是否溢出，必要时压缩"""
-        if not ctx.tool_results:
-            return
-
-        total = len(ctx.tool_results)
-        if total < self.min_turns_before_compact:
-            return
-
-        # 如果本轮已经是 compression 后的轮次，不再重复压缩
-        if ctx.react_depth in self._compacted_rounds:
-            return
-
-        # Token 估算：检查 conversation_history 是否超预算
-        hist_tokens = self._estimate_tokens(ctx)
-        if hist_tokens < self.token_budget:
-            return
-
-        compactable = total - self.protected_recent_turns
-        if compactable <= 0:
-            return
-
-        # 执行压缩
-        entries_to_compact = ctx.tool_results[:compactable]
-        summary = await self._generate_summary(
-            entries_to_compact, ctx.task_description, ctx,
-        )
-
-        # 重建 tool_results: [summary_note, tail...]
-        summary_note: Dict[str, Any] = {
-            "compacted": True,
-            "summary": summary,
-            "count": len(entries_to_compact),
-        }
-        ctx.tool_results = [summary_note] + ctx.tool_results[compactable:]
-
-        # 重建 _conversation_history
-        if ctx._conversation_history:
-            n_remove = min(compactable * 2, len(ctx._conversation_history) - 1)
-            ctx._conversation_history = ctx._conversation_history[n_remove:]
-            ctx._conversation_history.insert(0, {
-                "role": "system",
-                "content": f"[上下文摘要] 以下是对之前 {len(entries_to_compact)} 轮工具调用的结构化摘要：\n{summary}",
-            })
-
-        # 重放指令
-        ctx.forced_instructions = (
-            f"[上下文已压缩] 之前的工作已摘要。请基于此继续，不要重复已完成的操作。\n\n{summary}"
-        )
-
-        self._compacted_rounds.add(ctx.react_depth)
-        logger.info(
-            f"CompactionMiddleware: 压缩 {len(entries_to_compact)} 条, "
-            f"剩余 {len(ctx.tool_results)} 条"
-        )
-
-        # 持久化
-        self._persist(ctx, summary, compactable)
-
-    def _estimate_tokens(self, ctx: RunContext) -> int:
-        """估算 _conversation_history 的 token 数（优先 tiktoken，回退字符估算）"""
-        total = 0
-        for msg in ctx._conversation_history:
-            content = str(msg.get("content", ""))
-            total += self._count_tokens(content)
-            if msg.get("tool_calls"):
-                for tc in msg["tool_calls"]:
-                    fn = tc.get("function", {})
-                    total += self._count_tokens(str(fn.get("name", "")))
-                    total += self._count_tokens(str(fn.get("arguments", "")))
-        return total
-
-    @staticmethod
-    def _count_tokens(text: str) -> int:
-        """Token 计数：优先 tiktoken，回退字符/4 估算（更接近真实 token 比）"""
-        if not text:
-            return 0
-        try:
-            import tiktoken
-            enc = tiktoken.get_encoding("cl100k_base")
-            return len(enc.encode(text))
-        except (ImportError, Exception):
-            return max(1, len(text) // 4 + 1)
-
-    async def _generate_summary(self, entries: List[Dict],
-                                 task: str, ctx: RunContext) -> str:
-        """生成摘要 — 优先 LLM，失败回退到模板"""
-        from .context_budget import _COMPACTION_SYSTEM_PROMPT
-        try:
-            from core.engine.llm_backend import get_llm_router
-            router = get_llm_router()
-            if router and router.is_available() and self.use_llm:
-                lines = [f"## User Task\n{task}\n"]
-                for i, e in enumerate(entries):
-                    tc = e.get("tool_call", {})
-                    lines.append(
-                        f"### Call {i+1}: {tc.get('name', '?')} "
-                        f"({'OK' if e.get('success') else 'FAIL'})\n"
-                        f"Result: {str(e.get('result', ''))[:800]}\n"
-                    )
-                import asyncio
-                resp = await asyncio.wait_for(
-                    router.chat([
-                        {"role": "system", "content": _COMPACTION_SYSTEM_PROMPT},
-                        {"role": "user", "content": "\n".join(lines)},
-                    ], temperature=0.3, max_tokens=1024),
-                    timeout=30,
-                )
-                text = str(resp) if resp else ""
-                if text and text != "None" and len(text) > 20:
-                    return text.strip()
-        except Exception as e:
-            logger.debug(f"LLM 摘要失败: {e}")
-
-        # 回退到模板
-        return self._template_summary(entries)
-
-    def _template_summary(self, entries: List[Dict]) -> str:
-        """增强模板摘要 — 提取文件 / 查询 / 关键结果"""
-        if not entries:
-            return ""
-        tools = list(dict.fromkeys(
-            e.get("tool_call", {}).get("name", "") for e in entries
-        ))
-        ok = sum(1 for e in entries if e.get("success"))
-        fail = len(entries) - ok
-        files = []
-        queries = []
-        for e in entries:
-            args = e.get("tool_call", {}).get("arguments", {})
-            name = e.get("tool_call", {}).get("name", "")
-            if name in ("write_file", "edit_file"):
-                p = args.get("path", "")
-                if p:
-                    files.append(p)
-            elif name in ("web_search", "search"):
-                q = args.get("query", "")
-                if q:
-                    queries.append(q[:60])
-        parts = [f"[上下文压缩] 之前 {len(entries)} 轮：{', '.join(tools[:5])}，✅{ok} ❌{fail}"]
-        if files:
-            parts.append(f"📄 {'; '.join(files[:3])}")
-        if queries:
-            parts.append(f"🔍 {'; '.join(queries[:2])}")
-        return " | ".join(parts)
-
-    def _persist(self, ctx: RunContext, summary: str, n: int):
-        """持久化到 SQLite"""
-        try:
-            from .conversation_store import ConversationStore
-            store = ConversationStore.get_instance()
-            session_id = getattr(ctx, '_session_id', '')
-            if session_id:
-                store.save_compaction(session_id, ctx.react_depth, summary, len(ctx.tool_results))
-        except Exception as e:
-            logger.debug(f"持久化压缩失败: {e}")
+        # 委托给 ContextBudgetManager
+        ctx.context_budget = self.budget
+        compacted = await self.budget.async_check_and_compact(ctx)
+        if compacted:
+            self._compacted_rounds.add(ctx.react_depth)
 
 
 # ════════════════════════════════════════════════════════════════

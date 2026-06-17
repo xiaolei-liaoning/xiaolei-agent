@@ -5,13 +5,13 @@ from .base.work_agent import WorkAgent
 
 # 拆分后的模块
 from . import tool_evaluator
-from . import tool_parser
 from . import tool_executor
 from . import file_validator
 from . import plan_manager
+# tool_parser 废弃：已改用原生 tool calling（chat_structured）
 
 __all__ = [
     "BaseAgent", "AgentType", "WorkAgent", "Task",
-    "tool_evaluator", "tool_parser", "tool_executor",
+    "tool_evaluator", "tool_executor",
     "file_validator", "plan_manager",
 ]

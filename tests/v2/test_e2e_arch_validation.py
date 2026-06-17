@@ -32,11 +32,14 @@ class TestNewModules:
     def test_output_bounder_import(self):
         from core.multi_agent_v2.agents.output_bounder import (
             bound_tool_output, get_bound_stats, BounderStats,
-            TOOL_OUTPUT_LIMITS, DEFAULT_LIMIT
         )
         assert callable(bound_tool_output)
         assert callable(get_bound_stats)
-        assert DEFAULT_LIMIT == 3000
+        # TOOL_OUTPUT_LIMITS 已合并到 tool_result.py
+        from core.multi_agent_v2.tools.tool_result import (
+            TOOL_OUTPUT_LIMITS, DEFAULT_OUTPUT_LIMIT
+        )
+        assert DEFAULT_OUTPUT_LIMIT == 3000
         assert TOOL_OUTPUT_LIMITS["read"] == 3000
         assert TOOL_OUTPUT_LIMITS["bash"] == 5000
         assert TOOL_OUTPUT_LIMITS["websearch"] == 4000
@@ -120,24 +123,25 @@ class TestOutputBounder:
         # task limit = 2000
         assert len(read_result) > len(task_result), "read 应比 task 保留更多"
 
-    def test_fuzzy_tool_matching(self):
-        from core.multi_agent_v2.agents.output_bounder import (
-            bound_tool_output, _get_limit
+    def test_tool_limit_behavior(self):
+        """截断限制验证（合并后通过 tool_result.bound_result 或 TOOL_OUTPUT_LIMITS 测试）"""
+        from core.multi_agent_v2.tools.tool_result import (
+            TOOL_OUTPUT_LIMITS, DEFAULT_OUTPUT_LIMIT, bound_result
         )
-        # 模糊匹配：read_file 应匹配 read 的 3000 限制
-        assert _get_limit("read_file") == 3000
-        assert _get_limit("execute_shell") == 5000
-        assert _get_limit("execute_python") == 5000
-        assert _get_limit("unknown_tool") == 3000
+        # 精确匹配
+        assert TOOL_OUTPUT_LIMITS.get("read_file", DEFAULT_OUTPUT_LIMIT) == 3000
+        assert TOOL_OUTPUT_LIMITS.get("execute_shell", DEFAULT_OUTPUT_LIMIT) == 5000
+        assert TOOL_OUTPUT_LIMITS.get("execute_python", DEFAULT_OUTPUT_LIMIT) == 5000
+        # 未知工具回退默认值
+        assert TOOL_OUTPUT_LIMITS.get("unknown_tool", DEFAULT_OUTPUT_LIMIT) == 3000
+        # bound_result 可处理 dict/str
+        assert bound_result("read", "short") == "short"
 
-    def test_stats_tracking(self):
-        from core.multi_agent_v2.agents.output_bounder import (
-            bound_tool_output, get_bound_stats
-        )
-        stats = get_bound_stats()
-        before = stats.total_truncated
-        bound_tool_output("read", "X" * 5000)
-        assert stats.total_truncated > before, "截断统计应更新"
+    def test_truncation_happens(self):
+        from core.multi_agent_v2.agents.output_bounder import bound_tool_output
+        result = bound_tool_output("read", "X" * 5000)
+        assert len(result) < 5000, "长文本应被截断"
+        assert "[截断" in result, "应包含截断标识"
 
     def test_non_string_input(self):
         from core.multi_agent_v2.agents.output_bounder import bound_tool_output

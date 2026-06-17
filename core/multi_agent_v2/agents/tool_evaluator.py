@@ -64,32 +64,42 @@ def evaluate_tool_result(
 
     # ── web_search 评估 ──
     if name == "web_search":
-        # 计算搜索结果数（按数字序号或换行段落估算）
+        # 计算搜索结果数
         item_count = 0
+        has_hot_data = False
+        # 1) 数字编号: "1.", "2." 等
         numbered = re.findall(r'(?:^|\n)\s*\d+[\.\、]', text)
         if numbered:
             item_count = len(numbered)
-        else:
-            # 按双换行段落算
-            paragraphs = [p for p in text.split("\n\n") if len(p.strip()) > 10]
-            item_count = len(paragraphs)
+        # 2) 热搜格式: "【源名】" 后每行包含热度
+        if "热度:" in text:
+            hot_lines = [line for line in text.split("\n") if "热度:" in line]
+            item_count = len(hot_lines)
+            has_hot_data = True
+        # 3) 单换行条目: 每行 ≈ 一条（跳过标题行）
+        if item_count == 0:
+            lines = [l.strip() for l in text.split("\n") if l.strip() and len(l.strip()) > 10]
+            item_count = len(lines)
+        # 4) 热搜列表：大段结构化数据
+        if item_count == 0 and len(text) > 200:
+            item_count = 5  # 有实质性内容就当足够
 
         if item_count == 0:
-            return "[评估] ⚠️ 搜索未返回有效结果\n📌 建议：修改查询关键词或换搜索引擎重试"
-        elif item_count >= 5:
-            return f"[评估] ✅ 搜索成功，找到 {item_count} 条结果\n📌 建议：数据充足，≥5条结果可直接用于生成报告/回答"
+            return "[数据状态: 无结果] [评估] ⚠️ 搜索未返回有效结果\n📌 建议：修改查询关键词或换搜索引擎重试"
+        elif item_count >= 5 or has_hot_data:
+            return f"[数据状态: 充足] [评估] ✅ 搜索成功，找到 {item_count} 条结果\n📌 建议：数据已充足，直接输出答案，不要继续搜索也不要反问用户"
         else:
-            return f"[评估] ⚠️ 仅找到 {item_count} 条结果，可能不全面\n📌 建议：换个搜索词补充搜索以获取更完整信息"
+            return f"[数据状态: 不足] [评估] ⚠️ 仅找到 {item_count} 条结果，可能不全面\n📌 建议：换个搜索词补充搜索以获取更完整信息"
 
     # ── fetch_url 评估 ──
     if name == "fetch_url":
         if text_len < 100:
-            return "[评估] ⚠️ 获取内容极短（<100字符）\n📌 建议：可能未获取到完整数据，换用 execute_python 或 web_search 重试"
+            return "[数据状态: 不足] [评估] ⚠️ 获取内容极短（<100字符）\n📌 建议：可能未获取到完整数据，换用 execute_python 或 web_search 重试"
         elif text_len < 500:
-            return f"[评估] ⚠️ 内容偏少（{text_len}字符）\n📌 建议：可能只获取到部分信息，可尝试换一个数据源或 URL"
+            return f"[数据状态: 不足] [评估] ⚠️ 内容偏少（{text_len}字符）\n📌 建议：可能只获取到部分信息，可尝试换一个数据源或 URL"
         else:
             len_display = f">{text_len // 1000}k" if text_len > 1000 else str(text_len)
-            return f"[评估] ✅ 成功获取网页内容（{len_display}字符），数据量充足\n📌 建议：数据已就绪，可直接分析或生成报告"
+            return f"[数据状态: 充足] [评估] ✅ 成功获取网页内容（{len_display}字符），数据量充足\n📌 建议：数据已就绪，直接输出答案，不要再调工具"
 
     # ── execute_python 评估 ──
     if name == "execute_python":
