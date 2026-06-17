@@ -97,12 +97,17 @@ async def health_check() -> Dict[str, Any]:
     """返回系统健康状态，包含工具数量、数据库状态、版本号。"""
     tools_count: int = 0
     try:
-        from tools.tool_manager import ToolManager
-        tm = ToolManager.get_instance()
-        tools_count = len(tm._tools)
+        from core.multi_agent_v2.tools.tool_registry import get_tool_registry
+        reg = get_tool_registry()
+        tools_count = reg.count()
     except Exception:
-        logger.debug("获取工具管理器实例失败，tools_count=0")
-        pass
+        logger.debug("V2 ToolRegistry 获取失败，回退 ToolManager")
+        try:
+            from tools.tool_manager import ToolManager
+            tm = ToolManager.get_instance()
+            tools_count = len(tm._tools)
+        except Exception:
+            pass
 
     return {
         "status": "healthy",
@@ -124,7 +129,7 @@ async def list_characters() -> Dict[str, Any]:
         return _default_characters()
 
     try:
-        from core.infrastructure.database import get_session, Character
+        from core.database import get_session, Character
         session = get_session()
         try:
             characters = session.query(Character).all()
@@ -185,15 +190,20 @@ async def system_metrics() -> Dict[str, Any]:
 
     # 工具数量
     try:
-        from tools.tool_manager import ToolManager
-        tm = ToolManager.get_instance()
-        metrics["tools_count"] = len(tm._tools)
+        from core.multi_agent_v2.tools.tool_registry import get_tool_registry
+        reg = get_tool_registry()
+        metrics["tools_count"] = reg.count()
     except Exception:
-        metrics["tools_count"] = 0
+        try:
+            from tools.tool_manager import ToolManager
+            tm = ToolManager.get_instance()
+            metrics["tools_count"] = len(tm._tools)
+        except Exception:
+            metrics["tools_count"] = 0
 
     # Redis 状态
     try:
-        from core.infrastructure.redis_pool import RedisPoolManager
+        from core.engine.redis_pool import RedisPoolManager
         rpm = RedisPoolManager.get_instance()
         metrics["redis"] = rpm.health_check_all()
     except Exception:
@@ -243,7 +253,7 @@ async def auth_login(request: LoginRequest) -> Dict[str, Any]:
         return {"success": False, "detail": "数据库未初始化，仅支持 admin/admin123 登录"}
 
     try:
-        from core.infrastructure.database import get_session, User
+        from core.database import get_session, User
         from passlib.context import CryptContext
         pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
         
@@ -293,7 +303,7 @@ async def auth_register(request: RegisterRequest) -> Dict[str, Any]:
         return {"success": False, "detail": "数据库未初始化，无法注册"}
 
     try:
-        from core.infrastructure.database import get_session, User
+        from core.database import get_session, User
         from passlib.context import CryptContext
         pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
         
@@ -335,7 +345,7 @@ async def list_users() -> Dict[str, Any]:
     if not _db_initialized:
         return {"users": []}
     try:
-        from core.infrastructure.database import get_session, User
+        from core.database import get_session, User
         session = get_session()
         try:
             users = session.query(User).all()
@@ -363,7 +373,7 @@ async def update_profile(request: UpdateProfileRequest) -> Dict[str, Any]:
     if not _db_initialized:
         return {"success": False, "detail": "数据库未初始化"}
     try:
-        from core.infrastructure.database import get_session, User
+        from core.database import get_session, User
         session = get_session()
         try:
             user = session.query(User).filter_by(id=request.user_id).first()
@@ -389,7 +399,7 @@ async def change_password(request: ChangePasswordRequest) -> Dict[str, Any]:
     if not _db_initialized:
         return {"success": False, "detail": "数据库未初始化"}
     try:
-        from core.infrastructure.database import get_session, User, verify_password, hash_password
+        from core.database import get_session, User, verify_password, hash_password
         session = get_session()
         try:
             user = session.query(User).filter_by(id=request.user_id).first()
@@ -425,7 +435,7 @@ async def create_character(request: CharacterCreateRequest) -> Dict[str, Any]:
     if not _db_initialized:
         return {"success": False, "detail": "数据库未初始化"}
     try:
-        from core.infrastructure.database import get_session, Character
+        from core.database import get_session, Character
         session = get_session()
         try:
             existing = session.query(Character).filter_by(
@@ -476,7 +486,7 @@ async def update_character(character_id: str, request: CharacterCreateRequest) -
     if not _db_initialized:
         return {"success": False, "detail": "数据库未初始化"}
     try:
-        from core.infrastructure.database import get_session, Character
+        from core.database import get_session, Character
         session = get_session()
         try:
             character = session.query(Character).filter_by(
@@ -515,7 +525,7 @@ async def delete_character(character_id: str) -> Dict[str, Any]:
     if not _db_initialized:
         return {"success": False, "detail": "数据库未初始化"}
     try:
-        from core.infrastructure.database import get_session, Character
+        from core.database import get_session, Character
         session = get_session()
         try:
             character = session.query(Character).filter_by(
@@ -628,7 +638,7 @@ async def get_learning_stats() -> Dict[str, Any]:
 async def get_pending_questions() -> Dict[str, Any]:
     """获取所有待用户回答的Agent反问问题"""
     try:
-        from core.agents.agent_communication import get_question_registry
+        from core.question_registry import get_question_registry
         questions = get_question_registry().get_pending()
         return {
             "success": True,
@@ -657,7 +667,7 @@ class AnswerQuestionRequest(BaseModel):
 async def answer_question(question_id: str, req: AnswerQuestionRequest) -> Dict[str, Any]:
     """回答Agent的降级反问"""
     try:
-        from core.agents.agent_communication import get_question_registry
+        from core.question_registry import get_question_registry
         ok = get_question_registry().answer(question_id, req.answer)
         return {"success": ok, "detail": "已回答" if ok else "问题已超时或不存在"}
     except Exception as e:

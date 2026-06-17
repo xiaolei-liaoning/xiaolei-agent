@@ -47,6 +47,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 轻量 API Key 认证（未配置 API_KEY 时跳过，向后兼容）
+from api.auth_middleware import AuthMiddleware
+app.add_middleware(AuthMiddleware)
+
 # 静态文件
 static_dir = Path(__file__).parent / "static"
 if static_dir.exists():
@@ -104,7 +108,7 @@ app.include_router(pages_router)
 # ---------------------------------------------------------------------------
 # 系统初始化
 # ---------------------------------------------------------------------------
-from core.system_init import SystemInitializer
+from core.engine.system_init import SystemInitializer
 
 
 async def init_system() -> None:
@@ -126,7 +130,7 @@ async def startup_event() -> None:
     # 加载短期记忆
     try:
         from core.handlers import short_term_memory
-        from core.infrastructure.database import get_session, BFSContextNode
+        from core.database import get_session, BFSContextNode
         with get_session() as session:
             user_ids = session.query(BFSContextNode.user_id).distinct().all()
         for (user_id,) in user_ids:
@@ -136,7 +140,7 @@ async def startup_event() -> None:
         logger.warning("短期记忆加载失败（首次启动或数据库未就绪）: %s", e)
 
     # 文件 watcher
-    from core.watcher_setup import setup_file_watcher
+    from core.engine.watcher_setup import setup_file_watcher
     setup_file_watcher(app)
 
 
@@ -151,7 +155,7 @@ async def shutdown_event() -> None:
         logger.warning("WebSocket 心跳检测停止失败: %s", e)
 
     # 文件 watcher 停止
-    from core.watcher_setup import shutdown_file_watcher
+    from core.engine.watcher_setup import shutdown_file_watcher
     shutdown_file_watcher(app)
 
 # ---------------------------------------------------------------------------

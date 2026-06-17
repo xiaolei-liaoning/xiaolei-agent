@@ -28,7 +28,7 @@ from core.handlers import (
     save_task_log,
 )
 from core.workflow.bfs_processor import get_bfs_processor
-from core.agents.intelligent_agent_selector import get_intelligent_selector
+
 
 logger = logging.getLogger(__name__)
 
@@ -174,39 +174,19 @@ class ContextRequest(BaseModel):
 # 内部函数：判断是否需要走Agent（智能版本）
 # ---------------------------------------------------------------------------
 def _needs_agent(message: str) -> bool:
-    """判断是否需要走Agent系统（基于智能选择器）
-
-    完全根据任务复杂度自动判断：
-    - TRIVIAL/SIMPLE → 不需要Agent，直接走SkillDispatcher
-    - MODERATE/COMPLEX/VERY_COMPLEX → 需要Agent，走Agent系统
-    """
-    try:
-        selector = get_intelligent_selector()
-        plan = selector.create_execution_plan(message)
-
-        # 根据复杂度判断是否需要Agent
-        # TRIVIAL 和 SIMPLE 复杂度不需要Agent
-        if plan.complexity.value in ["trivial", "simple"]:
-            return False
-
-        # MODERATE 及以上复杂度需要Agent
-        return True
-
-    except Exception as e:
-        # 如果智能选择失败，降级到关键词判断
-        logger.warning(f"智能判断失败，降级到关键词判断: {e}")
-        message_lower = message.lower()
-        complex_keywords = [
-            "深度思考", "深入分析", "详细分析", "研究", "最新动态",
-            "分析一下", "研究一下", "怎么分析", "如何分析",
-            "为什么", "为什么是", "原因是什么", "分析原因",
-            "对比", "比较", "评估", "预测", "趋势",
-            "生成报告", "写一份", "方案", "规划",
-        ]
-        for kw in complex_keywords:
-            if kw in message_lower:
-                return True
-        return False
+    """判断是否需要走Agent系统"""
+    message_lower = message.lower()
+    complex_keywords = [
+        "深度思考", "深入分析", "详细分析", "研究", "最新动态",
+        "分析一下", "研究一下", "怎么分析", "如何分析",
+        "为什么", "为什么是", "原因是什么", "分析原因",
+        "对比", "比较", "评估", "预测", "趋势",
+        "生成报告", "写一份", "方案", "规划",
+    ]
+    for kw in complex_keywords:
+        if kw in message_lower:
+            return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -249,59 +229,6 @@ def _needs_multi_agent(message: str) -> bool:
                 return True
         
         return False
-
-
-# ---------------------------------------------------------------------------
-# 内部函数：判断是否需要使用 agency_agent（MCP 工具）
-# ---------------------------------------------------------------------------
-def _needs_mcp_tools(message: str) -> bool:
-    """判断用户是否需要使用 MCP 代码编辑工具"""
-    message_lower = message.lower()
-
-    # 精确短语匹配（优先）
-    exact_phrases = [
-        "读取文件", "写入文件", "编辑文件", "修改文件", "删除文件",
-        "创建文件", "复制文件", "移动文件", "重命名文件", "查看文件",
-        "读文件", "写文件", "改文件", "删文件", "新建文件",
-        "打开文件", "保存文件",
-        "搜索文件", "查找文件", "搜索内容", "搜索代码",
-        "搜索关键字", "搜索文本", "文件中搜索",
-        "创建目录", "创建文件夹", "列出目录", "查看目录",
-        "修改代码", "编辑代码",
-        "添加函数", "删除函数", "修改函数",
-        "read file", "write file", "edit file", "delete file",
-        "create file", "search file", "find file",
-        "grep", "glob",
-    ]
-    for kw in exact_phrases:
-        if kw in message_lower:
-            return True
-
-    # 松散匹配：动词 + 文件/代码/目录
-    action_words = [
-        "读取", "写入", "编辑", "修改", "删除", "创建",
-        "复制", "移动", "重命名", "打开", "查看", "新建",
-        "搜索", "查找", "分析", "优化", "解决", "看",
-        "读", "写", "改", "研究", "审查", "检查",
-    ]
-    objects = [
-        "文件", "代码", "目录", "文件夹", "函数", "报告",
-        "项目", "结构", "问题", "txt", "py",
-        "json", "yml", "yaml", "md", "csv", "xml",
-    ]
-
-    # 检查是否有动作词 + 对象名同时出现（不要求连续）
-    for action in action_words:
-        if action in message_lower:
-            # "读取文件内容" → action "读取" 在 message 中，不需要额外检查对象
-            for obj in objects:
-                if obj in message_lower:
-                    return True
-            # 如果 action 是"读取"且消息中包含 "/" 路径分隔符（可能是文件路径）
-            if "/" in message or "\\" in message:
-                return True
-
-    return False
 
 
 # ---------------------------------------------------------------------------
@@ -359,23 +286,6 @@ async def chat(request: ChatRequest) -> ChatResponse:
     # 智能Agent自动选择（如果启用）
     execution_plan_info = None
     agents_used = None
-    if request.auto_agent_selection:
-        try:
-            selector = get_intelligent_selector()
-            execution_plan = selector.create_execution_plan(message)
-            execution_plan_info = {
-                "complexity": execution_plan.complexity.value,
-                "execution_mode": execution_plan.execution_mode.value,
-                "agent_count": execution_plan.agent_count,
-                "agents": execution_plan.agents,
-                "estimated_time": execution_plan.estimated_time,
-                "strategy": execution_plan.strategy,
-                "auto_selected": True
-            }
-            agents_used = execution_plan.agents
-            logger.info(f"智能选择: {execution_plan.strategy}")
-        except Exception as e:
-            logger.warning(f"智能选择失败: {e}")
 
     # Web 统一走 V1 队长-队员多Agent系统（忽略 force_single_agent / force_multi_agent）
     return await _handle_with_multi_agent(request, message, start_time, context_info, execution_plan_info, agents_used)
@@ -665,72 +575,6 @@ async def _handle_with_agent(
         return await _handle_direct(request, message, start_time, context_info, execution_plan_info, agents_used)
 
 
-async def _handle_with_agency_agent(
-    request: ChatRequest,
-    message: str,
-    start_time: float,
-    context_info: Optional[Dict[str, Any]] = None,
-) -> ChatResponse:
-    """使用 agency_agent（集成 MCP 工具）处理用户请求"""
-    try:
-        from core.agency_agent import run_agent
-
-        # 给 agency_agent 一个专门的系统提示，说明它的能力
-        extra_prompt = (
-            "你是一个文件操作和代码编辑助手。\n\n"
-            "面对任何问题，先按这个流程：\n"
-            "1. **分析**：用户到底需要什么？需要读文件、搜索、还是分析？\n"
-            "2. **探索**：先看目录结构、读关键文件，收集信息\n"
-            "3. **判断**：信息够了就直接回答；不够就继续探索\n"
-            "4. **给出**：清晰、有结构的中文回答，加上你的分析\n\n"
-            "可用工具：\n"
-            "- read_file: 读取文件内容\n"
-            "- write_file: 写入文件\n"
-            "- edit_file: 编辑文件（字符串替换）\n"
-            "- glob: 搜索文件\n"
-            "- grep: 在文件中搜索文本\n"
-            "- web_fetch: 获取 URL 内容\n\n"
-            "记住：不要急着给结论，先充分探索和理解。"
-        )
-
-        reply_text = await run_agent(
-            message,
-            system_prompt_extra=extra_prompt,
-            max_steps=15,
-            step_timeout=45.0,
-        )
-
-        elapsed = time.time() - start_time
-        logger.info(f"AgencyAgent 处理完成，耗时: {elapsed:.2f}s")
-
-        # 保存聊天历史
-        try:
-            from core.handlers import save_chat_history
-            save_chat_history(request.user_id, request.agent_id, "user", message)
-            save_chat_history(request.user_id, request.agent_id, "assistant", reply_text, {
-                "skill": "agency_agent_mcp",
-                "elapsed": elapsed,
-            })
-        except Exception:
-            pass
-
-        return ChatResponse(
-            reply=reply_text,
-            skill="agency_agent_mcp",
-            thinking_process={
-                "mode": "mcp_tool_agent",
-                "description": "使用 agency_agent 驱动 MCP 工具",
-            },
-            context_info=context_info,
-            agents_used=[],
-            execution_plan=None,
-        )
-
-    except Exception as e:
-        logger.error(f"AgencyAgent 异常，降级到直接处理: {e}", exc_info=True)
-        return await _handle_direct(request, message, start_time, context_info, {}, [])
-
-
 async def _handle_direct(
     request: ChatRequest,
     message: str,
@@ -892,7 +736,7 @@ async def clear_context(request: ContextRequest):
     try:
         # 尝试从数据库清除
         try:
-            from core.infrastructure.database import get_session, ChatHistory
+            from core.database import get_session, ChatHistory
             session = get_session()
             if session:
                 count = session.query(ChatHistory).filter(ChatHistory.user_id == request.user_id).delete()

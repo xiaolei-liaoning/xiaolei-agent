@@ -34,7 +34,7 @@ async def get_chat_history_stats(
         return {"stats": {}}
 
     try:
-        from core.infrastructure.database import get_session, ChatHistory
+        from core.database import get_session, ChatHistory
         from sqlalchemy import func
         session = get_session()
         try:
@@ -129,7 +129,7 @@ async def get_task_stats(user_id: Optional[int] = None) -> Dict[str, Any]:
         return {"total": 0, "success": 0, "failed": 0, "by_type": {}}
 
     try:
-        from core.infrastructure.database import get_session, TaskLog, func
+        from core.database import get_session, TaskLog, func
         session = get_session()
         try:
             query = session.query(TaskLog)

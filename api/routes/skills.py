@@ -8,7 +8,7 @@ from typing import Optional, List
 from datetime import datetime
 import logging
 
-from core.infrastructure.database import get_session, UserSkillInstallation, Session
+from core.database import get_session, UserSkillInstallation, Session
 from sqlalchemy import and_
 
 logger = logging.getLogger(__name__)
