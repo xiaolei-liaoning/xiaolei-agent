@@ -47,7 +47,7 @@ class REPL:
 
                 # 自然语言：不作为命令处理
                 if not user_input.startswith("/"):
-                    await self.cli.handle_smart_request(user_input)
+                    await self.cli.chat_handler.handle_smart_request(user_input)
                     _console.print(f"[{CliColors.GRAY}]{'─' * 60}[/{CliColors.GRAY}]")
                     continue
 
