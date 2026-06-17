@@ -594,6 +594,7 @@ async def run_react(
     agent: Any = None,
     allowed_tools: Optional[List[str]] = None,
     disallowed_tools: Optional[List[str]] = None,
+    tool_preference: Optional[set] = None,
 ) -> dict:
     """快捷入口：直接用 ReActCore 处理任务"""
     if max_rounds == 0:
@@ -607,6 +608,8 @@ async def run_react(
         ctx.personality_prompt = personality_prompt
     ctx.allowed_tools = allowed_tools
     ctx.disallowed_tools = disallowed_tools
+    if tool_preference:
+        ctx.tool_preference = tool_preference
 
     # 默认启用上下文预算管理
     ctx.context_budget = ContextBudgetManager()

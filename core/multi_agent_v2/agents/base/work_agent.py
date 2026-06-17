@@ -97,6 +97,7 @@ class WorkAgent(BaseAgent):
                         self.personality = f"{self.personality}\n\n---\n【Skill角色】\n{skill.role_prompt[:500]}"
                     else:
                         self.personality = skill.role_prompt[:2000]
+                    self._skill_tools = skill.tools if skill.tools else []
                     print(f"    \033[1;36m🧠 BaseSkill: {skill.name}\033[0m")
             except Exception as e:
                 logger.warning(f"BaseSkill 匹配异常: {e}")
@@ -141,6 +142,7 @@ class WorkAgent(BaseAgent):
                 agent=self,
                 allowed_tools=task.context.get("allowed_tools"),
                 disallowed_tools=task.context.get("disallowed_tools"),
+                tool_preference=set(getattr(self, "_skill_tools", [])),
             )
 
             elapsed = time.time() - start
