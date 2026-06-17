@@ -4,7 +4,7 @@
   "debug": true,
   "llm": {
     "provider": "zhipuai",
-    "default_model": "glm-4-free",
+    "default_model": "glm-4-flash",
     "max_tokens": 4096,
     "temperature": 0.7,
     "timeout": 120,
