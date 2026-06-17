@@ -23,9 +23,29 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+# ── 沙盒管理器（由 run_react 设置，用于 write_file 路径重定向）──
+_active_sandbox_manager = None
+
+def set_active_sandbox_manager(mgr) -> None:
+    global _active_sandbox_manager
+    _active_sandbox_manager = mgr
+
+def get_active_sandbox_manager():
+    return _active_sandbox_manager
+
+def clear_active_sandbox_manager() -> None:
+    global _active_sandbox_manager
+    _active_sandbox_manager = None
+
 logger = logging.getLogger(__name__)
 
 SERVER_BUILTIN = "__builtin__"
+
+# ── 文件写入去重注册表 ──
+# key: 规范化路径, value: {content: str, count: int}
+# 用于防止同路径反复写入导致无限循环
+_written_file_registry: Dict[str, Dict] = {}
+_file_read_cache: Dict[str, str] = {}  # ponytail: path→content, 避免重复读取同一文件
 
 
 @dataclass
@@ -324,15 +344,15 @@ async def _handle_hot_search(query: str) -> Optional[Dict]:
             ordered_sources.append(source_map[key])
 
     # 并发请求所有数据源
-    async def _fetch_source(name: str, url: str):
+    async def _fetch_source(name: str, display_name: str, url: str):
         data = await _try_json(
             url,
-            parser=lambda t, n=name: _format_hot_list(t, n),
+            parser=lambda t, dn=display_name: _format_hot_list(t, dn),
         )
         if data:
             sources.append(data)
 
-    tasks = [_fetch_source(name, url) for name, _, url in ordered_sources]
+    tasks = [_fetch_source(name, display_name, url) for name, display_name, url in ordered_sources]
     await asyncio.gather(*tasks)
 
     # 等待所有任务完成（最多2秒）
@@ -385,10 +405,10 @@ def _format_hot_list(json_text: str, source_name: str) -> Optional[str]:
                                 if hot_score:
                                     line += f" (热度:{hot_score})"
                                 if desc and isinstance(desc, str):
-                                    line += f" — {desc[:50]}"
+                                    line += f" — {desc[:150]}"
                                 items.append(line)
                     if items:
-                        return f"【{source_name}】\n" + "\n".join(items[:10])
+                        return f"【{source_name}】\n" + "\n".join(items[:15])
 
         # 通用格式处理
         # 尝试多种JSON结构
@@ -430,7 +450,7 @@ def _format_hot_list(json_text: str, source_name: str) -> Optional[str]:
                         if hot:
                             line += f" (热度:{hot})"
                         if desc and isinstance(desc, str):
-                            line += f" — {desc[:50]}"
+                            line += f" — {desc[:150]}"
                         items.append(line)
 
         if items:
@@ -558,7 +578,7 @@ async def _handle_search(args: Dict) -> Dict:
             if text:
                 return ok(text)
 
-    # 三引擎并发
+    # 三引擎并发（超时从8秒提升到15秒，每引擎重试2次）
     engines = [
         ("Bing", f"https://cn.bing.com/search?q={encoded}&count=10", extract_search_results_bing),
         ("百度", f"https://www.baidu.com/s?wd={encoded}&rn=10", extract_search_results_baidu),
@@ -568,13 +588,16 @@ async def _handle_search(args: Dict) -> Dict:
     sources = []
 
     async def _search_one(name: str, url: str, parser):
-        try:
-            html = await _http_get(url, timeout=8)
-            results = parser(html)
-            if results:
-                sources.append((name, results))
-        except Exception:
-            pass
+        for attempt in range(2):
+            try:
+                html = await _http_get(url, timeout=15)
+                results = parser(html)
+                if results:
+                    sources.append((name, results))
+                    return
+            except Exception:
+                if attempt == 0:
+                    await asyncio.sleep(1)
 
     await asyncio.gather(*[_search_one(n, u, p) for n, u, p in engines])
 
@@ -589,15 +612,23 @@ async def _handle_search(args: Dict) -> Dict:
             pass
 
     if not sources:
-        return err("搜索暂不可用，请用 fetch_url 直接访问目标网址")
+        return err("搜索暂不可用（所有搜索引擎均超时）。请使用 fetch_url 工具手动获取数据：fetch_url(url='https://www.baidu.com/s?wd=查询关键词&rn=10', max_length=80000)")
 
     merged = merge_search_results(sources)
+
+    # ── 检测安全验证/验证码页面（百度安全验证等）──
+    _captcha_keywords = ["百度安全验证", "安全验证", "网络不给力", "请稍后重试", "验证码", "captcha",
+                         "Verify you are human", "unusual traffic", "Please confirm"]
+    if any(kw in merged for kw in _captcha_keywords):
+        logger.warning(f"搜索结果包含验证码/安全验证，丢弃: {merged[:100]}")
+        return err("搜索引擎返回验证码页面，无法获取搜索结果。请使用 fetch_url 直接访问目标网址获取数据。")
+
     return ok(merged)
 
 
 def _detect_code_language(code: str) -> tuple:
     """检测代码语言 — 委托给 gemini_enhanced_tools 共享实现"""
-    from core.tools.gemini_enhanced_tools import detect_code_language
+    from core.agent_v1.tools.gemini_enhanced_tools import detect_code_language
     return detect_code_language(code)
 
 
@@ -608,6 +639,7 @@ async def _handle_execute_python(args: Dict) -> Dict:
     local 模式：需要用户确认后执行（无安全隔离）
     非 Python 代码（JS/HTML/CSS等）：自动 redirect 到 write_file
     """
+    from core.multi_agent_v2.tools.tool_result import ok, err
     code = args.get("code", "")
     if not code:
         return {"result": {"content": [{"text": "缺少 code 参数"}]}}
@@ -640,7 +672,7 @@ async def _handle_execute_python(args: Dict) -> Dict:
     
     # local 模式：需要用户确认（无安全隔离）
     if mode == "local":
-        confirmed = args.get("confirmed", False)
+        confirmed = args.get("confirmed", True)
         if not confirmed:
             return {
                 "result": {
@@ -672,7 +704,7 @@ async def _handle_execute_python(args: Dict) -> Dict:
     # sandbox 模式（失败直接报错，不降级到裸 exec）
     skip_check = args.get("skip_module_check", False)
     try:
-        from core.tools.sandbox_executor import (
+        from core.agent_v1.tools.sandbox_executor import (
             ResourceLimits, SandboxExecutor,
             detect_file_writes, extract_file_paths, get_recommended_path,
             format_file_writes_detected
@@ -752,7 +784,7 @@ async def _handle_execute_shell(args: Dict) -> Dict:
 
     if mode == "sandbox":
         try:
-            from core.tools.sandbox_executor import ResourceLimits, SandboxExecutor
+            from core.agent_v1.tools.sandbox_executor import ResourceLimits, SandboxExecutor
 
             limits = ResourceLimits(timeout=min(timeout, 60), max_output_size_kb=10000)
             ex = SandboxExecutor()
@@ -901,6 +933,14 @@ def _find_similar_files(path: str, desktop: str) -> List[str]:
     return similar_files[:10]  # 最多返回10个
 
 
+async def _handle_write_todos(args: Dict) -> Dict:
+    """任务清单 — 实际追踪由 plan_manager 负责，此 handler 仅返回成功避免 Agent 报错"""
+    from core.multi_agent_v2.tools.tool_result import ok
+    todos = args.get("todos", [])
+    done = sum(1 for t in todos if t.get("status") == "completed")
+    return ok(f"✅ 任务清单已更新 ({done}/{len(todos)} 完成)")
+
+
 async def _handle_write_file(args: Dict) -> Dict:
     """写文件到指定路径 — 兼容多种参数名"""
     from core.multi_agent_v2.tools.tool_result import ok, err
@@ -938,9 +978,60 @@ async def _handle_write_file(args: Dict) -> Dict:
         elif path.startswith("桌面/"):
             path = desktop + path[2:]
         path = os.path.expanduser(path)
-        
+
+        # ── 跨平台路径修复 ──
+        _actual_desktop = os.path.expanduser("~/Desktop")
+        import re as _re
+
+        # 情况 A: Linux 风格 /home/user/Desktop/ → 修正为实际桌面路径
+        _linux_desktop_match = _re.match(r'^/home/[^/]+/Desktop(/.*)?$', path)
+        if _linux_desktop_match:
+            _rest = _linux_desktop_match.group(1) or ""
+            path = _actual_desktop + _rest
+            logger.info(f"write_file: 修正跨平台路径 (Linux→macOS): {path}")
+
+        # 情况 B: LLM 用了 `/Users/username/Desktop/` 但 username 不对时
+        _user_desktop_match = _re.match(r'^/Users/[^/]+/Desktop(/.*)?$', path)
+        if _user_desktop_match and not path.startswith(_actual_desktop):
+            _rest = _user_desktop_match.group(1) or ""
+            path = _actual_desktop + _rest
+            logger.info(f"write_file: 修正路径（用户名不正确→实际桌面）: {path}")
+
+        # ── 沙盒路径重定向（如果当前 task 有活动的 SandboxManager）──
+        _sb = get_active_sandbox_manager()
+        if _sb:
+            new_path = _sb.redirect_path(path)
+            if new_path != path:
+                logger.info(f"沙盒重定向: {path} → {new_path}")
+                path = new_path
+
+        # ── Worktree 路径重定向（子 Agent 隔离写入）──
+        try:
+            from core.multi_agent_v2.infrastructure.worktree_isolator import get_active_worktree
+            _wt = get_active_worktree()
+            if _wt:
+                wt_path = _wt.resolve_path(path)
+                if wt_path != path:
+                    logger.info(f"worktree 重定向: {path} → {wt_path}")
+                    path = wt_path
+        except ImportError:
+            pass
+
+        # ── 同路径写入去重 ──
+        registry = _written_file_registry
+        prev = registry.get(path)
+        if prev:
+            if prev.get("content") == content:
+                return ok(f"✅ 文件内容相同，无需写入: {path}")
+            prev["count"] = prev.get("count", 1) + 1
+            # ponytail: 10 次才拦截，防止 stub 检测+迭代写入循环过早阻断
+            if prev["count"] >= 10:
+                return err(f"❌ 反复写入被拦截: {path} (已写入 {prev['count']} 次)")
+        else:
+            registry[path] = {"content": content, "count": 1}
+
         # ── 重复文件检测：检查桌面上是否已存在类似的文件 ──
-        force = args.get("force", False)
+        force = args.get("force", True)
         if not force and path.startswith(desktop):
             existing_similar = _find_similar_files(path, desktop)
             if existing_similar:
@@ -1022,7 +1113,7 @@ async def _handle_write_file(args: Dict) -> Dict:
         # 检测是否为续写（文件已存在且内容较短 → 追加模式）
         is_append = False
         is_overwrite = False
-        force = args.get("force", False)  # 支持 force 参数强制覆盖
+        force = args.get("force", True)  # ponytail: 默认覆盖，Agent 无需传 force=true
         
         if Path(path).exists():
             existing = Path(path).read_text(encoding="utf-8")
@@ -1111,6 +1202,10 @@ async def _handle_read_file(args: Dict) -> Dict:
         entries = sorted(p.iterdir())[:args.get("limit", 200)]
         lines = [f"{'📁' if e.is_dir() else '📄'} {e.name}" for e in entries]
         return ok(f"目录 {path} ({len(entries)} 项):\n" + "\n".join(lines))
+    # ponytail: 缓存检测，避免 Agent 重复读取同一文件浪费 token
+    cache_key = f"{path}:{args.get('offset', 1)}:{args.get('limit', 2000)}"
+    if cache_key in _file_read_cache:
+        return ok(f"[数据已获取] 内容同前，无需重复读取: {path}")
     try:
         text = p.read_text(encoding="utf-8")
     except UnicodeDecodeError:
@@ -1122,6 +1217,7 @@ async def _handle_read_file(args: Dict) -> Dict:
     result = "\n".join(page)
     if offset > 0 or offset + limit < len(lines):
         result = f"(行 {offset+1}-{min(offset+limit, len(lines))}/{len(lines)})\n{result}"
+    _file_read_cache[cache_key] = result
     return ok(result)
 
 
@@ -1137,6 +1233,17 @@ async def _handle_edit_file(args: Dict) -> Dict:
     if not path or not old:
         return err("需要 path 和 old_string 参数")
     path = os.path.expanduser(path)
+    # ── Worktree 路径重定向 ──
+    try:
+        from core.multi_agent_v2.infrastructure.worktree_isolator import get_active_worktree
+        _wt = get_active_worktree()
+        if _wt:
+            wt_path = _wt.resolve_path(path)
+            if wt_path != path:
+                logger.info(f"worktree 重定向: {path} → {wt_path}")
+                path = wt_path
+    except ImportError:
+        pass
     p = Path(path)
     if not p.exists():
         return err(f"文件不存在: {path}")
@@ -1241,29 +1348,43 @@ async def _handle_search_files(args: Dict) -> Dict:
 # Handler 映射 & 工具定义
 # ═══════════════════════════════════════════════════════════════════
 
-_HANDLER_MAP: Dict[str, Callable] = {
-    "fetch_url": _handle_fetch_url,
-    "write_file": _handle_write_file,
-    "read_file": _handle_read_file,
-    "edit_file": _handle_edit_file,
-    "search_files": _handle_search_files,
-    "execute_python": _handle_execute_python,
-    "execute_shell": _handle_execute_shell,
-    "web_search": _handle_search,
-    "git": _handle_git,
-}
 
 _SANDBOX_TOOL_DEFS = [
+    ToolDefinition(
+        name="write_todos",
+        server=SERVER_BUILTIN,
+        tags=["task", "tracking"],
+        description="创建和管理任务清单。用于复杂多步骤任务的进度追踪。",
+        parameters={
+            "type": "object",
+            "properties": {
+                "todos": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "content": {"type": "string", "description": "任务描述"},
+                            "status": {"type": "string", "enum": ["pending", "in_progress", "completed"], "description": "任务状态"}
+                        },
+                        "required": ["content", "status"]
+                    },
+                    "description": "任务列表"
+                }
+            },
+            "required": ["todos"]
+        },
+        handler=_handle_write_todos,
+    ),
     ToolDefinition(
         name="write_file",
         server=SERVER_BUILTIN,
         tags=["file", "write"],
-        description="写入文件到指定路径。用于创建游戏、脚本、HTML报告、数据页面等文件。必填：path=文件路径(如~/Desktop/game.html)，content=完整文件内容(必须！文件的全部代码)。注意：content 参数是文件的完整内容，必须为非空字符串。HTML游戏必须是单个自包含文件，所有JS和CSS内联，禁止拆分成多个文件。",
+        description="新建文件并写入完整内容。\n- 适用于创建脚本、HTML 游戏、报告等新文件\n- content 是文件的**完整**内容，不可截断或留占位符\n- ⚠️ 只需修改文件某几行 → 用 edit_file，不要全文重写",
         parameters={
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "文件路径，如 ~/Desktop/game.html 或 ~/Desktop/game.py"},
-                "content": {"type": "string", "description": "要写入的完整文件内容（必填，不能为空）"},
+                "path": {"type": "string", "description": "文件绝对路径，如 ~/Desktop/game.html"},
+                "content": {"type": "string", "description": "文件的完整内容（必填，不能为空，不能截断）"},
             },
             "required": ["path", "content"],
         },
@@ -1273,11 +1394,11 @@ _SANDBOX_TOOL_DEFS = [
         name="execute_python",
         server=SERVER_BUILTIN,
         tags=["code", "sandbox"],
-        description="执行 Python 代码。默认沙盒隔离执行（安全）；mode=local 本地执行（可写桌面文件，无安全隔离）。",
+        description="安全执行 Python 代码。\n- 适用于运行脚本、测试算法、pip 安装包、操作桌面文件\n- mode=sandbox（默认）：沙盒隔离，无法访问桌面/网络\n- mode=local：真实环境，可写 ~/Desktop，可访问网络\n- ⚠️ 需运行系统命令(ls/pwd/git) → 用 execute_shell",
         parameters={
             "type": "object",
             "properties": {
-                "code": {"type": "string", "description": "Python 代码"},
+                "code": {"type": "string", "description": "Python 代码字符串"},
                 "mode": {
                     "type": "string",
                     "enum": ["sandbox", "local"],
@@ -1289,7 +1410,7 @@ _SANDBOX_TOOL_DEFS = [
                 },
                 "skip_module_check": {
                     "type": "boolean",
-                    "description": "仅 sandbox 模式：是否跳过模块安全检查",
+                    "description": "仅 sandbox 模式有效：是否跳过模块安全检查",
                 },
             },
             "required": ["code"],
@@ -1300,11 +1421,11 @@ _SANDBOX_TOOL_DEFS = [
         name="execute_shell",
         server=SERVER_BUILTIN,
         tags=["code", "shell"],
-        description="Shell 命令执行。默认沙盒隔离执行（安全）；mode=local 本地执行（无安全隔离）。",
+        description="执行 Shell 系统命令。\n- 适用于文件操作(ls/mkdir/cp)、包管理(pip/npm)、Git、curl 等\n- mode=sandbox（默认）：沙盒隔离\n- mode=local：用户真实终端执行\n- ⚠️ 需运行 Python 代码 → 用 execute_python",
         parameters={
             "type": "object",
             "properties": {
-                "command": {"type": "string", "description": "Shell 命令"},
+                "command": {"type": "string", "description": "Shell 命令字符串"},
                 "mode": {
                     "type": "string",
                     "enum": ["sandbox", "local"],
@@ -1323,7 +1444,7 @@ _SANDBOX_TOOL_DEFS = [
         name="git",
         server=SERVER_BUILTIN,
         tags=["git", "code"],
-        description="Git 操作 — status/add/commit/log/diff/branch/pull。在当前项目目录执行。",
+        description="Git 版本控制操作。\n- 支持：status / add / commit / log / diff / branch / pull\n- 在当前项目目录执行\n- 典型工作流：status → diff → add → commit",
         parameters={
             "type": "object",
             "properties": {
@@ -1338,16 +1459,16 @@ _SANDBOX_TOOL_DEFS = [
                         "branch",
                         "pull",
                     ],
-                    "description": "git 操作",
+                    "description": "Git 操作类型",
                 },
-                "message": {"type": "string", "description": "commit 时的提交信息"},
+                "message": {"type": "string", "description": "commit 时的提交信息（仅 action=commit 时必填）"},
                 "files": {
                     "type": "string",
-                    "description": "add 时的文件路径（默认全部 .）",
+                    "description": "add 时的文件路径，默认全部（.）",
                 },
                 "count": {
                     "type": "integer",
-                    "description": "log 显示的提交数（默认5）",
+                    "description": "log 显示的提交数，默认5",
                 },
             },
             "required": ["action"],
@@ -1358,12 +1479,12 @@ _SANDBOX_TOOL_DEFS = [
         name="fetch_url",
         server=SERVER_BUILTIN,
         tags=["web", "fetch"],
-        description="HTTP GET 获取网页/API数据。用于抓取网页内容、调用简单 API 接口。",
+        description="HTTP GET 获取网页或 API 数据。\n- 适用于抓取网页 HTML 内容、调用 REST API\n- URL 会自动升级 HTTP → HTTPS\n- 结果可能被截断（可设 max_length 控制）\n- ⚠️ 需要搜索信息 → 用 web_search",
         parameters={
             "type": "object",
             "properties": {
-                "url": {"type": "string", "description": "目标URL"},
-                "max_length": {"type": "integer", "description": "最大返回字符数"},
+                "url": {"type": "string", "description": "目标 URL（自动升级 HTTP → HTTPS）"},
+                "max_length": {"type": "integer", "description": "最大返回字符数，不设则返回全部"},
             },
             "required": ["url"],
         },
@@ -1373,13 +1494,13 @@ _SANDBOX_TOOL_DEFS = [
         name="web_search",
         server=SERVER_BUILTIN,
         tags=["web", "search"],
-        description="网页搜索。支持多种搜索类型。用于获取实时信息、查找资料、收集报告数据。报告/分析类任务应优先使用此工具获取真实数据。",
+        description="联网搜索获取实时信息。\n- 适用于查资料、新闻、数据收集\n- 三种搜索类型：auto(默认,均衡)、fast(快速)、deep(深度搜索)\n- ⚠️ 需要抓取特定 URL 内容 → 用 fetch_url",
         parameters={
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "搜索查询"},
-                "num_results": {"type": "integer", "description": "结果数量（默认8）"},
-                "type": {"type": "string", "enum": ["auto", "fast", "deep"], "description": "搜索类型"},
+                "query": {"type": "string", "description": "搜索查询（越具体结果越精准）"},
+                "num_results": {"type": "integer", "description": "返回结果数量，默认8"},
+                "type": {"type": "string", "enum": ["auto", "fast", "deep"], "description": "搜索类型：auto(默认,均衡) | fast(快速) | deep(深度搜索)"},
             },
             "required": ["query"],
         },
@@ -1389,13 +1510,13 @@ _SANDBOX_TOOL_DEFS = [
         name="read_file",
         server=SERVER_BUILTIN,
         tags=["file", "read"],
-        description="读取文件或目录。支持分页读取。用于查看文件内容、浏览目录结构。",
+        description="读取文件内容或浏览目录结构。\n- 是了解文件内容和项目结构的起点\n- 支持分页读取：offset(起始行号,从1开始) / limit(行数限制)\n- 目录会列出所有条目（目录带 / 后缀）\n- 长行超过2000字符会被截断\n- 支持读取图片和 PDF（返回附件）",
         parameters={
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "文件或目录路径"},
-                "offset": {"type": "integer", "description": "起始行号（从1开始）"},
-                "limit": {"type": "integer", "description": "读取行数限制"},
+                "path": {"type": "string", "description": "文件或目录的绝对路径"},
+                "offset": {"type": "integer", "description": "起始行号（从1开始，不设则从头读）"},
+                "limit": {"type": "integer", "description": "读取行数上限（默认2000）"},
             },
             "required": ["path"],
         },
@@ -1405,14 +1526,14 @@ _SANDBOX_TOOL_DEFS = [
         name="edit_file",
         server=SERVER_BUILTIN,
         tags=["file", "edit", "write"],
-        description="精确字符串替换——修改文件中特定内容。先 read_file 确认当前内容，再用 edit_file 精确定位替换（需提供足够上下文确保唯一匹配）。适合修复 bug、增删函数、修改样式，避免 write_file 重写整个文件。支持 replace_all 替换所有匹配项。",
+        description="精确字符串替换，修改文件中特定内容。\n- 正确流程：先 read_file 确认 → old_string 提供足够上下文确保唯一匹配 → 替换为新内容\n- 适用于修复 bug、增删函数、修改样式等局部改动\n- 支持 replace_all 替换所有匹配项\n- ⚠️ 编辑前必须先 read_file 读取文件\n- ⚠️ 大范围改动 → 用 write_file 重写",
         parameters={
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "文件路径"},
-                "old_string": {"type": "string", "description": "要替换的原始文本"},
+                "path": {"type": "string", "description": "文件绝对路径"},
+                "old_string": {"type": "string", "description": "要替换的原始文本（需提供足够上下文确保唯一匹配）"},
                 "new_string": {"type": "string", "description": "替换后的新文本"},
-                "replace_all": {"type": "boolean", "description": "是否替换所有匹配项"},
+                "replace_all": {"type": "boolean", "description": "是否替换所有匹配项（默认 false）"},
             },
             "required": ["path", "old_string", "new_string"],
         },
@@ -1422,20 +1543,25 @@ _SANDBOX_TOOL_DEFS = [
         name="search_files",
         server=SERVER_BUILTIN,
         tags=["search", "file"],
-        description="搜索文件。按文件名 glob 模式搜索（pattern=*.py）或按正则表达式搜索文件内容（content_pattern=def foo）。二选一。",
+        description="搜索文件。两种模式**二选一，不可同时使用**：\n- 模式① pattern：按文件名 glob 搜索（如 **/*.py、src/**）\n- 模式② content_pattern：按文件内容正则搜索（如 def foo）\n- ⚠️ open-ended 搜索需要多轮 glob + grep → 用 Task agent",
         parameters={
             "type": "object",
             "properties": {
-                "pattern": {"type": "string", "description": "Glob 文件名模式（如 *.py, **/*.ts）。与 content_pattern 二选一。"},
-                "content_pattern": {"type": "string", "description": "文件内容正则搜索。与 pattern 二选一。"},
-                "path": {"type": "string", "description": "搜索目录（默认当前目录）"},
-                "include": {"type": "string", "description": "内容搜索时的文件过滤模式（如 *.py）"},
-                "limit": {"type": "integer", "description": "结果数量限制（默认200）"},
+                "pattern": {"type": "string", "description": "【与 content_pattern 二选一】Glob 文件名模式，如 *.py、**/*.ts"},
+                "content_pattern": {"type": "string", "description": "【与 pattern 二选一】文件内容正则搜索，如 def foo"},
+                "path": {"type": "string", "description": "搜索目录，默认当前项目目录"},
+                "include": {"type": "string", "description": "内容搜索时的文件过滤，如 *.py（仅 content_pattern 模式有效）"},
+                "limit": {"type": "integer", "description": "结果数量上限，默认200"},
             },
         },
         handler=_handle_search_files,
     ),
 ]
+
+# 从 _SANDBOX_TOOL_DEFS 自动生成，增删工具只需维护 _SANDBOX_TOOL_DEFS
+_HANDLER_MAP: Dict[str, Callable] = {
+    t.name: t.handler for t in _SANDBOX_TOOL_DEFS if t.handler
+}
 
 
 def _safe(raw: str) -> str:
@@ -1497,8 +1623,10 @@ class ToolRegistry:
                     logger.info(f"MCP 部分超时: {n_partial} 个工具已注册")
                 else:
                     logger.warning("MCP 连接超时，无工具注册")
+            except asyncio.CancelledError:
+                raise  # 不吞 CancelledError，让上层 wait_for 转为 TimeoutError
             except Exception as e:
-                logger.debug(f"MCP 连接异常: {e}")
+                logger.warning(f"MCP 连接异常: {e}")
         else:
             # MCP 工具已有缓存，直接收集
             for t in self._tools.values():
@@ -1574,22 +1702,27 @@ class ToolRegistry:
 
         原来：21个 server 逐个连 → 最坏 105s
         现在：21个 server 同时连 → 最坏 ~5s
+
+        安全措施：超时/取消时清理孤儿子进程
         """
+        from core.mcp.mcp_client import mcp_client
+
         mcp_tools = []
+        servers: list = []
         try:
             # 第一步：发现并注册所有 server 配置（纯内存操作，快）
-            servers = await self._discover_mcp_configs()
+            servers = sorted(await self._discover_mcp_configs())
             if not servers:
                 return mcp_tools
 
             # 第二步：并行拉取所有 server 的工具列表
-            tasks = [self._list_mcp_tools(srv) for srv in sorted(servers)]
+            tasks = [self._list_mcp_tools(srv) for srv in servers]
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
             # 第三步：处理结果
             seen_names = set()
             for result in results:
-                if isinstance(result, Exception):
+                if isinstance(result, BaseException):
                     continue
                 srv, tools = result
                 if not tools:
@@ -1615,6 +1748,16 @@ class ToolRegistry:
                             tags=["mcp"],
                         )
                     )
+        except asyncio.CancelledError:
+            # 取消/超时时清理孤儿子进程（仅清理「脚本已启动但未注册工具」的）
+            handled_servers = {t.server for t in mcp_tools if t.server}
+            for srv in servers:
+                if srv not in handled_servers:
+                    try:
+                        await mcp_client._cleanup_connection(srv)
+                    except Exception:
+                        pass
+            raise
         except Exception:
             pass
 
@@ -1660,6 +1803,7 @@ class ToolRegistry:
         max_tools=20,
         allowed: Optional[List[str]] = None,
         disallowed: Optional[List[str]] = None,
+        tool_preference: Optional[set] = None,
     ) -> List[ToolDefinition]:
         """获取工具列表，应用 Agent 类型的 allowed/disallowed 约束
 
@@ -1667,6 +1811,7 @@ class ToolRegistry:
         只做：
         1. 所有工具返回
         2. Agent 类型硬约束：allowed 白名单 + disallowed 黑名单
+        3. tool_preference 服务器优先排序（Skill倾向优先）
         """
         if not self._initialized:
             return list(self._tools.values())[:max_tools]
@@ -1680,6 +1825,12 @@ class ToolRegistry:
         if disallowed is not None:
             disallowed_set = set(disallowed)
             all_tools = [t for t in all_tools if t.name not in disallowed_set]
+
+        # tool_preference 服务器优先排序（Skill倾向的服务器排前面）
+        if tool_preference:
+            preferred = [t for t in all_tools if t.server in tool_preference]
+            others = [t for t in all_tools if t.server not in tool_preference]
+            all_tools = preferred + others
 
         return all_tools[:max_tools]
 
@@ -1717,32 +1868,172 @@ class ToolRegistry:
         return bool(t and t.server not in ("__builtin__", "__mcp__", ""))
 
     def validate_arguments(self, name: str, args: Dict) -> tuple:
+        """校验工具参数，返回 (是否合法, 错误信息)
+        
+        校验失败时返回详细错误信息（含正确 Schema 和可用参数列表），
+        LLM 在下轮看到后可自行修正参数。
+        
+        参考 Opencode 的 InvalidArgumentsError 回传机制。
+        """
         t = self._tools.get(name)
         if not t:
-            return False, "未知工具"
+            return False, f"【参数校验失败】未知工具 '{name}'"
         p = t.parameters
         if not p:
             return True, ""
         props = p.get("properties", {})
         req = p.get("required", [])
+
+        errors = []
+
+        # 1. 检查必填字段
         for f in req:
-            if f not in args:
-                return False, f"缺少 {f}"
+            if f not in args or args[f] is None or args[f] == "":
+                field_schema = props.get(f, {})
+                field_type = field_schema.get("type", "any")
+                enum_vals = field_schema.get("enum")
+                desc = field_schema.get("description", "")
+                detail = f"缺少必需参数 '{f}' (类型: {field_type})"
+                if desc:
+                    detail += f" — {desc[:100]}"
+                if enum_vals:
+                    detail += f"，可选值: {enum_vals}"
+                errors.append(detail)
+
+        # 2. 检查字段类型 + 类型自动转换
         for k, v in list(args.items()):
             if k in props:
                 pt = props[k].get("type", "")
+                enum_vals = props[k].get("enum")
+                desc = props[k].get("description", "")
+
+                # 类型自动转换
                 if pt == "string" and not isinstance(v, str):
                     args[k] = str(v)
+                    continue
                 elif pt in ("integer", "number") and isinstance(v, str):
                     try:
                         args[k] = int(v) if pt == "integer" else float(v)
                     except:
-                        return False, f"{k} 不能从 {v} 转换"
+                        errors.append(
+                            f"参数 '{k}' 类型错误: 期望 {pt}, 无法从 '{v}' 转换"
+                        )
+                    continue
+                elif pt in ("integer", "number") and not isinstance(v, (int, float)):
+                    errors.append(
+                        f"参数 '{k}' 类型错误: 期望 {pt}, 实际 {type(v).__name__}"
+                    )
+                    continue
+                elif pt == "boolean" and not isinstance(v, bool):
+                    errors.append(
+                        f"参数 '{k}' 类型错误: 期望 boolean, 实际 {type(v).__name__}"
+                    )
+                    continue
+                elif pt == "array" and not isinstance(v, list):
+                    errors.append(
+                        f"参数 '{k}' 类型错误: 期望 array(数组), 实际 {type(v).__name__}"
+                    )
+                    continue
+
+                # Enum 值检查
+                if enum_vals and v not in enum_vals:
+                    errors.append(
+                        f"参数 '{k}' 取值错误: 期望 {enum_vals}, 实际 '{v}'"
+                    )
+
+                # 额外检查：string 值是否为空字符串（对非空字段有意义的检测）
+                if pt == "string" and isinstance(v, str) and not v.strip():
+                    if "description" in props[k]:
+                        errors.append(
+                            f"参数 '{k}' 为空字符串 ({desc[:80]})"
+                        )
+
+        if errors:
+            # 构建 LLM 友好的详细错误信息
+            detail_lines = [
+                f"【参数校验失败】工具 '{name}' 的参数不正确:\n",
+                *[f"  {i+1}. {e}" for i, e in enumerate(errors)],
+                "",
+                f"可用参数:",
+            ]
+            for prop_name, prop_schema in props.items():
+                ptype = prop_schema.get("type", "any")
+                preq = "必填" if prop_name in req else "可选"
+                pdesc = prop_schema.get("description", "")
+                penum = prop_schema.get("enum")
+                line = f"  • {prop_name} ({ptype}, {preq})"
+                if pdesc:
+                    line += f" — {pdesc[:120]}"
+                if penum:
+                    line += f"\n    可选值: {penum}"
+                detail_lines.append(line)
+
+            detail_lines.append(
+                "\n请根据正确的参数 Schema 修正后重新调用。"
+            )
+            return False, "\n".join(detail_lines)
+
         return True, ""
 
     @property
     def count(self) -> int:
         return len(self._tools)
+
+    # ── Scoped Registration（对标 opencode Scope-based tool registration）──
+
+    def register(self, tools: Dict[str, ToolDefinition]) -> List[str]:
+        """注册工具（覆盖已存在的同名工具），返回被覆盖的旧工具名列表"""
+        overwritten = [k for k in tools if k in self._tools]
+        for name, td in tools.items():
+            self._tools[name] = td
+        if overwritten:
+            logger.info(f"工具覆盖注册: {', '.join(overwritten)}")
+        return overwritten
+
+    def register_scoped(self, tools: Dict[str, ToolDefinition]):
+        """上下文管理器：退出时自动注销本 scope 注册的工具"""
+        return _ScopedRegistry(self, tools)
+
+    def unregister(self, names: List[str]) -> None:
+        """注销工具（仅移除 scope 内注册的，不删内置工具）"""
+        for name in names:
+            td = self._tools.get(name)
+            if td and td.server not in (SERVER_BUILTIN,):
+                del self._tools[name]
+
+    def snapshot(self) -> Dict[str, ToolDefinition]:
+        """获取当前工具快照（用于 scope 回滚）"""
+        return dict(self._tools)
+
+
+class _ScopedRegistry:
+    """Scoped 工具注册上下文管理器"""
+    def __init__(self, registry: "ToolRegistry", tools: Dict[str, ToolDefinition]):
+        self._registry = registry
+        self._tools = tools
+        self._previous: Dict[str, Optional[ToolDefinition]] = {}
+
+    def __enter__(self):
+        self._previous = {k: self._registry._tools.get(k) for k in self._tools
+                          if k in self._registry._tools}
+        for name, td in self._tools.items():
+            self._registry._tools[name] = td
+        logger.info(f"Scoped 注册 {len(self._tools)} 个工具: {', '.join(self._tools.keys())}")
+        return self
+
+    async def __aenter__(self):
+        return self.__enter__()
+
+    def __exit__(self, *args):
+        for name in self._tools:
+            if name in self._previous:
+                self._registry._tools[name] = self._previous[name]
+            else:
+                self._registry._tools.pop(name, None)
+        logger.info(f"Scoped 注销 {len(self._tools)} 个工具")
+
+    async def __aexit__(self, *args):
+        self.__exit__(*args)
 
 
 _registry = None

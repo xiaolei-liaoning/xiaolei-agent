@@ -181,6 +181,7 @@ class ReActCoreMiddleware(BaseMiddleware):
                         max_tools=20,
                         allowed=ctx.allowed_tools,
                         disallowed=ctx.disallowed_tools,
+                        tool_preference=ctx.tool_preference,
                     )
                 except Exception:
                     filtered = tool_cache[:20]
