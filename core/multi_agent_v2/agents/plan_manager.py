@@ -57,23 +57,41 @@ async def generate_plan(
         understanding = ""
 
     # ── 第二步：根据理解 + 工具信息，生成结构化计划 ──
+    # 动态工具列表，与 _SANDBOX_TOOL_DEFS 保持一致
+    try:
+        from core.multi_agent_v2.tools.tool_registry import _SANDBOX_TOOL_DEFS
+        _plan_tool_lines = [
+            f"  {t.name} — {t.description.split(chr(10))[0].rstrip('.')}"
+            for t in _SANDBOX_TOOL_DEFS
+            if t.server == "__builtin__" and t.name not in ("git", "search_files")
+        ]
+        _plan_tools_text = "\n".join(_plan_tool_lines)
+    except Exception:
+        _plan_tools_text = (
+            "  write_file — 写入文件到指定路径\n"
+            "  edit_file — 精确替换文件内容\n"
+            "  read_file — 读取文件内容\n"
+            "  execute_python — 执行Python代码\n"
+            "  web_search — 网页搜索\n"
+            "  fetch_url — HTTP GET获取网页/API数据"
+        )
+
     plan_prompt = (
         "根据任务理解和可用工具，将任务拆解为1-2个执行步骤。\n\n"
         "【任务理解】\n"
         f"{understanding if understanding else task_description[:200]}\n\n"
-        "【重要规则】\n"
-        "- 最多2个步骤，不要拆分过细\n"
-        "- 每个步骤只能包含一个工具调用\n"
+        "【⚡核心规则】\n"
+        "- 每个步骤做一件事（例如创建 notes.md 就是一件事），"
+        "不需要拆成创建+写入两个步骤\n"
+        "- 创建单文件项目（游戏/工具）— 1 步就够了\n"
+        "  - HTML 游戏：所有 CSS 和 JS 全部内嵌在单一 .html 文件中\n"
+        "  - Python 脚本：全部代码写入一个 .py 文件\n"
+        "- 如果要创建多个独立文件 — 每个文件一个步骤\n"
         "- ⚠️ 创建文件（游戏/HTML/脚本）必须用 write_file，不要用 execute_python！\n"
         "- 抓取网页数据（热搜/新闻/搜索结果）→ 用 web_search 或 fetch_url\n"
         "- ⚠️ 请直接输出你的计划，不要输出模板文字\n\n"
         "【可用工具】\n"
-        "  write_file — 写入文件到指定路径（创建游戏/HTML/脚本必用！）\n"
-        "  edit_file — 精确替换文件内容（改代码必用！先 read_file 读取，再用 edit_file 替换）\n"
-        "  read_file — 读取文件内容\n"
-        "  execute_python — 执行Python代码（仅用于数据处理、计算，不能创建持久文件）\n"
-        "  web_search — 网页搜索\n"
-        "  fetch_url — HTTP GET获取网页/API数据\n\n"
+        f"{_plan_tools_text}\n\n"
         "【输出格式】每行一个步骤，格式：步骤|具体描述|工具名\n"
         "⚠️ 「具体描述」必须包含具体文件路径，不要写泛泛的描述\n\n"
         "示例（参考格式，不要照抄内容）：\n"
@@ -120,6 +138,7 @@ async def generate_plan(
             steps.append(
                 PlanStep(index=len(steps) + 1, description=desc, tool_names=tools)
             )
+
         return steps[:5]
     except Exception:
         return []
@@ -188,13 +207,38 @@ def update_step_status(ctx: RunContext, prefix: str = "") -> None:
     if not ctx.tool_results:
         return
 
-    # 检查最近一次工具调用的结果中是否包含错误
     last_result = ctx.tool_results[-1]
-    last_raw = str(last_result.get("result", last_result.get("error", "")))
-    has_error = any(
-        marker in last_raw
-        for marker in ["❌", "SyntaxError", "NameError", "TypeError", "Error:", "需要", "失败"]
-    )
+    last_success = last_result.get("success", False)
+
+    done_count = sum(1 for s in ctx.plan if s.status == "done")
+    if done_count >= len(ctx.plan):
+        return
+    current_step = ctx.plan[done_count]
+
+    # 核心修复：工具成功完成 → 直接标记步骤 done，不受 forced_instructions 影响
+    if last_success and current_step.tool_names:
+        from collections import Counter
+        succeeded = Counter()
+        for tr in ctx.tool_results:
+            tn = tr.get("tool_call", {}).get("name", "")
+            if tn and tr.get("success"):
+                succeeded[tn] += 1
+        if set(current_step.tool_names) & set(succeeded.keys()):
+            current_step.status = "done"
+            return
+
+    # 检查最近一次工具调用的结果——仅在工具自身失败时才标记（不检查成功结果的内容）
+    last_result = ctx.tool_results[-1]
+    last_tc = last_result.get("tool_call", {})
+    last_success = last_result.get("success", False)
+    tool_has_error = not last_success
+    # 仅在工具失败时，额外检查结果中是否有明确的代码错误（如 SyntaxError）
+    if tool_has_error:
+        last_raw = str(last_result.get("result", last_result.get("error", "")))
+        code_error = any(
+            marker in last_raw
+            for marker in ["SyntaxError", "NameError", "TypeError"]
+        )
 
     # 获取当前正在执行的步骤（第一个未完成的步骤）
     done_count = sum(1 for s in ctx.plan if s.status == "done")
@@ -203,8 +247,8 @@ def update_step_status(ctx: RunContext, prefix: str = "") -> None:
 
     current_step = ctx.plan[done_count]
 
-    # 如果有代码错误，标记当前步骤为 failed 并触发重规划
-    if has_error:
+    # 工具失败 → 标记当前步骤为 failed 并触发重规划
+    if tool_has_error:
         if current_step.status != "failed":
             current_step.status = "failed"
             ctx._step_retries[current_step.index] = (
@@ -213,51 +257,100 @@ def update_step_status(ctx: RunContext, prefix: str = "") -> None:
             print(f"{prefix}    \033[1;31m❌ 步骤 {current_step.index} 执行失败，将触发重规划\033[0m")
         return
 
-    # ── 结果感知：write_file 成功后检查是否覆盖了后续步骤 ──
+    # ── 结果感知：write_file 成功但内容短 → 提示补充（不标记步骤完成）
     last_tc = last_result.get("tool_call", {})
     if last_tc.get("name") == "write_file" and last_result.get("success"):
-        _advance_steps_by_result(ctx, last_tc, prefix)
+        _content = str(last_tc.get("arguments", {}).get("content", ""))
+        _path = str(last_tc.get("arguments", {}).get("path", ""))
+        if len(_content) < 2000 and not ctx.forced_instructions:
+            _pending_after = [s for s in ctx.plan if s.status == "pending"]
+            if _pending_after:
+                ctx.forced_instructions = (
+                    f"⚠️ {_path} 仅 {len(_content)} 字符。先继续下一步（{_pending_after[0].description}），"
+                    f"所有文件创建完成后再回来补充内容。立即调用下一步的工具！"
+                )
+            else:
+                ctx.forced_instructions = (
+                    f"⚠️ {_path} 仅 {len(_content)} 字符。"
+                    f"请用 write_file 写入完整内容，不得截断或用占位符。"
+                )
+            logger.info(f"write_file 内容过短({len(_content)}字符)，不标记完成")
 
-    # 重新计算 done_count（可能被 _advance_steps_by_result 更新）
+    # 重新计算 done_count
     done_count = sum(1 for s in ctx.plan if s.status == "done")
     if done_count >= len(ctx.plan):
         return
     current_step = ctx.plan[done_count]
 
-    # 收集所有已调用的工具名称（成功调用）
-    succeeded_tools = set()
+    # 收集所有已调用的工具及其调用次数
+    from collections import Counter
+    succeeded_counts = Counter()
     for tr in ctx.tool_results:
         tc = tr.get("tool_call", {})
         tool_name = tc.get("name", "")
         if tool_name and tr.get("success"):
-            succeeded_tools.add(tool_name)
+            succeeded_counts[tool_name] += 1
 
-    # 如果步骤指定了工具，检查是否都已调用成功
+    # 如果步骤指定了工具，用快照对比法判断是否完成
     if current_step.tool_names:
         step_tools = set(current_step.tool_names)
-        all_tools_done = step_tools.issubset(succeeded_tools)
+        # 记录进入此 step 时的工具调用快照
+        if not hasattr(ctx, '_step_tool_snapshots'):
+            ctx._step_tool_snapshots = {}
+        if current_step.index not in ctx._step_tool_snapshots:
+            ctx._step_tool_snapshots[current_step.index] = dict(succeeded_counts)
 
-        # ── 质量门：write_file 后有 forced_instructions（review/improve）→ 不标记 done ──
-        if all_tools_done and ctx.forced_instructions:
-            last_tc = last_result.get("tool_call", {})
-            if last_tc.get("name") == "write_file":
-                logger.info(f"步骤 {current_step.index} write_file 完成，但 review 指令待执行，暂不标记 done")
-                return
+        snapshot = ctx._step_tool_snapshots[current_step.index]
+        all_tools_done = all(
+            succeeded_counts.get(t, 0) > snapshot.get(t, 0) for t in step_tools
+        )
+
+        _search_tools = {"web_search", "fetch_url", "fetch_json", "search_news"}
+        if not all_tools_done and step_tools & _search_tools:
+            if any(succeeded_counts.get(t, 0) > snapshot.get(t, 0) for t in _search_tools):
+                all_tools_done = True
+                current_step.tool_names = list(step_tools | _search_tools)
+
+        _file_tools = {"write_file", "edit_file"}
+        if not all_tools_done and step_tools & _file_tools:
+            if any(succeeded_counts.get(t, 0) > snapshot.get(t, 0) for t in _file_tools):
+                all_tools_done = True
+                current_step.tool_names = list(step_tools | _file_tools)
 
         if all_tools_done:
             current_step.status = "done"
-    else:
-        pass
+            logger.debug(f"步骤 {current_step.index} 完成");
+            _pending_after_tool = [s for s in ctx.plan if s.status == "pending"]
+            if _pending_after_tool and not ctx.forced_instructions:
+                _nxt = _pending_after_tool[0]
+                _th = f" → {_nxt.tool_names[0]}" if _nxt.tool_names else ""
+                ctx.forced_instructions = (
+                    f"立即执行下一步：{_nxt.description}{_th}，不要输出解释文本"
+                )
+            return
 
-    # 兜底：有实质进展且步骤已运行多轮 → 推进
-    if current_step.status != "done" and ctx.react_depth >= 3:
+    # 步骤没有 tool_names → 按成功调用次数 >= 已完成步骤数+1才推进
+    if not current_step.tool_names:
+        done_count = sum(1 for s in ctx.plan if s.status == "done")
+        _total_ok = sum(1 for r in ctx.tool_results if r.get("success"))
+        if _total_ok >= done_count + 1:
+            current_step.status = "done"
+            _pending_after_no = [s for s in ctx.plan if s.status == "pending"]
+            if _pending_after_no and not ctx.forced_instructions:
+                _n = _pending_after_no[0]
+                _t = f" → {_n.tool_names[0]}" if _n.tool_names else ""
+                ctx.forced_instructions = f"立即执行下一步：{_n.description}{_t}"
+            return
+
+    # 兜底：步骤卡住多轮且全无进展（无一完成）→ 推进
+    _any_done_backup = any(s.status == "done" for s in ctx.plan)
+    if current_step.status != "done" and not _any_done_backup and ctx.react_depth >= 6:
         _has_substance = False
         for r in ctx.tool_results:
             if not r.get("success"):
                 continue
             name = r.get("tool_call", {}).get("name", "")
-            # 只有产出数据的工具才算实质进展
-            if name in ("write_file", "web_search", "fetch_url", "fetch_json"):
+            if name in ("write_file", "web_search", "fetch_url", "fetch_json", "search_news", "execute_shell", "read_file"):
                 _has_substance = True
                 break
             if name == "execute_python":
@@ -283,71 +376,6 @@ def update_step_status(ctx: RunContext, prefix: str = "") -> None:
                 )
                 ctx.forced_instructions = inst
                 logger.info(f"步骤 {current_step.index} 卡在 read_file，禁用 read_file，强制使用 edit_file")
-
-
-def _advance_steps_by_result(ctx: RunContext, tool_call: dict, prefix: str = "") -> None:
-    """结果感知：write_file 成功后，检查是否覆盖了后续 pending 步骤
-
-    策略：
-    1. 提取写入的文件路径和内容关键词
-    2. 检查后续 pending 步骤是否描述了同一文件或类似操作
-    3. 如果覆盖，自动标记为 done
-    """
-    tc_args = tool_call.get("arguments", {})
-    if isinstance(tc_args, str):
-        import json
-        try:
-            tc_args = json.loads(tc_args)
-        except (json.JSONDecodeError, TypeError):
-            tc_args = {}
-
-    written_path = tc_args.get("path", "")
-    written_content = tc_args.get("content", "")
-    if not written_path or not written_content:
-        return
-
-    written_filename = written_path.rsplit("/", 1)[-1] if "/" in written_path else written_path
-    written_name_base = written_filename.rsplit(".", 1)[0] if "." in written_filename else written_filename
-    content_lower = written_content.lower()
-
-    # 收集内容中的关键特征
-    content_features = set()
-    if "<html" in content_lower or "<!doctype" in content_lower:
-        content_features.add("html")
-    if "class " in content_lower or "def " in content_lower:
-        content_features.add("code")
-    if any(kw in content_lower for kw in ["game", "puzzle", "游戏", "棋"]):
-        content_features.add("game")
-    if any(kw in content_lower for kw in ["<script", "javascript", "function "]):
-        content_features.add("js")
-    if any(kw in content_lower for kw in ["<style", "css", "background"]):
-        content_features.add("css")
-
-    done_count = sum(1 for s in ctx.plan if s.status == "done")
-
-    for step in ctx.plan[done_count:]:
-        if step.status != "pending":
-            continue
-        desc_lower = step.description.lower()
-
-        # 匹配条件 1：步骤描述中提到同一文件名
-        same_file = False
-        if written_filename in desc_lower or written_name_base in desc_lower:
-            same_file = True
-        # 匹配条件 2：步骤指定的工具也是 write_file，且内容特征匹配
-        elif "write_file" in step.tool_names:
-            step_has_game = any(kw in desc_lower for kw in ["game", "puzzle", "游戏", "棋", "html", "界面", "逻辑"])
-            step_has_code = any(kw in desc_lower for kw in ["代码", "脚本", "code", "script", "创建", "写入"])
-            if (step_has_game and "game" in content_features) or (step_has_code and "code" in content_features):
-                same_file = True
-        # 匹配条件 3：步骤描述是"设计/创建"类，且写入内容覆盖了该功能
-        elif any(kw in desc_lower for kw in ["设计", "创建", "布局", "界面"]):
-            if content_features & {"html", "game", "js", "css"}:
-                same_file = True
-
-        if same_file:
-            step.status = "done"
-            print(f"{prefix}    \033[1;32m✅ 步骤 {step.index} 已被写入结果覆盖，自动标记完成\033[0m")
 
 
 async def replan_failed(ctx: RunContext) -> bool:
