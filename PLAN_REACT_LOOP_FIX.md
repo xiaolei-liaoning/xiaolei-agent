@@ -55,3 +55,15 @@
 ---
 
 *All steps will be performed locally; no external network calls are required.*
+
+## 5️⃣ 修复状态 (2026-06-17)
+
+| 编号 | 缺陷 | 状态 |
+|------|------|------|
+| P0 #3 | plan_manager 状态逻辑 | ✅ 已修复 |
+| P0 #5 | 超时不取消协程 | ✅ 已修复 |
+| 窗口 | LoopDetection 窗口过小 | ✅ 已修复 |
+| MCP | 合并两套 MCP 管理器 | ✅ 已修复 |
+| 配置 | 配置统一 | ✅ 已修复 |
+| 监控 | monitoring 弃用标记 | ✅ 已修复 |
+| 清理 | Phase 1 删除 5967 行死代码 | ✅ 已修复 |
