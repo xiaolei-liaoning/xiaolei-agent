@@ -97,7 +97,7 @@ class WorkAgent(BaseAgent):
                         self.personality = f"{self.personality}\n\n---\n【Skill角色】\n{skill.role_prompt[:500]}"
                     else:
                         self.personality = skill.role_prompt[:2000]
-                    logger.info(f"✅ BaseSkill 注入: {skill.name}")
+                    print(f"    \033[1;36m🧠 BaseSkill: {skill.name}\033[0m")
             except Exception as e:
                 logger.warning(f"BaseSkill 匹配异常: {e}")
 
