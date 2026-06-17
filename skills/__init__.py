@@ -1,17 +1,7 @@
-"""Skills模块导出"""
+"""Skills模块导出（仅保留活跃的 workflow_engine）"""
 
-from .marketplace import *
-from .mcp_connector import *
-from .mcp_orchestrator import *
-from .mvp_checker import *
-from .ocr_recognition import *
 from .workflow_engine import *
 
 __all__ = [
-    "marketplace",
-    "mcp_connector",
-    "mcp_orchestrator",
-    "mvp_checker",
-    "ocr_recognition",
     "workflow_engine"
 ]
