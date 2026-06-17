@@ -88,57 +88,35 @@ class WorkAgent(BaseAgent):
             logger.info(f"WorkAgent → ReActCore (max_rounds={max_rounds})")
             from core.multi_agent_v2.agents.react_core import run_react
 
-            # ── Layer 1: Base Skill 匹配（新增）──
+            # ── 三层 Skill 匹配 ──
             try:
-                from core.skills.base_skills import get_base_skill_matcher
-                skill = await get_base_skill_matcher().match(desc)
-                if skill and skill.role_prompt:
-                    if self.personality:
-                        self.personality = f"{self.personality}\n\n---\n【Skill角色】\n{skill.role_prompt[:500]}"
-                    else:
-                        self.personality = skill.role_prompt[:2000]
-                    self._skill_tools = skill.tools if skill.tools else []
-                    print(f"    \033[1;36m🧠 BaseSkill: {skill.name}\033[0m")
+                from core.skills.base_skills import get_skill_system
+                skill_result = await get_skill_system().match(desc)
+                if skill_result.personality:
+                    overlay = f"【Skill角色】\n{skill_result.personality[:500]}"
+                    self.personality = f"{self.personality}\n\n---\n{overlay}" if self.personality else skill_result.personality[:2000]
+                    self._skill_tools = list(skill_result.tool_preference)
+                    print(f"    \033[1;36m🧠 Skill: {skill_result.skill_name}\033[0m")
+                if skill_result.expert_personality:
+                    self.personality += f"\n\n---\n【Expert】\n{skill_result.expert_personality[:500]}"
+                    print(f"    \033[1;36m👤 Expert: {skill_result.expert_name}\033[0m")
+                if skill_result.guidance:
+                    self._skill_guidance = skill_result.guidance
+                    logger.info(f"✅ Guidance: {len(skill_result.guidance)} 字符")
             except Exception as e:
-                logger.warning(f"BaseSkill 匹配异常: {e}")
+                logger.warning(f"Skill 匹配异常: {e}")
 
-            # ── 双重人设：内置类型（工具权限）+ Skill 角色（领域人格）累加 ──
-            try:
-                from core.skills.agency_agents.worker_role_matcher import (
-                    get_worker_role_matcher,
-                )
-                matcher = get_worker_role_matcher()
-                role = await matcher.match_role_for_task(desc)
-                if role:
-                    pt = matcher.get_role_prompt(role.get("id", ""))
-                    if pt:
-                        if self.personality:
-                            self.personality = (
-                                f"{self.personality}\n\n"
-                                f"---\n"
-                                f"【当前任务专家身份】\n"
-                                f"{pt[:1000]}"
-                            )
-                        else:
-                            self.personality = pt[:2000]
-                        logger.info(f"✅ 已注入角色: {role.get('name', '未知')}")
-                else:
-                    # ponytail: 匹配失败时降级到关键词，不静默跳过
-                    logger.warning("角色匹配返回空，尝试关键词降级")
-                    fallback = matcher.matcher._keyword_fallback(desc, 1)
-                    if fallback:
-                        pt = fallback[0].get("description", "")
-                        if pt:
-                            self.personality = pt[:2000]
-                            logger.info(f"✅ 关键词降级匹配: {fallback[0].get('name')}")
-            except Exception as e:
-                logger.warning(f"角色匹配异常: {e}")
+            # 如果有 Guidance，注入到 personality_prompt
+            guidance_text = getattr(self, "_skill_guidance", "")
+            pp = self.system_prompt_for_role()
+            if guidance_text:
+                pp += "\n\n<guidance>\n" + guidance_text[:2000] + "\n</guidance>"
 
             result = await run_react(
                 desc,
                 max_rounds=max_rounds,
                 model=task.context.get("model", ""),
-                personality_prompt=self.system_prompt_for_role(),
+                personality_prompt=pp,
                 agent=self,
                 allowed_tools=task.context.get("allowed_tools"),
                 disallowed_tools=task.context.get("disallowed_tools"),
