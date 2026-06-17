@@ -8,7 +8,12 @@
 """
 
 # ⚠️ DEPRECATED: 此模块未被核心流程使用
-
+import warnings
+warnings.warn(
+    "core.monitoring.performance_utils is deprecated and not used by the core pipeline",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 import logging
 import asyncio

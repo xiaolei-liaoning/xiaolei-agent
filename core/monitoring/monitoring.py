@@ -4,7 +4,12 @@
 """
 
 # ⚠️ DEPRECATED: 此模块未被核心流程使用
-
+import warnings
+warnings.warn(
+    "core.monitoring is deprecated and not used by the core pipeline",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 import json
 import logging
