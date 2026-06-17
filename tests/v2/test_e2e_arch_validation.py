@@ -716,7 +716,7 @@ class TestFullFlowIntegration:
         chain = build_default_chain()
         mw_names = [type(m).__name__ for m in chain._middlewares]
         assert "LoopDetectionMiddleware" in mw_names
-        assert "LoopDetectionMiddleware" in mw_names
+        assert "TruncationMiddleware" in mw_names
         assert "ReActCoreMiddleware" in mw_names
         assert "ReflectionMiddleware" in mw_names
         assert "KEPAMiddleware" in mw_names
