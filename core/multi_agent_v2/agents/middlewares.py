@@ -38,9 +38,10 @@ class ReActDepthMiddleware(BaseMiddleware):
     MAX_DEPTH = 30
 
     async def on_think_start(self, ctx: RunContext) -> None:
-        if ctx.react_depth > self.MAX_DEPTH:
+        max_depth = max(self.MAX_DEPTH, ctx.max_iterations)
+        if ctx.react_depth > max_depth:
             ctx.interrupted = True
-            logger.warning(f"ReAct 深度超过 {self.MAX_DEPTH}，终止执行")
+            logger.warning(f"ReAct 深度超过 {max_depth}，终止执行")
 
     async def on_tool_end(self, ctx: RunContext) -> None:
         if ctx.tool_results:
@@ -267,20 +268,38 @@ class KEPAMiddleware(BaseMiddleware):
 # ════════════════════════════════════════════════════════════════
 
 class LoopDetectionMiddleware(BaseMiddleware):
-    """双层循环检测：哈希 + 频率，防止工具调用死循环
+    """多层循环检测：哈希 + 频率 + doom loop，防止工具调用死循环
 
-    Layer 1: 滑动窗口内相同工具调用哈希重复检测
-    Layer 2: 单工具累计调用频率检测
+    Layer 1: 滑动窗口内相同工具调用哈希重复检测 (参考 deerflow)
+    Layer 2: 单工具累计调用频率检测（支持工具级阈值覆盖）
+    Layer 3: Doom Loop 检测 — 同轮内相同工具重复 ≥3 次 (参考 opencode)
+    Layer 4: MCP 错误结果重复检测
+    Layer 5: 文件写入路径重复检测
+    Layer 6: 跨多轮工具调用模式循环检测
+
+    同时检测历史已执行工具（ctx.tool_results）和 LLM 刚生成待执行的工具
+    （ctx._pending_tool_calls），避免晚一轮检测。
     """
-    HOOKS = ("on_think_end",)
+    HOOKS = ("on_plan_check",)
+
+    # 工具级频率阈值覆盖（参考 deerflow 的 per-tool config）
+    TOOL_FREQ_LIMITS = {
+        "read_file": {"warn": 8, "hard": 15},
+        "execute_shell": {"warn": 6, "hard": 12},
+        "execute_python": {"warn": 6, "hard": 12},
+        "web_search": {"warn": 4, "hard": 8},
+        "fetch_url": {"warn": 4, "hard": 8},
+        "write_file": {"warn": 5, "hard": 10},
+        "edit_file": {"warn": 5, "hard": 10},
+    }
 
     def __init__(
         self,
-        warn_threshold: int = 3,
-        hard_limit: int = 5,
+        warn_threshold: int = 5,
+        hard_limit: int = 10,
         tool_freq_warn: int = 5,
         tool_freq_hard_limit: int = 10,
-        window_size: int = 20,
+        window_size: int = 50,
     ):
         self.warn_threshold = warn_threshold
         self.hard_limit = hard_limit
@@ -291,6 +310,9 @@ class LoopDetectionMiddleware(BaseMiddleware):
         self._tool_freq: Dict[str, int] = {}
         self._warned_hashes: set = set()
         self._warned_tools: set = set()
+        # Layer 4: error dedup — track error messages per tool
+        self._tool_errors: Dict[str, List[str]] = {}
+        self._warned_duplicate_errors: set = set()
 
     def reset_task_state(self):
         """任务开始时重置循环检测状态"""
@@ -298,9 +320,65 @@ class LoopDetectionMiddleware(BaseMiddleware):
         self._tool_freq = {}
         self._warned_hashes = set()
         self._warned_tools = set()
+        self._tool_errors = {}
+        self._warned_duplicate_errors = set()
+
+    def _get_tool_limits(self, name: str) -> tuple:
+        """获取工具级频率阈值（支持覆盖），参考 deerflow 的 per-tool config"""
+        limits = self.TOOL_FREQ_LIMITS.get(name)
+        if limits:
+            return limits["warn"], limits["hard"]
+        return self.tool_freq_warn, self.tool_freq_hard_limit
+
+    _PROFILE_THRESHOLDS = {
+        "game": {"write_file": {"warn": 4, "hard": 8}},
+        "code": {"write_file": {"warn": 3, "hard": 6}},
+        "design": {"write_file": {"warn": 4, "hard": 8}},
+        "report": {"write_file": {"warn": 3, "hard": 5}},
+    }
+
+    def set_profile_thresholds(self, profile_id: str) -> None:
+        """根据任务画像动态调整工具频率阈值
+
+        游戏/设计类任务需要反复迭代文件写入，放宽阈值；
+        代码/报告类任务保持较严格限制。
+        """
+        override = self._PROFILE_THRESHOLDS.get(profile_id)
+        if override:
+            for tool_name, limits in override.items():
+                old = self.TOOL_FREQ_LIMITS.get(tool_name, {"warn": self.tool_freq_warn, "hard": self.tool_freq_hard_limit})
+                self.TOOL_FREQ_LIMITS[tool_name] = limits
+                logger.info(
+                    f"LoopDetection: profile={profile_id}, {tool_name} 阈值 "
+                    f"warn: {old['warn']}→{limits['warn']}, hard: {old['hard']}→{limits['hard']}"
+                )
+
+    def _normalize_read_file_args(self, args: Dict) -> Dict:
+        """read_file 参数归一化：将行区间分桶到 200 行块
+
+        参考 deerflow 的 line-range bucketing
+        """
+        salient = {}
+        for k, v in args.items():
+            if k in ("path", "filepath"):
+                salient[k] = v
+            elif k in ("offset", "start_line", "end_line", "limit"):
+                try:
+                    val = int(v) if v else 0
+                    bucket = (val // 200) * 200
+                    salient[k] = f"{bucket}+"
+                except (ValueError, TypeError):
+                    salient[k] = v
+        return salient
 
     def _hash_tool_calls(self, tool_calls: List[Dict]) -> str:
-        """对一组工具调用取哈希，用于滑动窗口比较"""
+        """对一组工具调用取哈希，用于滑动窗口比较
+
+        参考 deerflow：
+        - read_file：行区间分桶到 200 行块，避免频繁换行误报
+        - write_file/edit_file：完整参数哈希（含内容差异）
+        - 其他工具：仅关键字段
+        """
         items = []
         for tc in tool_calls:
             name = tc.get("function", {}).get("name", "")
@@ -309,12 +387,18 @@ class LoopDetectionMiddleware(BaseMiddleware):
                 args = json.loads(args_str) if isinstance(args_str, str) else args_str
             except (json.JSONDecodeError, TypeError):
                 args = {}
-            # 仅用关键字段做稳定哈希
-            salient = {
-                k: v
-                for k, v in (args if isinstance(args, dict) else {}).items()
-                if k in ("path", "url", "query", "command", "code")
-            }
+
+            if name == "read_file":
+                salient = self._normalize_read_file_args(args if isinstance(args, dict) else {})
+            elif name in ("write_file", "edit_file"):
+                salient = dict(args) if isinstance(args, dict) else {}
+            else:
+                salient = {
+                    k: v
+                    for k, v in (args if isinstance(args, dict) else {}).items()
+                    if k in ("path", "url", "query", "command", "code")
+                }
+
             items.append(
                 f"{name}:{json.dumps(salient, sort_keys=True, default=str)}"
             )
@@ -322,31 +406,83 @@ class LoopDetectionMiddleware(BaseMiddleware):
         blob = json.dumps(items, sort_keys=True)
         return hashlib.md5(blob.encode()).hexdigest()[:12]
 
-    async def on_think_end(self, ctx: RunContext) -> None:
-        if not ctx.tool_results:
-            return
+    def _normalize_to_function_calls(self, ctx: RunContext) -> List[Dict]:
+        """将历史已执行工具 + 本轮待执行工具归一化为统一格式"""
+        calls = []
 
-        # 从最近一轮 tool_results 重建工具调用信息
-        last_results = ctx.tool_results[-1:]
-        if not last_results:
-            return
+        # 1. 历史已执行工具（来自 tool_results）
+        if ctx.tool_results:
+            last_results = ctx.tool_results[-self.window_size:]
+            for r in last_results:
+                tc = r.get("tool_call", {})
+                if tc.get("name"):
+                    calls.append({
+                        "function": {
+                            "name": tc.get("name", ""),
+                            "arguments": json.dumps(tc.get("arguments", {}), default=str),
+                        }
+                    })
 
-        tool_calls = []
-        for r in last_results:
-            tc = r.get("tool_call", {})
-            tool_calls.append(
-                {
-                    "function": {
-                        "name": tc.get("name", ""),
-                        "arguments": json.dumps(
-                            tc.get("arguments", {}), default=str
-                        ),
-                    }
-                }
-            )
+        # 2. 本轮 LLM 刚生成但尚未执行的工具（来自 _pending_tool_calls）
+        pending = getattr(ctx, '_pending_tool_calls', None)
+        if pending:
+            for tc in pending:
+                fn = tc.get("function", {})
+                name = fn.get("name", "")
+                if name:
+                    calls.append({
+                        "function": {
+                            "name": name,
+                            "arguments": fn.get("arguments", "{}"),
+                        }
+                    })
 
+        return calls
+
+    async def on_plan_check(self, ctx: RunContext) -> None:
+        tool_calls = self._normalize_to_function_calls(ctx)
         if not tool_calls:
             return
+
+        # Layer 0: 检测 LLM 是否在重复写已完成步骤的文件
+        if ctx.plan and any(s.status == "done" for s in ctx.plan):
+            _pending = [s for s in ctx.plan if s.status == "pending"]
+            if _pending:
+                for tc in tool_calls:
+                    name = tc.get("function", {}).get("name", "")
+                    args_str = tc.get("function", {}).get("arguments", "{}")
+                    try:
+                        args = json.loads(args_str) if isinstance(args_str, str) else args_str
+                    except:
+                        args = {}
+                    _path = args.get("path", "")
+                    if name == "write_file" and _path:
+                        _pending_next = _pending[0]
+                        _next_has_path = any(kw in (_pending_next.description or "").lower()
+                                            for kw in _path.lower().split("/")[-1].replace(".", " ").split())
+                        if not _next_has_path:
+                            ctx.forced_instructions = (
+                                f"⚠️ 不要写已完成步骤的文件！当前应该执行：{_pending_next.description}"
+                            )
+                            return HookResult(jump_to="retry",
+                                reason=f"文件 {_path} 不属于当前步骤，请执行：{_pending_next.description}")
+                    if name == "write_file" and _path:
+                        # 检查这个路径在当前步骤已完成列表里
+                        _done_paths = set()
+                        for _tr in (ctx.tool_results or []):
+                            _tc = _tr.get("tool_call", {})
+                            if _tc.get("name") == "write_file" and _tr.get("success"):
+                                _p = _tc.get("arguments", {}).get("path", "")
+                                if _p:
+                                    _done_paths.add(os.path.expanduser(_p))
+                        _exp_path = os.path.expanduser(_path)
+                        if _exp_path in _done_paths and _pending:
+                            _pstep = _pending[0]
+                            ctx.forced_instructions = (
+                                f"⚠️ {_path} 已写入完成！立即执行下一步：{_pstep.description}"
+                            )
+                            return HookResult(jump_to="retry",
+                                reason=f"{_path} 已经写完，请执行下一步：{_pstep.description}")
 
         call_hash = self._hash_tool_calls(tool_calls)
 
@@ -359,6 +495,9 @@ class LoopDetectionMiddleware(BaseMiddleware):
         count = self._history.count(call_hash)
         if count >= self.hard_limit:
             ctx.interrupted = True
+            ctx.interrupted_reason = (
+                f"循环检测：相同工具调用重复 {count} 次，强制停止"
+            )
             ctx.last_error = (
                 f"循环检测：相同工具调用重复 {count} 次，强制停止"
             )
@@ -370,31 +509,73 @@ class LoopDetectionMiddleware(BaseMiddleware):
                 "[循环警告] 你正在重复相同的工具调用。请立即停止调用工具，输出最终答案。"
             )
 
-        # Layer 2: 频率检测
+        # Layer 2: 频率检测（支持工具级阈值，参考 deerflow）
         for tc in tool_calls:
             name = tc.get("function", {}).get("name", "")
             if not name:
                 continue
             self._tool_freq[name] = self._tool_freq.get(name, 0) + 1
 
-            if self._tool_freq[name] >= self.tool_freq_hard_limit:
+            _warn, _hard = self._get_tool_limits(name)
+            if self._tool_freq[name] >= _hard:
                 ctx.interrupted = True
+                ctx.interrupted_reason = (
+                    f"循环检测：工具 {name} 已调用 "
+                    f"{self._tool_freq[name]} 次（阈值={_hard}），强制停止"
+                )
                 ctx.last_error = (
                     f"循环检测：工具 {name} 已调用 "
-                    f"{self._tool_freq[name]} 次，强制停止"
+                    f"{self._tool_freq[name]} 次（阈值={_hard}），强制停止"
                 )
                 return HookResult(jump_to="end", reason=ctx.last_error)
 
             if (
-                self._tool_freq[name] >= self.tool_freq_warn
+                self._tool_freq[name] >= _warn
                 and name not in self._warned_tools
             ):
                 self._warned_tools.add(name)
                 ctx.warnings.append(
-                    f"[循环警告] 工具 {name} 已调用 {self._tool_freq[name]} 次。请考虑换用其他工具或直接输出结果。"
+                    f"[循环警告] 工具 {name} 已调用 {self._tool_freq[name]} 次（阈值={_warn}）。"
+                    "请考虑换用其他工具或直接输出结果。"
                 )
 
-        # Layer 3: 文件写入路径检测（防止反复写同一文件）
+        # Layer 3: Doom Loop 检测 — 同轮内相同工具+参数 ≥3 次 (参考 opencode)
+        _pending = getattr(ctx, '_pending_tool_calls', None)
+        if _pending and len(_pending) >= 3:
+            _name_counter: Dict[str, int] = {}
+            for _tc in _pending:
+                _n = _tc.get("function", {}).get("name", "")
+                if _n:
+                    _name_counter[_n] = _name_counter.get(_n, 0) + 1
+            for _n, _c in _name_counter.items():
+                if _c >= 3:
+                    ctx.warnings.append(
+                        f"[Doom Loop] 本轮内工具 {_n} 被重复调用 {_c} 次。"
+                        "请立即停止，不要重复调用相同工具。"
+                    )
+                    break
+
+        # Layer 4: 错误结果重复检测（MCP 工具返回相同错误 ≥2 次 → 强制切换策略）
+        # 跳过环境限制错误（沙盒超时、GUI 库不支持等），这些不应触发重试警告
+        if ctx.tool_results and len(ctx.tool_results) >= 2:
+            _last = ctx.tool_results[-1]
+            _prev = ctx.tool_results[-2]
+            _last_name = _last.get("tool_call", {}).get("name", "")
+            _prev_name = _prev.get("tool_call", {}).get("name", "")
+            if not _last.get("success") and _last_name and _last_name == _prev_name:
+                _last_err = str(_last.get("result", _last.get("error", "")))[:200]
+                _prev_err = str(_prev.get("result", _prev.get("error", "")))[:200]
+                # 跳过环境限制错误
+                _is_env_error = "[环境限制]" in _last_err or "[环境限制]" in _prev_err
+                if not _is_env_error and _last_err and _prev_err and _last_err == _prev_err:
+                    _err_key = f"{_last_name}:{_last_err[:80]}"
+                    if _err_key not in self._warned_duplicate_errors:
+                        self._warned_duplicate_errors.add(_err_key)
+                        ctx.warnings.append(
+                            f"[重复错误] 工具 {_last_name} 连续返回相同错误。请换用其他工具或方法，不要再重试此工具。"
+                        )
+
+        # Layer 5: 文件写入路径检测（防止反复写同一文件）
         for tc in tool_calls:
             name = tc.get("function", {}).get("name", "")
             if name not in ("write_file", "file"):
@@ -407,24 +588,38 @@ class LoopDetectionMiddleware(BaseMiddleware):
             path = args.get("path", args.get("filepath", ""))
             if not path:
                 continue
-            path_key = f"write:{os.path.basename(path)}"
+            path_key = f"write:{os.path.abspath(os.path.expanduser(path))}"
             self._tool_freq[path_key] = self._tool_freq.get(path_key, 0) + 1
-            if self._tool_freq[path_key] >= 3:
-                # 前3次只警告，不中断
-                if self._tool_freq[path_key] == 3:
-                    ctx.warnings.append(
-                        f"[循环警告] 文件 {path} 已被写入3次。"
-                        "请使用 force=true 参数覆盖，或换用其他文件名，或直接输出结果。"
-                    )
-                    return HookResult(jump_to="continue", reason="循环警告")
-                # 第5次才硬终止
+            if self._tool_freq[path_key] == 5:
+                ctx.warnings.append(
+                    f"[循环警告] 文件 {path} 已被写入5次。"
+                    "请使用 force=true 参数覆盖，或换用其他文件名，或直接输出结果。"
+                )
+                return HookResult(jump_to="continue", reason="循环警告")
+            if self._tool_freq[path_key] >= 10:
                 ctx.interrupted = True
+                ctx.interrupted_reason = (
+                    f"循环检测：文件 {path} 已被写入 {self._tool_freq[path_key]} 次，"
+                    "请停止重复写入，直接输出最终结果"
+                )
                 ctx.last_error = (
                     f"循环检测：文件 {path} 已被写入 {self._tool_freq[path_key]} 次，"
                     "请停止重复写入，直接输出最终结果"
                 )
                 return HookResult(jump_to="end", reason=ctx.last_error)
 
+        # Layer 6: 模式循环检测
+        if len(ctx.tool_results) >= 8:
+            recent_names = [r.get("tool_call", {}).get("name", "") for r in ctx.tool_results[-8:]]
+            for pattern_len in range(2, 5):
+                if len(recent_names) >= pattern_len * 2:
+                    pattern = recent_names[-pattern_len:]
+                    prev = recent_names[-pattern_len*2:-pattern_len]
+                    if prev == pattern and all(n for n in pattern):
+                        ctx.warnings.append(
+                            f"[模式循环] 检测到工具重复模式: {' → '.join(pattern)}。请跳出循环！"
+                        )
+                        break
 
 # ════════════════════════════════════════════════════════════════
 # ClarificationMiddleware — 澄清请求拦截
@@ -433,10 +628,10 @@ class LoopDetectionMiddleware(BaseMiddleware):
 class ClarificationMiddleware(BaseMiddleware):
     """拦截 LLM 输出中的澄清请求模式，中断执行等待用户确认
 
-    在 on_think_end 阶段检测 LLM 回复中是否包含结构化澄清请求
+    在 on_plan_check 阶段检测 LLM 回复中是否包含结构化澄清请求
     （如 [CLARIFICATION] 标记或问号密集段落），若命中则中断并输出问题。
     """
-    HOOKS = ("on_think_end",)
+    HOOKS = ("on_plan_check",)
 
     # 匹配 LLM 可能输出的澄清请求模式
     CLARIFICATION_PATTERNS = [
@@ -446,31 +641,26 @@ class ClarificationMiddleware(BaseMiddleware):
         "[clarification]",
     ]
 
-    async def on_think_end(self, ctx: RunContext) -> Optional[HookResult]:
-        # 仅在 LLM 产生 final_answer 时检查
-        if not ctx.final_answer:
+    async def on_plan_check(self, ctx: RunContext) -> Optional[HookResult]:
+        # 检查 final_answer 或 _pending_reply（含工具调用场景的澄清）
+        reply_text = ctx.final_answer or getattr(ctx, '_pending_reply', '')
+        if not reply_text:
             return None
 
-        answer_lower = ctx.final_answer.lower()
+        answer_lower = reply_text.lower()
 
-        # 检查是否包含澄清标记
         for pattern in self.CLARIFICATION_PATTERNS:
             if pattern.lower() in answer_lower:
                 ctx.interrupted = True
-                # 清除 final_answer，改为提示用户确认
-                ctx.final_answer = (
-                    f"需要您的确认：\n\n{ctx.final_answer}"
-                )
+                ctx._pending_tool_calls = None
+                ctx.final_answer = f"需要您的确认：\n\n{reply_text}"
                 return HookResult(jump_to="end", reason="需要用户澄清")
 
-        # 启发式检测：短回复 + 大量问号 → 可能是澄清请求
-        if len(ctx.final_answer) < 500 and ctx.final_answer.count("?") + ctx.final_answer.count("？") >= 2:
-            # 如果之前有工具调用结果，说明不是首次回复，可能是中途澄清
+        if len(reply_text) < 500 and reply_text.count("?") + reply_text.count("？") >= 2:
             if ctx.tool_results and len(ctx.tool_results) > 1:
                 ctx.interrupted = True
-                ctx.final_answer = (
-                    f"需要您的确认：\n\n{ctx.final_answer}"
-                )
+                ctx._pending_tool_calls = None
+                ctx.final_answer = f"需要您的确认：\n\n{reply_text}"
                 return HookResult(jump_to="end", reason="需要用户澄清")
 
 
@@ -484,7 +674,7 @@ class TodoMiddleware(BaseMiddleware):
     当工具调用失败率过高且 agent 试图输出 final_answer 时，
     注入提醒并清除 final_answer，强制继续执行。
     """
-    HOOKS = ("on_think_end",)
+    HOOKS = ("on_finish",)
 
     _MAX_REMINDERS = 2
 
@@ -495,7 +685,7 @@ class TodoMiddleware(BaseMiddleware):
         """任务开始时重置提醒计数"""
         self._reminder_count = 0
 
-    async def on_think_end(self, ctx: RunContext) -> None:
+    async def on_finish(self, ctx: RunContext) -> None:
         # 仅在 agent 试图输出 final_answer 时检查
         if not ctx.final_answer:
             return
@@ -531,7 +721,7 @@ class TruncationMiddleware(BaseMiddleware):
     """
     HOOKS = ("on_think_start",)
 
-    def __init__(self, keep_recent: int = 3, max_messages: int = 40):
+    def __init__(self, keep_recent: int = 5, max_messages: int = 40):
         self.keep_recent = keep_recent
         self.max_messages = max_messages
 
@@ -548,6 +738,200 @@ class TruncationMiddleware(BaseMiddleware):
 
 
 # ════════════════════════════════════════════════════════════════
+# CompactionMiddleware — 智能上下文压缩（对标 Opencode compaction）
+# ════════════════════════════════════════════════════════════════
+
+class CompactionMiddleware(BaseMiddleware):
+    """智能上下文压缩中间件（替代 TruncationMiddleware）
+
+    对标 Opencode compaction 系统：
+    - Token 感知溢出检测
+    - LLM 结构化摘要（替代硬截断）
+    - tail_start 指针标记保留轮次
+    - [summary, tail, new] 上下文重排
+    - 压缩后重放用户任务意图
+    - 结果持久化到 SQLite
+
+    在 on_think_start 阶段（LLM 调用前）检查是否需要压缩，
+    确保 LLM 看到的是精简后的上下文。
+    """
+    HOOKS = ("on_think_start",)
+
+    def __init__(
+        self,
+        token_budget: int = 6000,
+        protected_recent_turns: int = 3,
+        min_turns_before_compact: int = 4,
+        use_llm: bool = True,
+    ):
+        self.token_budget = token_budget
+        self.protected_recent_turns = protected_recent_turns
+        self.min_turns_before_compact = min_turns_before_compact
+        self.use_llm = use_llm
+        self._compacted_rounds: set = set()
+
+    def reset_task_state(self):
+        self._compacted_rounds.clear()
+
+    async def on_think_start(self, ctx: RunContext) -> None:
+        """LLM 调用前检查上下文是否溢出，必要时压缩"""
+        if not ctx.tool_results:
+            return
+
+        total = len(ctx.tool_results)
+        if total < self.min_turns_before_compact:
+            return
+
+        # 如果本轮已经是 compression 后的轮次，不再重复压缩
+        if ctx.react_depth in self._compacted_rounds:
+            return
+
+        # Token 估算：检查 conversation_history 是否超预算
+        hist_tokens = self._estimate_tokens(ctx)
+        if hist_tokens < self.token_budget:
+            return
+
+        compactable = total - self.protected_recent_turns
+        if compactable <= 0:
+            return
+
+        # 执行压缩
+        entries_to_compact = ctx.tool_results[:compactable]
+        summary = await self._generate_summary(
+            entries_to_compact, ctx.task_description, ctx,
+        )
+
+        # 重建 tool_results: [summary_note, tail...]
+        summary_note: Dict[str, Any] = {
+            "compacted": True,
+            "summary": summary,
+            "count": len(entries_to_compact),
+        }
+        ctx.tool_results = [summary_note] + ctx.tool_results[compactable:]
+
+        # 重建 _conversation_history
+        if ctx._conversation_history:
+            n_remove = min(compactable * 2, len(ctx._conversation_history) - 1)
+            ctx._conversation_history = ctx._conversation_history[n_remove:]
+            ctx._conversation_history.insert(0, {
+                "role": "system",
+                "content": f"[上下文摘要] 以下是对之前 {len(entries_to_compact)} 轮工具调用的结构化摘要：\n{summary}",
+            })
+
+        # 重放指令
+        ctx.forced_instructions = (
+            f"[上下文已压缩] 之前的工作已摘要。请基于此继续，不要重复已完成的操作。\n\n{summary}"
+        )
+
+        self._compacted_rounds.add(ctx.react_depth)
+        logger.info(
+            f"CompactionMiddleware: 压缩 {len(entries_to_compact)} 条, "
+            f"剩余 {len(ctx.tool_results)} 条"
+        )
+
+        # 持久化
+        self._persist(ctx, summary, compactable)
+
+    def _estimate_tokens(self, ctx: RunContext) -> int:
+        """估算 _conversation_history 的 token 数（优先 tiktoken，回退字符估算）"""
+        total = 0
+        for msg in ctx._conversation_history:
+            content = str(msg.get("content", ""))
+            total += self._count_tokens(content)
+            if msg.get("tool_calls"):
+                for tc in msg["tool_calls"]:
+                    fn = tc.get("function", {})
+                    total += self._count_tokens(str(fn.get("name", "")))
+                    total += self._count_tokens(str(fn.get("arguments", "")))
+        return total
+
+    @staticmethod
+    def _count_tokens(text: str) -> int:
+        """Token 计数：优先 tiktoken，回退字符/4 估算（更接近真实 token 比）"""
+        if not text:
+            return 0
+        try:
+            import tiktoken
+            enc = tiktoken.get_encoding("cl100k_base")
+            return len(enc.encode(text))
+        except (ImportError, Exception):
+            return max(1, len(text) // 4 + 1)
+
+    async def _generate_summary(self, entries: List[Dict],
+                                 task: str, ctx: RunContext) -> str:
+        """生成摘要 — 优先 LLM，失败回退到模板"""
+        from .context_budget import _COMPACTION_SYSTEM_PROMPT
+        try:
+            from core.engine.llm_backend import get_llm_router
+            router = get_llm_router()
+            if router and router.is_available() and self.use_llm:
+                lines = [f"## User Task\n{task}\n"]
+                for i, e in enumerate(entries):
+                    tc = e.get("tool_call", {})
+                    lines.append(
+                        f"### Call {i+1}: {tc.get('name', '?')} "
+                        f"({'OK' if e.get('success') else 'FAIL'})\n"
+                        f"Result: {str(e.get('result', ''))[:800]}\n"
+                    )
+                import asyncio
+                resp = await asyncio.wait_for(
+                    router.chat([
+                        {"role": "system", "content": _COMPACTION_SYSTEM_PROMPT},
+                        {"role": "user", "content": "\n".join(lines)},
+                    ], temperature=0.3, max_tokens=1024),
+                    timeout=30,
+                )
+                text = str(resp) if resp else ""
+                if text and text != "None" and len(text) > 20:
+                    return text.strip()
+        except Exception as e:
+            logger.debug(f"LLM 摘要失败: {e}")
+
+        # 回退到模板
+        return self._template_summary(entries)
+
+    def _template_summary(self, entries: List[Dict]) -> str:
+        """增强模板摘要 — 提取文件 / 查询 / 关键结果"""
+        if not entries:
+            return ""
+        tools = list(dict.fromkeys(
+            e.get("tool_call", {}).get("name", "") for e in entries
+        ))
+        ok = sum(1 for e in entries if e.get("success"))
+        fail = len(entries) - ok
+        files = []
+        queries = []
+        for e in entries:
+            args = e.get("tool_call", {}).get("arguments", {})
+            name = e.get("tool_call", {}).get("name", "")
+            if name in ("write_file", "edit_file"):
+                p = args.get("path", "")
+                if p:
+                    files.append(p)
+            elif name in ("web_search", "search"):
+                q = args.get("query", "")
+                if q:
+                    queries.append(q[:60])
+        parts = [f"[上下文压缩] 之前 {len(entries)} 轮：{', '.join(tools[:5])}，✅{ok} ❌{fail}"]
+        if files:
+            parts.append(f"📄 {'; '.join(files[:3])}")
+        if queries:
+            parts.append(f"🔍 {'; '.join(queries[:2])}")
+        return " | ".join(parts)
+
+    def _persist(self, ctx: RunContext, summary: str, n: int):
+        """持久化到 SQLite"""
+        try:
+            from .conversation_store import ConversationStore
+            store = ConversationStore.get_instance()
+            session_id = getattr(ctx, '_session_id', '')
+            if session_id:
+                store.save_compaction(session_id, ctx.react_depth, summary, len(ctx.tool_results))
+        except Exception as e:
+            logger.debug(f"持久化压缩失败: {e}")
+
+
+# ════════════════════════════════════════════════════════════════
 # PermissionMiddleware — 三级权限控制
 # ════════════════════════════════════════════════════════════════
 
@@ -559,7 +943,7 @@ class PermissionMiddleware(BaseMiddleware):
     2. 调用 ShellGuard 扫描命令安全性
     3. 根据结果决定执行/拒绝/询问用户
     """
-    HOOKS = ()  # 使用 on_wrap_tool_call，不需要其他钩子
+    HOOKS = ("on_wrap_tool_call",)  # 只注册洋葱模式钩子
 
     def __init__(self, config_path: Optional[str] = None, sandbox_mode: bool = False):
         from core.multi_agent_v2.tools.permission import get_permission_service
@@ -569,17 +953,11 @@ class PermissionMiddleware(BaseMiddleware):
 
     async def on_wrap_tool_call(self, ctx: RunContext, next_mw: Callable) -> Any:
         """在工具执行前实时检查权限和安全性（洋葱模式）"""
-        # 提取工具名和参数
-        if not isinstance(next_mw, dict):
-            # 从 ctx 获取工具调用信息
-            tool_name = getattr(ctx, '_current_tool_name', '')
-            arguments = getattr(ctx, '_current_tool_arguments', {})
-        else:
-            tool_name = next_mw.get('name', '')
-            arguments = next_mw.get('arguments', {})
+        tool_name = getattr(ctx, '_current_tool_name', '')
+        arguments = getattr(ctx, '_current_tool_arguments', {})
 
         if not tool_name:
-            return await next_mw() if callable(next_mw) else None
+            return await next_mw()
 
         # 检查权限
         perm_result = self.permission_service.check(tool_name, arguments)
@@ -641,25 +1019,58 @@ class PermissionMiddleware(BaseMiddleware):
 # ════════════════════════════════════════════════════════════════
 
 class HookMiddleware(BaseMiddleware):
-    """工具调用前后 Hook 拦截器
+    """工具调用前后 Hook 拦截器（BeforeTool / AfterTool / OnError）
 
-    在工具执行前后调用注册的 Hook，支持：
-    - BeforeTool: 修改参数、跳过执行、终止流程
-    - AfterTool: 修改结果、缓存结果
-    - OnError: 重试、错误处理
+    使用 on_wrap_tool_call（洋葱模式）实现 BeforeTool 拦截，
+    使用 on_tool_end 实现 AfterTool / OnError 后处理。
     """
-    HOOKS = ("on_think_end",)
+    HOOKS = ("on_wrap_tool_call", "on_tool_end")
 
     def __init__(self):
         from core.multi_agent_v2.tools.hooks import get_hook_manager
         self.hook_manager = get_hook_manager()
 
-    async def on_think_end(self, ctx: RunContext) -> None:
-        """在工具执行前后调用 Hook"""
+    async def on_wrap_tool_call(self, ctx: RunContext, next_mw: Callable) -> Any:
+        """BeforeTool: 工具执行前调用 Before Hook"""
+        tool_name = getattr(ctx, '_current_tool_name', '')
+        arguments = getattr(ctx, '_current_tool_arguments', {})
+
+        if not tool_name:
+            return await next_mw()
+
+        # 执行所有 BeforeTool Hook
+        before_result = await self.hook_manager.run_before(tool_name, arguments)
+
+        # 处理 skip（跳过工具执行）
+        if before_result.skip:
+            logger.info(f"BeforeTool 跳过 {tool_name}: {before_result.reason}")
+            return {
+                "success": False,
+                "error": f"工具被跳过: {before_result.reason}",
+                "result": {"error": f"工具被跳过: {before_result.reason}"},
+                "tool_call": {"name": tool_name, "arguments": arguments},
+            }
+
+        # 处理 abort（终止整个执行流程）
+        if before_result.abort:
+            logger.warning(f"BeforeTool 终止 {tool_name}: {before_result.abort_reason}")
+            ctx.interrupted = True
+            ctx.last_error = before_result.abort_reason
+            return {
+                "success": False,
+                "error": f"执行终止: {before_result.abort_reason}",
+                "result": {"error": f"执行终止: {before_result.abort_reason}"},
+                "tool_call": {"name": tool_name, "arguments": arguments},
+            }
+
+        # 继续执行（参数修改暂不支持，需架构级改造）
+        return await next_mw()
+
+    async def on_tool_end(self, ctx: RunContext) -> None:
+        """工具执行后调用 AfterTool / OnError Hook"""
         if not ctx.tool_results:
             return
 
-        # 获取最近一轮的工具调用
         last_result = ctx.tool_results[-1]
         tool_call = last_result.get("tool_call", {})
         tool_name = tool_call.get("name", "")
@@ -668,36 +1079,14 @@ class HookMiddleware(BaseMiddleware):
         if not tool_name:
             return
 
-        # 调用 BeforeTool Hook（如果工具还没执行）
-        if not last_result.get("success") and last_result.get("result") is None:
-            before_result = await self.hook_manager.run_before(tool_name, arguments)
-
-            if before_result.skip:
-                # 跳过工具执行
-                last_result["success"] = True
-                last_result["result"] = before_result.reason or "Hook 跳过了此工具调用"
-                logger.info(f"Hook 跳过工具: {tool_name}")
-                return
-
-            if before_result.abort:
-                # 终止整个流程
-                ctx.interrupted = True
-                ctx.final_answer = before_result.abort_reason or "Hook 终止了执行流程"
-                logger.warning(f"Hook 终止流程: {tool_name}")
-                return
-
-            # 如果修改了参数，更新工具调用
-            if before_result.modify_args and before_result.args:
-                tool_call["arguments"] = before_result.args
-
-        # 调用 AfterTool Hook（如果工具已执行）
+        # 调用 AfterTool Hook（工具已成功执行）
         if last_result.get("success"):
             after_result = await self.hook_manager.run_after(tool_name, arguments, last_result.get("result"))
 
             if after_result.modify_result and after_result.result:
                 last_result["result"] = after_result.result
 
-        # 调用 OnError Hook（如果工具执行失败）
+        # 调用 OnError Hook（工具执行失败）
         if not last_result.get("success") and last_result.get("error"):
             error_msg = last_result.get("error", "")
             try:
@@ -708,6 +1097,5 @@ class HookMiddleware(BaseMiddleware):
             error_result = await self.hook_manager.run_error(tool_name, arguments, error)
 
             if error_result.retry:
-                # 标记重试
                 last_result["retry"] = True
                 logger.info(f"Hook 请求重试: {tool_name}")
