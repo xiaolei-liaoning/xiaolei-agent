@@ -26,7 +26,7 @@ servers:
     command: python3
     args: ["mcp/fun_mcp_server.py"]
     description: "趣味工具：笑话、谜语、星座运势"
-    auto_connect: true
+    auto_connect: false
 
   file-ops-mcp:
     command: python3
@@ -86,19 +86,19 @@ servers:
     command: python3
     args: ["mcp/game_mcp_server.py"]
     description: "游戏：猜数字、石头剪刀布、掷骰子"
-    auto_connect: true
+    auto_connect: false
 
   art-mcp:
     command: python3
     args: ["mcp/art_mcp_server.py"]
     description: "ASCII艺术：猫、狗、心形、星星、机器人等图案"
-    auto_connect: true
+    auto_connect: false
 
   awesome-mcp-servers-mcp:
     command: python3
     args: ["mcp/awesome_mcp_servers_mcp_server.py"]
     description: "MCP服务器管理：搜索、连接、管理800+ MCP服务器"
-    auto_connect: true
+    auto_connect: false
 
   sandbox-tools-mcp:
     command: python3
@@ -116,13 +116,13 @@ servers:
     command: python3
     args: ["mcp/advanced_automation_mcp_server.py"]
     description: "高级自动化：工作流、邮件、日历、通知"
-    auto_connect: true
+    auto_connect: false
 
   openclaw-mcp:
     command: python3
     args: ["mcp/openclaw_mcp_server.py"]
     description: "OpenClaw工作流引擎：创建、执行、验证、导出工作流"
-    auto_connect: true
+    auto_connect: false
 
   third-party-mcp:
     command: python3
