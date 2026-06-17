@@ -22,7 +22,7 @@ from typing import List, Dict, Optional, AsyncIterator, Any
 from dotenv import load_dotenv
 
 try:
-    from ..infrastructure.config_manager import get_config
+    from .config_manager import get_config
     HAS_CONFIG_MANAGER = True
 except ImportError:
     HAS_CONFIG_MANAGER = False
@@ -41,11 +41,12 @@ def get_llm_config():
         default_model = "glm-4-flash"
         max_retries = 3
         backoff_base = 2.0
-        rate_limit_rpm = 300  # DeepSeek API 支持高并发，提升以支持 parallel 多 Agent 同时调用
+        rate_limit_rpm = 300
+        timeout = 30  # LLM 调用超时（秒），fallback 阶段可更快失败
         supported_models = [
             "glm-4-flash", "glm-4-plus", "glm-4-air",
             "glm-4.7-flash", "glm-4-free", "glm-3-turbo",
-            "free-glm-4", "free-qwen", "free-llama",
+            "deepseek-chat",
         ]
     return FallbackLLMConfig()
 
@@ -68,6 +69,16 @@ class TokenUsage:
     total_tokens: int = 0
     model: str = ""
     timestamp: float = 0.0
+
+
+@dataclass
+class LLMResponse:
+    """结构化 LLM 响应，含文本内容和原生 tool_calls"""
+    content: str = ""
+    tool_calls: List[Dict] = field(default_factory=list)
+
+    def has_tools(self) -> bool:
+        return bool(self.tool_calls)
 
 
 class TokenStats:
@@ -132,53 +143,25 @@ class RateLimiter:
 # ============================================================
 
 class GLMBackend:
-    """智谱 GLM API 封装 — 保留完整实现兼容旧代码"""
-
-    FREE_API_ENDPOINTS = {
-        "groq-llama3": "https://api.groq.com/openai/v1/chat/completions",
-        "groq-gemma": "https://api.groq.com/openai/v1/chat/completions",
-        "llama-3.1-8b-instant": "https://api.groq.com/openai/v1/chat/completions",
-        "gemma2-9b-it": "https://api.groq.com/openai/v1/chat/completions",
-        "together-llama": "https://api.together.xyz/v1/chat/completions",
-        "meta-llama/Llama-3-8b-chat-hf": "https://api.together.xyz/v1/chat/completions",
-        "openrouter-llama": "https://openrouter.ai/api/v1/chat/completions",
-        "openrouter-qwen": "https://openrouter.ai/api/v1/chat/completions",
-    }
+    """智谱 GLM API + DeepSeek 封装"""
 
     def __init__(self, api_key=None, model=None):
         self.api_key = api_key or os.getenv("ZHIPU_API_KEY", "")
         self.model = model or DEFAULT_MODEL
         self.client = None
-        self.local_client = None
-        self.local_model = None
-        self.free_client = None
+        self.deepseek_client = None
+        self.deepseek_model = os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL", "deepseek-chat")
         self._token_stats = TokenStats()
         self._rate_limiter = RateLimiter(RATE_LIMIT_RPM)
         self._model_lock = threading.Lock()
-        self.timeout = llm_config.timeout  # 使用配置中的超时设置
+        self.timeout = llm_config.timeout
+        self._consecutive_failures = 0  # 连续失败计数
+        self._max_consecutive_failures = 10  # 超过此值认为 API 不可用
         self._init_client()
 
     def _init_client(self):
-        # 1. 尝试初始化本地 LM Studio (OpenAI 兼容)
-        local_url = os.getenv("LOCAL_LLM_URL", "http://192.168.66.236:1234")
-        if local_url:
-            try:
-                # 使用 requests 直接调用 LM Studio API
-                import requests
-                self.local_url = local_url
-                self.local_model = os.getenv("LOCAL_LLM_MODEL", "qwen/qwen3-vl-4b")
-                self.local_client = True  # 标记为可用
-                logger.info("本地 LM Studio 初始化成功: %s", local_url)
-            except Exception as e:
-                logger.warning("本地 LM Studio 初始化失败: %s", e)
-                self.local_client = None
-        else:
-            self.local_client = None
-
-        # 2. 初始化 DeepSeek (OpenAI 兼容) — 从 ANTHROPIC_AUTH_TOKEN 读取 key
-        self.deepseek_client = None
-        self.deepseek_model = os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL", "deepseek-chat")
-        deepseek_key = os.getenv("ANTHROPIC_AUTH_TOKEN", "")
+        # 0. 初始化 DeepSeek (OpenAI 兼容)
+        deepseek_key = os.getenv("DEEPSEEK_API_KEY", os.getenv("ANTHROPIC_AUTH_TOKEN", ""))
         if deepseek_key:
             try:
                 import openai
@@ -192,7 +175,7 @@ class GLMBackend:
             except Exception as e:
                 logger.warning("DeepSeek 客户端初始化失败: %s", e)
 
-        # 3. 初始化 GLM API (fallback)
+        # 1. 初始化 GLM API (fallback)
         if self.api_key:
             try:
                 from zhipuai import ZhipuAI
@@ -239,58 +222,14 @@ class GLMBackend:
         except Exception:
             pass
 
-    async def _init_free_client(self) -> bool:
-        if self.free_client is not None:
-            return True
-        try:
-            import aiohttp
-            self.free_client = aiohttp.ClientSession()
-            return True
-        except Exception:
-            return False
-
-    async def _call_free_api(self, messages, model, temperature=0.7,
-                             max_tokens=2000, stream=False, tools=None, tool_choice=None):
-        if model not in self.FREE_API_ENDPOINTS:
-            return None
-        url = self.FREE_API_ENDPOINTS[model]
-        if not await self._init_free_client():
-            return None
-        try:
-            # 根据 endpoint 自动添加鉴权头
-            headers = {"Content-Type": "application/json", "User-Agent": "xiaolei-agent/1.0"}
-            if "openrouter" in url:
-                api_key = os.getenv("OPENROUTER_API_KEY", "")
-                if api_key:
-                    headers["Authorization"] = f"Bearer {api_key}"
-            elif "groq" in url:
-                api_key = os.getenv("GROQ_API_KEY", "")
-                if api_key:
-                    headers["Authorization"] = f"Bearer {api_key}"
-            elif "together" in url:
-                api_key = os.getenv("TOGETHER_API_KEY", "")
-                if api_key:
-                    headers["Authorization"] = f"Bearer {api_key}"
-            payload = {"model": model, "messages": messages,
-                       "temperature": temperature, "max_tokens": max_tokens, "stream": stream}
-            if tools:
-                payload["tools"] = tools
-                payload["tool_choice"] = tool_choice or "auto"
-            import aiohttp
-            timeout = aiohttp.ClientTimeout(total=30)
-            async with self.free_client.post(url, headers=headers, json=payload, timeout=timeout) as resp:
-                resp.raise_for_status()
-                return await resp.json() if not stream else resp
-        except Exception:
-            return None
-
-    async def chat(self, messages, temperature=0.7, max_tokens=2000,
-                   model=None, tools=None) -> str:
+    async def _chat_impl(self, messages, temperature=0.7, max_tokens=2000,
+                         model=None, tools=None) -> LLMResponse:
+        """内部实现：返回结构化 LLMResponse，包含原生 tool_calls"""
         target = model or self.model
-        if not await self._rate_limiter.acquire(timeout=30.0):
-            return "请求过于频繁，请稍后再试"
+        if not await self._rate_limiter.acquire(timeout=15.0):
+            return LLMResponse(content="请求过于频繁，请稍后再试")
 
-        # 0. DeepSeek (OpenAI 兼容) — 优先，用户已配置 key
+        # 0. DeepSeek (OpenAI 兼容) — 优先
         if self.deepseek_client:
             try:
                 payload = dict(model=self.deepseek_model, messages=messages,
@@ -300,32 +239,35 @@ class GLMBackend:
                     payload["tool_choice"] = "auto"
 
                 logger.info("LLM → DeepSeek (%s, tools=%s)", self.deepseek_model, bool(tools))
-                response = await self.deepseek_client.chat.completions.create(**payload)
+                response = await asyncio.wait_for(
+                    self.deepseek_client.chat.completions.create(**payload),
+                    timeout=60,
+                )
                 self._record_usage_from_response(response.model_dump() if hasattr(response, 'model_dump') else {}, self.deepseek_model)
                 if hasattr(response, 'choices') and response.choices:
                     message = response.choices[0].message
                     content = getattr(message, 'content', None) or ""
                     tc = getattr(message, 'tool_calls', None)
-                    
-                    # 检测截断信号
+
                     finish_reason = getattr(response.choices[0], 'finish_reason', None)
                     is_truncated = finish_reason == 'length'
                     if is_truncated:
                         logger.warning(f"⚠️ LLM输出被截断! finish_reason=length, content_len={len(content)}")
-                    
+
                     logger.info("LLM DeepSeek返回: content_len=%d tool_calls=%s truncated=%s", len(content), bool(tc), is_truncated)
+                    self._consecutive_failures = 0  # 成功，重置失败计数
                     if tc:
                         tc_list = [{"id": getattr(t, 'id', ''),
                                     "type": getattr(t, 'type', 'function'),
                                     "function": {"name": t.function.name,
                                                  "arguments": t.function.arguments}}
                                    for t in tc]
-                        return json.dumps({"choices": [{"message": {"role": "assistant",
-                                        "content": content, "tool_calls": tc_list}}]},
-                                          ensure_ascii=False)
-                    return content or ""
+                        return LLMResponse(content=content, tool_calls=tc_list)
+                    return LLMResponse(content=content or "")
                 else:
                     logger.warning("DeepSeek 返回空响应")
+            except asyncio.TimeoutError:
+                logger.error("DeepSeek API 调用超时(25s)")
             except Exception as e:
                 logger.error(f"DeepSeek API 调用异常: {e}（将尝试GLM API）")
 
@@ -336,102 +278,56 @@ class GLMBackend:
             try:
                 kwargs = dict(model="glm-4-flash", messages=messages,
                               temperature=temperature, max_tokens=max_tokens,
-                              stream=False, timeout=self.timeout)
+                              stream=False, timeout=20)
                 if tools:
                     kwargs["tools"] = tools
                     kwargs["tool_choice"] = "auto"
 
                 logger.info("LLM → GLM API (glm-4-flash, tools=%s)", bool(tools))
-                response = await asyncio.to_thread(self.client.chat.completions.create, **kwargs)
+                response = await asyncio.wait_for(
+                    asyncio.to_thread(self.client.chat.completions.create, **kwargs),
+                    timeout=60,
+                )
                 self._record_usage(response)
                 message = response.choices[0].message
                 content = message.content or ""
                 tc = getattr(message, 'tool_calls', None)
                 logger.info("LLM GLM返回: content_len=%d tool_calls=%s", len(content), bool(tc))
+                self._consecutive_failures = 0  # 成功，重置失败计数
                 if tc:
                     tc_list = [{"id": getattr(t, 'id', ''),
                                 "type": getattr(t, 'type', 'function'),
                                 "function": {"name": t.function.name,
                                              "arguments": t.function.arguments}}
                                for t in tc]
-                    return json.dumps({"choices": [{"message": {"role": "assistant",
-                                    "content": content, "tool_calls": tc_list}}]},
-                                      ensure_ascii=False)
-                return content or ""
+                    return LLMResponse(content=content, tool_calls=tc_list)
+                return LLMResponse(content=content or "")
+            except asyncio.TimeoutError:
+                logger.error("GLM API 调用超时(20s)")
             except Exception as e:
-                logger.error(f"GLM API 调用异常: {e}（将尝试本地LM Studio）")
+                logger.error(f"GLM API 调用异常: {e}")
 
-        # 1. 本地 LM Studio (保底)
-        if self.local_client:
-            try:
-                import requests
-                
-                payload = {
-                    "model": self.local_model,
-                    "messages": messages,
-                    "temperature": temperature,
-                    "max_tokens": max_tokens,
-                    "stream": False
-                }
-                if tools:
-                    payload["tools"] = tools
-                    payload["tool_choice"] = "auto"
+        self._consecutive_failures += 1
+        logger.warning("所有 LLM API 不可用 (deepseek=%s, glm=%s), 连续失败=%d",
+                       bool(self.deepseek_client), bool(self.client), self._consecutive_failures)
+        return LLMResponse(content="[LLM_MOCK] 系统正在处理您的请求...")
 
-                logger.info("LLM → 本地 LM Studio (%s, tools=%s)", self.local_model, bool(tools))
-                response = await asyncio.to_thread(
-                    requests.post,
-                    f"{self.local_url}/v1/chat/completions",
-                    json=payload,
-                    timeout=self.timeout
-                )
-                response.raise_for_status()
-                data = response.json()
-                
-                # 检查响应格式
-                if not data or "choices" not in data or not data["choices"]:
-                    logger.error("本地 LM Studio 返回空响应")
-                    raise ValueError("Empty response from local LM Studio")
-                
-                choice = data["choices"][0]
-                if "message" not in choice:
-                    logger.error("本地 LM Studio 返回空消息")
-                    raise ValueError("Empty message from local LM Studio")
-                
-                message = choice["message"]
-                content = message.get("content", "") or ""
-                tc = message.get("tool_calls", [])
-                logger.info("LLM 本地返回: content_len=%d tool_calls=%s", len(content), bool(tc))
-                if tc:
-                    return json.dumps({"choices": [{"message": {"role": "assistant",
-                                    "content": content, "tool_calls": tc}}]},
-                                      ensure_ascii=False)
-                return content or ""
-            except Exception as e:
-                logger.error(f"本地 LM Studio 调用异常: {e}（将尝试fallback）")
+    async def chat(self, messages, temperature=0.7, max_tokens=2000,
+                   model=None, tools=None) -> str:
+        """向后兼容包装器：返回字符串，支持 tool_calls 的 JSON 序列化"""
+        resp = await self._chat_impl(messages, temperature=temperature,
+                                     max_tokens=max_tokens, model=model, tools=tools)
+        if resp.tool_calls:
+            return json.dumps({"choices": [{"message": {"role": "assistant",
+                            "content": resp.content, "tool_calls": resp.tool_calls}}]},
+                              ensure_ascii=False)
+        return resp.content
 
-        # 2. 免费 API fallback（仅当没有主API key时）
-        can_use_free = await self._init_free_client()
-        logger.info("LLM fallback检查: free_client=%s api_key=%s", can_use_free, bool(self.api_key))
-        if can_use_free and not self.api_key:
-            for free_model in ["openrouter-qwen", "openrouter-llama", "llama-3.1-8b-instant", "gemma2-9b-it"]:
-                logger.info("LLM → 免费API: %s (tools=%s)", free_model, bool(tools))
-                data = await self._call_free_api(messages, free_model, temperature, max_tokens, tools=tools, tool_choice="auto" if tools else None)
-                if data and "choices" in data and data["choices"]:
-                    message = data["choices"][0].get("message", {})
-                    content = message.get("content", "") or ""
-                    tc = message.get("tool_calls", [])
-                    logger.info("LLM freeAPI成功: %s len=%d tool_calls=%s", free_model, len(content), bool(tc))
-                    if tc:
-                        return json.dumps({"choices": [{"message": {"role": "assistant",
-                                        "content": content, "tool_calls": tc}}]},
-                                          ensure_ascii=False)
-                    self._record_usage_from_response(data, free_model)
-                    return content or ""
-                logger.warning("LLM freeAPI失败: %s", free_model)
-
-        logger.warning("所有 LLM API 不可用，使用模拟响应 (client=%s, free_client=%s, api_key=%s)",
-                       bool(self.client), can_use_free, bool(self.api_key))
-        return "[LLM_MOCK] 系统正在处理您的请求..."
+    async def chat_structured(self, messages, temperature=0.7, max_tokens=2000,
+                              model=None, tools=None) -> LLMResponse:
+        """原生工具调用：返回 LLMResponse 含结构化 tool_calls"""
+        return await self._chat_impl(messages, temperature=temperature,
+                                     max_tokens=max_tokens, model=model, tools=tools)
 
     async def chat_stream(self, messages, temperature=0.7, max_tokens=2000,
                           model=None) -> AsyncIterator[str]:
@@ -440,47 +336,6 @@ class GLMBackend:
             yield "请求过于频繁"
             return
 
-        # 0. 本地 LM Studio (优先)
-        if self.local_client:
-            try:
-                import requests
-                
-                payload = {
-                    "model": self.local_model,
-                    "messages": messages,
-                    "temperature": temperature,
-                    "max_tokens": max_tokens,
-                    "stream": True
-                }
-
-                logger.info("LLM → 本地 LM Studio 流式 (%s)", self.local_model)
-                response = await asyncio.to_thread(
-                    requests.post,
-                    f"{self.local_url}/v1/chat/completions",
-                    json=payload,
-                    timeout=self.timeout,
-                    stream=True
-                )
-                response.raise_for_status()
-                
-                for line in response.iter_lines():
-                    if line:
-                        line = line.decode('utf-8')
-                        if line.startswith('data: '):
-                            data = line[6:]
-                            if data == '[DONE]':
-                                break
-                            try:
-                                chunk = json.loads(data)
-                                if chunk.get('choices') and chunk['choices'][0].get('delta', {}).get('content'):
-                                    yield chunk['choices'][0]['delta']['content']
-                            except json.JSONDecodeError:
-                                continue
-                return
-            except Exception as e:
-                logger.error("本地 LM Studio 流式调用异常: %s", e)
-
-        # 1. GLM API
         if self.client and self.api_key:
             try:
                 response = await asyncio.to_thread(
@@ -496,8 +351,163 @@ class GLMBackend:
                 pass
         yield "流式响应不可用，请使用非流式接口"
 
+    async def chat_structured_stream(self, messages, temperature=0.7, max_tokens=2000,
+                                      model=None, tools=None, on_text=None) -> LLMResponse:
+        """流式工具调用 — 对标 Opencode 的 streamText + 事件处理器
+        
+        on_text: 可选回调，每收到文本块时调用 on_text(chunk)
+        返回 LLMResponse（同 chat_structured），含 content + tool_calls
+        
+        流式处理逻辑：
+          1. DeepSeek (OpenAI 兼容): 原生 async generator，支持 tool_calls 流式传输
+          2. GLM (ZhipuAI): 同步 blocking + asyncio.to_thread
+        """
+        target = model or self.model
+        if not await self._rate_limiter.acquire(timeout=30.0):
+            return LLMResponse(content="请求过于频繁，请稍后再试")
+
+        full_content = ""
+        # tool_call 缓冲区: {index: {id, function: {name, arguments}}}
+        tool_call_buffers: Dict[int, Dict] = {}
+        finish_reason = None
+
+        # ── DeepSeek (OpenAI 兼容) ──
+        if self.deepseek_client:
+            try:
+                payload = dict(model=self.deepseek_model, messages=messages,
+                               temperature=temperature, max_tokens=max_tokens,
+                               stream=True, stream_options={"include_usage": True})
+                if tools:
+                    payload["tools"] = tools
+                    payload["tool_choice"] = "auto"
+
+                logger.info("LLM → DeepSeek(stream) (model=%s, tools=%s)", self.deepseek_model, bool(tools))
+                response = await self.deepseek_client.chat.completions.create(**payload)
+
+                async for chunk in response:
+                    if not chunk.choices:
+                        continue
+
+                    delta = chunk.choices[0].delta
+                    finish_reason = chunk.choices[0].finish_reason
+
+                    # 文本块
+                    if delta.content:
+                        full_content += delta.content
+                        if on_text:
+                            on_text(delta.content)
+
+                    # 工具调用块
+                    if delta.tool_calls:
+                        for tc_delta in delta.tool_calls:
+                            idx = tc_delta.index
+                            if idx not in tool_call_buffers:
+                                tool_call_buffers[idx] = {"id": "", "function": {"name": "", "arguments": ""}}
+                            buf = tool_call_buffers[idx]
+                            if tc_delta.id:
+                                buf["id"] = tc_delta.id
+                            if tc_delta.function:
+                                if tc_delta.function.name:
+                                    buf["function"]["name"] += tc_delta.function.name
+                                if tc_delta.function.arguments:
+                                    buf["function"]["arguments"] += tc_delta.function.arguments
+
+                self._consecutive_failures = 0
+
+                # 组装 tool_calls
+                tool_calls = []
+                if tool_call_buffers:
+                    for idx in sorted(tool_call_buffers.keys()):
+                        buf = tool_call_buffers[idx]
+                        tc_id = buf["id"]
+                        if not tc_id:
+                            tc_id = f"call_{buf['function']['name']}_{int(time.time())}"
+                        tool_calls.append({
+                            "id": tc_id,
+                            "type": "function",
+                            "function": {
+                                "name": buf["function"]["name"],
+                                "arguments": buf["function"]["arguments"],
+                            },
+                        })
+
+                logger.info("LLM DeepSeek(stream)返回: content_len=%d tool_calls=%s finish=%s",
+                            len(full_content), bool(tool_calls), finish_reason)
+                return LLMResponse(content=full_content, tool_calls=tool_calls if tool_calls else None)
+
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error(f"DeepSeek 流式调用异常: {e}（将尝试GLM API）")
+
+        # ── GLM (ZhipuAI, fallback) ──
+        if self.client and self.api_key:
+            try:
+                logger.info("LLM → GLM(stream) (tools=%s)", bool(tools))
+                response = await asyncio.to_thread(
+                    self.client.chat.completions.create,
+                    model="glm-4-flash", messages=messages,
+                    temperature=temperature, max_tokens=max_tokens,
+                    tools=tools if tools else None,
+                    tool_choice="auto" if tools else None,
+                    stream=True, timeout=self.timeout,
+                )
+                for chunk in response:
+                    if not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta
+                    finish_reason = chunk.choices[0].finish_reason
+
+                    if delta.content:
+                        full_content += delta.content
+                        if on_text:
+                            on_text(delta.content)
+
+                    if delta.tool_calls:
+                        for tc_delta in delta.tool_calls:
+                            idx = tc_delta.index
+                            if idx not in tool_call_buffers:
+                                tool_call_buffers[idx] = {"id": "", "function": {"name": "", "arguments": ""}}
+                            buf = tool_call_buffers[idx]
+                            if tc_delta.id:
+                                buf["id"] = tc_delta.id
+                            if tc_delta.function:
+                                if tc_delta.function.name:
+                                    buf["function"]["name"] += tc_delta.function.name
+                                if tc_delta.function.arguments:
+                                    buf["function"]["arguments"] += tc_delta.function.arguments
+
+                self._consecutive_failures = 0
+
+                tool_calls = []
+                if tool_call_buffers:
+                    for idx in sorted(tool_call_buffers.keys()):
+                        buf = tool_call_buffers[idx]
+                        tc_id = buf["id"]
+                        if not tc_id:
+                            tc_id = f"call_{buf['function']['name']}_{int(time.time())}"
+                        tool_calls.append({
+                            "id": tc_id,
+                            "type": "function",
+                            "function": {
+                                "name": buf["function"]["name"],
+                                "arguments": buf["function"]["arguments"],
+                            },
+                        })
+
+                return LLMResponse(content=full_content, tool_calls=tool_calls if tool_calls else None)
+
+            except Exception as e:
+                logger.error(f"GLM 流式调用异常: {e}")
+
+        self._consecutive_failures += 1
+        return LLMResponse(content="[LLM_MOCK] 流式调用失败")
+
     def is_available(self) -> bool:
-        return self.client is not None or self.free_client is not None
+        if self._consecutive_failures >= self._max_consecutive_failures:
+            logger.warning(f"LLM 连续 {self._consecutive_failures} 次调用失败，标记为不可用")
+            return False
+        return self.deepseek_client is not None or self.client is not None
 
     def _generate_fallback_response(self, messages) -> str:
         for msg in reversed(messages):
@@ -650,6 +660,12 @@ class MultiLLMRouter:
                 return p
         return None
 
+    def release(self, provider_name: str) -> None:
+        """ponytail: 调用方完成请求后必须调用，释放并发槽位"""
+        if provider_name in self.providers:
+            p = self.providers[provider_name]
+            p.current_load = max(0, p.current_load - 1)
+
     def record_success(self, provider_name: str, duration_ms: float = 0) -> None:
         if provider_name in self.providers:
             p = self.providers[provider_name]
@@ -697,6 +713,11 @@ class LLMRouter:
         return await self.backend.chat(messages, temperature=temperature,
                                        max_tokens=max_tokens, model=model, tools=tools)
 
+    async def chat_structured(self, messages, temperature=0.7, max_tokens=2000,
+                              model=None, tools=None) -> LLMResponse:
+        return await self.backend.chat_structured(messages, temperature=temperature,
+                                                  max_tokens=max_tokens, model=model, tools=tools)
+
     async def simple_chat(self, user_message: str, system_prompt=None,
                           temperature=0.7) -> str:
         messages = []
@@ -709,6 +730,14 @@ class LLMRouter:
                           model=None) -> AsyncIterator[str]:
         async for chunk in self.backend.chat_stream(messages, temperature, max_tokens, model):
             yield chunk
+
+    async def chat_structured_stream(self, messages, temperature=0.7, max_tokens=2000,
+                                      model=None, tools=None, on_text=None) -> LLMResponse:
+        """流式工具调用（路由层代理）"""
+        return await self.backend.chat_structured_stream(
+            messages, temperature=temperature, max_tokens=max_tokens,
+            model=model, tools=tools, on_text=on_text,
+        )
 
     def is_available(self) -> bool:
         return self.backend.is_available()
