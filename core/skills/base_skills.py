@@ -50,12 +50,7 @@ class BaseSkillMatcher:
                 return r
         except Exception:
             pass
-        try:
-            r = self._keyword_fallback(task)
-            if r:
-                return r
-        except Exception:
-            pass
+        # LLM 不可用或匹配失败时，兜底返回 general
         return self.skills.get("general") or BaseSkill(
             id="general", name="通用助手", role_prompt="你是一个通用助手", tools=["chat"]
         )
@@ -66,11 +61,16 @@ class BaseSkillMatcher:
         router = get_llm_router()
         if not router or not router.is_available():
             return None
-        lines = [f"  {s.id}: {s.role_prompt}" for s in self.skills.values()]
+        lines = []
+        for s in self.skills.values():
+            tools_str = f"  [{', '.join(s.tools[:5])}]" if s.tools else ""
+            lines.append(f"  {s.id}: {s.role_prompt}{tools_str}")
         prompt = (
-            f"任务：{task}\n选最匹配的1个角色:\n"
+            f"任务：{task}\n\n"
+            f"从以下角色中选出最匹配该任务的 1 个。\n"
+            f"考虑角色的描述和可用工具是否适合该任务。\n\n"
             + "\n".join(lines)
-            + "\n只输出角色ID:"
+            + "\n\n只输出角色 ID，不要其他文字："
         )
         resp = (
             await router.simple_chat(prompt, temperature=0.2, max_tokens=30) or ""
@@ -78,21 +78,6 @@ class BaseSkillMatcher:
         for sid in self.skills:
             if sid in resp:
                 return self.skills[sid]
-        return None
-
-    def _keyword_fallback(self, task: str) -> Optional[BaseSkill]:
-        maps = {
-            "web_scraper": ["搜索", "热搜", "爬取", "抓取", "爬虫", "scraper", "crawl", "search"],
-            "data_analyst": ["分析", "数据", "统计", "可视化", "报表", "图表"],
-            "deep_thinker": ["为什么", "分析", "深度", "复杂", "思考", "推理"],
-            "translator": ["翻译", "英文", "中文", "日语", "韩语", "法语"],
-            "weather_expert": ["天气", "温度", "下雨", "台风", "气温"],
-            "system_toolbox": ["系统", "命令", "终端", "shell", "进程"],
-            "creative": ["创意", "写故事", "写诗", "小说", "创作"],
-        }
-        for s in sorted(self.skills.values(), key=lambda x: x.priority, reverse=True):
-            if any(kw in task for kw in maps.get(s.id, [])):
-                return s
         return None
 
 
