@@ -208,35 +208,6 @@ class ReActCoreMiddleware(BaseMiddleware):
         else:
             ctx.tool_defs = None
 
-        # Add write_todos tool for task tracking
-        _write_todos_tool = {
-            "type": "function",
-            "function": {
-                "name": "write_todos",
-                "description": "创建和管理任务清单。用于复杂多步骤任务的进度追踪。只在任务有3个以上步骤时使用。",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "todos": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "content": {"type": "string", "description": "任务描述"},
-                                    "status": {"type": "string", "enum": ["pending", "in_progress", "completed"], "description": "任务状态"}
-                                },
-                                "required": ["content", "status"]
-                            },
-                            "description": "任务列表"
-                        }
-                    },
-                    "required": ["todos"]
-                }
-            }
-        }
-        if ctx.tool_defs is not None:
-            ctx.tool_defs.append(_write_todos_tool)
-
         # 构建消息 — 注入计划进度让 agent 知晓已完成/未完成步骤
         plan_context = steps_summary(ctx) if ctx.plan else ""
 
@@ -290,8 +261,12 @@ class ReActCoreMiddleware(BaseMiddleware):
         dynamic_context += "</system_context>"
         system_content += dynamic_context
 
-        # ── 2. 构建 LLM 消息（含 RAG 增强 + 个性化）──
+        # ── 2. 构建 LLM 消息（含对话历史 + RAG 增强 + 个性化）──
         messages = ctx._pending_messages.copy()
+
+        # 注入对话历史（让 LLM 看到之前的工具调用和结果）
+        if ctx._conversation_history:
+            messages.extend(ctx._conversation_history)
 
         # RAG 检索增强
         if ctx.react_depth <= 2:
@@ -307,15 +282,25 @@ class ReActCoreMiddleware(BaseMiddleware):
 
         # ── 3. 调用 LLM ──
         try:
-            async def _llm_call():
-                return await router.chat(
-                    messages,
-                    temperature=0.7,
-                    max_tokens=16384,
-                    tools=ctx.tool_defs if ctx.tool_defs else None,
-                )
-            
-            reply = await asyncio.wait_for(_llm_call(), timeout=60)
+            task = asyncio.create_task(router.chat(
+                messages,
+                temperature=0.7,
+                max_tokens=16384,
+                tools=ctx.tool_defs if ctx.tool_defs else None,
+            ))
+            try:
+                reply = await asyncio.wait_for(task, timeout=60)
+            except asyncio.TimeoutError:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+                raise
+            except Exception:
+                if not task.done():
+                    task.cancel()
+                raise
             reply = str(reply) if reply else ""
 
             # DEBUG: see what DeepSeek actually returned
@@ -357,6 +342,25 @@ class ReActCoreMiddleware(BaseMiddleware):
         tool_calls = ctx._pending_tool_calls
         ctx._pending_tool_calls = None
 
+        # ── 先累积 assistant 消息（含 tool_calls）到对话历史 ──
+        # 顺序必须：assistant(tool_calls) → tool_result → tool_result → ...
+        # 否则 DeepSeek 等 OpenAI 兼容 API 返回 400
+        if tool_calls:
+            _reply = (ctx._pending_reply or "").strip()
+            _msg = {"role": "assistant", "content": _reply}
+            _history_calls = []
+            for _tc in tool_calls:
+                _tc_id = _tc.get("id", f"call_{_tc.get('function', {}).get('name', '?')}_{ctx.react_depth}")
+                _tc_fn = _tc.get("function", {})
+                _history_calls.append({
+                    "id": _tc_id,
+                    "type": "function",
+                    "function": {"name": _tc_fn.get("name", ""), "arguments": _tc_fn.get("arguments", "{}")},
+                })
+            if _history_calls:
+                _msg["tool_calls"] = _history_calls
+            ctx._conversation_history.append(_msg)
+
         prefix = self._get_prefix(ctx)
 
         # 执行工具调用
@@ -377,7 +381,7 @@ class ReActCoreMiddleware(BaseMiddleware):
                 # 格式化结果
                 try:
                     arguments = json.loads(tc.get("function", {}).get("arguments", "{}"))
-                except:
+                except (json.JSONDecodeError, TypeError):
                     arguments = {}
                 
                 result_text = format_tool_result(
@@ -415,6 +419,15 @@ class ReActCoreMiddleware(BaseMiddleware):
                                 elif line.startswith("@@"):
                                     print(f"{prefix}      \033[36m{line}\033[0m")
 
+                # ── 累积 tool 结果到对话历史（紧跟在 assistant 消息之后）──
+                _tool_id = tc.get("id", f"call_{tool_name}_{ctx.react_depth}")
+                ctx._conversation_history.append({
+                    "role": "tool",
+                    "tool_call_id": _tool_id,
+                    "content": result_text[:2000],
+                    "name": tool_name,
+                })
+
                 # 文件验证（write_file 特殊处理）
                 if ok and tool_name == "write_file":
                     path = arguments.get("path", "")
@@ -427,11 +440,10 @@ class ReActCoreMiddleware(BaseMiddleware):
                                     actual = f.read()
                             else:
                                 actual = None
-                        except:
+                        except Exception:
                             actual = None
-                        validate_file_content(path, content, actual, ctx, agent=None)
-                        from core.multi_agent_v2.agents.file_validator import validate_code_quality
-                        qa_passed = validate_code_quality(path, content, ctx, agent=None)
+                        warnings = validate_file_content(path, content, actual, ctx, agent=None)
+                        qa_passed = not warnings  # 无警告 = 通过
 
                         # ── 迭代式质量改进：Write → Review → Improve ──
                         if qa_passed and not ctx.forced_instructions:
