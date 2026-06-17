@@ -13,25 +13,8 @@ class SmartAgentCLI:
     
     def _init_multi_agent_system(self):
         """初始化智能多Agent系统"""
-        try:
-            # 优先使用 multi_agent_v2
-            pass
-            self.coordinator = None
-            print_color("✅ 智能多Agent系统初始化完成 (v2)", CliColors.GREEN)
-        except Exception:
-            try:
-                # 降级到旧版 (core.agents)
-                from core.agents.smart_multi_agent import get_smart_multi_agent_system, CoordinatorAgent
-                from core.agents.agent_communication import communication_center
-                self.coordinator = get_smart_multi_agent_system()
-                self.coordinator.set_communication_center(communication_center)
-                print_color("✅ 智能多Agent系统初始化完成", CliColors.GREEN)
-            except Exception as e:
-                import traceback
-                error_msg = f"❌ 智能多Agent系统初始化失败: {e}"
-                print_error(error_msg)
-                print_error(f"详细错误: {traceback.format_exc()}")
-                self.coordinator = None
+        self.coordinator = None
+        print_color("ℹ️ 智能多Agent系统未启用 (coordinator模式已废弃)", CliColors.YELLOW)
     
     async def handle_smart_task(self, user_query: str):
         """处理智能任务请求"""

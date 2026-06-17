@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 async def _check_mcp_permission(action: str, server: str, tool: str = "") -> bool:
     """检查 MCP 操作权限"""
     try:
-        from core.services.permission_service import get_permission_service, PermissionType
+        from cli.permission_service import get_permission_service, PermissionType
         perm_svc = get_permission_service()
         target = f"mcp:{server}/{tool}" if tool else f"mcp:{server}"
         return await perm_svc.request_permission(

@@ -36,7 +36,9 @@ class SmartAgentCLIv2:
             _ = orch_mod.parallel
             _ = orch_mod.pipeline
             self._orchestrator = orch_mod
-            print_color("✅ Orchestrator 编排引擎就绪", CliColors.GREEN)
+            # 初始化共享 budget（默认 50000 tokens，所有 agent 共享）
+            orch_mod.set_budget(50000)
+            print_color("✅ Orchestrator 编排引擎就绪 (budget: 50000)", CliColors.GREEN)
             print_color("   支持: agent / parallel / pipeline / phase / log", CliColors.GRAY)
         except Exception as e:
             print_warning(f"Orchestrator 编排引擎未就绪: {e}")

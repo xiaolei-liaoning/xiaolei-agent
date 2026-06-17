@@ -25,7 +25,7 @@ try:
     from core.tool_framework import build_tool, register_tool, get_tool_registry, ToolResult, ToolPermission
 except ImportError:
     build_tool = register_tool = get_tool_registry = ToolResult = ToolPermission = None
-from core.tools.shell_executor import run_shell_command, build_shell_command
+from core.agent_v1.tools.shell_executor import run_shell_command, build_shell_command
 
 # 直接导入权限系统模块
 import importlib.util
@@ -244,7 +244,7 @@ class DemoRunner:
         
         # 方式3: 检查安全命令
         print("\n3. 安全命令检查:")
-        from core.tools.shell_executor import is_safe_command
+        from core.agent_v1.tools.shell_executor import is_safe_command
         commands = ["ls -la", "rm -rf /", "echo hello"]
         for cmd in commands:
             safe = is_safe_command(cmd)
