@@ -41,6 +41,10 @@ class RunContext:
     is_code_task: bool = False
     model_override: Optional[str] = None
     personality_prompt: str = ""
+    # ── Base Skill 集成 ──
+    skill_personality: str = ""
+    tool_preference: set = field(default_factory=set)
+    guidance: str = ""
     # Agent 类型工具约束
     allowed_tools: Optional[List[str]] = None   # 工具白名单（None=不限制）
     disallowed_tools: Optional[List[str]] = None  # 工具黑名单

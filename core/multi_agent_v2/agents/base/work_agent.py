@@ -88,6 +88,19 @@ class WorkAgent(BaseAgent):
             logger.info(f"WorkAgent → ReActCore (max_rounds={max_rounds})")
             from core.multi_agent_v2.agents.react_core import run_react
 
+            # ── Layer 1: Base Skill 匹配（新增）──
+            try:
+                from core.skills.base_skills import get_base_skill_matcher
+                skill = await get_base_skill_matcher().match(desc)
+                if skill and skill.role_prompt:
+                    if self.personality:
+                        self.personality = f"{self.personality}\n\n---\n【Skill角色】\n{skill.role_prompt[:500]}"
+                    else:
+                        self.personality = skill.role_prompt[:2000]
+                    logger.info(f"✅ BaseSkill 注入: {skill.name}")
+            except Exception as e:
+                logger.warning(f"BaseSkill 匹配异常: {e}")
+
             # ── 双重人设：内置类型（工具权限）+ Skill 角色（领域人格）累加 ──
             try:
                 from core.skills.agency_agents.worker_role_matcher import (
