@@ -1,15 +1,10 @@
 #!/usr/bin/env python3
 """
-MCP 客户端管理器 v3 — 支持 stdio 和 HTTP 两种连接类型
-
-特性：
-- connect_server() 真实启动子进程并完成初始化握手
-- 进程池复用（keepalive），list_tools / call_tool 不重复创建进程
-- 指数退避重试（最多 3 次）
-- 断连时自动清理进程
-- 健康检查（lazy 重连）
-- 支持 HTTP/SSE 类型的 MCP 服务器
+DEPRECATED: 此模块已弃用，请使用 awesome_mcp_manager 替代 (2026-06-17)
 """
+
+import warnings
+warnings.warn("mcp_client.py 已弃用，请使用 core.mcp.awesome_mcp_manager", DeprecationWarning, stacklevel=2)
 
 import asyncio
 import json
@@ -104,7 +99,13 @@ class MCPClientManager:
         self._server_configs: Dict[str, Dict[str, Any]] = {}
         self._connections: Dict[str, _Connection] = {}
         self._http_connections: Dict[str, _HttpConnection] = {}
-        self._request_lock = asyncio.Lock()
+        self._server_locks: Dict[str, asyncio.Lock] = {}
+
+    def _get_server_lock(self, name: str) -> asyncio.Lock:
+        """获取/创建每台服务器的独立锁，避免不同 MCP 服务器串行排队"""
+        if name not in self._server_locks:
+            self._server_locks[name] = asyncio.Lock()
+        return self._server_locks[name]
 
     async def initialize(self):
         """初始化管理器"""
@@ -203,7 +204,8 @@ class MCPClientManager:
         else:
             process = await self._get_or_reconnect_stdio(server_name)
             resp = await self._send_request_with_retry(
-                process, "tools/list", None, request_id=2
+                process, "tools/list", None, request_id=2,
+                server_name=server_name
             )
             if resp and "result" in resp:
                 return resp["result"].get("tools", [])
@@ -244,6 +246,7 @@ class MCPClientManager:
                 process, "tools/call",
                 {"name": tool_name, "arguments": arguments or {}},
                 request_id=2,
+                server_name=server_name,
             )
             if resp and "result" in resp:
                 content = resp["result"].get("content", [])
@@ -319,10 +322,10 @@ class MCPClientManager:
                     "protocolVersion": "2024-11-05",
                     "capabilities": {},
                     "clientInfo": {"name": "xiaolei", "version": "3.3.1"},
-                }, request_id=1
+                }, request_id=1, server_name=name
             )
             if resp and "result" in resp:
-                await self._send_notification(conn.process, "notifications/initialized")
+                await self._send_notification(conn.process, "notifications/initialized", server_name=name)
                 conn.initialized = True
                 return conn.process
             else:
@@ -344,10 +347,10 @@ class MCPClientManager:
                 "protocolVersion": "2024-11-05",
                 "capabilities": {},
                 "clientInfo": {"name": "xiaolei", "version": "3.3.1"},
-            }, request_id=1
+            }, request_id=1, server_name=name
         )
         if resp and "result" in resp:
-            await self._send_notification(process, "notifications/initialized")
+            await self._send_notification(process, "notifications/initialized", server_name=name)
             conn.initialized = True
             return process
         raise RuntimeError(f"重连 stdio 服务器 '{name}' 失败")
@@ -358,12 +361,13 @@ class MCPClientManager:
         method: str,
         params: Optional[dict] = None,
         request_id: int = 1,
+        server_name: str = "",
     ) -> Optional[dict]:
         """带指数退避重试的 JSON-RPC 请求"""
         last_error = None
         for attempt in range(_MAX_RETRIES):
             try:
-                return await self._send_request(process, method, params, request_id)
+                return await self._send_request(process, method, params, request_id, server_name=server_name)
             except (ConnectionError, asyncio.TimeoutError, json.JSONDecodeError) as e:
                 last_error = e
                 if attempt < _MAX_RETRIES - 1:
@@ -382,9 +386,11 @@ class MCPClientManager:
         method: str,
         params: Optional[dict] = None,
         request_id: int = 1,
+        server_name: str = "",
     ) -> Optional[dict]:
         """发送 JSON-RPC 请求（带锁保护，避免并发读写破坏协议）"""
-        async with self._request_lock:
+        lock = self._get_server_lock(server_name)
+        async with lock:
             request = {
                 "jsonrpc": "2.0",
                 "id": request_id,
@@ -407,9 +413,11 @@ class MCPClientManager:
         process: asyncio.subprocess.Process,
         method: str,
         params: Optional[dict] = None,
+        server_name: str = "",
     ) -> None:
         """发送 JSON-RPC 通知（无 id，不期望响应）"""
-        async with self._request_lock:
+        lock = self._get_server_lock(server_name)
+        async with lock:
             notification = {"jsonrpc": "2.0", "method": method}
             if params:
                 notification["params"] = params
@@ -472,7 +480,7 @@ class MCPClientManager:
     ) -> bool:
         """连接到 the-agency 服务器"""
         try:
-            from ..infrastructure.config_manager import ConfigManager
+            from ..engine.config_manager import ConfigManager
             config = ConfigManager.load()
             default_agency_path = config.paths.the_agency_path
             mcp_servers_dir = config.paths.mcp_servers_dir
@@ -550,7 +558,7 @@ class MCPClientManager:
     async def _connect_mcp_server(self, server_name: str, script_name: str, label: str) -> bool:
         """通用 MCP 服务器连接"""
         try:
-            from ..infrastructure.config_manager import ConfigManager
+            from ..engine.config_manager import ConfigManager
             config = ConfigManager.load()
             mcp_servers_dir = config.paths.mcp_servers_dir
         except Exception:

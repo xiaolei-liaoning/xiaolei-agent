@@ -174,7 +174,7 @@ def _import_core_services():
     global CLARIFICATION_SERVICE, PERMISSION_SERVICE, FORKED_AGENT_SERVICE
 
     try:
-        from core.services.clarification_service import get_clarification_service
+        from cli.clarification_service import get_clarification_service
 
         CLARIFICATION_SERVICE = get_clarification_service()
         log_success("✅ 反问服务导入成功")
@@ -182,7 +182,7 @@ def _import_core_services():
         log_error(f"❌ 反问服务导入失败: {e}")
 
     try:
-        from core.services.permission_service import get_permission_service
+        from cli.permission_service import get_permission_service
 
         PERMISSION_SERVICE = get_permission_service()
         log_success("✅ 权限服务导入成功")
@@ -190,7 +190,7 @@ def _import_core_services():
         log_error(f"❌ 权限服务导入失败: {e}")
 
     try:
-        from core.services.forked_agent_service import get_forked_agent_service
+        from cli.forked_agent_service import get_forked_agent_service
 
         FORKED_AGENT_SERVICE = get_forked_agent_service()
         log_success("✅ Forked Agent服务导入成功")
@@ -926,7 +926,7 @@ class EnhancedCLI:
             return
 
         # 测试权限检查
-        from core.services.permission_service import PermissionType
+        from cli.permission_service import PermissionType
 
         test_permissions = [
             (PermissionType.READ_FILE, "读取文件"),
@@ -1063,13 +1063,11 @@ class EnhancedCLI:
                 return []
 
             prompt = (
-                "将以下任务拆解为3个独立的子任务，每个子任务聚焦一个不同的分析维度。\n"
+                "将以下任务拆解为3个独立的子任务，每个子任务聚焦一个不同的维度。\n"
                 "输出格式：每行一个子任务标题，不要序号，不要引号。\n\n"
                 f"任务：{task[:200]}\n\n"
-                '示例（如果是"分析某个网站"）：\n'
-                "网站架构分析\n"
-                "用户体验评估\n"
-                "性能优化建议\n\n"
+                "如果是分析类任务，示例：网站架构分析 | 用户体验评估 | 性能优化建议\n"
+                "如果是创建/构建类任务（写代码、做游戏、生成文件），示例：界面和样式创建 | 游戏逻辑实现 | 交互和输出文件\n"
                 "开始："
             )
             resp = await asyncio.wait_for(
@@ -1127,63 +1125,26 @@ class EnhancedCLI:
         else:
             log_status("LLM 正在编写 JS Workflow 脚本...", color=CLAUDE)
             script = await self._llm_write_workflow(task)
+            if script and not self._validate_workflow_script(script, task):
+                log_status("LLM 脚本语义校验未通过，使用固定模板", color="yellow")
+                script = ""
             if not script:
                 log_status("LLM 写脚本失败，使用固定模板", color="yellow")
-                # 兜底：拆解任务用固定模板
-                import re
-
-                sub_tasks = re.findall(r'"([^"]*)"', task)
-                if not sub_tasks:
-                    sub_tasks = [
-                        t.strip()
-                        for t in task.replace("、", "，").split("，")
-                        if t.strip()
-                    ]
-
-                if len(sub_tasks) <= 1:
-                    topics = await self._llm_decompose_task(task)
-                    if not topics:
-                        topics = [task]
-                else:
-                    topics = sub_tasks
-
-                log_status(f"拆解为 {len(topics)} 个子任务", color=CLAUDE)
-                topics_js = json.dumps(topics, ensure_ascii=False)
+                # 兜底：LLM 不可用时直接调 agent 执行原始任务
                 task_safe = task[:300].replace("`", "\\`").replace("$", "\\$")
                 script = f"""
 export const meta = {{
-    name: "多Agent自动编排",
-    description: "并行分析{len(topics)}个维度后综合汇总",
+    name: "单Agent执行",
+    description: "LLM不可用，直接用agent执行任务",
     phases: [
-        {{"title": "并行分析", "detail": "{len(topics)}个子任务"}},
-        {{"title": "综合汇总", "detail": "合并结果"}},
+        {{"title": "执行", "detail": "直接执行任务"}},
     ],
 }}
 
 export default async function() {{
     globalThis._globalTask = `{task_safe}`
-
-    phase("并行分析")
-    const topics = {topics_js}
-
-    const results = await parallel(
-        topics.map((t, i) => () => agent(`深入分析: ${{t}}`, {{
-            label: `子任务${{i+1}}: ${{t.substring(0, 20)}}`,
-            timeout: 120,
-        }}))
-    )
-    globalThis._prevResults["并行分析"] = results.filter(Boolean).join("\\n\\n")
-
-    phase("综合汇总")
-    const good = results.filter(r => r && typeof r === 'string' && r.length > 0)
-    if (good.length === 0) return "所有子任务失败"
-
-    const context = good.map((r, i) => `【子任务${{i+1}}】\\n${{r.substring(0, 500)}}`).join("\\n\\n")
-    return await agent(`综合以下对各个维度的分析结果，给出整体结论:\\n\\n${{context}}`, {{
-        label: "综合汇总",
-        timeout: 180,
-        isFinal: true,
-    }})
+    phase("执行")
+    return await agent(`{task_safe}`, {{ label: "执行", timeout: 300, isFinal: true }})
 }}
 """
 
@@ -1220,18 +1181,29 @@ export default async function() {{
             prompt = (
                 "你是一个 Workflow 脚本生成器。根据用户的任务描述，生成一个 JavaScript Workflow 脚本。\n\n"
                 "可用的全局 API：\n"
-                "  - phase(title)              - 标记阶段\n"
+                "  - phase(title)              - 标记阶段（多个 agent 协作时用）\n"
                 "  - log(msg)                  - 输出日志\n"
                 "  - agent(prompt, opts)       - 调用子Agent（返回纯文本字符串）\n"
-                "    opts: { label, timeout, schema, model, isFinal }\n"
-                "    - isFinal: true 表示这是最后一个汇总 agent，保留 schema 约束\n"
-                "    - 中间 agent 不需要加 isFinal，系统会自动去掉 schema 约束\n"
+                "    opts: { label, timeout, schema, model, agentType, isFinal }\n"
+                "    - agentType: 指定子Agent角色（可选）。支持：\n"
+                "      系统内置类型：Explore/Plan/Coder/Analyst/Operator\n"
+                "      语义角色：'前端开发者'、'设计师'、'后端架构师'、'数据分析师' 等\n"
+                "      会根据 agentType 自动匹配最合适的专家角色身份\n"
+                "      不指定 agentType 也能正常工作，系统会按任务内容自动匹配\n"
+                "    - isFinal: true 表示这是最后一个汇总 agent\n"
                 "  - parallel([thunks])        - 并行执行（数组里是 () => agent(...)）\n"
                 "  - pipeline(items, ...stages) - 无屏障流水线\n"
+                "  - $dag(nodes)               - DAG 图编排（最强大！支持任意依赖关系）\n"
+                "    nodes 每个 key 是节点名，value 是：\n"
+                "      () => agent(...)                    — 无依赖节点\n"
+                "      {depends: 'X', task: ctx => ...}    — 依赖节点\n"
+                "      {depends: ['X','Y'], task: ctx => ...} — 多依赖节点\n"
+                "    ctx 自动注入上游结果：ctx.节点名 即上游输出\n"
+                "    拓扑排序自动并行，节点失败→下游自动跳过\n"
                 "  - budget.remaining()        - 剩余预算\n\n"
-                "自动注入的上下文（agent() 会自动携带，不需要手动拼在 prompt 里）：\n"
-                "  - globalThis._globalTask    - 设置全局任务描述（每个子Agent都能看到）\n"
-                "  - globalThis._prevResults    - 保存前序阶段结果供后续使用\n\n"
+                "自动注入的上下文（agent() 会自动携带）：\n"
+                "  - globalThis._globalTask    - 设置全局任务描述\n"
+                "  - globalThis._prevResults   - 保存前序阶段结果（向后兼容）\n\n"
                 "脚本结构必须：\n"
                 "  export const meta = {\n"
                 '    name: "脚本名",\n'
@@ -1242,30 +1214,60 @@ export default async function() {{
                 "    // 编排逻辑\n"
                 "    return 结果\n"
                 "  }\n\n"
-                "正确示例（多阶段 + 上下文传递）：\n"
+                "正确示例 1（串行 phase → DAG 多角色协作）：\n"
                 "  export const meta = {\n"
-                '    name: "热搜报告",\n'
-                '    description: "搜索并分析百度热搜数据",\n'
+                '    name: "多Agent协作",\n'
+                '    description: "多角色DAG协作执行任务",\n'
+                "    phases: [\n"
+                '      {title: "分析", detail: "需求分析"},\n'
+                '      {title: "开发", detail: "多角色并行"},\n'
+                '      {title: "整合", detail: "合并输出"},\n'
+                "    ],\n"
+                "  }\n"
+                "  export default async function() {\n"
+                '    globalThis._globalTask = "DAG多角色协作执行任务"\n\n'
+                '    phase("分析")\n'
+                "    const req = await agent(\"分析任务需求\", {label: \"需求分析\"})\n\n"
+                '    phase("开发")\n'
+                "    const dev = await $dag({\n"
+                "      子任务A: {depends: '需求分析', task: ctx => agent('基于分析做A部分:\\n' + ctx['需求分析'], {\n"
+                '        label: "子任务A",\n'
+                "        agentType: 'Coder',\n"
+                "      })},\n"
+                "      子任务B: {depends: '需求分析', task: ctx => agent('基于分析做B部分:\\n' + ctx['需求分析'], {\n"
+                '        label: "子任务B",\n'
+                "        agentType: '设计师',\n"
+                "      })},\n"
+                "      子任务C: {depends: '需求分析', task: ctx => agent('基于分析做C部分:\\n' + ctx['需求分析'], {\n"
+                '        label: "子任务C",\n'
+                "      })},\n"
+                "      需求分析: () => req,\n"
+                "    })\n\n"
+                '    phase("整合")\n'
+                "    return await agent('整合A+B+C的结果为最终输出:\\n\\n【A】\\n' + (dev['子任务A'] ? dev['子任务A'].text : '') + '\\n\\n【B】\\n' + (dev['子任务B'] ? dev['子任务B'].text : '') + '\\n\\n【C】\\n' + (dev['子任务C'] ? dev['子任务C'].text : ''), {\n"
+                '      label: "整合",\n'
+                "      isFinal: true,\n"
+                "      timeout: 180,\n"
+                "    })\n"
+                "  }\n\n"
+                "正确示例 2（简单分析任务 — 串行 agent）：\n"
+                "  export const meta = {\n"
+                '    name: "热搜分析",\n'
+                '    description: "简单任务串行执行",\n'
                 "    phases: [\n"
                 '      {title: "搜索数据", detail: "获取热搜列表"},\n'
-                '      {title: "分析数据", detail: "提取有价值信息"},\n'
                 '      {title: "生成报告", detail: "生成HTML报告"},\n'
                 "    ],\n"
                 "  }\n"
                 "  export default async function() {\n"
                 '    globalThis._globalTask = "搜索百度热搜并生成分析报告"\n\n'
                 '    phase("搜索数据")\n'
-                "    const hotData = await agent(\"搜索百度热搜，获取完整的热搜列表，包括每条的热度值\", {\n"
+                "    const hotData = await agent(\"搜索百度热搜，获取完整的热搜列表\", {\n"
                 '      label: "热搜搜索"\n'
                 "    })\n"
                 '    globalThis._prevResults["搜索数据"] = hotData\n\n'
-                '    phase("分析数据")\n'
-                "    const analysis = await agent(\"基于以下热搜数据，分析热点趋势和主题:\\n\" + hotData, {\n"
-                '      label: "数据分析"\n'
-                "    })\n"
-                '    globalThis._prevResults["分析数据"] = analysis\n\n'
                 '    phase("生成报告")\n'
-                "    return await agent(\"基于以下数据和分析结果，用 write_file 在桌面生成一个完整的HTML分析报告:\\n\\n【热搜数据】\\n\" + hotData + \"\\n\\n【分析结果】\\n\" + analysis, {\n"
+                "    return await agent(\"基于以下数据，用 write_file 在桌面生成HTML分析报告:\\n\" + hotData, {\n"
                 '      label: "报告生成",\n'
                 "      isFinal: true,\n"
                 "      timeout: 180\n"
@@ -1275,24 +1277,17 @@ export default async function() {{
                 "  1. 直接输出脚本代码，不要解释，不要 markdown 代码块\n"
                 "  2. agent() 返回纯文本字符串，不是对象\n"
                 "  3. 变量名用英文，不要中文\n"
-                "  4. 根据任务复杂度决定用 agent() / parallel() / pipeline()\n"
-                "  5. 复杂任务拆成多个 phase，每个 phase 聚焦一个步骤\n"
-                "  6. schema 必须是 JSON Schema 对象，不是字符串\n"
-                "  7. 不要指定 agentType，让系统自动判断使用什么工具\n\n"
-                "  ⚠️ 创建文件类任务（游戏/HTML/脚本/代码）的特殊规则：\n"
-                "  - 必须在单个 agent() 调用中完成所有文件创建\n"
-                "  - agent 的 prompt 必须明确要求：用 write_file 工具一次性写入完整文件\n"
-                "  - 不要把创建任务拆成多个 phase（如：先写框架、再写逻辑、再写样式）\n"
-                "  - 正确示例：agent('用 write_file 在桌面创建完整的植物大战僵尸HTML游戏，包含CSS和JS', {label:'创建游戏'})\n"
-                "  - 错误示例：分3个phase分别写HTML结构、CSS样式、JS逻辑\n\n"
-                "  ⚠️ 多阶段协作规则（重要）：\n"
-                "  - 一个任务拆成 2-3 个 phase：数据采集 → 分析 → 生成\n"
-                "  - 每个 phase 只做一件事，只调用一次 agent()\n"
-                "  - 用 globalThis._prevResults[\"阶段名\"] = 结果 保存每个 phase 的输出\n"
-                "  - 后续 phase 用字符串拼接引用前序结果（如 \"基于以下数据:\" + prevResult）\n"
-                "  - 最后汇总/生成阶段的 agent 加 {isFinal: true}\n"
-                "  - 中间 agent 不需要 schema，输出自然语言即可\n\n"
-                f"任务描述：{task[:500]}\n\n"
+                "  4. 根据任务复杂度选择原语：\n"
+                "     - 简单（1-2步）：agent() + phase\n"
+                "     - 并行子任务：parallel() 或 $dag()\n"
+                "     - 复杂依赖关系（A依赖B/C，B/C依赖D）：$dag()\n"
+                "     - 创建文件类任务（游戏/HTML/脚本）：用 $dag() 拆成多个角色分别负责不同部分\n"
+                "  5. agentType 可选，建议以下情况使用：\n"
+                "     - 同一任务不同子任务需要不同专业技能时\n"
+                "     - DAG 中不同节点有明确的角色分工时\n"
+                "  6. schema 必须是 JSON Schema 对象\n"
+                "  7. phase() 和 $dag() 可以混合使用，phase 控制大阶段，$dag 控制阶段内的并行依赖\n\n"
+                f"任务描述：{task[:600]}\n\n"
                 "开始生成："
             )
             resp = await asyncio.wait_for(
@@ -1318,6 +1313,19 @@ export default async function() {{
             return text
         except Exception:
             return ""
+
+    def _validate_workflow_script(self, script: str, task: str) -> bool:
+        """对 LLM 生成的 Workflow 脚本做基本结构校验。
+
+        校验规则：
+        1. export const meta 存在
+        2. export default 存在
+        """
+        if "export const meta" not in script:
+            return False
+        if "export default" not in script or "async function" not in script:
+            return False
+        return True
 
     async def handle_analyze(self, parsed_cmd: ParsedCommand):
         """处理分析命令"""
@@ -2186,10 +2194,10 @@ MCP命令使用帮助:
 
     async def mcp_list_servers(self):
         """列出已连接的MCP服务器"""
-        from core.mcp import mcp_client
+        from core.mcp.awesome_mcp_manager import awesome_mcp_manager
 
         print_color("\n📡 已连接的MCP服务器:", CliColors.CYAN)
-        servers = await mcp_client.list_servers()
+        servers = awesome_mcp_manager.get_connected_servers()
 
         if servers:
             for server in servers:
@@ -2200,7 +2208,7 @@ MCP命令使用帮助:
 
     async def mcp_connect(self, parsed_cmd):
         """连接MCP服务器"""
-        from core.mcp import mcp_client
+        from core.mcp.awesome_mcp_manager import awesome_mcp_manager
 
         server_name = parsed_cmd.remaining.strip()
         if not server_name:
@@ -2208,26 +2216,26 @@ MCP命令使用帮助:
             return
 
         print_color(f"\n🔗 正在连接MCP服务器: {server_name}...", CliColors.CYAN)
-        result = await mcp_client.connect_server(server_name, "connect", [], ".")
+        result = await awesome_mcp_manager.smart_connect(server_name)
 
-        if result:
+        if result and result.get("success"):
             print_success(f"成功连接MCP服务器: {server_name}")
         else:
             print_error(f"连接MCP服务器失败: {server_name}")
 
     async def mcp_connect_agency(self):
         """连接the-agency MCP服务器"""
-        from core.mcp import mcp_client
+        from core.mcp.awesome_mcp_manager import awesome_mcp_manager
 
         print_color("\n🔗 正在连接the-agency MCP服务器...", CliColors.CYAN)
-        result = await mcp_client.connect_agency_server()
+        result = await awesome_mcp_manager.smart_connect("the-agency")
 
-        if result:
+        if result and result.get("success"):
             print_success("成功连接the-agency MCP服务器")
 
             # 显示可用工具
             print_color("\n📦 可用工具:", CliColors.CYAN)
-            tools = await mcp_client.list_tools("the-agency")
+            tools = await awesome_mcp_manager.get_server_tools("the-agency")
             if tools:
                 for tool in tools:
                     print_color(f"  - {tool}", CliColors.GREEN)
@@ -2238,16 +2246,16 @@ MCP命令使用帮助:
 
     async def mcp_connect_fun(self):
         """连接趣味MCP服务器"""
-        from core.mcp import mcp_client
+        from core.mcp.awesome_mcp_manager import awesome_mcp_manager
 
         print_color("\n🔗 正在连接趣味MCP服务器...", CliColors.CYAN)
-        result = await mcp_client.connect_fun_server()
+        result = await awesome_mcp_manager.smart_connect("fun-mcp")
 
-        if result:
+        if result and result.get("success"):
             print_success("成功连接趣味MCP服务器")
 
             print_color("\n📦 可用工具:", CliColors.CYAN)
-            tools = await mcp_client.list_tools("fun-mcp")
+            tools = await awesome_mcp_manager.get_server_tools("fun-mcp")
             if tools:
                 for tool in tools:
                     print_color(f"  - {tool}", CliColors.GREEN)
@@ -2258,16 +2266,16 @@ MCP命令使用帮助:
 
     async def mcp_connect_weather(self):
         """连接天气MCP服务器"""
-        from core.mcp import mcp_client
+        from core.mcp.awesome_mcp_manager import awesome_mcp_manager
 
         print_color("\n🔗 正在连接天气MCP服务器...", CliColors.CYAN)
-        result = await mcp_client.connect_weather_server()
+        result = await awesome_mcp_manager.smart_connect("weather-mcp")
 
-        if result:
+        if result and result.get("success"):
             print_success("成功连接天气MCP服务器")
 
             print_color("\n📦 可用工具:", CliColors.CYAN)
-            tools = await mcp_client.list_tools("weather-mcp")
+            tools = await awesome_mcp_manager.get_server_tools("weather-mcp")
             if tools:
                 for tool in tools:
                     print_color(f"  - {tool}", CliColors.GREEN)
@@ -2278,16 +2286,16 @@ MCP命令使用帮助:
 
     async def mcp_connect_calculator(self):
         """连接计算器MCP服务器"""
-        from core.mcp import mcp_client
+        from core.mcp.awesome_mcp_manager import awesome_mcp_manager
 
         print_color("\n🔗 正在连接计算器MCP服务器...", CliColors.CYAN)
-        result = await mcp_client.connect_calculator_server()
+        result = await awesome_mcp_manager.smart_connect("calculator-mcp")
 
-        if result:
+        if result and result.get("success"):
             print_success("成功连接计算器MCP服务器")
 
             print_color("\n📦 可用工具:", CliColors.CYAN)
-            tools = await mcp_client.list_tools("calculator-mcp")
+            tools = await awesome_mcp_manager.get_server_tools("calculator-mcp")
             if tools:
                 for tool in tools:
                     print_color(f"  - {tool}", CliColors.GREEN)
@@ -2298,16 +2306,16 @@ MCP命令使用帮助:
 
     async def mcp_connect_file_ops(self):
         """连接文件操作MCP服务器"""
-        from core.mcp import mcp_client
+        from core.mcp.awesome_mcp_manager import awesome_mcp_manager
 
         print_color("\n🔗 正在连接文件操作MCP服务器...", CliColors.CYAN)
-        result = await mcp_client.connect_file_ops_server()
+        result = await awesome_mcp_manager.smart_connect("file-ops-mcp")
 
-        if result:
+        if result and result.get("success"):
             print_success("成功连接文件操作MCP服务器")
 
             print_color("\n📦 可用工具:", CliColors.CYAN)
-            tools = await mcp_client.list_tools("file-ops-mcp")
+            tools = await awesome_mcp_manager.get_server_tools("file-ops-mcp")
             if tools:
                 for tool in tools:
                     print_color(f"  - {tool}", CliColors.GREEN)
@@ -2318,16 +2326,16 @@ MCP命令使用帮助:
 
     async def mcp_connect_text_processing(self):
         """连接文本处理MCP服务器"""
-        from core.mcp import mcp_client
+        from core.mcp.awesome_mcp_manager import awesome_mcp_manager
 
         print_color("\n🔗 正在连接文本处理MCP服务器...", CliColors.CYAN)
-        result = await mcp_client.connect_text_processing_server()
+        result = await awesome_mcp_manager.smart_connect("text-processing-mcp")
 
-        if result:
+        if result and result.get("success"):
             print_success("成功连接文本处理MCP服务器")
 
             print_color("\n📦 可用工具:", CliColors.CYAN)
-            tools = await mcp_client.list_tools("text-processing-mcp")
+            tools = await awesome_mcp_manager.get_server_tools("text-processing-mcp")
             if tools:
                 for tool in tools:
                     print_color(f"  - {tool}", CliColors.GREEN)
@@ -2338,7 +2346,7 @@ MCP命令使用帮助:
 
     async def mcp_list_tools(self, parsed_cmd):
         """列出MCP服务器的可用工具"""
-        from core.mcp import mcp_client
+        from core.mcp.awesome_mcp_manager import awesome_mcp_manager
 
         server_name = parsed_cmd.remaining.strip()
         if not server_name:
@@ -2346,7 +2354,7 @@ MCP命令使用帮助:
             return
 
         print_color(f"\n📦 {server_name} 的可用工具:", CliColors.CYAN)
-        tools = await mcp_client.list_tools(server_name)
+        tools = await awesome_mcp_manager.get_server_tools(server_name)
 
         if tools:
             for tool in tools:
@@ -2356,7 +2364,7 @@ MCP命令使用帮助:
 
     async def mcp_call_tool(self, parsed_cmd):
         """调用MCP工具"""
-        from core.mcp import mcp_client
+        from core.mcp.awesome_mcp_manager import awesome_mcp_manager
 
         remaining = parsed_cmd.remaining.strip()
         if not remaining:
@@ -2379,7 +2387,7 @@ MCP命令使用帮助:
                 kwargs[key] = value
 
         print_color(f"\n🚀 调用 {server_name}.{tool_name}...", CliColors.CYAN)
-        result = await mcp_client.call_tool(server_name, tool_name, **kwargs)
+        result = await awesome_mcp_manager.call_server_tool(server_name, tool_name, kwargs)
 
         if result:
             print_success("调用成功")
@@ -2389,7 +2397,7 @@ MCP命令使用帮助:
 
     async def mcp_disconnect(self, parsed_cmd):
         """断开MCP服务器连接"""
-        from core.mcp import mcp_client
+        from core.mcp.awesome_mcp_manager import awesome_mcp_manager
 
         server_name = parsed_cmd.remaining.strip()
         if not server_name:
@@ -2397,7 +2405,7 @@ MCP命令使用帮助:
             return
 
         print_color(f"\n🔌 正在断开MCP服务器: {server_name}...", CliColors.CYAN)
-        result = await mcp_client.disconnect_server(server_name)
+        result = await awesome_mcp_manager.disconnect_server(server_name)
 
         if result:
             print_success(f"成功断开MCP服务器: {server_name}")
@@ -2408,14 +2416,14 @@ MCP命令使用帮助:
 
     async def mcp_select(self, parsed_cmd):
         """设置当前活动MCP服务器"""
-        from core.mcp import mcp_client
+        from core.mcp.awesome_mcp_manager import awesome_mcp_manager
 
         server_name = parsed_cmd.remaining.strip()
         if not server_name:
             print_error("请指定服务器名称，如: /mcp select the-agency")
             return
 
-        servers = await mcp_client.list_servers()
+        servers = awesome_mcp_manager.get_connected_servers()
         if server_name in servers:
             self.current_mcp_server = server_name
             print_success(f"已选择MCP服务器: {server_name}")
@@ -2425,7 +2433,7 @@ MCP命令使用帮助:
 
     async def mcp_quick_call(self, parsed_cmd):
         """快速调用当前服务器的工具"""
-        from core.mcp import mcp_client
+        from core.mcp.awesome_mcp_manager import awesome_mcp_manager
 
         if not self.current_mcp_server:
             print_error("未选择当前MCP服务器")
@@ -2453,8 +2461,8 @@ MCP命令使用帮助:
         print_color(
             f"\n🚀 快速调用 {self.current_mcp_server}.{tool_name}...", CliColors.CYAN
         )
-        result = await mcp_client.call_tool(
-            self.current_mcp_server, tool_name, **kwargs
+        result = await awesome_mcp_manager.call_server_tool(
+            self.current_mcp_server, tool_name, kwargs
         )
 
         if result:
@@ -2465,12 +2473,12 @@ MCP命令使用帮助:
 
     async def mcp_status(self):
         """查看MCP连接状态"""
-        from core.mcp import mcp_client
+        from core.mcp.awesome_mcp_manager import awesome_mcp_manager
 
         print_color("\n📊 MCP连接状态:", CliColors.CYAN)
         print_color("────────────────", CliColors.GRAY)
 
-        servers = await mcp_client.list_servers()
+        servers = awesome_mcp_manager.get_connected_servers()
 
         if servers:
             print_color(f"已连接服务器: {len(servers)}", CliColors.GREEN)
