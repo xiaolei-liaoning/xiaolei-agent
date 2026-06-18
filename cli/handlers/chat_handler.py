@@ -182,36 +182,53 @@ export default async function() {{
                 return ""
 
             prompt = (
-                "你是一个 Workflow 脚本生成器。根据用户的任务描述，生成一个 JavaScript Workflow 脚本。\n\n"
-                "可用的全局 API：\n"
-                "  - phase(title)              - 标记阶段\n"
-                "  - log(msg)                  - 输出日志\n"
-                "  - agent(prompt, opts)       - 调用子Agent（返回纯文本字符串）\n"
-                "    opts: { label, timeout, schema, model, agentType, isFinal }\n"
-                "  - parallel([thunks])        - 并行执行\n"
-                "  - pipeline(items, ...stages) - 无屏障流水线\n"
-                "  - $dag(nodes)               - DAG 图编排\n"
-                "  - budget.remaining()        - 剩余预算\n\n"
-                "脚本结构必须：\n"
-                "  export const meta = { name, description, phases }\n"
-                "  export default async function() { ... }\n\n"
-                f"任务描述：{task[:600]}\n\n"
-                "开始生成："
+                "生成 JS Workflow 脚本，必须包含 export const meta + export default async function。\n\n"
+                "API: agent(prompt,{label,isFinal}) $dag(nodes) parallel(thunks)\n\n"
+                "代码类任务必须用 $dag 模式：先分析接口，再并行写模块，最后合并。\n"
+                "$dag 示例（照做，不要自己改编排）：\n"
+                "const ctx = await $dag({\n"
+                "  分析: () => agent('分析',{label:'分析'}),\n"
+                "  引擎: {depends:'分析',task: ctx => agent('引擎\\n'+ctx['分析'],{label:'引擎'})},\n"
+                "  UI: {depends:'分析',task: ctx => agent('UI\\n'+ctx['分析'],{label:'UI'})},\n"
+                "  合并: {depends:['引擎','UI'],task: ctx => agent('合并\\n'+ctx['引擎']+ctx['UI'],{label:'合并',isFinal:true})},\n"
+                "})\n"
+                "return ctx['合并'];\n\n"
+                f"任务：{task[:600]}\n\n"
+                "开始："
             )
             resp = await asyncio.wait_for(
                 router.chat(
                     [{"role": "user", "content": prompt}],
                     temperature=0.3,
-                    max_tokens=2000,
+                    max_tokens=8192,
                 ),
-                timeout=30.0,
+                timeout=120.0,
             )
             text = str(resp).strip() if resp else ""
             if not text or "[LLM_MOCK]" in text:
                 return ""
 
+            # 去掉 markdown 代码块标记
             text = text.removeprefix("```javascript").removeprefix("```js").removeprefix("```")
             text = text.removesuffix("```").strip()
+            # 去掉 LLM 在代码前加的中文说明
+            export_idx = text.find("export const meta")
+            if export_idx >= 0:
+                text = text[export_idx:].strip()
+            # 截掉代码后面的中文说明
+            fn_idx = text.find("export default async function")
+            if fn_idx >= 0:
+                brace_count = 0
+                started = False
+                for i in range(fn_idx, len(text)):
+                    if text[i] == '{':
+                        brace_count += 1
+                        started = True
+                    elif text[i] == '}':
+                        brace_count -= 1
+                        if started and brace_count == 0:
+                            text = text[:i+1].strip()
+                            break
             if "export const meta" not in text:
                 return ""
             return text

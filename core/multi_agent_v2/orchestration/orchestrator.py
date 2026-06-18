@@ -9,6 +9,7 @@ Orchestrator — 多Agent 编排引擎
 
 import asyncio
 import json
+import hashlib
 import logging
 import time
 import traceback
@@ -237,7 +238,7 @@ async def agent(
             merged_opts["label"] = profile.name
 
     label = merged_opts.get("label", prompt[:40])
-    timeout = merged_opts.get("timeout", 120)
+    timeout = merged_opts.get("timeout", 300)
     ar = await _execute_agent(prompt, label, timeout, merged_opts)
     return ar
 
@@ -309,6 +310,7 @@ async def _execute_agent(
         result = None
         last_error = None
         ar = None
+        _prev_error_hash = None
 
         for retry in range(max_retries):
             try:
@@ -377,6 +379,12 @@ async def _execute_agent(
                     break
             except Exception as e:
                 last_error = str(e)
+                _err_hash = hashlib.md5(last_error.encode()).hexdigest()[:8]
+                if _err_hash == _prev_error_hash:
+                    logger.warning(f"循环检测命中: 同一错误连续出现: {last_error[:80]}")
+                    ar = AgentResult(success=False, error=f"循环检测命中: {last_error[:80]}", label=label)
+                    break
+                _prev_error_hash = _err_hash
                 if retry == max_retries - 1:
                     raise
                 continue
@@ -438,6 +446,7 @@ def reset() -> None:
 async def parallel(
     tasks: List[Dict[str, Any]],
     timeout: int = 120,
+    on_agent_fail: Optional[Callable[[Dict, str], Any]] = None,
 ) -> List[AgentResult]:
     """并行执行多个子任务。
 
@@ -451,6 +460,8 @@ async def parallel(
                 "timeout": int,          # 单任务超时 (可选)
             }
         timeout: 整体超时秒数
+        on_agent_fail: 可选回调，某个子任务失败时调用
+                       签名: on_agent_fail(task_dict, error_message)
 
     Returns:
         List[AgentResult] — 与 tasks 顺序对应的结果列表
@@ -473,7 +484,16 @@ async def parallel(
             opts["agentType"] = task["subagent_type"]
         if "timeout" in task:
             opts["timeout"] = task["timeout"]
-        return await agent(prompt, opts)
+        result = await agent(prompt, opts)
+        if not result.success and on_agent_fail:
+            try:
+                if asyncio.iscoroutinefunction(on_agent_fail):
+                    await on_agent_fail(task, result.error or "unknown")
+                else:
+                    on_agent_fail(task, result.error or "unknown")
+            except Exception as cb_err:
+                logger.warning(f"on_agent_fail 回调异常: {cb_err}")
+        return result
 
     try:
         results = await asyncio.wait_for(

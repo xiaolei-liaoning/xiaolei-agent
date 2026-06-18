@@ -290,7 +290,7 @@ class ReActCoreMiddleware(BaseMiddleware):
                 tools=ctx.tool_defs if ctx.tool_defs else None,
             ))
             try:
-                reply = await asyncio.wait_for(task, timeout=60)
+                reply = await asyncio.wait_for(task, timeout=180)
             except asyncio.TimeoutError:
                 task.cancel()
                 try:

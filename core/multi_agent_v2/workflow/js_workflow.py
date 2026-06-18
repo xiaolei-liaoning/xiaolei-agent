@@ -783,6 +783,52 @@ globalThis.parallel = async function(thunks) {{
     return settled.map(r => r.status === 'fulfilled' ? r.value : null);
 }};
 
+// ── $dag() — 声明式 DAG 图编排 ──
+globalThis.$dag = async function(nodes) {{
+    const names = Object.keys(nodes);
+    const graph = {{}}, edges = [];
+    for (const name of names) {{
+        const spec = nodes[name];
+        if (typeof spec === 'function') {{
+            graph[name] = {{ deps: [], task: spec, status: 'pending' }};
+        }} else {{
+            const deps = Array.isArray(spec.depends) ? spec.depends :
+                         (spec.depends ? [spec.depends] : []);
+            graph[name] = {{ deps, task: spec.task, status: 'pending' }};
+            for (const dep of deps) edges.push({{ from: dep, to: name }});
+        }}
+    }}
+    const inDegree = {{}}, adj = {{}};
+    for (const n of names) {{ inDegree[n] = 0; adj[n] = []; }}
+    for (const [name, node] of Object.entries(graph)) {{
+        for (const dep of node.deps) {{
+            adj[dep] = adj[dep] || []; adj[dep].push(name); inDegree[name]++;
+        }}
+    }}
+    const results = {{}};
+    let ready = names.filter(n => inDegree[n] === 0);
+    while (ready.length > 0) {{
+        await Promise.allSettled(ready.map(async (name) => {{
+            const node = graph[name];
+            for (const dep of node.deps) {{
+                if (graph[dep].status === 'failed') {{ node.status = 'skipped'; results[name] = null; return; }}
+            }}
+            const ctx = {{}};
+            for (const dep of node.deps) ctx[dep] = results[dep];
+            try {{
+                results[name] = await node.task(ctx);
+                graph[name].status = 'done';
+            }} catch (e) {{
+                graph[name].status = 'failed'; results[name] = null;
+                console.warn('[DAG] "' + name + '" failed:', String(e).substring(0, 80));
+            }}
+        }}));
+        ready = names.filter(n => graph[n].status === 'pending' &&
+            graph[n].deps.every(d => graph[d].status === 'done' || graph[d].status === 'failed'));
+    }}
+    return results;
+}};
+
 // ── pipeline() — 无屏障流水线 ──
 globalThis.pipeline = async function(items, ...stages) {{
     console.log(`[Pipeline] Processing ${{items.length}} items through ${{stages.length}} stages...`);
@@ -914,6 +960,7 @@ main().finally(() => process.stdin?.destroy());
             elapsed=end - start,
             label=meta.name,
             phases=phase_records,
+            agent_graph=data.get("agentGraph"),
             metadata={
                 "budget": data.get("budget", {}),
                 "agent_count": data.get("agentCount", 0),

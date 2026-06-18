@@ -241,7 +241,7 @@ class GLMBackend:
                 logger.info("LLM → DeepSeek (%s, tools=%s)", self.deepseek_model, bool(tools))
                 response = await asyncio.wait_for(
                     self.deepseek_client.chat.completions.create(**payload),
-                    timeout=60,
+                    timeout=180,
                 )
                 self._record_usage_from_response(response.model_dump() if hasattr(response, 'model_dump') else {}, self.deepseek_model)
                 if hasattr(response, 'choices') and response.choices:
@@ -286,7 +286,7 @@ class GLMBackend:
                 logger.info("LLM → GLM API (glm-4-flash, tools=%s)", bool(tools))
                 response = await asyncio.wait_for(
                     asyncio.to_thread(self.client.chat.completions.create, **kwargs),
-                    timeout=60,
+                    timeout=180,
                 )
                 self._record_usage(response)
                 message = response.choices[0].message
