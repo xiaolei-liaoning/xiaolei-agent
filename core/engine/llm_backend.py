@@ -222,9 +222,24 @@ class GLMBackend:
         except Exception:
             pass
 
-    async def _chat_impl(self, messages, temperature=0.7, max_tokens=2000,
+    async def _chat_impl(self, messages, temperature=0.7, max_tokens=4096,
                          model=None, tools=None) -> LLMResponse:
         """内部实现：返回结构化 LLMResponse，包含原生 tool_calls"""
+        # ── 清理 tool 消息顺序 — 防止 DeepSeek API 400 ──
+        try:
+            cleaned = []
+            for m in messages:
+                if m["role"] == "tool":
+                    has_pending = any(
+                        p.get("tool_calls") for p in cleaned if p["role"] == "assistant"
+                    )
+                    if not has_pending:
+                        continue
+                cleaned.append(m)
+            messages = cleaned
+        except Exception:
+            pass
+
         target = model or self.model
         if not await self._rate_limiter.acquire(timeout=15.0):
             return LLMResponse(content="请求过于频繁，请稍后再试")
@@ -312,7 +327,7 @@ class GLMBackend:
                        bool(self.deepseek_client), bool(self.client), self._consecutive_failures)
         return LLMResponse(content="[LLM_MOCK] 系统正在处理您的请求...")
 
-    async def chat(self, messages, temperature=0.7, max_tokens=2000,
+    async def chat(self, messages, temperature=0.7, max_tokens=4096,
                    model=None, tools=None) -> str:
         """向后兼容包装器：返回字符串，支持 tool_calls 的 JSON 序列化"""
         resp = await self._chat_impl(messages, temperature=temperature,
@@ -323,13 +338,13 @@ class GLMBackend:
                               ensure_ascii=False)
         return resp.content
 
-    async def chat_structured(self, messages, temperature=0.7, max_tokens=2000,
+    async def chat_structured(self, messages, temperature=0.7, max_tokens=4096,
                               model=None, tools=None) -> LLMResponse:
         """原生工具调用：返回 LLMResponse 含结构化 tool_calls"""
         return await self._chat_impl(messages, temperature=temperature,
                                      max_tokens=max_tokens, model=model, tools=tools)
 
-    async def chat_stream(self, messages, temperature=0.7, max_tokens=2000,
+    async def chat_stream(self, messages, temperature=0.7, max_tokens=4096,
                           model=None) -> AsyncIterator[str]:
         target = model or self.model
         if not await self._rate_limiter.acquire(timeout=30.0):
@@ -351,7 +366,7 @@ class GLMBackend:
                 pass
         yield "流式响应不可用，请使用非流式接口"
 
-    async def chat_structured_stream(self, messages, temperature=0.7, max_tokens=2000,
+    async def chat_structured_stream(self, messages, temperature=0.7, max_tokens=4096,
                                       model=None, tools=None, on_text=None) -> LLMResponse:
         """流式工具调用 — 对标 Opencode 的 streamText + 事件处理器
         
@@ -708,30 +723,33 @@ class LLMRouter:
             concurrency=3,
         ))
 
-    async def chat(self, messages, temperature=0.7, max_tokens=2000,
+    async def chat(self, messages, temperature=0.7, max_tokens=4096,
                    model=None, tools=None) -> str:
         return await self.backend.chat(messages, temperature=temperature,
                                        max_tokens=max_tokens, model=model, tools=tools)
 
-    async def chat_structured(self, messages, temperature=0.7, max_tokens=2000,
+    async def chat_structured(self, messages, temperature=0.7, max_tokens=4096,
                               model=None, tools=None) -> LLMResponse:
         return await self.backend.chat_structured(messages, temperature=temperature,
                                                   max_tokens=max_tokens, model=model, tools=tools)
 
     async def simple_chat(self, user_message: str, system_prompt=None,
-                          temperature=0.7) -> str:
+                          temperature=0.7, max_tokens=None) -> str:
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": user_message})
-        return await self.backend.chat(messages, temperature=temperature)
+        kwargs = {"temperature": temperature}
+        if max_tokens is not None:
+            kwargs["max_tokens"] = max_tokens
+        return await self.backend.chat(messages, **kwargs)
 
-    async def chat_stream(self, messages, temperature=0.7, max_tokens=2000,
+    async def chat_stream(self, messages, temperature=0.7, max_tokens=4096,
                           model=None) -> AsyncIterator[str]:
         async for chunk in self.backend.chat_stream(messages, temperature, max_tokens, model):
             yield chunk
 
-    async def chat_structured_stream(self, messages, temperature=0.7, max_tokens=2000,
+    async def chat_structured_stream(self, messages, temperature=0.7, max_tokens=4096,
                                       model=None, tools=None, on_text=None) -> LLMResponse:
         """流式工具调用（路由层代理）"""
         return await self.backend.chat_structured_stream(

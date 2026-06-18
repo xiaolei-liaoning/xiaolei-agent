@@ -231,19 +231,22 @@ chat_history = []
 @app.get("/chat", response_class=HTMLResponse)
 async def chat_page(request: Request):
     """聊天页面"""
-    return templates.TemplateResponse("chat.html", {"request": request})
+    template = templates.get_template("chat.html")
+    return HTMLResponse(content=template.render(request=request))
 
 
 @app.get("/coze", response_class=HTMLResponse)
 async def coze_page(request: Request):
     """Coze平台页面"""
-    return templates.TemplateResponse("coze.html", {"request": request})
+    template = templates.get_template("coze.html")
+    return HTMLResponse(content=template.render(request=request))
 
 
 @app.get("/workflow_editor", response_class=HTMLResponse)
 async def workflow_editor_page(request: Request):
     """工作流编辑器页面"""
-    return templates.TemplateResponse("workflow_editor.html", {"request": request})
+    template = templates.get_template("workflow_editor.html")
+    return HTMLResponse(content=template.render(request=request))
 
 
 @app.on_event("startup")
@@ -665,10 +668,8 @@ logger.info("加载了 %d 个技能", len(SKILLS_CACHE))
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     """主页"""
-    return templates.TemplateResponse("index.html", {
-        "request": request,
-        "skills": SKILLS_CACHE
-    })
+    template = templates.get_template("index.html")
+    return HTMLResponse(content=template.render(request=request, skills=SKILLS_CACHE))
 
 
 @app.get("/api/agents")

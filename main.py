@@ -140,8 +140,11 @@ async def startup_event() -> None:
         logger.warning("短期记忆加载失败（首次启动或数据库未就绪）: %s", e)
 
     # 文件 watcher
-    from core.engine.watcher_setup import setup_file_watcher
-    setup_file_watcher(app)
+    try:
+        from core.watcher_setup import setup_file_watcher
+        setup_file_watcher(app)
+    except Exception as e:
+        logger.warning("文件watcher启动失败: %s", e)
 
 
 @app.on_event("shutdown")
@@ -155,8 +158,11 @@ async def shutdown_event() -> None:
         logger.warning("WebSocket 心跳检测停止失败: %s", e)
 
     # 文件 watcher 停止
-    from core.engine.watcher_setup import shutdown_file_watcher
-    shutdown_file_watcher(app)
+    try:
+        from core.watcher_setup import shutdown_file_watcher
+        shutdown_file_watcher(app)
+    except Exception as e:
+        logger.warning("文件watcher停止失败: %s", e)
 
 # ---------------------------------------------------------------------------
 # 启动入口

@@ -77,7 +77,7 @@ MANUAL_KEYWORDS: Dict[str, list] = {
 def scan_skills() -> Dict[str, dict]:
     """扫描 everything-claude-code 目录，返回 {name: metadata}"""
     if not os.path.isdir(SKILLS_BASE):
-        logger.warning(f"everything-claude-code 目录不存在: {SKILLS_BASE}")
+        logger.debug(f"everything-claude-code 目录不存在: {SKILLS_BASE}")
         return {}
 
     skills = {}

@@ -1,0 +1,352 @@
+# Agency Agents 角色配置
+# 从 agency-agents-zh 项目导入的 144+ 个专家 Agent 角色
+# Worker Agent 将根据任务场景自主匹配这些角色
+
+# ═══════════════════════════════════════════════════════════════
+# 工程开发类 (Engineering)
+# ═══════════════════════════════════════════════════════════════
+engineering:
+  - name: "后端架构师"
+    id: "engineering-backend-architect"
+    description: "资深后端架构师，专精可扩展系统设计、数据库架构、API 开发和云基础设施"
+    emoji: "⚙️"
+    keywords: ["后端", "架构", "数据库", "API", "微服务", "系统设计", "服务器", "云基础设施", "backend", "architecture", "database"]
+    match_patterns: ["设计.*系统", "数据库.*架构", "API.*开发", "微服务", "后端.*开发"]
+    
+  - name: "前端开发工程师"
+    id: "engineering-frontend-developer"
+    description: "专业前端开发工程师，精通现代Web技术栈、响应式设计和性能优化"
+    emoji: "🎨"
+    keywords: ["前端", "React", "Vue", "JavaScript", "CSS", "HTML", "响应式", "网页", "frontend", "web"]
+    match_patterns: ["前端.*开发", "网页.*设计", "React.*组件", "Vue.*应用"]
+    
+  - name: "AI工程师"
+    id: "engineering-ai-engineer"
+    description: "AI工程师，专精机器学习模型开发、深度学习架构和AI系统集成"
+    emoji: "🤖"
+    keywords: ["AI", "机器学习", "深度学习", "神经网络", "模型训练", "人工智能", "ml", "dl", "ai"]
+    match_patterns: ["AI.*开发", "机器学习.*模型", "深度学习", "神经网络"]
+    
+  - name: "DevOps自动化工程师"
+    id: "engineering-devops-automator"
+    description: "DevOps自动化专家，专精CI/CD流水线、容器化编排和基础设施即代码"
+    emoji: "🔧"
+    keywords: ["DevOps", "CI/CD", "Docker", "Kubernetes", "自动化", "部署", "运维", "devops", "deploy"]
+    match_patterns: ["CI/CD.*流水线", "Docker.*容器", "Kubernetes.*编排", "自动化.*部署"]
+    
+  - name: "安全工程师"
+    id: "engineering-security-engineer"
+    description: "安全工程师，专精应用安全、渗透测试和安全架构设计"
+    emoji: "🔒"
+    keywords: ["安全", "渗透测试", "漏洞", "加密", "认证", "授权", "security", "penetration", "vulnerability"]
+    match_patterns: ["安全.*审计", "渗透.*测试", "漏洞.*扫描", "加密.*算法"]
+    
+  - name: "数据工程师"
+    id: "engineering-data-engineer"
+    description: "数据工程师，专精数据管道、ETL流程和大数据处理架构"
+    emoji: "📊"
+    keywords: ["数据", "ETL", "数据管道", "大数据", "数据仓库", "data", "pipeline", "etl"]
+    match_patterns: ["数据.*管道", "ETL.*流程", "大数据.*处理", "数据.*仓库"]
+    
+  - name: "移动应用开发工程师"
+    id: "engineering-mobile-app-builder"
+    description: "移动应用开发专家，精通iOS和Android原生及跨平台开发"
+    emoji: "📱"
+    keywords: ["移动", "iOS", "Android", "Flutter", "React Native", "APP", "mobile", "app"]
+    match_patterns: ["移动.*开发", "iOS.*应用", "Android.*应用", "跨平台.*开发"]
+    
+  - name: "代码审查员"
+    id: "engineering-code-reviewer"
+    description: "代码审查专家，专精代码质量、最佳实践和技术债务管理"
+    emoji: "🔍"
+    keywords: ["代码审查", "code review", "代码质量", "最佳实践", "技术债务", "review", "quality"]
+    match_patterns: ["代码.*审查", "代码.*质量", "技术.*债务"]
+    
+  - name: "技术文档工程师"
+    id: "engineering-technical-writer"
+    description: "技术文档专家，专精API文档、用户手册和技术博客写作"
+    emoji: "📝"
+    keywords: ["技术文档", "API文档", "用户手册", "技术博客", "documentation", "technical writing"]
+    match_patterns: ["技术.*文档", "API.*文档", "用户.*手册"]
+
+# ═══════════════════════════════════════════════════════════════
+# 市场营销类 (Marketing)
+# ═══════════════════════════════════════════════════════════════
+marketing:
+  - name: "小红书运营专家"
+    id: "marketing-xiaohongshu-operator"
+    description: "专注小红书平台的内容运营专家，擅长种草笔记创作、达人合作策略和爆款内容公式"
+    emoji: "📕"
+    keywords: ["小红书", "种草", "笔记", "达人合作", "爆款", "xiaohongshu", "RED"]
+    match_patterns: ["小红书.*运营", "种草.*笔记", "达人.*合作", "爆款.*内容"]
+    
+  - name: "抖音运营策略师"
+    id: "marketing-douyin-strategist"
+    description: "抖音平台运营专家，擅长短视频内容策划、直播运营和流量增长"
+    emoji: "🎵"
+    keywords: ["抖音", "短视频", "直播", "流量", "douyin", "tiktok", "short video"]
+    match_patterns: ["抖音.*运营", "短视频.*策划", "直播.*运营"]
+    
+  - name: "SEO专家"
+    id: "marketing-seo-specialist"
+    description: "搜索引擎优化专家，专精关键词策略、技术SEO和内容优化"
+    emoji: "🔎"
+    keywords: ["SEO", "搜索引擎优化", "关键词", "排名", "流量", "seo", "search engine"]
+    match_patterns: ["SEO.*优化", "搜索引擎.*排名", "关键词.*策略"]
+    
+  - name: "内容创作者"
+    id: "marketing-content-creator"
+    description: "全平台内容创作专家，擅长文案写作、视觉设计和品牌故事讲述"
+    emoji: "✍️"
+    keywords: ["内容创作", "文案", "品牌故事", "写作", "content", "copywriting", "brand story"]
+    match_patterns: ["内容.*创作", "文案.*写作", "品牌.*故事"]
+    
+  - name: "增长黑客"
+    id: "marketing-growth-hacker"
+    description: "增长黑客专家，专精用户获取、留存优化和数据驱动增长策略"
+    emoji: "🚀"
+    keywords: ["增长", "用户获取", "留存", "数据驱动", "growth", "hacking", "acquisition"]
+    match_patterns: ["增长.*策略", "用户.*获取", "留存.*优化"]
+    
+  - name: "微信公众号运营"
+    id: "marketing-wechat-official-account"
+    description: "微信公众号运营专家，擅长内容策划、粉丝增长和变现策略"
+    emoji: "💬"
+    keywords: ["微信", "公众号", "粉丝", "变现", "wechat", "official account"]
+    match_patterns: ["微信.*运营", "公众号.*策划", "粉丝.*增长"]
+    
+  - name: "微博策略师"
+    id: "marketing-weibo-strategist"
+    description: "微博平台运营专家，擅长话题营销、KOL合作和舆情管理"
+    emoji: "📢"
+    keywords: ["微博", "话题", "KOL", "舆情", "weibo", "trending"]
+    match_patterns: ["微博.*运营", "话题.*营销", "舆情.*管理"]
+    
+  - name: "B站策略师"
+    id: "marketing-bilibili-strategist"
+    description: "B站平台运营专家，擅长视频内容策划、UP主合作和社区运营"
+    emoji: "📺"
+    keywords: ["B站", "bilibili", "UP主", "视频", "社区", "b站"]
+    match_patterns: ["B站.*运营", "UP主.*合作", "视频.*策划"]
+
+# ═══════════════════════════════════════════════════════════════
+# 产品设计类 (Product & Design)
+# ═══════════════════════════════════════════════════════════════
+product_design:
+  - name: "产品经理"
+    id: "product-manager"
+    description: "资深产品经理，专精需求分析、产品规划和用户故事编写"
+    emoji: "📋"
+    keywords: ["产品经理", "需求分析", "产品规划", "用户故事", "PRD", "product", "requirement"]
+    match_patterns: ["产品.*规划", "需求.*分析", "用户.*故事"]
+    
+  - name: "UI设计师"
+    id: "design-ui-designer"
+    description: "UI设计专家，专精界面设计、设计系统和交互细节"
+    emoji: "🎨"
+    keywords: ["UI", "界面设计", "设计系统", "图标", "配色", "ui", "interface", "design system"]
+    match_patterns: ["UI.*设计", "界面.*优化", "设计.*系统"]
+    
+  - name: "UX架构师"
+    id: "design-ux-architect"
+    description: "用户体验架构师，专精用户研究、信息架构和交互设计"
+    emoji: "🧭"
+    keywords: ["UX", "用户体验", "用户研究", "信息架构", "交互设计", "ux", "user experience"]
+    match_patterns: ["用户体验.*研究", "信息.*架构", "交互.*设计"]
+    
+  - name: "品牌守护者"
+    id: "design-brand-guardian"
+    description: "品牌设计专家，专精品牌视觉识别系统、品牌指南和一致性管理"
+    emoji: "🛡️"
+    keywords: ["品牌", "VI", "品牌指南", "视觉识别", "brand", "identity", "guideline"]
+    match_patterns: ["品牌.*设计", "VI.*系统", "品牌.*指南"]
+
+# ═══════════════════════════════════════════════════════════════
+# 财务金融类 (Finance)
+# ═══════════════════════════════════════════════════════════════
+finance:
+  - name: "财务分析师"
+    id: "finance-financial-analyst"
+    description: "财务分析专家，专精财务报表分析、估值建模和投资评估"
+    emoji: "💰"
+    keywords: ["财务分析", "报表", "估值", "投资", "financial", "analysis", "valuation"]
+    match_patterns: ["财务.*分析", "估值.*建模", "投资.*评估"]
+    
+  - name: "投资研究员"
+    id: "finance-investment-researcher"
+    description: "投资研究专家，专精行业分析、公司研究和投资策略制定"
+    emoji: "📈"
+    keywords: ["投资研究", "行业分析", "公司研究", "投资策略", "investment", "research"]
+    match_patterns: ["投资.*研究", "行业.*分析", "公司.*研究"]
+    
+  - name: "税务策略师"
+    id: "finance-tax-strategist"
+    description: "税务规划专家，专精税务优化、合规管理和跨境税务"
+    emoji: "🧾"
+    keywords: ["税务", "税务规划", "合规", "跨境税务", "tax", "compliance"]
+    match_patterns: ["税务.*规划", "税务.*优化", "跨境.*税务"]
+
+# ═══════════════════════════════════════════════════════════════
+# 销售类 (Sales)
+# ═══════════════════════════════════════════════════════════════
+sales:
+  - name: "销售教练"
+    id: "sales-coach"
+    description: "销售培训专家，专精销售技巧、谈判策略和客户关系管理"
+    emoji: "🤝"
+    keywords: ["销售", "谈判", "客户关系", "销售技巧", "sales", "negotiation", "CRM"]
+    match_patterns: ["销售.*技巧", "谈判.*策略", "客户.*关系"]
+    
+  - name: "交易策略师"
+    id: "sales-deal-strategist"
+    description: "交易策略专家，专精大客户销售、交易结构设计和成交优化"
+    emoji: "💼"
+    keywords: ["交易", "大客户", "成交", "deal", "enterprise", "closing"]
+    match_patterns: ["交易.*策略", "大客户.*销售", "成交.*优化"]
+
+# ═══════════════════════════════════════════════════════════════
+# 游戏开发类 (Game Development)
+# ═══════════════════════════════════════════════════════════════
+game_development:
+  - name: "Unity架构师"
+    id: "unity-architect"
+    description: "Unity游戏开发架构师，专精游戏系统设计、性能优化和跨平台部署"
+    emoji: "🎮"
+    keywords: ["Unity", "游戏开发", "架构", "性能优化", "unity", "game", "architecture"]
+    match_patterns: ["Unity.*开发", "游戏.*架构", "性能.*优化"]
+    
+  - name: "游戏设计师"
+    id: "game-designer"
+    description: "游戏设计专家，专精游戏机制设计、关卡设计和玩家体验优化"
+    emoji: "🎲"
+    keywords: ["游戏设计", "关卡", "机制", "玩家体验", "game design", "level", "mechanics"]
+    match_patterns: ["游戏.*设计", "关卡.*设计", "玩家.*体验"]
+    
+  - name: "技术美术"
+    id: "technical-artist"
+    description: "技术美术专家，专精Shader开发、渲染优化和美术工具链"
+    emoji: "🖌️"
+    keywords: ["技术美术", "Shader", "渲染", "TA", "technical artist", "shader", "rendering"]
+    match_patterns: ["技术.*美术", "Shader.*开发", "渲染.*优化"]
+
+# ═══════════════════════════════════════════════════════════════
+# 学术类 (Academic)
+# ═══════════════════════════════════════════════════════════════
+academic:
+  - name: "心理学家"
+    id: "academic-psychologist"
+    description: "心理学专家，专精行为分析、认知研究和心理健康指导"
+    emoji: "🧠"
+    keywords: ["心理学", "行为分析", "认知", "心理健康", "psychology", "behavior", "cognitive"]
+    match_patterns: ["心理.*分析", "行为.*研究", "认知.*科学"]
+    
+  - name: "历史学家"
+    id: "academic-historian"
+    description: "历史研究专家，专精历史文献分析、时代背景研究和历史叙事"
+    emoji: "📜"
+    keywords: ["历史", "文献", "时代背景", "历史叙事", "history", "document", "narrative"]
+    match_patterns: ["历史.*研究", "文献.*分析", "时代.*背景"]
+    
+  - name: "学习规划师"
+    id: "academic-study-planner"
+    description: "学习规划专家，专精学习计划制定、知识体系构建和效率提升"
+    emoji: "📚"
+    keywords: ["学习", "规划", "知识体系", "效率", "study", "planning", "learning"]
+    match_patterns: ["学习.*规划", "知识.*体系", "效率.*提升"]
+
+# ═══════════════════════════════════════════════════════════════
+# 空间计算类 (Spatial Computing)
+# ═══════════════════════════════════════════════════════════════
+spatial_computing:
+  - name: "VisionOS空间工程师"
+    id: "visionos-spatial-engineer"
+    description: "VisionOS开发专家，专精空间计算、3D交互和沉浸式体验设计"
+    emoji: "🥽"
+    keywords: ["VisionOS", "空间计算", "3D", "沉浸式", "visionos", "spatial", "3D"]
+    match_patterns: ["VisionOS.*开发", "空间.*计算", "3D.*交互"]
+    
+  - name: "XR沉浸式开发"
+    id: "xr-immersive-developer"
+    description: "XR开发专家，专精VR/AR/MR应用开发和沉浸式交互设计"
+    emoji: "🌐"
+    keywords: ["XR", "VR", "AR", "MR", "沉浸式", "xr", "vr", "ar", "mixed reality"]
+    match_patterns: ["XR.*开发", "VR.*应用", "AR.*体验"]
+
+# ═══════════════════════════════════════════════════════════════
+# 专业领域类 (Specialized)
+# ═══════════════════════════════════════════════════════════════
+specialized:
+  - name: "高考志愿顾问"
+    id: "gaokao-college-advisor"
+    description: "高考志愿填报专家，专精院校分析、专业选择和录取策略"
+    emoji: "🎓"
+    keywords: ["高考", "志愿", "院校", "专业", "录取", "gaokao", "college", "admission"]
+    match_patterns: ["高考.*志愿", "院校.*分析", "专业.*选择"]
+    
+  - name: "区块链安全审计"
+    id: "blockchain-security-auditor"
+    description: "区块链安全专家，专精智能合约审计、漏洞检测和DeFi安全"
+    emoji: "⛓️"
+    keywords: ["区块链", "智能合约", "审计", "DeFi", "blockchain", "smart contract", "audit"]
+    match_patterns: ["区块链.*安全", "智能.*合约.*审计", "DeFi.*安全"]
+    
+  - name: "合规审计师"
+    id: "compliance-auditor"
+    description: "合规审计专家，专精法规遵从、风险管理和内部控制"
+    emoji: "✅"
+    keywords: ["合规", "审计", "法规", "风险管理", "compliance", "audit", "regulation"]
+    match_patterns: ["合规.*审计", "法规.*遵从", "风险.*管理"]
+
+# ═══════════════════════════════════════════════════════════════
+# 项目管理类 (Project Management)
+# ═══════════════════════════════════════════════════════════════
+project_management:
+  - name: "高级项目经理"
+    id: "project-manager-senior"
+    description: "高级项目管理专家，专精项目规划、风险管理和团队协调"
+    emoji: "📅"
+    keywords: ["项目管理", "规划", "风险管理", "团队协调", "project", "management", "planning"]
+    match_patterns: ["项目.*管理", "项目.*规划", "风险.*管理"]
+    
+  - name: "项目协调员"
+    id: "project-management-project-shepherd"
+    description: "项目协调专家，专精进度跟踪、资源分配和跨团队协作"
+    emoji: "🐑"
+    keywords: ["项目协调", "进度", "资源", "协作", "coordination", "tracking", "resource"]
+    match_patterns: ["项目.*协调", "进度.*跟踪", "资源.*分配"]
+
+# ═══════════════════════════════════════════════════════════════
+# 人力资源类 (HR)
+# ═══════════════════════════════════════════════════════════════
+hr:
+  - name: "招聘专员"
+    id: "hr-recruiter"
+    description: "招聘专家，专精人才筛选、面试技巧和组织文化建设"
+    emoji: "👥"
+    keywords: ["招聘", "面试", "人才", "组织文化", "recruiting", "interview", "talent"]
+    match_patterns: ["招聘.*流程", "面试.*技巧", "人才.*筛选"]
+    
+  - name: "绩效评估师"
+    id: "hr-performance-reviewer"
+    description: "绩效管理专家，专精绩效考核、目标设定和员工发展"
+    emoji: "📊"
+    keywords: ["绩效", "考核", "目标", "员工发展", "performance", "review", "goals"]
+    match_patterns: ["绩效.*考核", "目标.*设定", "员工.*发展"]
+
+# ═══════════════════════════════════════════════════════════════
+# 法律类 (Legal)
+# ═══════════════════════════════════════════════════════════════
+legal:
+  - name: "合同审查师"
+    id: "legal-contract-reviewer"
+    description: "法律合同专家，专精合同条款审查、风险识别和法律合规"
+    emoji: "📜"
+    keywords: ["合同", "审查", "法律", "合规", "contract", "review", "legal"]
+    match_patterns: ["合同.*审查", "法律.*合规", "条款.*分析"]
+    
+  - name: "政策撰写师"
+    id: "legal-policy-writer"
+    description: "政策文档专家，专精隐私政策、服务条款和公司制度撰写"
+    emoji: "📋"
+    keywords: ["政策", "隐私", "服务条款", "制度", "policy", "privacy", "terms"]
+    match_patterns: ["政策.*撰写", "隐私.*政策", "服务.*条款"]

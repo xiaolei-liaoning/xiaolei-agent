@@ -4,4 +4,4 @@
 - 技能提取器
 """
 
-from .skill_extractor import *
+from ..skill_extractor import *

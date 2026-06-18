@@ -628,7 +628,7 @@ async def _handle_search(args: Dict) -> Dict:
 
 def _detect_code_language(code: str) -> tuple:
     """检测代码语言 — 委托给 gemini_enhanced_tools 共享实现"""
-    from core.agent_v1.tools.gemini_enhanced_tools import detect_code_language
+    from core.tools.gemini_enhanced_tools import detect_code_language
     return detect_code_language(code)
 
 

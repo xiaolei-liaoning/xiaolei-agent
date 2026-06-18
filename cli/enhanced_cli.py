@@ -26,8 +26,8 @@ import traceback
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-# 添加项目路径
-sys.path.insert(0, str(Path(__file__).parent))
+# 添加项目根目录到 sys.path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
 # ── 预初始化日志系统（必须在导入其他模块之前） ──

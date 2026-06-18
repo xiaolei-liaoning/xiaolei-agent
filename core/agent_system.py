@@ -997,6 +997,22 @@ class LeaderAgent(LLMAgent):
             # 检查是否任务完成
             if thought.get("done"):
                 logger.info(f"✅ ReAct 第 {round_num} 轮: 队长判定任务完成")
+                # 将最终结果添加到 all_results
+                if thought.get("final_result"):
+                    all_results.append({
+                        "success": True,
+                        "result": {"result": thought.get("final_result")},
+                        "worker": self.name,
+                        "task": "最终结果"
+                    })
+                elif not all_results:
+                    # 如果没有子任务结果，添加一个空结果
+                    all_results.append({
+                        "success": True,
+                        "result": {"result": thought.get("thinking", "任务完成")},
+                        "worker": self.name,
+                        "task": "最终结果"
+                    })
                 break
 
             # ========== Action: 执行行动 ==========

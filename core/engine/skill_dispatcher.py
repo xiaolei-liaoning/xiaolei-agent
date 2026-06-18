@@ -249,7 +249,7 @@ class SkillDispatcher:
             萃取的技能名称，如果没有匹配则返回 None
         """
         try:
-            from ..skills.skill_extractor import get_skill_extractor
+            from ..skill_extractor import get_skill_extractor
 
             extractor = get_skill_extractor()
             all_skills = extractor.get_all_skills()

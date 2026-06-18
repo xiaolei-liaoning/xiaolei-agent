@@ -39,7 +39,7 @@ class BaseSkill:
 
 # BaseSkill → 相关的 Expert 类别（缩小216个的匹配范围）
 BASE_TO_EXPERT_CATEGORIES = {
-    "web_scraper":    ["engineering", "marketing"],
+    "web_scraper":    ["engineering", "specialized"],
     "data_analyst":   ["engineering", "finance", "specialized"],
     "deep_thinker":   ["specialized", "product", "engineering"],
     "translator":     ["specialized"],
