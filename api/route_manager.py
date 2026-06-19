@@ -11,7 +11,6 @@ ROUTE_MANIFEST = [
     ("api.routes.chat_ws", "ws_router"),
     ("api.routes.history", "router"),
     ("api.routes.system", "router"),
-    ("api.workflow", "router"),
     ("api.schedule", "router"),
     ("api.monitor", "router"),
     ("api.routes.skills", "router"),
