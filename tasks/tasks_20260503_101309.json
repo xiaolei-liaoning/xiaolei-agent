@@ -1,0 +1,17 @@
+[
+  {
+    "task_id": 101,
+    "user_id": 1,
+    "user_message": "写一个故事后打开QQ",
+    "ai_response": "执行: 写一个故事后打开QQ",
+    "tool_call": {
+      "name": "gui_automation",
+      "params": {
+        "action": "open_app",
+        "app": "QQ"
+      }
+    },
+    "status": "pending",
+    "timestamp": "2026-05-03T10:13:09.571434"
+  }
+]

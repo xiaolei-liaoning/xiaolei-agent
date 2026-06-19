@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>多Agent系统 V2.0 架构图</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+            min-height: 100vh;
+            padding: 40px 20px;
+            color: #fff;
+        }
+
+        h1 {
+            text-align: center;
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            background: linear-gradient(90deg, #00d9ff, #00ff88);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .subtitle {
+            text-align: center;
+            color: #8892b0;
+            margin-bottom: 40px;
+            font-size: 1.1em;
+        }
+
+        .architecture-container {
+            max-width: 1400px;
+            margin: 0 auto;
+            position: relative;
+        }
+
+        .layer {
+            margin-bottom: 60px;
+        }
+
+        .layer-title {
+            font-size: 1.5em;
+            margin-bottom: 20px;
+            padding-left: 20px;
+            border-left: 4px solid #00d9ff;
+            color: #00d9ff;
+        }
+
+        .layer-content {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+            justify-content: center;
+        }
+
+        .module {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 16px;
+            padding: 20px;
+            min-width: 200px;
+            max-width: 300px;
+            backdrop-filter: blur(10px);
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .module::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, var(--accent-color, #00d9ff), transparent);
+        }
+
+        .module:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+            border-color: rgba(0, 217, 255, 0.3);
+        }
+
+        .module-icon {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .module-title {
+            font-size: 1.2em;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: #fff;
+        }
+
+        .module-desc {
+            font-size: 0.85em;
+            color: #8892b0;
+            line-height: 1.5;
+        }
+
+        .module-features {
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .feature-tag {
+            display: inline-block;
+            background: rgba(0, 217, 255, 0.15);
+            color: #00d9ff;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 0.75em;
+            margin: 3px;
+        }
+
+        .agents-layer .module {
+            --accent-color: #00ff88;
+            background: linear-gradient(135deg, rgba(0, 255, 136, 0.05) 0%, rgba(0, 217, 255, 0.05) 100%);
+        }
+
+        .agents-layer .module::before {
+            background: linear-gradient(90deg, #00ff88, transparent);
+        }
+
+        .orchestration-layer .module {
+            --accent-color: #ff6b6b;
+        }
+
+        .orchestration-layer .module::before {
+            background: linear-gradient(90deg, #ff6b6b, transparent);
+        }
+
+        .infrastructure-layer .module {
+            --accent-color: #ffd93d;
+        }
+
+        .infrastructure-layer .module::before {
+            background: linear-gradient(90deg, #ffd93d, transparent);
+        }
+
+        .api-layer .module {
+            --accent-color: #c56cf0;
+        }
+
+        .api-layer .module::before {
+            background: linear-gradient(90deg, #c56cf0, transparent);
+        }
+
+        .flow-section {
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 20px;
+            padding: 30px;
+            margin-top: 40px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .flow-title {
+            font-size: 1.3em;
+            margin-bottom: 20px;
+            color: #fff;
+            text-align: center;
+        }
+
+        .flow-diagram {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-wrap: wrap;
+            gap: 15px;
+        }
+
+        .flow-node {
+            background: linear-gradient(135deg, rgba(0, 217, 255, 0.2), rgba(0, 255, 136, 0.2));
+            border: 1px solid rgba(0, 217, 255, 0.3);
+            border-radius: 12px;
+            padding: 15px 25px;
+            text-align: center;
+            min-width: 120px;
+        }
+
+        .flow-node.highlight {
+            background: linear-gradient(135deg, rgba(255, 107, 107, 0.3), rgba(255, 217, 61, 0.3));
+            border-color: rgba(255, 107, 107, 0.5);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(255, 107, 107, 0.4); }
+            50% { box-shadow: 0 0 20px 5px rgba(255, 107, 107, 0.2); }
+        }
+
+        .flow-arrow {
+            font-size: 1.5em;
+            color: #00d9ff;
+        }
+
+        .legend {
+            display: flex;
+            justify-content: center;
+            gap: 30px;
+            margin-top: 30px;
+            flex-wrap: wrap;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.9em;
+            color: #8892b0;
+        }
+
+        .legend-color {
+            width: 16px;
+            height: 16px;
+            border-radius: 4px;
+        }
+
+        .stats {
+            display: flex;
+            justify-content: center;
+            gap: 40px;
+            margin-top: 50px;
+            flex-wrap: wrap;
+        }
+
+        .stat-item {
+            text-align: center;
+        }
+
+        .stat-number {
+            font-size: 3em;
+            font-weight: 700;
+            background: linear-gradient(90deg, #00d9ff, #00ff88);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .stat-label {
+            color: #8892b0;
+            font-size: 0.9em;
+            margin-top: 5px;
+        }
+
+        @media (max-width: 768px) {
+            .module {
+                min-width: 100%;
+            }
+
+            h1 {
+                font-size: 1.8em;
+            }
+
+            .flow-diagram {
+                flex-direction: column;
+            }
+
+            .flow-arrow {
+                transform: rotate(90deg);
+            }
+        }
+    </style>
+</head>
+<body>
+    <h1>🦾 多Agent系统 V2.0 架构图</h1>
+    <p class="subtitle">Multi-Agent Collaboration Engine Architecture</p>
+
+    <div class="architecture-container">
+        <!-- 用户接口层 -->
+        <div class="layer api-layer">
+            <div class="layer-title">🌐 用户接口层 (API Layer)</div>
+            <div class="layer-content">
+                <div class="module">
+                    <div class="module-icon">🚪</div>
+                    <div class="module-title">FastAPI Server</div>
+                    <div class="module-desc">RESTful API接口，提供任务管理、Agent监控、健康检查等Endpoint</div>
+                    <div class="module-features">
+                        <span class="feature-tag">/tasks</span>
+                        <span class="feature-tag">/agents</span>
+                        <span class="feature-tag">/metrics</span>
+                        <span class="feature-tag">/health</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Agent层 -->
+        <div class="layer agents-layer">
+            <div class="layer-title">🤖 Agent层 (Agents)</div>
+            <div class="layer-content">
+                <div class="module">
+                    <div class="module-icon">👑</div>
+                    <div class="module-title">MasterAgent</div>
+                    <div class="module-desc">主Agent，负责任务分解、结果聚合、全局协调</div>
+                    <div class="module-features">
+                        <span class="feature-tag">任务分解</span>
+                        <span class="feature-tag">结果聚合</span>
+                        <span class="feature-tag">流程控制</span>
+                    </div>
+                </div>
+
+                <div class="module">
+                    <div class="module-icon">⚙️</div>
+                    <div class="module-title">WorkerAgent</div>
+                    <div class="module-desc">执行Agent，负责具体任务执行，支持多种专业领域</div>
+                    <div class="module-features">
+                        <span class="feature-tag">scraping</span>
+                        <span class="feature-tag">analysis</span>
+                        <span class="feature-tag">processing</span>
+                    </div>
+                </div>
+
+                <div class="module">
+                    <div class="module-icon">🔍</div>
+                    <div class="module-title">ReviewerAgent</div>
+                    <div class="module-desc">评审Agent，负责质量把关、结果审查、问题发现</div>
+                    <div class="module-features">
+                        <span class="feature-tag">质量评审</span>
+                        <span class="feature-tag">错误检测</span>
+                        <span class="feature-tag">建议生成</span>
+                    </div>
+                </div>
+
+                <div class="module">
+                    <div class="module-icon">🎓</div>
+                    <div class="module-title">ExpertAgent</div>
+                    <div class="module-desc">专家Agent，提供领域知识、专业建议、最佳实践</div>
+                    <div class="module-features">
+                        <span class="feature-tag">security</span>
+                        <span class="feature-tag">performance</span>
+                        <span class="feature-tag">architecture</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 编排层 -->
+        <div class="layer orchestration-layer">
+            <div class="layer-title">🎯 编排层 (Orchestration)</div>
+            <div class="layer-content">
+                <div class="module">
+                    <div class="module-icon">🧠</div>
+                    <div class="module-title">Intent Understanding</div>
+                    <div class="module-desc">LLM辅助意图理解，解析用户输入、提取实体、识别约束</div>
+                    <div class="module-features">
+                        <span class="feature-tag">意图分类</span>
+                        <span class="feature-tag">实体提取</span>
+                        <span class="feature-tag">复杂度评估</span>
+                    </div>
+                </div>
+
+                <div class="module">
+                    <div class="module-icon">📋</div>
+                    <div class="module-title">Intelligent Scheduler</div>
+                    <div class="module-desc">智能任务调度，根据Agent能力、负载、状态动态分配任务</div>
+                    <div class="module-features">
+                        <span class="feature-tag">能力匹配</span>
+                        <span class="feature-tag">负载均衡</span>
+                        <span class="feature-tag">动态调度</span>
+                    </div>
+                </div>
+
+                <div class="module">
+                    <div class="module-icon">🔄</div>
+                    <div class="module-title">LLM Reflection</div>
+                    <div class="module-desc">反思机制，在关键节点评估执行质量、动态调整计划</div>
+                    <div class="module-features">
+                        <span class="feature-tag">失败检测</span>
+                        <span class="feature-tag">计划调整</span>
+                        <span class="feature-tag">自适应</span>
+                    </div>
+                </div>
+
+                <div class="module">
+                    <div class="module-icon">🔗</div>
+                    <div class="module-title">Collaboration Strategies</div>
+                    <div class="module-desc">多种协作模式，支持Pipeline、Master-Slave、Review、Auction等</div>
+                    <div class="module-features">
+                        <span class="feature-tag">Pipeline</span>
+                        <span class="feature-tag">Review</span>
+                        <span class="feature-tag">Auction</span>
+                        <span class="feature-tag">Consensus</span>
+                    </div>
+                </div>
+
+                <div class="module">
+                    <div class="module-icon">🌐</div>
+                    <div class="module-title">Global Context Center</div>
+                    <div class="module-desc">全局上下文与状态中心，跨Agent共享信息、事件驱动通信</div>
+                    <div class="module-features">
+                        <span class="feature-tag">任务追踪</span>
+                        <span class="feature-tag">消息总线</span>
+                        <span class="feature-tag">事件系统</span>
+                    </div>
+                </div>
+
+                <div class="module">
+                    <div class="module-icon">🔀</div>
+                    <div class="module-title">Complex Collaboration</div>
+                    <div class="module-desc">复杂协作引擎，递归分解、动态团队、协商共识、任务拍卖</div>
+                    <div class="module-features">
+                        <span class="feature-tag">递归分解</span>
+                        <span class="feature-tag">动态组队</span>
+                        <span class="feature-tag">协商共识</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 基础设施层 -->
+        <div class="layer infrastructure-layer">
+            <div class="layer-title">🏗️ 基础设施层 (Infrastructure)</div>
+            <div class="layer-content">
+                <div class="module">
+                    <div class="module-icon">🤖</div>
+                    <div class="module-title">Multi-LLM Facade</div>
+                    <div class="module-desc">统一LLM接口，支持OpenAI、Anthropic、Google、国产模型等</div>
+                    <div class="module-features">
+                        <span class="feature-tag">模型路由</span>
+                        <span class="feature-tag">负载均衡</span>
+                        <span class="feature-tag">降级策略</span>
+                        <span class="feature-tag">成本控制</span>
+                    </div>
+                </div>
+
+                <div class="module">
+                    <div class="module-icon">🔧</div>
+                    <div class="module-title">Tool Gateway</div>
+                    <div class="module-desc">统一工具接入，权限控制、限流熔断、日志审计</div>
+                    <div class="module-features">
+                        <span class="feature-tag">权限控制</span>
+                        <span class="feature-tag">限流</span>
+                        <span class="feature-tag">熔断</span>
+                    </div>
+                </div>
+
+                <div class="module">
+                    <div class="module-icon">💾</div>
+                    <div class="module-title">Redis Persistence</div>
+                    <div class="module-desc">基于Redis的持久化存储，任务状态、Agent状态、上下文缓存</div>
+                    <div class="module-features">
+                        <span class="feature-tag">任务持久化</span>
+                        <span class="feature-tag">分布式锁</span>
+                        <span class="feature-tag">消息队列</span>
+                    </div>
+                </div>
+
+                <div class="module">
+                    <div class="module-icon">📊</div>
+                    <div class="module-title">Prometheus Metrics</div>
+                    <div class="module-desc">Prometheus监控集成，实时采集性能指标、可视化展示</div>
+                    <div class="module-features">
+                        <span class="feature-tag">Agent指标</span>
+                        <span class="feature-tag">任务指标</span>
+                        <span class="feature-tag">系统指标</span>
+                    </div>
+                </div>
+
+                <div class="module">
+                    <div class="module-icon">🧠</div>
+                    <div class="module-title">Memory System</div>
+                    <div class="module-desc">Agent记忆系统，短期记忆、长期记忆、情景记忆</div>
+                    <div class="module-features">
+                        <span class="feature-tag">短期记忆</span>
+                        <span class="feature-tag">长期记忆</span>
+                        <span class="feature-tag">经验积累</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 执行流程图 -->
+        <div class="flow-section">
+            <div class="flow-title">⚡ 核心执行流程</div>
+            <div class="flow-diagram">
+                <div class="flow-node">📥 用户输入</div>
+                <div class="flow-arrow">→</div>
+                <div class="flow-node highlight">🧠 意图理解</div>
+                <div class="flow-arrow">→</div>
+                <div class="flow-node highlight">👑 任务分解</div>
+                <div class="flow-arrow">→</div>
+                <div class="flow-node highlight">⚙️ 智能调度</div>
+                <div class="flow-arrow">→</div>
+                <div class="flow-node">🤖 Agent执行</div>
+                <div class="flow-arrow">→</div>
+                <div class="flow-node highlight">🔄 反思检查</div>
+                <div class="flow-arrow">→</div>
+                <div class="flow-node">📤 结果聚合</div>
+            </div>
+
+            <div class="legend">
+                <div class="legend-item">
+                    <div class="legend-color" style="background: linear-gradient(90deg, #00d9ff, #00ff88);"></div>
+                    <span>核心编排组件</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: linear-gradient(90deg, #ff6b6b, #ffd93d);"></div>
+                    <span>自适应机制</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: rgba(255,255,255,0.2);"></div>
+                    <span>执行节点</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- 统计信息 -->
+        <div class="stats">
+            <div class="stat-item">
+                <div class="stat-number">11</div>
+                <div class="stat-label">核心模块</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-number">4</div>
+                <div class="stat-label">Agent类型</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-number">6</div>
+                <div class="stat-label">协作策略</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-number">5+</div>
+                <div class="stat-label">LLM支持</div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

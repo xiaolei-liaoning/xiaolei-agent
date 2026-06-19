@@ -1,4 +1,4 @@
-# Environment variables (包含敏感信息，不要提交到版本控制
+# Environment variables
 .env
 .env.*
 !.env.example
@@ -34,13 +34,14 @@ wheels/
 *.swo
 *~
 
-# Editor history / tools
+# Editor history
 .history/
 .opencode/
+.trae/
+.superpowers/
 
 # Logs
 *.log
-logs/
 
 # Database
 *.db
@@ -52,18 +53,6 @@ test_reports/
 pytest-*
 .coverage
 htmlcov/
-
-# Test report files (临时测试报告)
-test_report*.json
-test_report*.txt
-*_test_report*.txt
-*_test_report*.json
-COMPLETE_TEST_REPORT.md
-TEST_SUMMARY.md
-TEST_COVERAGE_ANALYSIS.md
-generate_test_report.py
-performance_test_*.json
-workflow_editor_test_report*.txt
 
 # Temporary files
 tmp/
@@ -81,27 +70,13 @@ faiss_index/
 .DS_Store
 Thumbs.db
 
-# Output files (reports, scraped data, uploads)
+# Output / uploads
 output/
-skills/web_scraper/output/
-skills/data_analysis/output/
-skills/output/
 uploads/
 
-# Test temporary files
-test_*.py
-!tests/
-quick*.py
-run_*.py
-sync_test.py
-sync_tests.py
-*.sh
-task_decomposer_test_report.json
-tasks/
-workflow_editor_test_report*.txt
-view_*.py
-visualize_performance.py
-example_*.py
+# Backup files
+*.bak
+*.backup_*
 
 # Project management
 todo.md
@@ -109,10 +84,3 @@ todo.md
 # Archive
 *.zip
 *.tar.gz
-
-# Misc
-docs/*.html
-
-# Large log files
-logs/*.log
-*.env
