@@ -384,8 +384,22 @@ async def _handle_with_multi_agent(
             worker_result = r.get("result", {})
             status_icon = "✅" if worker_ok else "❌"
             reply_parts.append(f"\n{status_icon} **{worker_name}**: {task_desc[:80]}")
-            result_text = worker_result.get("result", "") if isinstance(worker_result, dict) else str(worker_result)
+            result_text = ""
+            if isinstance(worker_result, dict):
+                # 优先取 content（KEPA 格式），其次取 result
+                result_text = worker_result.get("content", "") or worker_result.get("result", "")
+                # 如果 result 是 dict，尝试提取子字段
+                if not result_text and isinstance(worker_result.get("result"), dict):
+                    sub = worker_result["result"]
+                    result_text = sub.get("content", "") or sub.get("result", "") or sub.get("text", "")
+            elif worker_result:
+                result_text = str(worker_result)
             if result_text:
+                import re
+                # 去掉尾部 JSON 块（markdown 代码块格式）
+                result_text = re.sub(r'\n?[\s]*```json\s*\{.*?\}\s*```.*$', '', result_text, flags=re.DOTALL).strip()
+                # 去掉尾部裸 JSON 对象（从最后一个独立 { 开始）
+                result_text = re.sub(r'\n\{".*$', '', result_text, flags=re.DOTALL).strip()
                 reply_parts.append(f"   {result_text[:2000]}")
 
         reply_text = "\n".join(reply_parts)
