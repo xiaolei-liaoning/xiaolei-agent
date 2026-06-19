@@ -40,7 +40,7 @@ if _extra_args:
             await cli.handle_command(parsed)
         else:
             # 自然语言，走智能请求
-            await cli.handle_smart_request(cmd_str)
+            await cli.chat_handler.handle_smart_request(cmd_str)
 
     asyncio.run(_exec_argv())
     sys.exit(0)
