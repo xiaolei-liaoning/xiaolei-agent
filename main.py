@@ -47,10 +47,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 轻量 API Key 认证（未配置 API_KEY 时跳过，向后兼容）
-from api.auth_middleware import AuthMiddleware
-app.add_middleware(AuthMiddleware)
-
 # 静态文件
 static_dir = Path(__file__).parent / "static"
 if static_dir.exists():
@@ -174,7 +170,7 @@ if __name__ == "__main__":
     host = os.getenv("AGENT_HOST", "0.0.0.0")
     log_level = os.getenv("LOG_LEVEL", "info")
     reload = os.getenv("DEV_MODE", "false").lower() == "true"
-    reload_dirs = ["api", "core", "skills", "tools"] if reload else None
+    reload_dirs = ["api", "core", "tools"] if reload else None
 
     logger.info("=" * 70)
     logger.info("🚀 小雷版小龙虾 AI Agent v3.4.0")

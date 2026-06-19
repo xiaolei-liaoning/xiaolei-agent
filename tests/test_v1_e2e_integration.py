@@ -145,7 +145,7 @@ async def test_llmagent_process_message():
 
     with patch("core.agent_v1.agent._llm_json", _llm_fake):
         agent = LLMAgent("full_test", AgentRole.WORKER)
-        msg = AgentMessage(from_agent="tester", to_agent=agent.name, content="写一个 hello.txt 并写入 Hello World")
+        msg = AgentMessage(from_agent="tester", content="写一个 hello.txt 并写入 Hello World")
         result_str = await agent.process_message(msg)
         result = json.loads(result_str)
         assert "status" in result or "success" in result

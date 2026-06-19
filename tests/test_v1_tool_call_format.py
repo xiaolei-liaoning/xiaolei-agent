@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, patch, MagicMock
 
 import pytest
 
-from core.agent_system import LLMAgent, LeaderAgent, AgentRole, OUTPUT_FORMATS, TOOL_USAGE_SECTION
+from core.agent_system import LLMAgent, LeaderAgent, AgentRole, OUTPUT_FORMATS
 
 
 # =============================================================================
@@ -130,30 +130,17 @@ class TestToolCallJsonFormat:
 
 
 # =============================================================================
-# 3. OUTPUT_FORMATS 中工具调用格式定义测试
+# 3. OUTPUT_FORMATS 工具调用格式定义测试
 # =============================================================================
 
 class TestOutputFormatsToolCalling:
-    """测试 OUTPUT_FORMATS 和 TOOL_USAGE_SECTION"""
+    """测试 OUTPUT_FORMATS"""
 
     def test_execute_format_exists(self):
         """execute 输出格式存在"""
         assert "execute" in OUTPUT_FORMATS
         assert "status" in OUTPUT_FORMATS["execute"]
         assert "result" in OUTPUT_FORMATS["execute"]
-
-    def test_tool_usage_section_contains_tool_calls_format(self):
-        """TOOL_USAGE_SECTION 包含工具调用格式说明"""
-        assert "tool_calls" in TOOL_USAGE_SECTION
-        assert "write_file" in TOOL_USAGE_SECTION
-        assert "execute_python" in TOOL_USAGE_SECTION
-        assert "name" in TOOL_USAGE_SECTION
-        assert "arguments" in TOOL_USAGE_SECTION
-
-    def test_tool_usage_section_rules(self):
-        """TOOL_USAGE_SECTION 包含重要规则"""
-        assert "单步执行" in TOOL_USAGE_SECTION
-        assert "write_file" in TOOL_USAGE_SECTION
 
 
 # =============================================================================
@@ -244,7 +231,7 @@ class TestHandleMessageToolBranch:
             mock_kepa.return_value = {"success": True, "status": "success"}
 
             from core.agent_system import AgentMessage
-            msg = AgentMessage(from_agent="test", to_agent="test_branch", content="写一个文件")
+            msg = AgentMessage(from_agent="test", content="写一个文件")
 
             await self.agent._handle_message(msg)
 
@@ -261,7 +248,7 @@ class TestHandleMessageToolBranch:
             mock_kepa.return_value = {"success": True, "status": "success"}
 
             from core.agent_system import AgentMessage
-            msg = AgentMessage(from_agent="test", to_agent="test_branch", content="简单任务")
+            msg = AgentMessage(from_agent="test", content="简单任务")
 
             await self.agent._handle_message(msg)
 
@@ -285,7 +272,7 @@ class TestHandleMessageToolBranch:
             mock_kepa.return_value = {"success": True, "status": "success"}
 
             from core.agent_system import AgentMessage
-            msg = AgentMessage(from_agent="test", to_agent="test_branch", content="创建文件")
+            msg = AgentMessage(from_agent="test", content="创建文件")
 
             result = await self.agent._handle_message(msg)
 
@@ -541,7 +528,7 @@ class TestE2EToolCallingFlow:
                     mock_kepa.return_value = {"success": True, "status": "success", "confidence": 0.95}
 
                     from core.agent_system import AgentMessage
-                    msg = AgentMessage(from_agent="test", to_agent="e2e_worker", content="创建文件 test.txt")
+                    msg = AgentMessage(from_agent="test", content="创建文件 test.txt")
 
                     result = await self.agent.process_message(msg)
 
@@ -571,7 +558,7 @@ class TestE2EToolCallingFlow:
                         mock_kepa.return_value = {"success": True, "status": "success"}
 
                         from core.agent_system import AgentMessage
-                        msg = AgentMessage(from_agent="test", to_agent="e2e_worker", content="执行代码")
+                        msg = AgentMessage(from_agent="test", content="执行代码")
 
                         result = await self.agent.process_message(msg)
 

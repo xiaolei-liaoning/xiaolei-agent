@@ -327,6 +327,7 @@ async def _handle_with_multi_agent(
         if not hasattr(_handle_with_multi_agent, '_pool'):
             _handle_with_multi_agent._pool = V1LeaderPool()
         pool = _handle_with_multi_agent._pool
+        await pool._ensure_tool_registry()
 
         # 从池中获取Worker
         workers = []
@@ -346,7 +347,6 @@ async def _handle_with_multi_agent(
                 name=f"leader_{int(time.time())}",
                 max_workers=len(workers),
                 tool_registry=pool._tool_registry,
-                comm_center=pool._comm_center,
             )
             is_temp_team = False
 

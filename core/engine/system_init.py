@@ -29,7 +29,6 @@ class SystemInitializer:
         await self._step_init_database()
         await self._step_inject_handler_refs()
         await self._step_inject_task_interface_refs()
-        await self._step_inject_system_route_refs()
         await self._step_check_env()
         self._log_summary()
 
@@ -166,14 +165,6 @@ class SystemInitializer:
             logger.info("任务执行接口引用注入完成")
         except Exception as e:
             logger.error("任务执行接口引用注入失败: %s", e, exc_info=True)
-
-    async def _step_inject_system_route_refs(self):
-        try:
-            from api.routes.system import set_system_refs
-            set_system_refs(self.ctx.db_initialized, self.ctx.startup_time, self.ctx.processor)
-            logger.info("System 路由全局引用设置完成")
-        except Exception as e:
-            logger.error("System 路由全局引用设置失败: %s", e, exc_info=True)
 
     async def _step_check_env(self):
         try:

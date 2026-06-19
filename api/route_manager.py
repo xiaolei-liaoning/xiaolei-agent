@@ -5,21 +5,11 @@ from typing import Dict, Any
 
 logger = logging.getLogger(__name__)
 
-# 集中式路由清单
+# 集中式路由清单（仅保留核心功能：聊天、WebSocket、历史）
 ROUTE_MANIFEST = [
     ("api.routes.chat", "router"),
     ("api.routes.chat_ws", "ws_router"),
     ("api.routes.history", "router"),
-    ("api.routes.system", "router"),
-    ("api.schedule", "router"),
-    ("api.monitor", "router"),
-    ("api.routes.skills", "router"),
-    ("api.routes.agent_groups", "router"),
-    ("api.routes.agent_groups_collab", "collab_router"),
-    ("api.routes.self_check", "router"),
-    ("api.routes.plans", "router"),
-    ("api.routes.frontend_agent", "router"),
-    ("api.routes.simple_chat", "router"),  # 简化聊天 API
 ]
 
 

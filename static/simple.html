@@ -425,13 +425,12 @@
             
             try {
                 // 调用简化聊天 API
-                const response = await fetch(`${API_BASE}/api/simple/chat`, {
+                const response = await fetch(`${API_BASE}/api/chat`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         message: message,
                         user_id: 1,
-                        agent_id: 'v1_react'
                     })
                 });
                 
