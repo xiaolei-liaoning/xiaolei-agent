@@ -96,7 +96,7 @@ class SystemInitializer:
         components = [
             ("TaskProcessor", "core.tasks.task_processor", "task_processor"),
             ("自主搜索引擎", "core.search.rag_search_engine", "RAGSearchEngine"),
-            ("监控管理器", "core.monitoring", "monitoring_manager"),  # DEPRECATED
+            # 已移除: ("监控管理器", "core.monitoring", "monitoring_manager"),  # DEPRECATED
         ]
         for name, module, obj in components:
             try:
@@ -179,7 +179,7 @@ class SystemInitializer:
     def _log_summary(self):
         uptime = time.time() - self.ctx.startup_time
         logger.info("=" * 60)
-        logger.info("  小雷版小龙虾 AI Agent v3.3.1 启动成功！")
+        logger.info("  小雷版小龙虾 AI Agent v3.4.0 启动成功！")
         logger.info("  初始化耗时: %.2fs | DB: %s | LLM: %s", uptime,
                     "OK" if self.ctx.db_initialized else "OFF",
                     "OK" if self.env_status.get("llm_ok") else "未配置")
