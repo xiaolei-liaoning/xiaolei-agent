@@ -311,7 +311,7 @@ class MCPClientManager:
                     conn.process, "initialize", {
                         "protocolVersion": "2024-11-05",
                         "capabilities": {},
-                        "clientInfo": {"name": "xiaolei", "version": "3.3.1"},
+                        "clientInfo": {"name": "xiaolei", "version": "3.4.0"},
                     }, request_id=1, server_name=name
                 )
                 if resp and "result" in resp:
@@ -336,7 +336,7 @@ class MCPClientManager:
             process, "initialize", {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {},
-                "clientInfo": {"name": "xiaolei", "version": "3.3.1"},
+                "clientInfo": {"name": "xiaolei", "version": "3.4.0"},
             }, request_id=1, server_name=name
         )
         if resp and "result" in resp:
