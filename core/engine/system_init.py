@@ -37,7 +37,7 @@ class SystemInitializer:
             from core.multi_agent_v2.tools.tool_registry import get_tool_registry
             reg = get_tool_registry()
             await reg.discover_all()
-            logger.info("V2 ToolRegistry 工具发现完成 (%d 个)", reg.count())
+            logger.info("V2 ToolRegistry 工具发现完成 (%d 个)", reg.count)
         except Exception as e:
             logger.warning("V2 ToolRegistry 发现失败: %s", e)
         try:
