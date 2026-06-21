@@ -29,42 +29,17 @@ class SystemInitializer:
         await self._step_init_database()
         await self._step_inject_handler_refs()
         await self._step_inject_task_interface_refs()
+        await self._step_inject_system_route_refs()
         await self._step_check_env()
         self._log_summary()
 
     async def _step_register_tools(self):
         try:
-            from core.multi_agent_v2.tools.tool_registry import get_tool_registry
-            reg = get_tool_registry()
-            await reg.discover_all()
-            logger.info("V2 ToolRegistry 工具发现完成 (%d 个)", reg.count())
-        except Exception as e:
-            logger.warning("V2 ToolRegistry 发现失败: %s", e)
-        try:
             from tools.tool_manager import register_all_skills
             register_all_skills()
-            logger.info("ToolManager 内置工具注册完成（兼容路径）")
+            logger.info("ToolManager 内置工具注册完成")
         except Exception as e:
-            logger.debug("ToolManager 注册跳过: %s", e)
-        
-        # 注册 Agency Agents 角色匹配技能
-        try:
-            from core.skill_base import ToolRegistry
-            from core.skills.agency_agents.skill import (
-                AgencyAgentExecuteSkill,
-                AgencyAgentListSkill,
-                AgencyAgentMatcherSkill,
-            )
-            
-            ToolRegistry.register(AgencyAgentMatcherSkill())
-            ToolRegistry.register(AgencyAgentListSkill())
-            ToolRegistry.register(AgencyAgentExecuteSkill())
-            
-            from core.skills.agency_agents.handler import get_agency_agent_matcher
-            matcher = get_agency_agent_matcher()
-            logger.info("✅ Agency Agents 角色匹配系统已注册 (%d 个专家角色)", len(matcher.agents))
-        except Exception as e:
-            logger.warning("Agency Agents 注册跳过: %s", e)
+            logger.error("ToolManager 内置工具注册失败: %s", e, exc_info=True)
 
     async def _step_init_dispatcher_and_plugins(self):
         try:
@@ -96,7 +71,7 @@ class SystemInitializer:
         components = [
             ("TaskProcessor", "core.tasks.task_processor", "task_processor"),
             ("自主搜索引擎", "core.search.rag_search_engine", "RAGSearchEngine"),
-            ("监控管理器", "core.monitoring", "monitoring_manager"),  # DEPRECATED
+            ("监控管理器", "core.monitoring", "monitoring_manager"),
         ]
         for name, module, obj in components:
             try:
@@ -120,10 +95,7 @@ class SystemInitializer:
 
     async def _step_config_driven_services(self):
         try:
-            from .config_loader import (
-                auto_connect_mcp_servers,
-                register_agents_from_config,
-            )
+            from core.config_loader import auto_connect_mcp_servers, register_agents_from_config
             asyncio.create_task(auto_connect_mcp_servers())
             logger.info("配置驱动MCP服务器自启任务已提交")
             agents = register_agents_from_config()
@@ -134,7 +106,7 @@ class SystemInitializer:
 
     async def _step_init_database(self):
         try:
-            from core.database import init_db
+            from core.infrastructure.database import init_db
             init_db()
             self.ctx.db_initialized = True
             logger.info("MySQL 数据库初始化完成")
@@ -152,8 +124,8 @@ class SystemInitializer:
 
     async def _step_inject_task_interface_refs(self):
         try:
-            from core.handlers import handle_multi_step, handle_single_step
             from core.tasks.task_execution_interface import set_task_handlers
+            from core.handlers import handle_multi_step, handle_single_step
 
             class _TextAnalyzerAgent:
                 """文本分析Agent — IntelligentScheduler 已移除，使用 LLM 动态编排"""
@@ -166,9 +138,17 @@ class SystemInitializer:
         except Exception as e:
             logger.error("任务执行接口引用注入失败: %s", e, exc_info=True)
 
+    async def _step_inject_system_route_refs(self):
+        try:
+            from api.routes.system import set_system_refs
+            set_system_refs(self.ctx.db_initialized, self.ctx.startup_time, self.ctx.processor)
+            logger.info("System 路由全局引用设置完成")
+        except Exception as e:
+            logger.error("System 路由全局引用设置失败: %s", e, exc_info=True)
+
     async def _step_check_env(self):
         try:
-            from .check_env import check_env
+            from core.check_env import check_env
             self.env_status = check_env()
             if not self.env_status.get("llm_ok"):
                 logger.warning("LLM 未配置 — 聊天/代码生成/反思将不可用")

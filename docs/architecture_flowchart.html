@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>多Agent系统 V2.0 架构流程图</title>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #f5f5f5;
+            padding: 20px;
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        h1 {
+            color: #333;
+            font-size: 1.8em;
+        }
+        .subtitle {
+            color: #666;
+            margin-top: 10px;
+        }
+        .diagram-container {
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            margin-bottom: 30px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .diagram-title {
+            font-size: 1.2em;
+            color: #333;
+            margin-bottom: 20px;
+            font-weight: 600;
+            border-bottom: 2px solid #00d9ff;
+            padding-bottom: 10px;
+        }
+        .mermaid {
+            display: flex;
+            justify-content: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🔄 多Agent系统 V2.0 架构流程图</h1>
+        <p class="subtitle">Multi-Agent Collaboration Engine - 系统流程与组件调用关系</p>
+    </div>
+
+    <!-- 图1: 完整请求处理流程 -->
+    <div class="diagram-container">
+        <div class="diagram-title">📋 图1: 完整请求处理流程</div>
+        <pre class="mermaid">
+flowchart TB
+    subgraph INPUT["🌐 用户接口层"]
+        A[📥 用户请求]
+    end
+
+    subgraph API["🚪 API层"]
+        B[FastAPI Server<br/>/tasks POST]
+    end
+
+    subgraph ORCHESTRATION["🎯 编排层"]
+        C[🧠 Intent Understanding<br/>意图理解]
+        D[📋 Task Definition<br/>任务定义生成]
+        E[⚙️ Intelligent Scheduler<br/>智能调度器]
+        F[🔄 LLM Reflection<br/>反思机制]
+    end
+
+    subgraph AGENTS["🤖 Agent层"]
+        G[👑 MasterAgent<br/>任务分解]
+        H1[⚙️ WorkerAgent<br/>执行任务]
+        H2[🔍 ReviewerAgent<br/>评审任务]
+        H3[🎓 ExpertAgent<br/>专家咨询]
+        I[📦 Result Aggregator<br/>结果聚合]
+    end
+
+    subgraph INFRA["🏗️ 基础设施层"]
+        J[🤖 Multi-LLM Facade<br/>LLM统一接口]
+        K[💾 Redis Storage<br/>持久化存储]
+        L[📊 Prometheus<br/>监控系统]
+        M[🔧 Tool Gateway<br/>工具网关]
+    end
+
+    A --> B
+    B --> C
+    C --> D
+    D --> E
+    E --> G
+    G -->|任务分解| H1
+    G -->|任务分解| H2
+    G -->|任务分解| H3
+    H1 -->|执行结果| F
+    H2 -->|评审结果| F
+    H3 -->|建议结果| F
+    F -->|继续/调整| E
+    F -->|反思决策| I
+    I -->|最终结果| B
+    B -->|响应| A
+
+    J -.->|LLM调用| C
+    J -.->|LLM调用| F
+    J -.->|LLM调用| I
+    K -.->|状态存储| E
+    K -.->|任务持久化| G
+    L -.->|指标收集| H1
+    L -.->|指标收集| H2
+    M -.->|工具调用| H1
+
+    style INPUT fill:#e3f2fd,stroke:#1976d2
+    style API fill:#e8f5e9,stroke:#388e3c
+    style ORCHESTRATION fill:#fff3e0,stroke:#f57c00
+    style AGENTS fill:#fce4ec,stroke:#c2185b
+    style INFRA fill:#f3e5f5,stroke:#7b1fa2
+        </pre>
+    </div>
+
+    <!-- 图2: Agent协作模式 -->
+    <div class="diagram-container">
+        <div class="diagram-title">🔗 图2: Agent协作模式</div>
+        <pre class="mermaid">
+flowchart LR
+    subgraph PIPELINE["📝 Pipeline 模式"]
+        P1[Task Input] --> P2[Worker1<br/>预处理]
+        P2 --> P3[Worker2<br/>核心处理]
+        P3 --> P4[Worker3<br/>后处理]
+        P4 --> P5[Output]
+    end
+
+    subgraph MASTER_SLAVE["👑 Master-Slave 模式"]
+        M1[MasterAgent] --> M2[Worker1]
+        M1 --> M3[Worker2]
+        M1 --> M4[Worker3]
+        M2 --> M5[结果收集]
+        M3 --> M5
+        M4 --> M5
+        M5 --> M6[Master聚合]
+    end
+
+    subgraph REVIEW["🔍 Review 模式"]
+        R1[执行Agent] --> R2[Reviewer<br/>质量评审]
+        R2 -->|通过| R3[结果输出]
+        R2 -->|不通过| R4[重新执行]
+        R4 --> R1
+    end
+
+    subgraph AUCTION["🏷️ Auction 模式"]
+        A1[任务发布] --> A2[Agent1 投标]
+        A1 --> A3[Agent2 投标]
+        A1 --> A4[Agent3 投标]
+        A2 --> A5[竞标评估]
+        A3 --> A5
+        A4 --> A5
+        A5 --> A6[最优Agent执行]
+    end
+
+    style PIPELINE fill:#e3f2fd,stroke:#1976d2
+    style MASTER_SLAVE fill:#e8f5e9,stroke:#388e3c
+    style REVIEW fill:#fff3e0,stroke:#f57c00
+    style AUCTION fill:#fce4ec,stroke:#c2185b
+        </pre>
+    </div>
+
+    <!-- 图3: 反思机制流程 -->
+    <div class="diagram-container">
+        <div class="diagram-title">💭 图3: LLM反思机制流程</div>
+        <pre class="mermaid">
+flowchart TD
+    START([开始执行]) --> STEP1[执行当前步骤]
+
+    STEP1 --> CHECK1{成功？}
+    CHECK1 -->|否| TRIGGER1[触发反思]
+    CHECK1 -->|是| CHECK2{超时？}
+
+    CHECK2 -->|是| TRIGGER2[触发反思]
+    CHECK2 -->|否| CHECK3{置信度<阈值？}
+
+    CHECK3 -->|是| TRIGGER3[触发反思]
+    CHECK3 -->|否| CHECK4{周期性检查？}
+
+    CHECK4 -->|是| TRIGGER4[触发反思]
+    CHECK4 -->|否| CONTINUE[继续下一步]
+
+    TRIGGER1 --> REFLECT[LLM反思]
+    TRIGGER2 --> REFLECT
+    TRIGGER3 --> REFLECT
+    TRIGGER4 --> REFLECT
+
+    REFLECT --> DECISION{决策}
+
+    DECISION -->|CONTINUE| CONTINUE
+    DECISION -->|RETRY| RETRY[重试上一步]
+    RETRY --> STEP1
+    DECISION -->|SKIP| SKIP[跳过下一步]
+    SKIP --> NEXT[跳到下下步]
+    DECISION -->|ADD| ADD[添加新步骤]
+    ADD --> STEP1
+    DECISION -->|FAIL| FAIL([宣告失败])
+
+    CONTINUE --> DONE{所有步骤完成？}
+    DONE -->|否| STEP1
+    DONE -->|是| FINAL[聚合结果]
+
+    style TRIGGER1 fill:#ffcdd2,stroke:#d32f2f
+    style TRIGGER2 fill:#ffcdd2,stroke:#d32f2f
+    style TRIGGER3 fill:#ffcdd2,stroke:#d32f2f
+    style TRIGGER4 fill:#ffcdd2,stroke:#d32f2f
+    style REFLECT fill:#fff9c4,stroke:#f9a825
+    style FAIL fill:#f44336,stroke:#b71c1c
+        </pre>
+    </div>
+
+    <!-- 图4: 意图理解流程 -->
+    <div class="diagram-container">
+        <div class="diagram-title">🧠 图4: 意图理解流程</div>
+        <pre class="mermaid">
+flowchart TB
+    INPUT[用户输入文本] --> EXTRACT[实体提取]
+    EXTRACT --> RULE[基于规则的意图分类]
+    RULE --> CONF1{置信度>阈值？}
+
+    CONF1 -->|否| LLM[LLM辅助分类]
+    LLM --> CONF2{有LLM？}
+    CONF2 -->|是| USELLM[使用LLM分类]
+    USELLM --> INTENT[最终意图]
+    CONF2 -->|否| FALLBACK[回退到规则]
+    FALLBACK --> INTENT
+
+    CONF1 -->|是| INTENT
+
+    INTENT --> CONSTRAINT[约束识别]
+    CONSTRAINT --> KEYWORD[关键词提取]
+    KEYWORD --> COMPLEXITY[复杂度评估]
+    COMPLEXITY --> OUTPUT[结构化任务定义]
+
+    subgraph 意图类型
+        I1[QUERY 查询]
+        I2[ACTION 执行]
+        I3[CREATION 创建]
+        I4[ANALYSIS 分析]
+        I5[MODIFICATION 修改]
+        I6[DELETION 删除]
+    end
+
+    style INPUT fill:#e1f5fe,stroke:#0288d1
+    style EXTRACT fill:#e8f5e9,stroke:#388e3c
+    style INTENT fill:#fff3e0,stroke:#f57c00
+    style OUTPUT fill:#f3e5f5,stroke:#7b1fa2
+        </pre>
+    </div>
+
+    <!-- 图5: 任务生命周期 -->
+    <div class="diagram-container">
+        <div class="diagram-title">🔄 图5: 任务生命周期</div>
+        <pre class="mermaid">
+stateDiagram-v2
+    [*] --> PENDING: 创建任务
+
+    PENDING --> PARSING: 进入调度器
+    PARSING --> DECOMPOSING: 意图理解完成
+    DECOMPOSING --> SCHEDULING: 分解完成
+
+    SCHEDULING --> ASSIGNING: 选择Agent
+    ASSIGNING --> EXECUTING: 任务分配
+
+    EXECUTING --> REFLECTING: 步骤完成
+    REFLECTING --> DECIDING: 反思完成
+
+    DECIDING --> CONTINUE: 继续执行
+    DECIDING --> RETRY: 重试
+    DECIDING --> SKIP: 跳过
+    DECIDING --> FAIL: 失败
+
+    CONTINUE --> EXECUTING: 下一步
+    RETRY --> EXECUTING: 重试当前
+    SKIP --> EXECUTING: 跳过当前
+
+    EXECUTING --> AGGREGATING: 所有步骤完成
+    AGGREGATING --> COMPLETED: 聚合完成
+
+    FAIL --> CANCELLED: 任务取消
+    COMPLETED --> [*]
+
+    note right of PENDING: 等待调度
+    note right of EXECUTING: Agent执行中
+    note right of REFLECTING: LLM评估质量
+    note right of AGGREGATING: 结果汇总
+        </pre>
+    </div>
+
+    <!-- 图6: 数据流向 -->
+    <div class="diagram-container">
+        <div class="diagram-title">📊 图6: 数据存储与消息流</div>
+        <pre class="mermaid">
+flowchart TB
+    subgraph EXTERNAL["📤 外部系统"]
+        USER[👤 用户]
+        MONITOR[📊 Grafana]
+    end
+
+    subgraph STORAGE["💾 存储层"]
+        REDIS[(Redis<br/>任务队列)]
+        DISK[(磁盘<br/>持久化)]
+    end
+
+    subgraph MESSAGE["📨 消息总线"]
+        MB[Message Bus<br/>事件发布/订阅]
+    end
+
+    USER -->|HTTP| API[API Server]
+    API -->|读写| REDIS
+    REDIS -->|异步| WORKER[Background Worker]
+    WORKER -->|发布| MB
+    MB -->|订阅| AGENTS[Agent Workers]
+    AGENTS -->|结果| REDIS
+    DISK -->|备份| REDIS
+
+    MB -->|指标| METRICS[Metrics Collector]
+    METRICS -->|数据| REDIS
+    MONITOR -->|拉取| REDIS
+
+    style USER fill:#e3f2fd,stroke:#1976d2
+    style REDIS fill:#e8f5e9,stroke:#388e3c
+    style MB fill:#fff3e0,stroke:#f57c00
+    style MONITOR fill:#fce4ec,stroke:#c2185b
+        </pre>
+    </div>
+
+    <script>
+        mermaid.initialize({
+            startOnLoad: true,
+            theme: 'default',
+            flowchart: {
+                useMaxWidth: true,
+                htmlLabels: true,
+                curve: 'basis'
+            }
+        });
+    </script>
+</body>
+</html>

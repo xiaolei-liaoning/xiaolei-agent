@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>两种多Agent架构优化方案</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #f0f2f5; font-family: -apple-system, "Microsoft YaHei", sans-serif; padding: 40px; color: #333; }
+  .container { max-width: 1400px; margin: 0 auto; }
+  h1 { text-align: center; font-size: 28px; margin-bottom: 8px; color: #1a1a2e; }
+  .subtitle { text-align: center; font-size: 14px; color: #666; margin-bottom: 40px; }
+
+  .section { background: #fff; border-radius: 12px; padding: 32px; margin-bottom: 24px; box-shadow: 0 2px 12px rgba(0,0,0,0.08); }
+  .section-title { font-size: 20px; font-weight: 600; margin-bottom: 12px; display: flex; align-items: center; gap: 10px; }
+  .section-title .num { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%; font-size: 14px; font-weight: 700; color: #fff; }
+
+  .issue-list { list-style: none; }
+  .issue-list li { padding: 10px 0; border-bottom: 1px solid #f0f0f0; display: flex; gap: 10px; align-items: flex-start; }
+  .issue-list li:last-child { border: none; }
+  .issue-icon { font-size: 16px; flex-shrink: 0; margin-top: 2px; }
+  .issue-label { display: inline-block; padding: 1px 8px; border-radius: 3px; font-size: 11px; font-weight: 500; margin-right: 6px; flex-shrink: 0; }
+  .label-critical { background: #ffe0e0; color: #c62828; }
+  .label-high { background: #fff3e0; color: #e65100; }
+  .label-medium { background: #fff8e1; color: #f57f17; }
+  .label-low { background: #e8f5e9; color: #2e7d32; }
+  .label-v1 { background: #fce4ec; color: #ad1457; }
+  .label-v2 { background: #e8e0ff; color: #5e35b1; }
+  .label-both { background: #e0f2f1; color: #00695c; }
+
+  .opt-box { background: #f8f9ff; border: 1px solid #d0d4ff; border-radius: 8px; padding: 16px; margin: 12px 0; }
+  .opt-box h4 { color: #3949ab; margin-bottom: 6px; font-size: 14px; }
+  .opt-box p { font-size: 13px; color: #555; line-height: 1.6; }
+  .opt-box code { background: #eef0ff; padding: 1px 6px; border-radius: 3px; font-size: 12px; }
+
+  .mermaid-wrap { overflow-x: auto; margin: 16px 0; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13px; }
+  th, td { padding: 10px 14px; border: 1px solid #e0e0e0; text-align: left; }
+  th { background: #f5f5f5; font-weight: 600; white-space: nowrap; }
+  tr:hover { background: #fafafa; }
+  .phase-header { background: #e3f2fd; font-weight: 600; }
+
+  .tag { display: inline-block; padding: 1px 8px; border-radius: 3px; font-size: 11px; font-weight: 500; }
+  .tag-v1 { background: #fce4ec; color: #ad1457; }
+  .tag-v2 { background: #e8e0ff; color: #5e35b1; }
+  .tag-both { background: #e0f2f1; color: #00695c; }
+
+  .metric-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; margin: 16px 0; }
+  .metric-card { background: #fafafa; border: 1px solid #eee; border-radius: 8px; padding: 14px; text-align: center; }
+  .metric-value { font-size: 22px; font-weight: 700; color: #1a1a2e; }
+  .metric-label { font-size: 12px; color: #888; margin-top: 4px; }
+  .metric-good { color: #2e7d32; }
+  .metric-bad { color: #c62828; }
+  .metric-warn { color: #e65100; }
+
+  .arch-compare { display: flex; gap: 16px; margin: 16px 0; }
+  .arch-col { flex: 1; border-radius: 8px; padding: 16px; }
+  .arch-col h4 { margin-bottom: 8px; font-size: 14px; display: flex; align-items: center; gap: 6px; }
+  .arch-col ul { font-size: 13px; line-height: 1.8; padding-left: 18px; }
+  .arch-v1 { background: #fff5f5; border: 1px solid #ffcdd2; }
+  .arch-v2 { background: #f5f0ff; border: 1px solid #d1c4e9; }
+
+  .footer { text-align: center; font-size: 12px; color: #999; margin-top: 32px; padding: 20px; border-top: 1px solid #eee; }
+  @media (max-width: 768px) { body { padding: 16px; } .section { padding: 16px; } .arch-compare { flex-direction: column; } }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>两种多Agent架构优化方案</h1>
+<p class="subtitle">基于代码深度分析 · 问题诊断 + 优化路径</p>
+
+<!-- ============================= 概览 ============================= -->
+<div class="section">
+  <div class="section-title"><span class="num" style="background:#455a64;">0</span> 当前架构诊断概览</div>
+
+  <div class="metric-grid">
+    <div class="metric-card">
+      <div class="metric-value metric-bad">~96KB</div>
+      <div class="metric-label">intelligent_scheduler.py 单体大小</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-value metric-warn">3 次</div>
+      <div class="metric-label">LLM 断线重试次数后降级</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-value">5 种</div>
+      <div class="metric-label">协作策略（但只有2种有实质性实现）</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-value metric-good">0 个</div>
+      <div class="metric-label">持久化 Agent 记忆机制</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-value metric-bad">~79KB</div>
+      <div class="metric-label">base_agent.py 单体大小</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-value metric-bad">~74KB</div>
+      <div class="metric-label">strategies.py（含反射逻辑）大小</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-value metric-warn">~39KB</div>
+      <div class="metric-label">agent_prompts.py 硬编码提示词</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-value metric-bad">Mock</div>
+      <div class="metric-label">V1 agent_system.py 模拟实现</div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================= V1 问题 ============================= -->
+<div class="section">
+  <div class="section-title"><span class="num" style="background:#c62828;">1</span> <span class="tag tag-v1">V1 角色分工型</span> — 问题诊断</div>
+
+  <ul class="issue-list">
+    <li>
+      <span class="issue-icon">🔴</span>
+      <div>
+        <span class="issue-label label-critical">致命</span>
+        <strong>调度器单点瓶颈 + 单点故障</strong>
+        <p style="font-size:13px;color:#666;margin-top:4px;">AgentScheduler 是唯一的入口和分发点，所有任务经过它。它挂了整个系统瘫痪。无冗余、无备份。</p>
+        <p style="font-size:12px;color:#999;">文件: <code>core/agent_architecture.md</code></p>
+      </div>
+    </li>
+    <li>
+      <span class="issue-icon">🔴</span>
+      <div>
+        <span class="issue-label label-critical">致命</span>
+        <strong>Mock 实现无实际价值</strong>
+        <p style="font-size:13px;color:#666;margin-top:4px;"><code>agent_system.py</code> 中 StrategistAgent/ExecutorAgent/ResearcherAgent 全是模拟实现，用字符串匹配代替实际 LLM 推理。<code>Reflector</code> 用关键词匹配推测失败原因。不能用于生产。</p>
+        <p style="font-size:12px;color:#999;">文件: <code>core/agent_system.py:106-333</code></p>
+      </div>
+    </li>
+    <li>
+      <span class="issue-icon">🟠</span>
+      <div>
+        <span class="issue-label label-high">严重</span>
+        <strong>无 Agent 间通信</strong>
+        <p style="font-size:13px;color:#666;margin-top:4px;">调度器单向分发任务给 Agent，Agent 之间不能互相通信。信息孤岛，无法协作解决复杂问题。</p>
+      </div>
+    </li>
+    <li>
+      <span class="issue-icon">🟠</span>
+      <div>
+        <span class="issue-label label-high">严重</span>
+        <strong>固定角色不可扩展</strong>
+        <p style="font-size:13px;color:#666;margin-top:4px;">5 个 Agent 角色固定（检查/爬虫/漏洞/总结/前端），需要新增角色时必须修改调度器核心代码。</p>
+      </div>
+    </li>
+    <li>
+      <span class="issue-icon">🟡</span>
+      <div>
+        <span class="issue-label label-medium">一般</span>
+        <strong>死代码/空壳模块</strong>
+        <p style="font-size:13px;color:#666;margin-top:4px;"><code>agent_coordinator.py</code>、<code>multi_agent_system.py</code> 都是向后兼容空壳。核心逻辑委托给 V2，但入口不清。</p>
+        <p style="font-size:12px;color:#999;">文件: <code>core/agent_coordinator.py</code>, <code>core/multi_agent_system.py</code></p>
+      </div>
+    </li>
+    <li>
+      <span class="issue-icon">🟡</span>
+      <div>
+        <span class="issue-label label-medium">一般</span>
+        <strong>无失败处理机制</strong>
+        <p style="font-size:13px;color:#666;margin-top:4px;">Agent 执行失败后无自动重试、无降级、无熔断。"单 Agent 故障不影响其他" 是 feature 也是 bug — 故障 Agent 的任务直接丢失。</p>
+      </div>
+    </li>
+  </ul>
+</div>
+
+<!-- ============================= V2 问题 ============================= -->
+<div class="section">
+  <div class="section-title"><span class="num" style="background:#5e35b1;">2</span> <span class="tag tag-v2">V2 智能协作型</span> — 问题诊断</div>
+
+  <ul class="issue-list">
+    <li>
+      <span class="issue-icon">🔴</span>
+      <div>
+        <span class="issue-label label-critical">致命</span>
+        <strong>单体文件过大：职责未分离</strong>
+        <p style="font-size:13px;color:#666;margin-top:4px;"><code>intelligent_scheduler.py</code> (96KB) 集成了任务理解、复杂度评估、资源评估、Agent 匹配、模式选择、流程编排、结果聚合。任何一处修改风险波及全模块。<code>base_agent.py</code> (79KB) 同理。</p>
+        <p style="font-size:12px;color:#999;">建议按职责拆分为 4-5 个独立的调度子模块</p>
+      </div>
+    </li>
+    <li>
+      <span class="issue-icon">🔴</span>
+      <div>
+        <span class="issue-label label-critical">致命</span>
+        <strong>协作策略双路执行混乱</strong>
+        <p style="font-size:13px;color:#666;margin-top:4px;"><code>TaskExecutor.execute()</code> 遍历 <code>assigned_agents</code> 直接调用 <code>agent.act()</code>，但 <code>PipelineStrategy</code>/<code>MasterSlaveStrategy</code> 也有自己的 <code>execute()</code> 和 <code>_execute_agent_task()</code>。调度器分配的协作模式在 TaskExecutor 中被忽略 — 两条路径互不感知。</p>
+        <p style="font-size:12px;color:#999;">文件: <code>infrastructure/task_executor.py:55-80</code> vs <code>orchestration/collaboration/strategies.py</code></p>
+      </div>
+    </li>
+    <li>
+      <span class="issue-icon">🟠</span>
+      <div>
+        <span class="issue-label label-high">严重</span>
+        <strong>AgentPool 形同虚设</strong>
+        <p style="font-size:13px;color:#666;margin-top:4px;"><code>SimpleAgentPool</code> 就是一个包装的 <code>dict</code>。无健康检查、无负载感知、无自动伸缩、无心跳检测。<code>acquire()</code> 返回第一个可用 Agent，不做任何择优。</p>
+        <p style="font-size:12px;color:#999;">文件: <code>infrastructure/agent_pool.py</code>，仅 59 行</p>
+      </div>
+    </li>
+    <li>
+      <span class="issue-icon">🟠</span>
+      <div>
+        <span class="issue-label label-high">严重</span>
+        <strong>LLM 降级策略脆弱</strong>
+        <p style="font-size:13px;color:#666;margin-top:4px;">Mind.think() 3 次重试后降级到 <code>_think_simulated()</code>，但模拟思考返回的 plan 和 reasoning 全是占位字符串，无法用于实际执行。LLM 挂了系统等于废了。</p>
+        <p style="font-size:12px;color:#999;">文件: <code>agents/base/base_agent.py:237-264</code></p>
+      </div>
+    </li>
+    <li>
+      <span class="issue-icon">🟠</span>
+      <div>
+        <span class="issue-label label-high">严重</span>
+        <strong>结果聚合是浅拼接</strong>
+        <p style="font-size:13px;color:#666;margin-top:4px;"><code>_aggregate_slave_results()</code> 把所有结果 <code>list.append</code> 到一起返回。无冲突消解、无去重、无质量评分、无跨 Agent 一致性校验。</p>
+        <p style="font-size:12px;color:#999;">文件: <code>strategies.py:348-360</code></p>
+      </div>
+    </li>
+    <li>
+      <span class="issue-icon">🟡</span>
+      <div>
+        <span class="issue-label label-medium">一般</span>
+        <strong>调度模式选择偏差</strong>
+        <p style="font-size:13px;color:#666;margin-top:4px;">测试报告发现：调度器只看复杂度数值，忽略 task keyword 语义，导致 pipeline 任务（复杂度 0.4）被误配为 hybrid 模式。</p>
+        <p style="font-size:12px;color:#999;">文件: <code>两模式测试报告.md:75-76</code></p>
+      </div>
+    </li>
+    <li>
+      <span class="issue-icon">🟡</span>
+      <div>
+        <span class="issue-label label-medium">一般</span>
+        <strong>无跨会话记忆持久化</strong>
+        <p style="font-size:13px;color:#666;margin-top:4px;">Agent 的短期/长期/情景记忆全部在内存中，重启后丢失。KEPA 闭环没有真实的"学习→沉淀"存储后端。</p>
+      </div>
+    </li>
+    <li>
+      <span class="issue-icon">🟡</span>
+      <div>
+        <span class="issue-label label-medium">一般</span>
+        <strong>MCP 工具缓存重建</strong>
+        <p style="font-size:13px;color:#666;margin-top:4px;"><code>_build_mcp_tool_cache()</code> 每次启动时扫描全部 mcp 目录，不持久化，不增量更新。大项目启动慢。</p>
+      </div>
+    </li>
+    <li>
+      <span class="issue-icon">🟢</span>
+      <div>
+        <span class="issue-label label-low">轻微</span>
+        <strong>大量 JSON 序列化/反序列化</strong>
+        <p style="font-size:13px;color:#666;margin-top:4px;">Agent 间通信、任务结果传递频繁 <code>json.dumps()/loads()</code>。高并发下是 CPU 浪费。缺少 typed message 传递。</p>
+      </div>
+    </li>
+    <li>
+      <span class="issue-icon">🟢</span>
+      <div>
+        <span class="issue-label label-low">轻微</span>
+        <strong>日志噪音大</strong>
+        <p style="font-size:13px;color:#666;margin-top:4px;">大量 <code>logger.info</code> + 手写 <code>[DEBUG]</code> 日志混在一起。TaskExecutor 有 7 行 <code>[DEBUG]</code> 前缀的临时调试日志未清理。</p>
+        <p style="font-size:12px;color:#999;">文件: <code>infrastructure/task_executor.py:56-73</code></p>
+      </div>
+    </li>
+  </ul>
+</div>
+
+<!-- ============================= V1 优化方案 ============================= -->
+<div class="section">
+  <div class="section-title"><span class="num" style="background:#c62828;">3</span> <span class="tag tag-v1">V1 优化方案</span> — 轻量级升级路径</div>
+
+  <p style="font-size:13px;color:#666;margin-bottom:16px;">V1 的核心问题在架构层面（单体调度器、无通信、Mock），修补意义有限。建议做"最小可行升级"后迁移到 V2：</p>
+
+  <div class="opt-box">
+    <h4>优化 1：替换 mock 为真实 LLM 调用 ✦ P0</h4>
+    <p>将 <code>agent_system.py</code> 中的 <code>decompose_task()</code>、<code>execute_task()</code> 等模拟方法改为调用 LLM。复用 <code>core/engine/llm_backend.py</code> 中的 <code>LLMRouter</code>。去除关键词模式匹配和占位 JSON 响应。</p>
+    <p style="margin-top:8px;font-size:12px;color:#888;">文件: <code>agent_system.py:106-134</code>, <code>147-176</code></p>
+  </div>
+
+  <div class="opt-box">
+    <h4>优化 2：引入 Agent 间消息总线 ✦ P1</h4>
+    <p>V1 有 <code>agent_communication.py</code> 定义的 <code>AgentCommunicationCenter</code>（主题订阅/发布/请求-响应），但 V1 的 Agent 从未使用它。将 V1 Agent 接入该通信中心，实现去调度器的点对点协作。</p>
+    <p style="margin-top:8px;font-size:12px;color:#888;">文件: <code>agent_communication.py</code> (已有基础设施)</p>
+  </div>
+
+  <div class="opt-box">
+    <h4>优化 3：移除空壳模块 + 统一入口 ✦ P2</h4>
+    <p><code>agent_coordinator.py</code>、<code>multi_agent_system.py</code> 都是空壳委托到 V2。清理死代码，在 <code>__init__.py</code> 层做统一路由：V1 入口→直接报 deprecated 提示迁移到 V2。</p>
+  </div>
+
+  <div class="mermaid-wrap">
+<pre class="mermaid">
+flowchart LR
+  subgraph Current["当前架构"]
+    direction TB
+    S[AgentScheduler]
+    A1[CheckerAgent<br/><small>Mock实现</small>]
+    A2[ScraperAgent<br/><small>Mock实现</small>]
+    S --> A1 & A2
+  end
+
+  subgraph After["优化后"]
+    direction TB
+    S2[AgentScheduler<br/><small>+LLM路由</small>]
+    A1r[CheckerAgent<br/><small>LLM真实执行</small>]
+    A2r[ScraperAgent<br/><small>LLM真实执行</small>]
+    Comm[AgentCommCenter<br/><small>消息总线</small>]
+    S2 --> A1r & A2r
+    A1r <--> Comm
+    A2r <--> Comm
+    A1r <--> A2r
+  end
+
+  Current -->|"1.替换Mock 2.接入总线"| After
+  style Current fill:#fff0f0
+  style After fill:#f0fff0
+</pre>
+  </div>
+</div>
+
+<!-- ============================= V2 优化方案 ============================= -->
+<div class="section">
+  <div class="section-title"><span class="num" style="background:#5e35b1;">4</span> <span class="tag tag-v2">V2 优化方案</span> — 核心优化</div>
+
+  <div class="opt-box">
+    <h4>优化 1：调度器拆分为微服务层 ✦ P0</h4>
+    <p>将 <code>intelligent_scheduler.py</code> (96KB) 拆分为独立模块：</p>
+    <table>
+      <tr><th>新模块</th><th>职责</th><th>原代码范围</th></tr>
+      <tr><td><code>task_analyzer.py</code></td><td>任务意图理解、复杂度/关键词/依赖分析</td><td>~200行</td></tr>
+      <tr><td><code>mode_selector.py</code></td><td>协作模式选择（历史统计→LLM→规则 三层决策）</td><td>~150行</td></tr>
+      <tr><td><code>capability_matcher.py</code></td><td>Agent 能力评分、负载感知、最优分配</td><td>~200行</td></tr>
+      <tr><td><code>execution_planner.py</code></td><td>执行顺序编排、依赖拓扑排序</td><td>~100行</td></tr>
+      <tr><td><code>result_aggregator.py</code></td><td>结果合并、冲突消解、去重、质量评分</td><td>~100行</td></tr>
+    </table>
+    <p style="margin-top:8px;">改造后调度器变为 <strong>协调器</strong>，只负责任务编排和子模块路由，不再是大而全的单体。</p>
+  </div>
+
+  <div class="opt-box">
+    <h4>优化 2：统一执行路径 — 消除双路混乱 ✦ P0</h4>
+    <p>当前有两套执行逻辑：</p>
+    <ul style="font-size:13px;margin:8px 0;padding-left:18px;line-height:1.8;">
+      <li>TaskExecutor.execute() — 直接调 agent.act()，忽略协作模式</li>
+      <li>PipelineStrategy/MasterSlaveStrategy.execute() — 各自实现执行逻辑</li>
+    </ul>
+    <p>优化方案：TaskExecutor 不再直接执行，而是 <strong>委托给选中的 CollaborationStrategy</strong>。TaskExecutor 只负责超时控制、状态更新、异常兜底。</p>
+    <p style="margin-top:8px;font-size:12px;">
+      <code>TaskExecutor.execute() → schedule_result.strategy.execute() → strategies.execute_with_agents()</code>
+    </p>
+  </div>
+
+  <div class="mermaid-wrap">
+<pre class="mermaid">
+flowchart TB
+  subgraph Before["改造前（单体 + 双路）"]
+    Sched["intelligent_scheduler.py (96KB)<br/>任务理解/模式选择/匹配/编排/聚合"]
+    TE["TaskExecutor<br/>直接调 agent.act()"]
+    CS["CollaborationStrategy<br/>自己实现 execute()"]
+    Sched --> TE
+    Sched --> CS
+    TE -..->|"冲突：两套执行逻辑"| CS
+  end
+
+  subgraph After2["改造后（分层 + 委托）"]
+    Coord["SchedulerCoordinator (轻量)"]
+    TA["TaskAnalyzer"]
+    MS["ModeSelector"]
+    CM["CapabilityMatcher"]
+    EP["ExecutionPlanner"]
+    RA["ResultAggregator"]
+    TE2["TaskExecutor<br/>只负责超时/状态/兜底"]
+    PS["PipelineStrategy<br/>专注流水线编排"]
+    MSS["MasterSlaveStrategy<br/>专注主从协作"]
+    RS["ReviewStrategy<br/>专注评审共识"]
+    Coord --> TA & MS & CM & EP
+    Coord --> TE2
+    TE2 --> PS & MSS & RS
+    PS & MSS & RS -.->|"结果写入"| RA
+  end
+
+  Before -->|"重构"| After2
+  style Before fill:#fff5f5
+  style After2 fill:#f5f0ff
+</pre>
+  </div>
+
+  <div class="opt-box">
+    <h4>优化 3：AgentPool 升级为生产级 ✦ P1</h4>
+    <p>替换 <code>SimpleAgentPool</code>（59行）为 <code>ProductionAgentPool</code>：</p>
+    <table>
+      <tr><th>能力</th><th>现状</th><th>目标</th></tr>
+      <tr><td>健康检查</td><td>无</td><td>每30秒心跳检测，连续3次失败标记为 unhealthy</td></tr>
+      <tr><td>负载感知</td><td>无</td><td>追踪每个 Agent 当前执行任务数 + 队列长度</td></tr>
+      <tr><td>自动伸缩</td><td>无</td><td>队列积压 > 阈值时自动创建新 Agent 实例</td></tr>
+      <tr><td>择优分配</td><td>返回第一个</td><td>综合评分：负载×0.4 + 成功率×0.3 + 匹配度×0.3</td></tr>
+      <tr><td>优雅下线</td><td>直接 remove</td><td>等待当前任务完成后再移除</td></tr>
+    </table>
+  </div>
+
+  <div class="opt-box">
+    <h4>优化 4：结果聚合智能升级 ✦ P1</h4>
+    <p>当前 <code>_aggregate_slave_results()</code> 做的是 <code>list.append</code>，需要升级为：</p>
+    <ul style="font-size:13px;margin:8px 0;padding-left:18px;line-height:1.8;">
+      <li><strong>去重</strong>：对多 Agent 返回的相似结果做相似度去重（编辑距离/embedding）</li>
+      <li><strong>冲突消解</strong>：Agent 结论不一致时，按置信度/历史成功率投票</li>
+      <li><strong>质量评分</strong>：每个结果附带 quality_score（0-1），低于阈值的丢弃</li>
+      <li><strong>总结摘要</strong>：对聚合后的结果调用 LLM 生成简洁摘要（而非返回原始 JSON 数组）</li>
+    </ul>
+  </div>
+
+  <div class="opt-box">
+    <h4>优化 5：跨会话记忆持久化 ✦ P2</h4>
+    <p>当前 Agent 记忆（短期/长期/情景）全部在内存中。引入持久化层：</p>
+    <ul style="font-size:13px;margin:8px 0;padding-left:18px;line-height:1.8;">
+      <li><strong>短期记忆</strong>：内存 in-memory（当前实现，无需改）</li>
+      <li><strong>长期记忆</strong>：SQLite 持久化，按 agent_id + task_type 索引</li>
+      <li><strong>情景记忆</strong>：嵌入向量存储，用于相似任务检索</li>
+      <li><strong>KEPA 闭环</strong>：Agent 反思提取的经验教训写入 long-term memory，下次同类任务自动注入 prompt</li>
+    </ul>
+    <p style="margin-top:8px;font-size:12px;color:#888;">可复用已有 infrastructure: <code>core/memory/</code> 和 <code>core/search/rag_search_engine.py</code></p>
+  </div>
+
+  <div class="opt-box">
+    <h4>优化 6：可观测性加入 ✦ P2</h4>
+    <p>清理 <code>logger.info</code> + 手写 <code>[DEBUG]</code> 的混乱局面：</p>
+    <ul style="font-size:13px;margin:8px 0;padding-left:18px;line-height:1.8;">
+      <li>引入结构化日志：每条日志带 <code>trace_id</code>、<code>agent_id</code>、<code>task_id</code>、<code>duration_ms</code></li>
+      <li>关键链路加 timing decorator：自动记录每个阶段的耗时</li>
+      <li>移除所有以 <code>[DEBUG]</code> 为前缀的手写日志（task_executor.py:56-73）</li>
+      <li>MonitorAgent 接入 Prometheus 指标 + 实时 Dashboard</li>
+    </ul>
+  </div>
+
+  <div class="opt-box">
+    <h4>优化 7：MCP 工具缓存预热 ✦ P2</h4>
+    <p>将 <code>_build_mcp_tool_cache()</code> 改为：启动时异步预热 + 文件缓存 + 文件监听增量更新。避免每次请求重建。</p>
+  </div>
+
+  <div class="opt-box">
+    <h4>优化 8：调度模式加入语义分析 ✦ P1</h4>
+    <p>在 <code>mode_selector.py</code> 的规则兜底层加入 keyword 语义分析。例如检测到 pipeline 关键词（"排序""依次""按步骤"）即使复杂度不高也走流水线模式。修复测试报告发现的问题。</p>
+    <p style="margin-top:8px;font-size:12px;color:#888;">来自测试报告：pipeline 任务（复杂度 0.4）被误配为 hybrid</p>
+  </div>
+
+</div>
+
+<!-- ============================= 分阶段实施路线图 ============================= -->
+<div class="section">
+  <div class="section-title"><span class="num" style="background:#00695c;">5</span> 分阶段实施路线图</div>
+
+  <table>
+    <tr class="phase-header"><td colspan="4">Phase 1：止血（2-3 天）</td></tr>
+    <tr><td>P0</td><td>清理 V1 Mock</td><td>替换 agent_system.py 中所有模拟实现为 LLM 调用</td><td><code>agent_system.py</code></td></tr>
+    <tr><td>P0</td><td>统一执行路径</td><td>TaskExecutor 委托给 CollaborationStrategy，消除双路执行</td><td><code>task_executor.py</code>, <code>strategies.py</code></td></tr>
+    <tr><td>P0</td><td>修复调度模式选择</td><td>加入 keyword 语义分析兜底，修复 0.4 pipeline 误判 hybrid</td><td><code>intelligent_scheduler.py</code></td></tr>
+    <tr><td>P1</td><td>消除死代码</td><td>标记 V1 空壳模块为 deprecated，统一入口路由</td><td><code>agent_coordinator.py</code>, <code>multi_agent_system.py</code></td></tr>
+
+    <tr class="phase-header"><td colspan="4">Phase 2：加固（4-5 天）</td></tr>
+    <tr><td>P0</td><td>调度器拆分</td><td>将 intelligent_scheduler.py 拆为 5 个子模块</td><td>新建 <code>orchestration/scheduler/</code></td></tr>
+    <tr><td>P1</td><td>AgentPool 升级</td><td>加入健康检查、负载感知、择优分配</td><td><code>infrastructure/agent_pool.py</code></td></tr>
+    <tr><td>P1</td><td>结果聚合升级</td><td>去重、冲突消解、质量评分、LLM 摘要</td><td><code>strategies.py</code></td></tr>
+    <tr><td>P1</td><td>V1 接入通信总线</td><td>V1 Agent 通过 AgentCommunicationCenter 实现点对点协作</td><td><code>agent_communication.py</code></td></tr>
+
+    <tr class="phase-header"><td colspan="4">Phase 3：增强（3-4 天）</td></tr>
+    <tr><td>P2</td><td>记忆持久化</td><td>SQLite 长期记忆 + 向量情景记忆 + KEPA 闭环存储</td><td><code>core/memory/</code>, <code>rag_search_engine.py</code></td></tr>
+    <tr><td>P2</td><td>可观测性</td><td>结构化日志 + timing + Prometheus + Dashboard</td><td><code>core/monitoring/</code></td></tr>
+    <tr><td>P2</td><td>MCP 缓存预热</td><td>异步预热 + 文件缓存 + 监听增量更新</td><td><code>base_agent.py _build_mcp_tool_cache()</code></td></tr>
+    <tr><td>P2</td><td>LLM 降级改进</td><td>降级时使用本地小模型（如 GLM-4-9B）而非模拟思考</td><td><code>base_agent.py mind.think()</code></td></tr>
+  </table>
+</div>
+
+<!-- ============================= 最终目标架构 ============================= -->
+<div class="section">
+  <div class="section-title"><span class="num" style="background:#1565c0;">6</span> 最终目标架构</div>
+
+  <div class="mermaid-wrap">
+<pre class="mermaid">
+flowchart TB
+  subgraph Target["优化后的统一多Agent系统"]
+    direction TB
+
+    subgraph Entry["入口层"]
+      API["API/WS 网关"]
+      Router["DeprecatedRouter<br/>V1→提示迁移"]
+    end
+
+    subgraph Orchestration["编排层（拆分为5子模块）"]
+      TA["TaskAnalyzer<br/>意图·复杂度·依赖"]
+      MS["ModeSelector<br/>三层决策选模式"]
+      CM["CapabilityMatcher<br/>评分·负载·分配"]
+      EP["ExecutionPlanner<br/>拓扑排序·编排"]
+      RA["ResultAggregator<br/>去重·消歧·评分·摘要"]
+      SchedCoord["SchedulerCoordinator<br/>... 轻量路由 ..."]
+      SchedCoord --> TA & MS & CM & EP
+    end
+
+    subgraph Execution["执行层"]
+      TE2["TaskExecutor<br/>超时·状态·异常兜底"]
+      PS2["PipelineStrategy"]
+      MSS2["MasterSlaveStrategy"]
+      RS2["ReviewStrategy"]
+      AS2["AuctionStrategy"]
+      HY2["HybridStrategy"]
+      TE2 --> PS2 & MSS2 & RS2 & AS2 & HY2
+    end
+
+    subgraph Pool["Agent 池（生产级）"]
+      AP["ProductionAgentPool<br/>健康检查·负载·伸缩·择优"]
+      Master["MasterAgent"]
+      Worker["WorkerAgent"]
+      Reviewer["ReviewerAgent"]
+      Expert["ExpertAgent"]
+      Monitor2["MonitorAgent"]
+      Coord2["CoordinatorAgent"]
+      AP --- Master & Worker & Reviewer & Expert & Monitor2 & Coord2
+    end
+
+    subgraph Memory2["记忆系统（持久化）"]
+      STM["ShortTermMemory<br/>in-memory"]
+      LTM["LongTermMemory<br/>SQLite"]
+      EPM["EpisodicMemory<br/>向量存储"]
+      KEPA2["KEPALoop<br/>反思→经验→沉淀→复用"]
+      STM --- LTM --- EPM --- KEPA2
+    end
+
+    subgraph Obs["可观测性"]
+      StructLog["结构化日志<br/>trace_id/agent_id/task_id"]
+      Metrics["Prometheus 指标<br/>QPS/延迟/成功率"]
+      Dashboard["实时 Dashboard"]
+    end
+
+    subgraph Comm2["通信基础设施"]
+      Bus["SharedBus（增强）<br/>发布/订阅"]
+      MsgQueue["AgentMsgQueue<br/>点对点消息"]
+      CB2["CircuitBreaker<br/>熔断+降级"]
+    end
+
+    API --> SchedCoord
+    PS2 & MSS2 & RS2 & AS2 & HY2 -.->|"获取Agent"| AP
+    PS2 & MSS2 & RS2 & AS2 & HY2 -.->|"读写记忆"| Memory2
+    Master & Worker & Reviewer -->|"reflect→"| KEPA2
+    PS2 & MSS2 & RS2 & AS2 & HY2 -->|"状态更新"| Bus
+    Master <-->|"消息通信"| MsgQueue
+    Worker <--> MsgQueue
+    PS2 & MSS2 -.->|"结果写入"| RA
+  end
+
+  style Target fill:#f5f0ff
+  style Entry fill:#fff5f5
+  style Orchestration fill:#e8e0ff
+  style Execution fill:#e0f2f1
+  style Pool fill:#e8f5e9
+  style Memory2 fill:#fff8e1
+  style Obs fill:#e3f2fd
+  style Comm2 fill:#fce4ec
+</pre>
+  </div>
+
+  <p style="font-size:13px;color:#666;margin-top:16px;">优化核心原则：<strong>不推倒重来</strong>，而是解剖巨型文件、理顺调用路径、补全缺失的能力。V1 做最小升级后引导到 V2，V2 做模块拆分和加固。</p>
+</div>
+
+<footer class="footer">小雷版小龙虾 Agent · 架构优化方案 · 2026-05-21</footer>
+</div>
+
+<script>
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'default',
+    themeVariables: {
+      fontFamily: '-apple-system, "Microsoft YaHei", sans-serif',
+      fontSize: '13px',
+    },
+    flowchart: { useMaxWidth: true, htmlLabels: true, curve: 'basis', padding: 16 },
+    securityLevel: 'loose',
+  });
+</script>
+</body>
+</html>

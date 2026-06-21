@@ -1,0 +1,85 @@
+/* Menu Items */
+"Bruce" = "布鲁斯";
+"Jazz" = "爵士";
+"Sounds" = "声音";
+"Provider" = "提供商";
+"Size" = "大小";
+"Style" = "样式";
+"Display" = "显示器";
+"Check for Updates..." = "检查更新...";
+"Quit" = "退出";
+
+/* Provider Names */
+"Claude" = "Claude";
+"Codex" = "Codex";
+"Copilot" = "Copilot";
+"Gemini" = "Gemini";
+"OpenCode" = "OpenCode";
+"OpenClaw" = "OpenClaw";
+
+/* Character Sizes */
+"Large" = "大";
+"Medium" = "中";
+"Small" = "小";
+
+/* Themes */
+"Peach" = "桃色";
+"Midnight" = "午夜";
+"Cloud" = "云朵";
+"Moss" = "苔藓";
+
+/* Display Options */
+"Auto (Main Display)" = "自动 (主显示器)";
+
+/* Advanced Settings */
+"Advanced Settings…" = "高级设置…";
+
+/* Tooltips & Accessibility */
+"Switch provider" = "切换提供商";
+"Refresh" = "刷新";
+"Copy" = "复制";
+
+/* Thinking Phrases */
+"hmm..." = "嗯...";
+"thinking..." = "思考中...";
+"one sec..." = "稍等...";
+"ok hold on" = "好的，等一下";
+"let me check" = "让我看看";
+"working on it" = "正在处理";
+"almost..." = "快了...";
+"bear with me" = "稍等片刻";
+"on it!" = "马上!";
+"gimme a sec" = "给我一秒";
+"brb" = "马上回来";
+"processing..." = "处理中...";
+"hang tight" = "稍等";
+"just a moment" = "等一下";
+"figuring it out" = "想办法中";
+"crunching..." = "运算中...";
+"reading..." = "阅读中...";
+"looking..." = "查看中...";
+"cooking..." = "准备中...";
+"vibing..." = "感受中...";
+"digging in" = "深入研究";
+"connecting dots" = "连接思路";
+"give me a sec" = "给我一点时间";
+"don't rush me" = "别催我";
+"calculating..." = "计算中...";
+"assembling…" = "组装中…";
+
+/* Completion Phrases */
+"done!" = "完成!";
+"all set!" = "搞定!";
+"ready!" = "准备好了!";
+"here you go" = "给你";
+"got it!" = "明白了!";
+"finished!" = "完成!";
+"ta-da!" = "变!";
+"voila!" = "瞧!";
+"boom!" = "砰!";
+"there ya go!" = "好了!";
+"check it out!" = "看看吧!";
+
+/* Terminal */
+"Ask %@..." = "问 %@...";
+"%@ session ended." = "%@ 会话已结束。";
