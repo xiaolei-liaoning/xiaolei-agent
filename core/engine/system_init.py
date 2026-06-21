@@ -20,6 +20,7 @@ class SystemInitializer:
         """执行全部初始化步骤。"""
         self.ctx.startup_time = time.time()
         await self._step_register_tools()
+        await self._step_init_memory()
         await self._step_init_dispatcher_and_plugins()
         await self._step_init_concurrent_processor()
         await self._step_init_task_planner()
@@ -37,7 +38,7 @@ class SystemInitializer:
             from core.multi_agent_v2.tools.tool_registry import get_tool_registry
             reg = get_tool_registry()
             await reg.discover_all()
-            logger.info("V2 ToolRegistry 工具发现完成 (%d 个)", reg.count())
+            logger.info("V2 ToolRegistry 工具发现完成 (%d 个)", reg.count)
         except Exception as e:
             logger.warning("V2 ToolRegistry 发现失败: %s", e)
         try:
@@ -47,24 +48,19 @@ class SystemInitializer:
         except Exception as e:
             logger.debug("ToolManager 注册跳过: %s", e)
         
-        # 注册 Agency Agents 角色匹配技能
+    async def _step_init_memory(self):
+        """初始化 V2 全量记忆系统（复用 V1 组件）
+
+        仅创建 MemoryMiddleware 容器。V1 记忆模块延迟到首次
+        ReAct 循环时按需加载，避免启动时触发 ChromaDB。
+        """
         try:
-            from core.skill_base import ToolRegistry
-            from core.skills.agency_agents.skill import (
-                AgencyAgentExecuteSkill,
-                AgencyAgentListSkill,
-                AgencyAgentMatcherSkill,
-            )
-            
-            ToolRegistry.register(AgencyAgentMatcherSkill())
-            ToolRegistry.register(AgencyAgentListSkill())
-            ToolRegistry.register(AgencyAgentExecuteSkill())
-            
-            from core.skills.agency_agents.handler import get_agency_agent_matcher
-            matcher = get_agency_agent_matcher()
-            logger.info("✅ Agency Agents 角色匹配系统已注册 (%d 个专家角色)", len(matcher.agents))
+            from core.multi_agent_v2.agents.memory_middleware import MemoryMiddleware
+            self.ctx.memory_middleware = MemoryMiddleware()
+            logger.info("V2 记忆中间件就绪（MemoryMiddleware 已创建）")
         except Exception as e:
-            logger.warning("Agency Agents 注册跳过: %s", e)
+            self.ctx.memory_middleware = None
+            logger.warning("MemoryMiddleware 初始化失败（降级: 无持久记忆）: %s", e)
 
     async def _step_init_dispatcher_and_plugins(self):
         try:
