@@ -30,12 +30,78 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
+# 系统初始化
+# ---------------------------------------------------------------------------
+from core.engine.system_init import SystemInitializer
+
+
+async def init_system() -> None:
+    await SystemInitializer(app, ctx).initialize()
+
+
+# ---------------------------------------------------------------------------
+# Lifespan 上下文管理器（替代旧的 on_event 模式）
+# ---------------------------------------------------------------------------
+from contextlib import asynccontextmanager
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """应用生命周期 — startup/yield/shutdown"""
+    await init_system()
+
+    # WebSocket 心跳检测
+    try:
+        from api.routes.chat_ws import manager
+        await manager.start_heartbeat_check()
+        logger.info("WebSocket 心跳检测已启动")
+    except Exception as e:
+        logger.warning("WebSocket 心跳检测启动失败: %s", e)
+
+    # 加载短期记忆
+    try:
+        from core.handlers import short_term_memory
+        from core.database import get_session, BFSContextNode
+        with get_session() as session:
+            user_ids = session.query(BFSContextNode.user_id).distinct().all()
+        for (user_id,) in user_ids:
+            short_term_memory.load_from_db(user_id)
+        logger.info("短期记忆加载完成，共恢复 %d 个用户的记忆", len(user_ids))
+    except Exception as e:
+        logger.warning("短期记忆加载失败（首次启动或数据库未就绪）: %s", e)
+
+    # 文件 watcher
+    try:
+        from core.watcher_setup import setup_file_watcher
+        setup_file_watcher(app)
+    except Exception as e:
+        logger.warning("文件watcher启动失败: %s", e)
+
+    yield   # ← 应用开始服务请求
+
+    # ── shutdown ──
+    try:
+        from api.routes.chat_ws import manager
+        await manager.stop_heartbeat_check()
+        logger.info("WebSocket 心跳检测已停止")
+    except Exception as e:
+        logger.warning("WebSocket 心跳检测停止失败: %s", e)
+
+    try:
+        from core.watcher_setup import shutdown_file_watcher
+        shutdown_file_watcher(app)
+    except Exception as e:
+        logger.warning("文件watcher停止失败: %s", e)
+
+
+# ---------------------------------------------------------------------------
 # FastAPI 应用
 # ---------------------------------------------------------------------------
 app = FastAPI(
     title="小雷版小龙虾 AI Agent",
     version="3.4.0",
     description="工业级 AI Agent 系统 - 意图识别 / 多步任务 / 工作流自动化 / 用户管理",
+    lifespan=lifespan,
 )
 
 # CORS — 放宽以支持 Live Server 开发
@@ -100,65 +166,6 @@ register_routes(app)
 # ---------------------------------------------------------------------------
 from api.pages import router as pages_router
 app.include_router(pages_router)
-
-# ---------------------------------------------------------------------------
-# 系统初始化
-# ---------------------------------------------------------------------------
-from core.engine.system_init import SystemInitializer
-
-
-async def init_system() -> None:
-    await SystemInitializer(app, ctx).initialize()
-
-
-@app.on_event("startup")
-async def startup_event() -> None:
-    await init_system()
-
-    # WebSocket 心跳检测
-    try:
-        from api.routes.chat_ws import manager
-        await manager.start_heartbeat_check()
-        logger.info("WebSocket 心跳检测已启动")
-    except Exception as e:
-        logger.warning("WebSocket 心跳检测启动失败: %s", e)
-
-    # 加载短期记忆
-    try:
-        from core.handlers import short_term_memory
-        from core.database import get_session, BFSContextNode
-        with get_session() as session:
-            user_ids = session.query(BFSContextNode.user_id).distinct().all()
-        for (user_id,) in user_ids:
-            short_term_memory.load_from_db(user_id)
-        logger.info("短期记忆加载完成，共恢复 %d 个用户的记忆", len(user_ids))
-    except Exception as e:
-        logger.warning("短期记忆加载失败（首次启动或数据库未就绪）: %s", e)
-
-    # 文件 watcher
-    try:
-        from core.watcher_setup import setup_file_watcher
-        setup_file_watcher(app)
-    except Exception as e:
-        logger.warning("文件watcher启动失败: %s", e)
-
-
-@app.on_event("shutdown")
-async def shutdown_event() -> None:
-    # WebSocket 心跳停止
-    try:
-        from api.routes.chat_ws import manager
-        await manager.stop_heartbeat_check()
-        logger.info("WebSocket 心跳检测已停止")
-    except Exception as e:
-        logger.warning("WebSocket 心跳检测停止失败: %s", e)
-
-    # 文件 watcher 停止
-    try:
-        from core.watcher_setup import shutdown_file_watcher
-        shutdown_file_watcher(app)
-    except Exception as e:
-        logger.warning("文件watcher停止失败: %s", e)
 
 # ---------------------------------------------------------------------------
 # 启动入口
