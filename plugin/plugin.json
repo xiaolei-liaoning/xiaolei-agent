@@ -11,27 +11,17 @@
 
   "skills": {
     "local_skills": [
-      "workflow_engine",
       "mcp_connector",
       "mcp_orchestrator"
     ],
     "guidance_skills": {
-      "source": "~/Desktop/claude/everything-claude-code-main/.agents/skills",
-      "system_skills": [
-        "update-config", "keybindings-help", "simplify",
-        "fewer-permission-prompts", "loop", "init", "review",
-        "security-review", "GenericAgent"
-      ]
+      "source": "",
+      "system_skills": []
     },
     "persona_skills": [
       "libai", "goddess", "first_love", "bestfriend",
       "linus_torvalds", "john_carmack"
     ]
-  },
-
-  "api_routes": {
-    "routes_dir": "api",
-    "enabled": ["skills", "agent_groups", "system", "chat"]
   },
 
   "config_files": {

@@ -322,6 +322,12 @@ class PluginLoader:
         guidance_cfg = skills_cfg.get("guidance_skills", {})
         source_path = guidance_cfg.get("source", "")
         
+        system_skills = guidance_cfg.get("system_skills", [])
+
+        # 无来源且无系统技能时跳过加载
+        if not source_path and not system_skills:
+            return 0
+
         # 验证路径
         if source_path:
             import os
