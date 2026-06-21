@@ -113,40 +113,30 @@ class MCPClientManager:
         return True
 
     async def auto_connect_local_servers(self):
-        """开机自启：自动连接所有可用的本地 MCP 服务器"""
+        """动态扫描 mcp/ 目录，自动连接所有 *_mcp_server.py 文件"""
         mcp_dir = os.path.join(os.path.dirname(__file__), "..", "..", "mcp")
         if not os.path.exists(mcp_dir):
             logger.warning(f"MCP 服务器目录不存在: {mcp_dir}")
             return
 
-        server_map = {
-            "fun-mcp": ("fun_mcp_server.py", "趣味MCP"),
-            "weather-mcp": ("weather_mcp_server.py", "天气MCP"),
-            "calculator-mcp": ("calculator_mcp_server.py", "计算器MCP"),
-            "file-ops-mcp": ("file_operations_mcp_server.py", "文件操作MCP"),
-            "text-processing-mcp": ("text_processing_mcp_server.py", "文本处理MCP"),
-            "web-scraper-mcp": ("web_scraper_mcp_server.py", "网页爬虫MCP"),
-            "data-analysis-mcp": ("data_analysis_mcp_server.py", "数据分析MCP"),
-            "gui-automation-mcp": ("gui_automation_mcp_server.py", "GUI自动化MCP"),
-            "sandbox-executor": ("sandbox_executor_mcp_server.py", "代码沙盒执行器"),
-            "web-search": ("web_search_mcp_server.py", "联网搜索"),
-        }
+        for fn in sorted(os.listdir(mcp_dir)):
+            if not fn.endswith("_mcp_server.py"):
+                continue
+            server_name = fn.replace("_mcp_server.py", "").replace("_", "-")
+            script_path = os.path.join(mcp_dir, fn)
+            if not os.path.exists(script_path):
+                continue
 
-        for name, (script, label) in server_map.items():
-            script_path = os.path.join(mcp_dir, script)
-            if os.path.exists(script_path):
-                try:
-                    await self.connect_server(
-                        name=name,
-                        command="python3",
-                        args=[script_path],
-                        cwd=mcp_dir,
-                    )
-                    logger.info(f"  ✅ {label}服务器就绪")
-                except Exception as e:
-                    logger.warning(f"  ⚠️ {label}服务器启动失败: {e}")
-            else:
-                logger.debug(f"  - {label}服务器文件不存在，跳过: {script_path}")
+            try:
+                await self.connect_server(
+                    name=server_name,
+                    command="python3",
+                    args=[script_path],
+                    env={"PYTHONPATH": os.path.dirname(mcp_dir)},
+                )
+                logger.info(f"  ✅ {server_name} 服务器就绪")
+            except Exception as e:
+                logger.warning(f"  ⚠️ {server_name} 服务器启动失败: {e}")
 
     # ── 连接管理 ──────────────────────────────────────────────────────────────
 
@@ -317,19 +307,19 @@ class MCPClientManager:
                 if conn.initialized:
                     return conn.process
                 # 未初始化 → 重新初始化
-            resp = await self._send_request(
-                conn.process, "initialize", {
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": {},
-                    "clientInfo": {"name": "xiaolei", "version": "3.3.1"},
-                }, request_id=1, server_name=name
-            )
-            if resp and "result" in resp:
-                await self._send_notification(conn.process, "notifications/initialized", server_name=name)
-                conn.initialized = True
-                return conn.process
-            else:
-                await self._cleanup_connection(name)
+                resp = await self._send_request(
+                    conn.process, "initialize", {
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {},
+                        "clientInfo": {"name": "xiaolei", "version": "3.3.1"},
+                    }, request_id=1, server_name=name
+                )
+                if resp and "result" in resp:
+                    await self._send_notification(conn.process, "notifications/initialized", server_name=name)
+                    conn.initialized = True
+                    return conn.process
+                else:
+                    await self._cleanup_connection(name)
         else:
             await self._cleanup_connection(name)
 

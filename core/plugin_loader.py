@@ -361,25 +361,36 @@ class PluginLoader:
                 if not cfg.get("auto_connect", True):
                     continue
 
-                args = cfg.get("args", [])
-                adjusted_args = []
-                for arg in args:
-                    if arg.startswith("mcp/") and not arg.startswith("plugin/mcp/"):
-                        adjusted_args.append(arg.replace("mcp/", "plugin/mcp/", 1))
-                    else:
-                        adjusted_args.append(arg)
-
-                try:
-                    from core.mcp.awesome_mcp_manager import awesome_mcp_manager
-                    result = await awesome_mcp_manager.quick_connect(name)
-                    if result.get("success"):
+                # 双路径 — 有 command 的是本地服务器，无 command 的是外部
+                if cfg.get("command"):
+                    # 本地 MCP 服务器 → 用 mcp_client.connect_server() 直接注册
+                    args = cfg.get("args", [])
+                    try:
+                        from core.mcp.mcp_client import mcp_client
+                        await mcp_client.connect_server(
+                            name=name,
+                            command=cfg["command"],
+                            args=args,
+                            env={"PYTHONPATH": str(PLUGIN_DIR.parent)},
+                        )
                         self.loaded_mcp_servers.append(name)
                         results.append(name)
                         logger.debug(f"  ✅ MCP: {name}")
-                    else:
-                        logger.warning(f"  ⚠️ MCP {name} 连接失败: {result.get('message')}")
-                except Exception as e:
-                    logger.warning(f"  ⚠️ MCP {name} 异常: {e}")
+                    except Exception as e:
+                        logger.warning(f"  ⚠️ MCP {name} 配置失败: {e}")
+                else:
+                    # 外部 MCP 服务器 → awesome_mcp_manager.quick_connect()
+                    try:
+                        from core.mcp.awesome_mcp_manager import awesome_mcp_manager
+                        result = await awesome_mcp_manager.quick_connect(name)
+                        if result.get("success"):
+                            self.loaded_mcp_servers.append(name)
+                            results.append(name)
+                            logger.debug(f"  ✅ MCP: {name}")
+                        else:
+                            logger.warning(f"  ⚠️ MCP {name} 连接失败: {result.get('message')}")
+                    except Exception as e:
+                        logger.warning(f"  ⚠️ MCP {name} 异常: {e}")
 
         except Exception as e:
             logger.error(f"❌ MCP 加载失败: {e}")
