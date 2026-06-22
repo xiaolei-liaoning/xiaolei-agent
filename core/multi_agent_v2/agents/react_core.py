@@ -192,13 +192,28 @@ class ReActCoreMiddleware(BaseMiddleware):
                 from core.multi_agent_v2.tools.tool_registry import get_tool_registry
                 reg = get_tool_registry()
                 try:
-                    filtered = await reg.get_tools_for_task(
-                        ctx.task_description,
-                        max_tools=20,
-                        allowed=ctx.allowed_tools,
-                        disallowed=ctx.disallowed_tools,
-                        tool_preference=ctx.tool_preference,
-                    )
+                    # 项目分析任务：白名单过滤，排除无关工具
+                    task_lower = ctx.task_description.lower()
+                    analysis_kw = ["分析项目", "项目结构", "项目目录", "项目分析"]
+                    if any(kw in task_lower for kw in analysis_kw):
+                        analysis_tool_names = {"analyze_project", "search_code", "read_file", "search_files"}
+                        filtered = [t for t in tool_cache if t.name in analysis_tool_names]
+                        if not filtered:
+                            filtered = await reg.get_tools_for_task(
+                                ctx.task_description,
+                                max_tools=20,
+                                allowed=ctx.allowed_tools,
+                                disallowed=ctx.disallowed_tools,
+                                tool_preference=ctx.tool_preference,
+                            )
+                    else:
+                        filtered = await reg.get_tools_for_task(
+                            ctx.task_description,
+                            max_tools=20,
+                            allowed=ctx.allowed_tools,
+                            disallowed=ctx.disallowed_tools,
+                            tool_preference=ctx.tool_preference,
+                        )
                 except Exception:
                     filtered = tool_cache[:20]
                 ctx._filtered_tools = filtered
