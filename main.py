@@ -58,17 +58,7 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("WebSocket 心跳检测启动失败: %s", e)
 
-    # 加载短期记忆
-    try:
-        from core.handlers import short_term_memory
-        from core.database import get_session, BFSContextNode
-        with get_session() as session:
-            user_ids = session.query(BFSContextNode.user_id).distinct().all()
-        for (user_id,) in user_ids:
-            short_term_memory.load_from_db(user_id)
-        logger.info("短期记忆加载完成，共恢复 %d 个用户的记忆", len(user_ids))
-    except Exception as e:
-        logger.warning("短期记忆加载失败（首次启动或数据库未就绪）: %s", e)
+    # 加载短期记忆（文件式存储，无需显式加载，按需读取）
 
     # 文件 watcher
     try:

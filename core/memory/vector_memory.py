@@ -39,6 +39,7 @@ import math
 import re
 import threading
 import time
+import uuid
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
@@ -328,7 +329,7 @@ def get_bge_embedding_function():
 
 
 # ─── 支持的记忆类别 ──────────────────────────────────────────────────────────
-VALID_CATEGORIES = {"general", "fact", "preference", "experience"}
+VALID_CATEGORIES = {"general", "fact", "preference", "experience", "insight"}
 
 
 class VectorMemoryStore:
@@ -365,7 +366,9 @@ class VectorMemoryStore:
             settings=Settings(anonymized_telemetry=False),
         )
         self._collection = None
-        self._ensure_initialized()
+        # ponytail: 嵌入模型在后台线程初始化，不阻塞启动
+        self._embedding_ready = False
+        self._start_embedding_init()
 
         # 批量写入缓冲区
         self._memory_buffer: List[tuple] = []
@@ -423,8 +426,12 @@ class VectorMemoryStore:
                 logger.info("备份线程已优雅关闭")
 
     # ── 集合初始化 ───────────────────────────────────────────────────────────
-    def _ensure_initialized(self):
-        """确保集合存在（使用 text2vec embedding）"""
+    def _ensure_collection(self):
+        """同步初始化 ChromaDB 集合（会在首次时加载 embedding 模型）
+
+        单独暴露供后台线程调用。如果调用时模型还未就绪，
+        会同步等待模型下载完成。业务代码应使用 _start_embedding_init。
+        """
         try:
             embed_fn = get_bge_embedding_function()
             try:
@@ -437,15 +444,32 @@ class VectorMemoryStore:
                     embedding_function=embed_fn,
                 )
                 logger.info("ChromaDB 集合 long_term_memory 已创建")
+            self._embedding_ready = True
             logger.info("ChromaDB 集合 long_term_memory 就绪")
         except Exception as e:
             logger.error("ChromaDB 初始化失败: %s", e)
             self._collection = None
 
+    def _start_embedding_init(self):
+        """后台线程：异步加载 embedding 模型，不阻塞服务启动
+
+        线程运行期间 add_memory / search_memories 会静默跳过
+        （短期记忆正常工作）。缓冲中的写入会在集合就绪后
+        由 _flush_buffer 清空。
+        """
+        def _init_worker():
+            self._ensure_collection()
+            # 集合就绪后刷入缓冲中的待写入数据
+            self._flush_buffer()
+
+        t = threading.Thread(target=_init_worker, daemon=True, name="embedding-init")
+        t.start()
+        logger.debug("后台 embedding 初始化线程已启动")
+
     # ── 写入 ─────────────────────────────────────────────────────────────────
     def add_memory(
         self,
-        user_id: int,
+        user_id,
         content: str,
         category: str = "general",
         metadata: Dict[str, Any] = None,
@@ -469,7 +493,7 @@ class VectorMemoryStore:
             logger.warning("无效 category=%s, 将使用 general", category)
             category = "general"
 
-        memory_id = f"mem_{user_id}_{int(time.time() * 1000)}"
+        memory_id = f"mem_{user_id}_{uuid.uuid4().hex[:12]}"
         meta = metadata or {}
         meta.update(
             {
@@ -513,7 +537,7 @@ class VectorMemoryStore:
 
     # ── 检索 ─────────────────────────────────────────────────────────────────
     def search_memories(
-        self, query: str, user_id: int = None, top_k: int = 5
+        self, query: str, user_id=None, top_k: int = 5
     ) -> List[Dict[str, Any]]:
         """向量检索记忆（带 distance）
 
@@ -527,6 +551,9 @@ class VectorMemoryStore:
         """
         if not self._collection or not query or not query.strip():
             return []
+
+        # 搜索前自动刷入缓冲区
+        self._flush_buffer()
 
         where_filter: Dict[str, Any] = {}
         if user_id is not None:
@@ -566,6 +593,10 @@ class VectorMemoryStore:
         except Exception as e:
             logger.error("向量检索失败: %s", e)
             return []
+
+    def flush(self):
+        """强制刷入缓冲区（测试用）"""
+        self._flush_buffer()
 
     # ── 删除 / 统计 / 清空 ────────────────────────────────────────────────────
     def delete_memory(self, memory_id: str):
@@ -724,7 +755,7 @@ class VectorMemoryStore:
             shutil.copytree(backup_path, self.persist_dir)
 
             # 重新初始化
-            self._ensure_initialized()
+            self._ensure_collection()
             logger.info("向量存储从备份恢复成功: %s", backup_path)
             return True
         except Exception as e:

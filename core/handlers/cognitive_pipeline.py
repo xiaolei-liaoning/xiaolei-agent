@@ -162,6 +162,7 @@ class CognitivePipeline:
             "recent_messages": [],
             "reflection_history": self._reflection_history[-5:],
             "bfs_tree": None,
+            "vector_memories": [],
         }
 
         for attempt in [
@@ -173,6 +174,25 @@ class CognitivePipeline:
                 attempt[1]()
             except Exception as e:
                 logger.debug(f"上下文增强({attempt[0]})跳过: {e}")
+
+        # 新增：搜索向量记忆
+        try:
+            from ..memory.vector_memory import VectorMemoryStore
+            vm = VectorMemoryStore()
+            if vm._collection:
+                memories = vm.search_memories(
+                    query=message,
+                    user_id=str(self.user_id),
+                    top_k=5,
+                )
+                if memories:
+                    memory_parts = []
+                    for m in memories[:3]:
+                        content = m.get("content", "")
+                        memory_parts.append(content[:200])
+                    context["vector_memories"] = memory_parts
+        except Exception as e:
+            logger.debug("向量记忆搜索失败: %s", e)
 
         return context
 

@@ -8,13 +8,13 @@ logger = logging.getLogger(__name__)
 
 # 导入依赖
 from ..workflow.bfs_processor import get_bfs_processor
-from ..memory.short_term_memory import ShortTermMemoryManager
+from ..memory.short_term_memory import get_memory_manager
 
 # 全局BFS处理器实例（单例，所有调用共享）
 bfs_processor = get_bfs_processor()
 
-# 全局短时记忆管理器（支持分层树状索引 + BFS队列）
-short_term_memory = ShortTermMemoryManager(cache_size=50)
+# 使用全局单例（消除重复实例）
+short_term_memory = get_memory_manager()
 
 
 # 不需要BFS的技能类型（纯闲聊无需结构化上下文）
