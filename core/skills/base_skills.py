@@ -9,7 +9,9 @@
 """
 import logging
 import os
+import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import yaml
@@ -17,6 +19,7 @@ import yaml
 logger = logging.getLogger(__name__)
 BASE_CONFIG = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "config", "agents.yml")
 EXPERT_CONFIG = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "core", "skills", "agency_agents", "agents_config.yaml")
+AGENCY_AGENTS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "agency-agents-zh")
 
 
 @dataclass
@@ -39,14 +42,38 @@ class BaseSkill:
 
 # BaseSkill → 相关的 Expert 类别（缩小216个的匹配范围）
 BASE_TO_EXPERT_CATEGORIES = {
-    "web_scraper":    ["engineering", "specialized"],
-    "data_analyst":   ["engineering", "finance", "specialized"],
-    "deep_thinker":   ["specialized", "product", "engineering"],
-    "translator":     ["specialized"],
+    "project_analyzer": ["engineering", "specialized"],
+    "web_scraper":    ["engineering", "specialized", "marketing"],
+    "data_analyst":   ["engineering", "finance", "specialized", "supply_chain"],
+    "deep_thinker":   ["specialized", "product_design", "engineering", "strategy"],
+    "translator":     ["specialized", "support"],
     "weather_expert": ["specialized"],
-    "system_toolbox": ["engineering", "support"],
-    "creative":       ["design", "game_development", "marketing"],
+    "system_toolbox": ["engineering", "support", "security"],
+    "creative":       ["design", "game_development", "marketing", "paid_media"],
     "general":        [],
+}
+
+# YAML 分类名 → agency-agents-zh 目录名映射
+CATEGORY_TO_DIR = {
+    "engineering": "engineering",
+    "marketing": "marketing",
+    "product_design": "product",
+    "design": "design",
+    "finance": "finance",
+    "sales": "sales",
+    "game_development": "game-development",
+    "academic": "academic",
+    "spatial_computing": "spatial-computing",
+    "specialized": "specialized",
+    "project_management": "project-management",
+    "hr": "hr",
+    "legal": "legal",
+    "support": "support",
+    "supply_chain": "supply-chain",
+    "paid_media": "paid-media",
+    "testing": "testing",
+    "security": "security",
+    "strategy": "strategy",
 }
 
 
@@ -114,7 +141,12 @@ class SkillSystem:
         expert = await self._match_expert(task, base.id if base else "general")
         if expert:
             result.expert_name = expert.get("name", "")
-            result.expert_personality = f"你的专业方向是：{expert.get('description', '')[:300]}"
+            # 优先加载完整的 MD 角色定义，没有则用 YAML description
+            md_content = self._load_expert_md(expert)
+            if md_content:
+                result.expert_personality = md_content
+            else:
+                result.expert_personality = f"你的专业方向是：{expert.get('description', '')[:300]}"
 
         # Layer 3: Guidance
         guide = self._match_guidance(base.id if base else "general")
@@ -122,6 +154,38 @@ class SkillSystem:
             result.guidance = guide
 
         return result
+
+    def _load_expert_md(self, expert: dict) -> Optional[str]:
+        """从 agency-agents-zh 加载专家角色的完整 MD 定义
+
+        Args:
+            expert: 匹配到的专家角色 dict（含 id、category、name）
+
+        Returns:
+            MD 文件内容，如文件不存在则返回 None
+        """
+        expert_id = expert.get("id", "")
+        category = expert.get("category", "")
+        if not expert_id or not category or not os.path.isdir(AGENCY_AGENTS_DIR):
+            return None
+
+        # category → 目录名映射
+        dir_name = CATEGORY_TO_DIR.get(category, category.replace("_", "-"))
+        md_path = os.path.join(AGENCY_AGENTS_DIR, dir_name, f"{expert_id}.md")
+
+        if not os.path.isfile(md_path):
+            return None
+
+        try:
+            with open(md_path, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+            if content:
+                logger.debug(f"📄 加载 Expert MD: {expert_id} ({len(content)} 字符)")
+                return content[:4000]  # ponytail: 截断防 prompt 溢出
+        except Exception as e:
+            logger.warning(f"加载 Expert MD 失败 {expert_id}: {e}")
+
+        return None
 
     async def _match_base(self, task: str) -> Optional[BaseSkill]:
         from core.engine.llm_backend import get_llm_router
@@ -136,8 +200,11 @@ class SkillSystem:
         return self.base_skills.get("general")
 
     async def _match_expert(self, task: str, base_id: str) -> Optional[dict]:
-        """只在 BaseSkill 相关的类别中匹配 Expert"""
+        """jieba 分词预筛 + LLM 精排：任务分词后逐词匹配描述，取 Top-4 交 LLM"""
         cats = BASE_TO_EXPERT_CATEGORIES.get(base_id, [])
+        # general 没有关联分类时回退到所有分类
+        if not cats and base_id == "general":
+            cats = list(self.experts.keys())
         candidates = []
         for cat in cats:
             candidates.extend(self.experts.get(cat, []))
@@ -149,17 +216,76 @@ class SkillSystem:
         if not router or not router.is_available():
             return None
 
-        # 候选太多时只取前 20 个
-        if len(candidates) > 20:
-            candidates = candidates[:20]
+        # ── 第 1 步：jieba 分词预筛 ──
+        import jieba
+        # 只用 jieba 分任务的词（短，0.2s 一次），不分析描述
+        raw_tokens = jieba.lcut(task)
+        # 过滤：中文词 2+字，英文词 3+字母，去重
+        task_words = set()
+        for w in raw_tokens:
+            w = w.strip()
+            if not w: continue
+            if re.match(r'^[一-龥]{2,}$', w):
+                task_words.add(w)
+            elif re.match(r'^[a-zA-Z]{3,}$', w):
+                task_words.add(w.lower())
+        task_lower = task.lower()
 
-        lines = [f"  {a.get('id','?')}: {a.get('emoji','')} {a.get('name','')} — {a.get('description','')[:60]}" for a in candidates]
-        prompt = f"任务：{task}\n\n从以下专家中选最匹配的 1 个：\n" + "\n".join(lines) + "\n\n只输出专家 ID："
-        resp = (await router.simple_chat(prompt, temperature=0.2, max_tokens=30) or "").strip().lower()
+        scored = []
         for a in candidates:
+            score = 0.0
+            desc = (a.get("description", "") or "")
+            desc_lower = desc.lower()
+            name = a.get("name", "")
+
+            # a) 分词中文词 → 描述子串匹配（每个词 1 分）
+            matched = set()
+            for w in task_words:
+                if w in desc:
+                    matched.add(w)
+                    score += 1.0
+            # b) 任务词 → YAML keywords 补刀
+            for kw in a.get("keywords", []):
+                if len(kw) >= 2 and kw.lower() in task_lower and kw not in matched:
+                    score += 0.5
+            # c) 角色名在任务中出现 → 强信号
+            if name and name.lower() in task_lower:
+                score += 2.0
+
+            if score > 0:
+                # 归一化分数：命中词数 / 任务总词数
+                norm = score / max(len(task_words), 1)
+                scored.append((norm, score, a))
+
+        if not scored:
+            return None
+
+        # 按归一化分降序取 Top-4
+        scored.sort(key=lambda x: (-x[0], -x[1]))
+        top = [a for _, _, a in scored[:4]]
+
+        # Top-1 领先明显 → 直接采纳
+        if len(scored) >= 2 and scored[0][0] - scored[1][0] >= 0.3:
+            logger.debug(f"Expert 规则强势命中: {scored[0][2].get('name')} (norm={scored[0][0]:.2f})")
+            return scored[0][2]
+
+        # ── 第 2 步：LLM 精排 — 从 Top-4 里选最匹配的 ──
+        lines = []
+        for a in top:
+            lines.append(f"  {a.get('emoji','👤')} {a.get('name','?')} — {(a.get('description','') or '')[:120]}")
+        prompt = (
+            f"任务：{task}\n\n"
+            f"从以下专家中选最匹配的 1 个：\n"
+            + "\n".join(lines) +
+            "\n\n仔细阅读任务和每个专家的描述，只输出专家 ID："
+        )
+        resp = (await router.simple_chat(prompt, temperature=0.1, max_tokens=30) or "").strip().lower()
+        for a in top:
             if a.get("id", "") in resp:
+                logger.debug(f"Expert LLM 精排选中: {a.get('name')}")
                 return a
-        return None
+        logger.debug(f"Expert LLM 精排无结果，降级为规则 Top-1: {scored[0][2].get('name')}")
+        return scored[0][2] if scored else None
 
     def _match_guidance(self, base_id: str) -> str:
         """根据 BaseSkill ID 找对应的 Guidance"""

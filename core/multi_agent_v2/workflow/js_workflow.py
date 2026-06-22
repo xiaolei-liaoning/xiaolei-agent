@@ -687,6 +687,8 @@ const logs = [];
 globalThis._globalTask = '';
 globalThis._prevResults = {{}};
 globalThis._agentCount = 0;
+globalThis._agentCalls = [];  // 跟踪每个 agent 调用用于协作图
+globalThis._dagEdges = [];    // 跟踪 DAG 边用于协作图
 
 // ── Budget 追踪（支持多模型） ──
 let _budgetSpent = 0;
@@ -731,6 +733,7 @@ globalThis.log = async function(msg) {{
 // ── agent() — 调用子 Agent（支持多模型路由、Resume 缓存） ──
 globalThis.agent = async function(prompt, opts = {{}}) {{
     const label = opts.label || `Agent #${{++globalThis._agentCount}}`;
+    globalThis._agentCalls.push({{label: label, prompt: ''+(prompt||'').substring(0,80), status: 'running', startTime: Date.now()}});
     console.log(`[Agent] ${{label}}${{opts.model ? ' [' + opts.model + ']' : ''}}: ${{String(prompt).substr(0, 100)}}`);
 
     // 自动注入工作流上下文
@@ -795,7 +798,10 @@ globalThis.$dag = async function(nodes) {{
             const deps = Array.isArray(spec.depends) ? spec.depends :
                          (spec.depends ? [spec.depends] : []);
             graph[name] = {{ deps, task: spec.task, status: 'pending' }};
-            for (const dep of deps) edges.push({{ from: dep, to: name }});
+            for (const dep of deps) {{
+                edges.push({{ from: dep, to: name }});
+                globalThis._dagEdges.push({{ from: dep, to: name }});
+            }}
         }}
     }}
     const inDegree = {{}}, adj = {{}};
@@ -898,6 +904,10 @@ async function main() {{
             phaseRecords: phaseRecords,
             logs: logs,
             agentCount: globalThis._agentCount,
+            agentGraph: {{
+                nodes: globalThis._agentCalls,
+                edges: globalThis._dagEdges,
+            }},
             budget: {{
                 total: budget.total,
                 spent: _budgetSpent,

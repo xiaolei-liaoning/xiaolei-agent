@@ -1,5 +1,6 @@
 """闲聊处理器"""
 
+import asyncio
 import logging
 from typing import Dict, Any
 
@@ -25,18 +26,6 @@ async def handle_chat(
     """
     from .context_memory import add_to_context_memory, get_context_for_llm
     from .persistence import get_system_prompt
-    from ..memory.memory_nudge import get_memory_nudge
-
-    nudge = get_memory_nudge()
-    if nudge.increment(str(user_id)):
-        try:
-            from ..memory.vector_memory import VectorMemoryStore
-            vm = VectorMemoryStore()
-            if vm._collection:
-                vm.cleanup_old_memories(keep_last=500)
-                logger.info("Nudge: 向量记忆整理完成, user=%s", user_id)
-        except Exception as e:
-            logger.debug("Nudge 整理失败: %s", e)
 
     add_to_context_memory(user_id, message, role="user", skill_name="chat")
     
@@ -44,33 +33,20 @@ async def handle_chat(
     
     system_prompt: str = get_system_prompt(agent_id, db_initialized)
     
-    # 向量记忆搜索
-    vector_memories_str = ""
+    # 统一记忆中间件：获取用户上下文
+    user_context_str = ""
     try:
-        from ..memory.vector_memory import VectorMemoryStore
-        vm = VectorMemoryStore()
-        if vm._collection:
-            memories = vm.search_memories(
-                query=message,
-                user_id=str(user_id),
-                top_k=5,
-            )
-            if memories:
-                vector_parts = []
-                for i, m in enumerate(memories[:5], 1):
-                    content = m.get("content", "")
-                    meta = m.get("metadata", {})
-                    cat = meta.get("category", "general")
-                    vector_parts.append(f"  {i}. [{cat}] {content[:150]}")
-                vector_memories_str = "\n".join(vector_parts)
+        from ..memory.memory_middleware import get_memory_middleware
+        mw = get_memory_middleware()
+        user_context_str = await mw.get_user_context(str(user_id), message)
     except Exception as e:
-        logger.debug("向量记忆搜索失败: %s", e)
+        logger.debug("用户记忆获取失败: %s", e)
     
     if context_str:
         system_prompt += f"\n\n历史对话上下文（用于理解当前问题）：\n{context_str}"
     
-    if vector_memories_str:
-        system_prompt += f"\n\n长期记忆（相关历史知识）：\n{vector_memories_str}"
+    if user_context_str:
+        system_prompt += f"\n\n{user_context_str}"
 
     thinking_process = None
     
@@ -101,6 +77,14 @@ async def handle_chat(
             reply = f"你好！有什么可以帮你的吗？（LLM 未配置: {llm_e}）"
     
     add_to_context_memory(user_id, reply, role="assistant", skill_name="chat")
+    
+    # 对话结束后：自动提取事实
+    try:
+        from ..memory.memory_middleware import get_memory_middleware
+        mw = get_memory_middleware()
+        asyncio.ensure_future(mw.process_turn(str(user_id), message, str(reply)[:500]))
+    except Exception:
+        pass
     
     return {
         "reply": reply,

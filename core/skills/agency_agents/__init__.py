@@ -1,26 +1,5 @@
-"""Agency Agents 角色匹配模块
+"""Agency Agents 专家角色配置
 
-将 agency-agents-zh 的 144+ 个专家 Agent 角色集成到 Skill 系统中，
-Worker Agent 可根据任务场景自主匹配最合适的专家角色。
+角色数据定义在 agents_config.yaml 中，
+由 core/skills/base_skills.py 的 SkillSystem 加载使用。
 """
-
-from .handler import AgencyAgentMatcher, get_agency_agent_matcher
-from .skill import (
-    AgencyAgentExecuteSkill,
-    AgencyAgentListSkill,
-    AgencyAgentMatcherSkill,
-)
-from .worker_role_matcher import WorkerAgentRoleMatcher, get_worker_role_matcher
-
-__all__ = [
-    "AgencyAgentMatcher",
-    "get_agency_agent_matcher",
-    "AgencyAgentMatcherSkill",
-    "AgencyAgentListSkill",
-    "AgencyAgentExecuteSkill",
-    "WorkerAgentRoleMatcher",
-    "get_worker_role_matcher",
-]    "AgencyAgentMatcherSkill",
-    "AgencyAgentListSkill",
-    "AgencyAgentExecuteSkill",
-]

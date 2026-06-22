@@ -1,19 +1,19 @@
 {
-  "timestamp": 1781185597.952964,
+  "timestamp": 1782011300.0202339,
   "alarms": [
     {
-      "timestamp": 1781185592.8410602,
+      "timestamp": 1782011289.800759,
       "type": "cpu",
       "message": "CPU\u4f7f\u7528\u7387\u8d85\u8fc7\u9608\u503c 80.0%",
       "details": {
         "threshold": 80.0,
-        "current_value": 87.4,
+        "current_value": 98.1,
         "duration": 30
       },
       "status": "triggered"
     },
     {
-      "timestamp": 1781185597.9515798,
+      "timestamp": 1782011300.018393,
       "type": "cpu",
       "message": "cpu \u544a\u8b66\u5df2\u6e05\u9664",
       "status": "cleared"

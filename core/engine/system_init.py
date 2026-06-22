@@ -156,10 +156,16 @@ class SystemInitializer:
             from core.tasks.task_execution_interface import set_task_handlers
 
             class _TextAnalyzerAgent:
-                """文本分析Agent — IntelligentScheduler 已移除，使用 LLM 动态编排"""
+                """文本分析Agent — 基于 LLM 的文本理解"""
                 async def execute(self, message: str, user_id: int) -> dict:
-                    logger.warning("IntelligentScheduler 已移除，降级返回")
-                    return {"success": False, "reply": "智能调度已移除，请使用新编排引擎", "fallback": True}
+                    try:
+                        from core.multi_agent_v2.tools.tool_registry import _handle_text_analyzer
+                        result = await _handle_text_analyzer({"text": message})
+                        if result.get("ok"):
+                            return {"success": True, "reply": result.get("data", "")}
+                        return {"success": False, "reply": result.get("error", "分析失败")}
+                    except Exception as e:
+                        return {"success": False, "reply": f"文本分析失败: {e}"}
 
             set_task_handlers(_TextAnalyzerAgent(), handle_multi_step, handle_single_step)
             logger.info("任务执行接口引用注入完成")

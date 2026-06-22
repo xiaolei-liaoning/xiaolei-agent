@@ -1202,10 +1202,10 @@ async def _handle_read_file(args: Dict) -> Dict:
         entries = sorted(p.iterdir())[:args.get("limit", 200)]
         lines = [f"{'📁' if e.is_dir() else '📄'} {e.name}" for e in entries]
         return ok(f"目录 {path} ({len(entries)} 项):\n" + "\n".join(lines))
-    # ponytail: 缓存检测，避免 Agent 重复读取同一文件浪费 token
-    cache_key = f"{path}:{args.get('offset', 1)}:{args.get('limit', 2000)}"
-    if cache_key in _file_read_cache:
-        return ok(f"[数据已获取] 内容同前，无需重复读取: {path}")
+    # ponytail: 多 Agent 场景下缓存会导致 process_results 拿不到实际内容，禁用
+    # cache_key = f"{path}:{args.get('offset', 1)}:{args.get('limit', 2000)}"
+    # if cache_key in _file_read_cache:
+    #     return ok(f"[数据已获取] 内容同前，无需重复读取: {path}")
     try:
         text = p.read_text(encoding="utf-8")
     except UnicodeDecodeError:
@@ -1217,7 +1217,7 @@ async def _handle_read_file(args: Dict) -> Dict:
     result = "\n".join(page)
     if offset > 0 or offset + limit < len(lines):
         result = f"(行 {offset+1}-{min(offset+limit, len(lines))}/{len(lines)})\n{result}"
-    _file_read_cache[cache_key] = result
+    # _file_read_cache[cache_key] = result  # ponytail: 禁用缓存
     return ok(result)
 
 
@@ -1347,6 +1347,42 @@ async def _handle_search_files(args: Dict) -> Dict:
 # ═══════════════════════════════════════════════════════════════════
 # Handler 映射 & 工具定义
 # ═══════════════════════════════════════════════════════════════════
+
+
+async def _handle_text_analyzer(args: Dict) -> Dict:
+    """文本分析 — 基于 LLM 的深度文本理解"""
+    from core.multi_agent_v2.tools.tool_result import ok, err
+
+    text = args.get("text", "")
+    if not text:
+        return err("需要 text 参数")
+
+    # ponytail: 最小实现，直接调 LLM 做文本分析
+    try:
+        from core.engine.llm_backend import get_llm_router
+        router = get_llm_router()
+
+        system_prompt = (
+            "你是文本分析专家。对给定文本进行深入分析，输出：\n"
+            "1. 主题/主旨（一句话概括）\n"
+            "2. 关键信息点（3-5个要点）\n"
+            "3. 文本类型（文章/代码/对话/数据/其他）\n"
+            "4. 情感倾向（正面/负面/中性）\n"
+            "5. 简短摘要（50字内）\n\n"
+            "用中文回答，格式清晰简洁。"
+        )
+        # ponytail: 截断超长文本，防止 token 爆炸
+        truncated = text[:3000] if len(text) > 3000 else text
+        response = await router.simple_chat(
+            user_message=f"请分析以下文本：\n\n{truncated}",
+            system_prompt=system_prompt,
+            temperature=0.3,
+        )
+        if response:
+            return ok(response)
+        return err("LLM 无响应")
+    except Exception as e:
+        return err(f"文本分析失败: {e}")
 
 
 _SANDBOX_TOOL_DEFS = [
@@ -1556,6 +1592,20 @@ _SANDBOX_TOOL_DEFS = [
         },
         handler=_handle_search_files,
     ),
+    ToolDefinition(
+        name="text_analyzer",
+        server=SERVER_BUILTIN,
+        tags=["text", "analysis"],
+        description="深度文本分析（基于 LLM）。\n- 分析文本主题、关键信息、情感倾向\n- 生成摘要和要点提取\n- 适用于文章分析、报告解读、内容理解\n- ⚠️ 只需统计字数/关键词 → 用 MCP text-analyzer",
+        parameters={
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "待分析的文本内容"},
+            },
+            "required": ["text"],
+        },
+        handler=_handle_text_analyzer,
+    ),
 ]
 
 # 从 _SANDBOX_TOOL_DEFS 自动生成，增删工具只需维护 _SANDBOX_TOOL_DEFS
@@ -1569,7 +1619,7 @@ def _safe(raw: str) -> str:
 
 
 class ToolRegistry:
-    """工具注册表 — 10 个内置工具 + 懒加载 MCP + Agent 权限过滤"""
+    """工具注册表 — 11 个内置工具 + 懒加载 MCP + Agent 权限过滤"""
 
     def __init__(self):
         self._tools: Dict[str, ToolDefinition] = {}

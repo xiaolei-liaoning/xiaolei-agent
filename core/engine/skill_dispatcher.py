@@ -91,6 +91,9 @@ def load_config_from_yaml():
                         {
                             "name": name,
                             "keywords": skill_info.get("keywords", []),
+                            "strong_patterns": skill_info.get("strong_patterns", []),
+                            "weak_keywords": skill_info.get("weak_keywords", []),
+                            "x_keywords": skill_info.get("x_keywords", []),
                             "priority": skill_info.get("priority", 5),
                             "description": skill_info.get("description", ""),
                         },
@@ -131,10 +134,33 @@ class SkillDispatcher:
         self._config_path = config_path or str(CONFIG_DIR / "skill_keywords.yaml")
         self.skill_configs: List[tuple] = list(SKILL_CONFIGS)
         self._dynamic_registry: Dict[str, Dict[str, Any]] = {}
+        # 技能详细信息（多因子评分用）：name → {strong_patterns, keywords, weak_keywords, x_keywords, priority}
+        self.skill_details: Dict[str, Dict[str, Any]] = {}
+        self._load_skill_details()
 
         # LLM客户端
         self.llm_router = None
         self._init_llm()
+
+    def _load_skill_details(self):
+        """从 YAML 配置文件加载技能详细信息（多因子评分用）"""
+        if not os.path.exists(self._config_path):
+            return
+        try:
+            import yaml
+            with open(self._config_path, encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+            skills_data = data.get("skills", {})
+            for name, info in skills_data.items():
+                self.skill_details[name] = {
+                    "strong_patterns": info.get("strong_patterns", []),
+                    "keywords": info.get("keywords", []),
+                    "weak_keywords": info.get("weak_keywords", []),
+                    "x_keywords": info.get("x_keywords", []),
+                    "priority": info.get("priority", 5),
+                }
+        except Exception as e:
+            logger.debug("加载技能详情失败: %s", e)
 
     def _init_llm(self):
         """初始化LLM路由器"""
@@ -167,11 +193,18 @@ class SkillDispatcher:
             logger.warning(f"加载配置文件失败: {e}")
 
     def _parse_config(self, skills_config: Dict[str, Dict]):
-        """解析配置文件中的技能配置"""
+        """解析配置文件中的技能配置（含多因子评分字段）"""
         for skill_name, skill_data in skills_config.items():
             priority = skill_data.get("priority", 5)
             keywords = skill_data.get("keywords", [])
             self._update_skill_config(skill_name, keywords, priority)
+            self.skill_details[skill_name] = {
+                "strong_patterns": skill_data.get("strong_patterns", []),
+                "keywords": keywords,
+                "weak_keywords": skill_data.get("weak_keywords", []),
+                "x_keywords": skill_data.get("x_keywords", []),
+                "priority": priority,
+            }
 
     def _update_skill_config(self, name: str, keywords: List[str], priority: int):
         """更新技能配置"""
@@ -187,7 +220,9 @@ class SkillDispatcher:
     def reload_config(self):
         """重新加载配置文件"""
         self.skill_configs = list(SKILL_CONFIGS)
+        self.skill_details = {}
         self._load_config_from_file()
+        self._load_skill_details()
         logger.info("技能配置已重新加载")
 
     # ── 动态注册 ─────────────────────────────────────────────────────────────
@@ -525,16 +560,23 @@ class SkillDispatcher:
                         best_match = name
                         best_is_third_party = True
 
-        # 静态配置
+        # 降级e：多因子评分（关键词 + 路径检测 + X信号）
+        best_match = "chat"
+        best_score = 0.0
+        best_is_third_party = False
+
+        # 检测路径——所有 skill 共享
+        path_match, detected_path = self._detect_path(message)
+
+        # 对静态配置 skills 进行多因子评分
         for name, keywords, priority in self.skill_configs:
-            hits = sum(1 for kw in keywords if kw.lower() in message_lower)
-            score = hits * priority
+            score = self._multi_factor_score(name, message, message_lower, path_match, priority)
             if score > best_score:
                 best_score = score
                 best_match = name
                 best_is_third_party = False
 
-        # 其他动态注册的技能
+        # 其他动态注册的技能（走旧的关键词评分）
         for name, config in self._dynamic_registry.items():
             if not name.startswith("third_party_") and name not in [
                 c[0] for c in self.skill_configs
@@ -564,6 +606,21 @@ class SkillDispatcher:
                 if skill_name.lower() == message_lower:
                     logger.debug("精确匹配技能: '%s' -> %s", message, skill_name)
                     return skill_name
+
+        # LLM 消歧兜底：top-2 分差 < 0.5 且 LLM 可用时
+        if best_score < 5.0:
+            # 收集 top-2
+            scored_skills = []
+            for name, _, _ in self.skill_configs:
+                s = self._multi_factor_score(name, message, message_lower, path_match, self._get_priority(name))
+                if s > 0:
+                    scored_skills.append((s, name))
+            scored_skills.sort(key=lambda x: -x[0])
+            if len(scored_skills) >= 2 and scored_skills[0][0] - scored_skills[1][0] < 0.5:
+                disambig = self._llm_disambiguate(message, scored_skills[:2])
+                if disambig:
+                    logger.debug("LLM 消歧: '%s' -> %s", message[:40], disambig)
+                    best_match = disambig
 
         # **新增**: MCP兜底机制 - 当所有技能都不匹配时，检查是否有可用的MCP服务器
         if best_match == "chat" and best_score == 0:
@@ -899,6 +956,117 @@ class SkillDispatcher:
                         return True, intent.strip()
 
         return False, None
+
+    # ── 多因子评分（路由精度改进） ──────────────────────────────────────────
+
+    def _get_priority(self, name: str) -> int:
+        """获取技能的 priority（从 skill_details 或 skill_configs）"""
+        if name in self.skill_details:
+            return self.skill_details[name].get("priority", 5)
+        for n, _, p in self.skill_configs:
+            if n == name:
+                return p
+        return 5
+
+    def _multi_factor_score(self, name: str, message: str, message_lower: str,
+                           path_score: float, priority: int) -> float:
+        """多因子评分：strong_pattern + keyword + weak + x_signal + path
+
+        Returns:
+            加权总分
+        """
+        details = self.skill_details.get(name, {})
+        score = 0.0
+
+        # 因子 A：strong_pattern 词组匹配（正则，权重 2.0）
+        for pattern in details.get("strong_patterns", []):
+            if re.search(pattern, message):
+                score += 2.0
+
+        # 因子 B：完整关键词匹配（权重 1.5，大小写不敏感）
+        for kw in details.get("keywords", []):
+            if kw.lower() in message_lower:
+                score += 1.5
+
+        # 因子 C：弱信号词（权重 0.3，大小写不敏感）
+        for wk in details.get("weak_keywords", []):
+            if wk.lower() in message_lower:
+                score += 0.3
+
+        # 因子 D：路径信号（权重 2.0，所有 skill 共享）
+        score += path_score
+
+        # 因子 E：X 信号（反向排除，权重 -0.5，大小写不敏感）
+        for xk in details.get("x_keywords", []):
+            if xk.lower() in message_lower:
+                score -= 0.5
+
+        # 优先级加成
+        score *= (1 + (priority - 5) * 0.1)
+
+        return max(score, 0.0)
+
+    def _detect_path(self, message: str) -> tuple:
+        """检测消息中是否包含文件系统路径
+
+        Returns:
+            (path_score, detected_path_or_None)
+        """
+        patterns = [
+            (r"(~[^\s，,]*[/][^\s，,]+)", True),     # ~/xxx/yyy
+            (r"(/(?:[^\s，,/]+/)+[^\s，,/]+)", True), # /absolute/path
+            (r"(\.\.?/[^\s，,/]+)", True),            # ./xxx or ../xxx
+            (r"([a-zA-Z]:\\[^\s，,]+)", False),       # C:\xxx
+        ]
+        for pat, need_exists in patterns:
+            m = re.search(pat, message)
+            if m:
+                candidate = m.group(1)
+                expanded = os.path.expanduser(candidate)
+                if not need_exists or os.path.exists(expanded) or os.path.isdir(expanded):
+                    return 2.0, candidate
+        return 0.0, None
+
+    def _llm_disambiguate(self, message: str, top_two: list) -> Optional[str]:
+        """当 top-2 分差很小时用 LLM 做一次消歧
+
+        Args:
+            message: 用户消息
+            top_two: [(score, skill_name), (score, skill_name)]
+
+        Returns:
+            消歧后的 skill_name，或 None
+        """
+        if not self.llm_router or not self.llm_router.is_available():
+            return None
+        if len(top_two) < 2:
+            return None
+
+        prompt = (
+            f"用户说：“{message}”\n\n"
+            f"备选技能：\n"
+            f"  - {top_two[0][1]}\n"
+            f"  - {top_two[1][1]}\n\n"
+            f"只输出最合适的技能名，不要多余文字："
+        )
+        try:
+            import asyncio
+            loop = asyncio.new_event_loop()
+            try:
+                resp = loop.run_until_complete(
+                    self.llm_router.simple_chat(prompt, temperature=0.1, max_tokens=20)
+                )
+            finally:
+                loop.close()
+            if resp:
+                resp = resp.strip().lower()
+                if top_two[0][1] in resp:
+                    return top_two[0][1]
+                if top_two[1][1] in resp:
+                    return top_two[1][1]
+        except Exception as e:
+            logger.debug("LLM 消歧失败: %s", e)
+        return None
 
     # P1修复4：添加调试方法，查看技能匹配详情
     def debug_match(self, message: str) -> Dict[str, Any]:

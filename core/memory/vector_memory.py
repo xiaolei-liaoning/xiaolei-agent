@@ -368,6 +368,7 @@ class VectorMemoryStore:
         self._collection = None
         # ponytail: 嵌入模型在后台线程初始化，不阻塞启动
         self._embedding_ready = False
+        self._collection_ready_event = threading.Event()
         self._start_embedding_init()
 
         # 批量写入缓冲区
@@ -445,10 +446,22 @@ class VectorMemoryStore:
                 )
                 logger.info("ChromaDB 集合 long_term_memory 已创建")
             self._embedding_ready = True
+            self._collection_ready_event.set()
             logger.info("ChromaDB 集合 long_term_memory 就绪")
         except Exception as e:
             logger.error("ChromaDB 初始化失败: %s", e)
             self._collection = None
+
+    def wait_for_collection(self, timeout: float = 10.0) -> bool:
+        """等待集合就绪（后台线程初始化完成）
+
+        Args:
+            timeout: 最大等待秒数
+
+        Returns:
+            True 如果集合已就绪，False 超时
+        """
+        return self._collection_ready_event.wait(timeout=timeout)
 
     def _start_embedding_init(self):
         """后台线程：异步加载 embedding 模型，不阻塞服务启动

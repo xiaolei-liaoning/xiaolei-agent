@@ -98,8 +98,16 @@ class WorkAgent(BaseAgent):
                     self._skill_tools = list(skill_result.tool_preference)
                     print(f"    \033[1;36m🧠 Skill: {skill_result.skill_name}\033[0m")
                 if skill_result.expert_personality:
-                    self.personality += f"\n\n---\n【Expert】\n{skill_result.expert_personality[:500]}"
+                    ep = skill_result.expert_personality
+                    # 跳过 YAML frontmatter（---...---），从内容正文开始
+                    if ep.startswith('---'):
+                        idx = ep.find('---', 3)
+                        if idx > 0:
+                            ep = ep[idx + 3:].strip()
+                    self.personality += f"\n\n---\n【Expert】\n{ep[:3000]}"
                     print(f"    \033[1;36m👤 Expert: {skill_result.expert_name}\033[0m")
+                    if len(ep) > 100:
+                        print(f"    \033[2m📄 角色定义已加载 ({len(ep[:3000])} 字)\033[0m")
                 if skill_result.guidance:
                     self._skill_guidance = skill_result.guidance
                     logger.info(f"✅ Guidance: {len(skill_result.guidance)} 字符")

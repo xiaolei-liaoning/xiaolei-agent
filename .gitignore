@@ -84,3 +84,22 @@ todo.md
 # Archive
 *.zip
 *.tar.gz
+
+# Obsidian workspace
+.obsidian/
+
+# Memory search cache
+.memsearch/
+
+# Runtime data (auto-generated)
+data/task_snapshots/
+data/alarms.json
+data/metrics.json
+data/monitoring.log
+data/*.csv
+
+# Generated chart outputs
+mcp/_impl/data_analysis/output/
+
+# Old scripts directory (all one-time scripts removed)
+scripts/

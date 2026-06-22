@@ -130,6 +130,19 @@ servers:
     description: "第三方应用集成：Twitter、Discord、Jira、微信等"
     auto_connect: true
 
+  # ── 项目分析 MCP 服务器 ──
+  project-analyzer-mcp:
+    command: python3
+    args: ["mcp/project_analyzer_mcp_server.py"]
+    description: "项目分析：批量文件读取、项目结构扫描、代码搜索"
+    auto_connect: true
+
+  codegraph-mcp:
+    command: codegraph
+    args: ["serve", "--mcp"]
+    description: "代码关系图引擎：符号搜索、文件结构、函数调用分析"
+    auto_connect: true
+
   # ── 外部 / 第三方 MCP 服务器 ──
   # 方式一: from_awesome 引用（推荐）— 自动从精选库拉取 command + args
   # 精选库位于 data/known_mcp_servers.json，覆盖 80+ 服务器

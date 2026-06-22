@@ -15,10 +15,10 @@ V2 ToolRegistry 集成：
 
 import asyncio
 import json
-import re
 import time
 import logging
 from typing import Any, Dict, List, Optional
+from core.memory.context_compactor import get_compactor
 from dataclasses import dataclass
 from enum import Enum
 from uuid import uuid4
@@ -111,6 +111,8 @@ SYSTEM_PROMPT_TEMPLATE = """你是一个{role}Agent。你的职责是{descriptio
 
 {extra_context}
 
+{file_tip}
+
 输出格式（JSON，不要包含其他内容）：
 {output_format}"""
 
@@ -144,6 +146,10 @@ class ContextMemory:
     def get_recent(self, n: int = 5) -> str:
         return "\n".join(self.entries[-n:]) if self.entries else "（无上下文）"
 
+    def clear(self) -> None:
+        """清空上下文记忆"""
+        self.entries = []
+
 
 # =============================================================================
 # LLMAgent — 统一 Agent 基类（含 KEPA + RAG + 反问 + 上下文）
@@ -161,12 +167,46 @@ class LLMAgent:
         self._tool_cache = None  # 缓存的工具列表
         self._tool_cache_time = 0  # 缓存时间戳（用于TTL）
         self._task_id = None  # 当前任务 ID
-        
+
         # Worker 状态
         self.state = "idle"
         self.current_task = None  # 当前执行的任务
         self.last_result = None  # 上一次执行结果
         self.leader_name = None  # 所属主Agent名称（用于询问）
+
+        # A: 对话记忆 (ShortTermMemory)
+        self.user_id: str = ""
+        self._stm = None
+        # B/C: 向量记忆 (VectorMemoryStore)
+        self._vm = None
+
+    @property
+    def stm(self):
+        """Lazy init ShortTermMemoryManager"""
+        if self._stm is None and self.user_id:
+            from core.memory.short_term_memory import get_memory_manager
+            self._stm = get_memory_manager()
+        return self._stm
+
+    @property
+    def vm(self):
+        """Lazy init VectorMemoryStore"""
+        if self._vm is None:
+            try:
+                from core.memory.vector_memory import VectorMemoryStore
+                self._vm = VectorMemoryStore()
+            except Exception as e:
+                logger.debug(f"VectorMemory init failed: {e}")
+                self._vm = False  # 标记失败不再重试
+        return self._vm if self._vm else None
+
+    @property
+    def stm(self):
+        """Lazy init ShortTermMemoryManager"""
+        if self._stm is None and self.user_id:
+            from core.memory.short_term_memory import get_memory_manager
+            self._stm = get_memory_manager()
+        return self._stm
 
     def _get_role_config(self) -> tuple:
         configs = {
@@ -307,7 +347,14 @@ class LLMAgent:
     async def process_message(self, message: AgentMessage) -> str:
         self.context.add(f"收到: {message.content[:100]}")
         logger.info(f"📬 {self.name} 收到消息 from {message.from_agent}")
-        
+
+        # A: 对话记忆 — 存用户消息
+        if self.stm and self.user_id:
+            try:
+                self.stm.add(self.user_id, "user", message.content)
+            except Exception as e:
+                logger.debug(f"STM add user failed: {e}")
+
         # 设置任务 ID
         self._task_id = f"{message.from_agent}_{int(time.time())}"
         
@@ -342,6 +389,14 @@ class LLMAgent:
             self._update_state("retrying", f"尝试 {attempt + 1}/{max_retries + 1}")
         
         self.context.add(f"回复: {str(result)[:100]}")
+
+        # A: 对话记忆 — 存 Agent 回复
+        if self.stm and self.user_id:
+            try:
+                self.stm.add(self.user_id, "assistant", str(result)[:2000])
+            except Exception as e:
+                logger.debug(f"STM add assistant failed: {e}")
+
         return result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
 
     async def _handle_message(self, message: AgentMessage) -> str:
@@ -355,13 +410,36 @@ class LLMAgent:
         extra_context = ""
         if rag_context:
             extra_context += f"\n【知识库参考】\n{rag_context}\n"
-        recent_ctx = self.context.get_recent()
-        if recent_ctx != "（无上下文）":
-            extra_context += f"\n【上下文】\n{recent_ctx}\n"
+        # A: 从 STM 获取对话历史上下文
+        stm_context = ""
+        if self.stm and self.user_id:
+            try:
+                ctx_msgs = self.stm.get_context(self.user_id)
+                if ctx_msgs:
+                    stm_context = "\n".join(
+                        f"[{m['role']}] {m['content'][:300]}"
+                        for m in ctx_msgs[-5:]
+                    )
+                    extra_context += f"\n【历史对话】\n{stm_context}\n"
+            except Exception as e:
+                logger.debug(f"STM get_context failed: {e}")
+        if not stm_context:
+            recent_ctx = self.context.get_recent()
+            if recent_ctx != "（无上下文）":
+                extra_context += f"\n【上下文】\n{recent_ctx}\n"
+
+        # 获取工具列表（先获取，后面 system_prompt 和 ReAct 都要用）
+        tools = await self._get_tools_for_task(message.content)
+
+        # 判断是否有写文件能力
+        has_write = any("write_file" in str(t) for t in tools) if tools else False
+        file_tip = ""
+        if has_write:
+            file_tip = "🔧 你有 write_file 工具可以创建/写入文件。如果任务要求「保存到桌面」或「生成报告」，请用 write_file 把结果写入 ~/Desktop/。\n"
 
         system_prompt = SYSTEM_PROMPT_TEMPLATE.format(
             role=role, description=desc, extra_context=extra_context,
-            output_format=output_format
+            file_tip=file_tip, output_format=output_format
         )
 
         # 构建对话历史（ReAct 循环用）
@@ -370,9 +448,16 @@ class LLMAgent:
             {"role": "user", "content": f"任务内容:\n{message.content}"},
         ]
 
-        tools = await self._get_tools_for_task(message.content)
-        max_react_rounds = 3  # ponytail: 3 rounds 够了，5 轮容易过度执行
+        # ===== 上下文压缩：压缩对话历史 =====
+        try:
+            compactor = get_compactor()
+            conversation = compactor.compact(conversation)
+        except Exception:
+            pass
+
+        max_react_rounds = 2  # ponytail: 2 rounds，工具调用一次后直接结束
         result = {}
+        all_tool_results = []  # 累积所有轮的 tool_results
 
         for round_num in range(max_react_rounds):
             # LLM 调用（带完整对话历史）
@@ -392,13 +477,12 @@ class LLMAgent:
             # 把工具结果回传到对话历史，让下一轮 LLM 能看到
             self._append_tool_round(conversation, tool_calls, tool_results)
 
-            result["tool_results"] = tool_results
+            all_tool_results.extend(tool_results)
             logger.info(f"🔧 {self.name} 第 {round_num + 1} 轮: {len(tool_calls)} 个工具执行完成")
 
-        # 基于最终工具结果生成答案
-        tool_results = result.get("tool_results", [])
-        if tool_results:
-            result = await self._process_tool_results(result, tool_results, message.content)
+        # 基于所有轮累积的工具结果生成答案
+        if all_tool_results:
+            result = await self._process_tool_results(result, all_tool_results, message.content)
 
         # KEPA 反思闭环
         kepa_result = await self._kepa_reflect(result)
@@ -410,6 +494,10 @@ class LLMAgent:
                 "success": False,
                 "error": kepa_result.get("error", "KEPA 判定失败"),
             }, ensure_ascii=False)
+
+        # C: 知识积累 — Worker 执行完知识型任务后自动写入
+        if self.role == AgentRole.WORKER and self.vm and self.user_id:
+            asyncio.ensure_future(self._store_knowledge(message.content, kepa_result))
 
         return json.dumps(kepa_result, ensure_ascii=False)
 
@@ -427,7 +515,10 @@ class LLMAgent:
         for tc, tr in zip(tool_calls, tool_results):
             res = tr.get("result", {})
             if isinstance(res, dict):
-                content = res.get("content", res.get("text", res.get("result", str(res))))
+                if "ok" in res:
+                    content = str(res.get("data", str(res)))
+                else:
+                    content = str(res.get("content", res.get("text", res.get("result", str(res)))))
             else:
                 content = str(res) if res else tr.get("error", "工具执行失败")
             conversation.append({
@@ -444,7 +535,7 @@ class LLMAgent:
                 response = await router.chat(
                     conversation,
                     temperature=0.7,
-                    max_tokens=1000,
+                    max_tokens=8000,  # ponytail: 8000 tokens 给 write_file 等大数据写入留空间
                     tools=tools if tools else None,
                 )
 
@@ -471,19 +562,6 @@ class LLMAgent:
         except Exception as e:
             logger.warning(f"LLM 调用失败: {e}")
             return {}
-
-    @staticmethod
-    def _extract_tool_calls_from_text(text: str) -> dict:
-        """从文本中提取工具调用（备用方案）"""
-        import re
-        result = {"tool_calls": []}
-        write_match = re.search(r'write_file\s*\(\s*path\s*=\s*["\']([^"\']+)["\']\s*,\s*content\s*=\s*["\'](.+?)["\']\s*\)', text, re.DOTALL)
-        if write_match:
-            result["tool_calls"].append({"name": "write_file", "arguments": {"path": write_match.group(1), "content": write_match.group(2)}})
-        python_match = re.search(r'execute_python\s*\(\s*code\s*=\s*["\'](.+?)["\']\s*\)', text, re.DOTALL)
-        if python_match:
-            result["tool_calls"].append({"name": "execute_python", "arguments": {"code": python_match.group(1)}})
-        return result
 
     async def _execute_tool_calls(self, tool_calls: List[Dict]) -> List[Dict]:
         """执行多个工具调用（并行）"""
@@ -539,16 +617,29 @@ class LLMAgent:
             result["error"] = "所有工具调用失败"
             return result
         
-        # 基于工具结果生成最终答案
+        # 基于工具结果生成最终答案（去重：按工具名+结果摘要前20字去重）
         result_summary = []
+        seen = set()
         for r in successful_results:
             tc = r.get("tool_call", {})
             res = r.get("result", {})
             if isinstance(res, dict):
-                content = res.get("content", res.get("text", res.get("result", str(res))))
+                if "ok" in res:
+                    content = str(res.get("data", str(res)))
+                else:
+                    content = str(res.get("content", res.get("text", res.get("result", str(res)))))
             else:
                 content = str(res)
-            result_summary.append(f"[{tc.get('name', '?')}] {content[:500]}")
+            # 从 OpenAI 格式 tool_call 中提取工具名
+            tc_name = tc.get("name", "")
+            if not tc_name and isinstance(tc.get("function"), dict):
+                tc_name = tc["function"].get("name", "?")
+            # 去重键：工具名 + 结果前30字
+            dedup_key = f"{tc_name}:{str(content)[:30]}"
+            if dedup_key in seen:
+                continue
+            seen.add(dedup_key)
+            result_summary.append(f"[{tc_name}] {content[:500]}")
         
         result["tool_result_summary"] = "\n".join(result_summary)
         result["status"] = "success"
@@ -558,6 +649,29 @@ class LLMAgent:
         """对外执行接口 — 自动管理 context"""
         msg = AgentMessage(from_agent=from_agent, content=task_content)
         return await self.process_message(msg)
+
+    # ── C: 知识积累 ────────────────────────────────────────────────────
+
+    async def _store_knowledge(self, task: str, result: dict) -> None:
+        """Worker 执行完知识型任务后写入向量库"""
+        if not result.get("success", True):
+            return
+        kw = ["搜索", "查找", "调研", "分析", "摘要", "总结", "翻译", "热搜", "查询", "对比"]
+        if not any(k in task for k in kw):
+            return
+        if not self.vm or not self.user_id:
+            return
+        result_text = result.get("result", "")
+        if isinstance(result_text, dict):
+            result_text = result_text.get("result", result_text.get("content", str(result_text)[:500]))
+        content = f"【任务】{task[:100]}\n【结果】{str(result_text)[:500]}"
+        try:
+            self.vm.add_memory(
+                user_id=self.user_id, content=content, category="fact",
+                metadata={"source": task[:60], "agent": self.name},
+            )
+        except Exception as e:
+            logger.debug(f"写入知识失败: {e}")
 
 
 # =============================================================================
@@ -575,7 +689,7 @@ class LeaderAgent(LLMAgent):
         self.worker_states: Dict[str, str] = {}  # 跟踪Worker状态
 
     async def supervise_task(self, task_description: str, workers: List[LLMAgent],
-                             active_count: int = 3, max_rounds: int = 10) -> Dict:
+                             active_count: int = 3, max_rounds: int = 5) -> Dict:
         """队长 ReAct 主循环：Thought → Action → Observation → 循环/完成
 
         ReAct 模式核心：
@@ -588,7 +702,7 @@ class LeaderAgent(LLMAgent):
             task_description: 任务描述
             workers: Worker Agent 列表（全部槽位）
             active_count: 本轮活跃 Worker 数
-            max_rounds: 最大循环轮次（ReAct 默认10轮）
+            max_rounds: 最大循环轮次（ReAct 默认5轮，Web传3轮）
 
         Returns:
             执行结果字典
@@ -616,25 +730,48 @@ class LeaderAgent(LLMAgent):
                 task_description, context_history, all_results, round_num
             )
             
-            # 检查是否任务完成
+            # ponytail: 程序化强制 — 已有成功结果且 round>=2 时，直接 done
+            successful = [r for r in all_results if r.get("success")]
+            if successful and round_num >= 2 and not thought.get("done"):
+                logger.info(f"🔒 已有 {len(successful)} 个成功结果，强制 done（跳过 LLM 决策）")
+                # 从已有结果中提取内容作为 final_result
+                last_content = ""
+                for r in reversed(successful):
+                    data = r.get("result", {})
+                    if isinstance(data, dict):
+                        c = data.get("tool_result_summary", data.get("content", ""))
+                        if c:
+                            last_content = c[:2000]
+                            break
+                thought = {"done": True, "thinking": "已有足够结果", "final_result": last_content or "任务已完成"}
+            
+            # ponytail: 程序化强制 — 已有成功结果且 round>=2 时，直接 done
+            successful = [r for r in all_results if r.get("success")]
+            if successful and round_num >= 2 and not thought.get("done"):
+                logger.info(f"🔒 已有 {len(successful)} 个成功结果，强制 done（跳过 LLM 决策）")
+                # 用 LLM 的 thinking 作为 final_result（如果有的话），否则用 raw 结果
+                final = thought.get("thinking", "")
+                if not final or len(final) < 20:
+                    # LLM 没有生成有意义的合成，用 raw 结果
+                    for r in reversed(successful):
+                        data = r.get("result", {})
+                        if isinstance(data, dict):
+                            c = data.get("tool_result_summary", data.get("content", ""))
+                            if c:
+                                final = c[:2000]
+                                break
+                thought = {"done": True, "thinking": final or "任务已完成", "final_result": final or "任务已完成"}
+            
+            # 检查是否任务完成（必须在 force done 之后）
             if thought.get("done"):
                 logger.info(f"✅ ReAct 第 {round_num} 轮: 队长判定任务完成")
-                # 将最终结果添加到 all_results
-                if thought.get("final_result"):
-                    all_results.append({
-                        "success": True,
-                        "result": {"result": thought.get("final_result")},
-                        "worker": self.name,
-                        "task": "最终结果"
-                    })
-                elif not all_results:
-                    # 如果没有子任务结果，添加一个空结果
-                    all_results.append({
-                        "success": True,
-                        "result": {"result": thought.get("thinking", "任务完成")},
-                        "worker": self.name,
-                        "task": "最终结果"
-                    })
+                final = thought.get("final_result") or thought.get("thinking", "任务完成")
+                all_results.append({
+                    "success": True,
+                    "result": {"tool_result_summary": final, "content": final},
+                    "worker": self.name,
+                    "task": "最终结果"
+                })
                 break
 
             # ========== Action: 执行行动 ==========
@@ -660,6 +797,36 @@ class LeaderAgent(LLMAgent):
             
             logger.info(f"👁️ ReAct 第 {round_num} 轮观察: {action_type} - {'成功' if action_result.get('success') else '失败'}")
 
+            # ponytail: tool 失败强制 fallback，避免 Leader 反复重试失败的 tool
+            if action_type == "tool" and not action_result.get("success"):
+                # 统计连续 tool 失败次数
+                tool_fail_streak = sum(
+                    1 for h in context_history
+                    if h["action_type"] == "tool" and not h["result"].get("success")
+                )
+                if tool_fail_streak >= 1:
+                    # 注入强制 delegate 提示，让下一轮 LLM 必须选 delegate
+                    context_history.append({
+                        "round": round_num,
+                        "thought": "系统提示：tool 执行失败，下一轮必须使用 delegate 分配给 Worker",
+                        "action_type": "system_override",
+                        "action": {"type": "delegate"},
+                        "result": {"success": False, "error": "tool fallback"},
+                    })
+            
+            # ponytail: 已有成功结果时，禁止再 delegate/batch_delegate，强制合成
+            if action_type in ("delegate", "batch_delegate") and action_result.get("success") and all_results:
+                successful_results = [r for r in all_results if r.get("success")]
+                if successful_results:
+                    logger.info("🔒 已有成功结果，强制切换为 process_results")
+                    context_history.append({
+                        "round": round_num,
+                        "thought": "系统强制：已有成功结果，下一轮必须使用 process_results 综合分析",
+                        "action_type": "system_override",
+                        "action": {"type": "process_results", "task": f"综合分析以下结果并生成最终答案：{task_description}"},
+                        "result": {"success": False, "error": "force process_results"},
+                    })
+
         success = len(all_results) > 0 and all(r.get("success") for r in all_results)
         
         # 统计子任务总数（支持批量分配的嵌套结构）
@@ -673,6 +840,21 @@ class LeaderAgent(LLMAgent):
         
         logger.info(f"{'✅' if success else '❌'} ReAct 任务完成: 共 {round_num} 轮, {total_subtasks} 个子任务")
 
+        # B: 异步写经验
+        result_payload = {
+            "success": success, "rounds": round_num,
+            "total_subtasks": total_subtasks, "react_history": context_history,
+        }
+        asyncio.ensure_future(self._store_experience(task_description, result_payload))
+
+        # ★: 自我进化触发检查
+        if self.user_id:
+            try:
+                from core.memory.self_evolution import get_evolution_engine
+                asyncio.ensure_future(get_evolution_engine().check_and_evolve(self.user_id))
+            except Exception:
+                pass
+
         return {
             "success": success,
             "results": all_results,
@@ -681,9 +863,60 @@ class LeaderAgent(LLMAgent):
             "react_history": context_history,
         }
 
+    # ── B: 任务经验写入 ────────────────────────────────────────────────
+
+    async def _store_experience(self, task: str, result: dict) -> None:
+        """任务完成后异步写入经验到向量库"""
+        if not self.vm or not self.user_id:
+            return
+        success = result.get("success", False)
+        rounds = result.get("rounds", 0)
+        total_sub = result.get("total_subtasks", 0)
+        strategies = set()
+        for h in result.get("react_history", []):
+            strategies.add(h.get("action_type", ""))
+        used = ", ".join(s for s in strategies if s) or "direct"
+        task_type = "分析"
+        if any(kw in task for kw in ["搜索", "查找", "调研", "热搜"]):
+            task_type = "搜索调研"
+        elif any(kw in task for kw in ["写", "创建", "保存", "生成"]):
+            task_type = "生成创作"
+        elif any(kw in task for kw in ["代码", "执行", "运行", "python"]):
+            task_type = "代码执行"
+        elif any(kw in task for kw in ["分析", "对比", "总结", "翻译"]):
+            task_type = "分析处理"
+        content = (
+            f"[{task_type}] 使用 {used} 策略，{rounds} 轮完成，"
+            f"{total_sub}个子任务，{'成功' if success else '失败'}。"
+            f"任务: {task[:100]}"
+        )
+        try:
+            self.vm.add_memory(
+                user_id=self.user_id, content=content, category="experience",
+                metadata={
+                    "task_type": task_type, "strategy": used,
+                    "rounds": rounds, "success": str(success),
+                    "agent": self.name,
+                },
+            )
+        except Exception as e:
+            logger.debug(f"写入经验失败: {e}")
+
     async def _react_think(self, task_description: str, history: List[Dict],
                            results: List[Dict], round_num: int) -> Dict:
         """ReAct Thought 阶段：分析状态，决定下一步"""
+
+        # ===== 上下文压缩：压缩历史记录 =====
+        try:
+            if history and len(history) > 3:
+                compactor = get_compactor()
+                # Convert history to message format for compression
+                history_msgs = [{"role": "assistant", "content": str(h)} for h in history]
+                compressed = compactor.compact(history_msgs)
+                # Extract compressed history back
+                history = [h for h in history if any(c.get("content", "").startswith(str(h)[:50]) for c in compressed if c.get("role") == "assistant")]
+        except Exception:
+            pass
 
         history_text = ""
         if history:
@@ -695,28 +928,99 @@ class LeaderAgent(LLMAgent):
                 )
             history_text = "\n".join(history_lines)
 
+        # ponytail: 检测连续 tool 失败，注入强制 delegate 提示
+        if history:
+            last_actions = [h for h in history[-2:] if h["action_type"] == "tool" and not h["result"].get("success")]
+            if last_actions:
+                history_text += "\n\n⚠️ 注意：上一轮 tool 执行失败，你必须选择 delegate 或 batch_delegate，禁止再次选择 tool！"
+            # 检测连续 batch_delegate，强制合成
+            last_batch = [h for h in history[-2:] if h["action_type"] in ("batch_delegate", "delegate")]
+            if last_batch and results:
+                history_text += "\n\n🚨 已有结果！下一轮必须选择 process_results 或 done，禁止再选 batch_delegate 或 delegate！"
+
         results_text = ""
         if results:
-            results_text = f"\n已完成 {len(results)} 个子任务"
+            # 提取已有结果的关键内容
+            result_summaries = []
+            for r in results[-3:]:
+                data = r.get("result", {})
+                if isinstance(data, dict):
+                    if "batch_results" in data:
+                        for br in data["batch_results"][:3]:
+                            br_data = br.get("result", {})
+                            if isinstance(br_data, dict):
+                                c = br_data.get("tool_result_summary", br_data.get("content", ""))
+                                if c:
+                                    result_summaries.append(c[:200])
+                    else:
+                        c = data.get("content", data.get("result", data.get("tool_result_summary", "")))
+                        if c:
+                            result_summaries.append(str(c)[:200])
+            if result_summaries:
+                results_text = (
+                    f"\n【⚠️ 已有结果 - 不要再重复相同任务！】\n"
+                    + "\n".join(result_summaries)
+                    + "\n\n→ 如果结果足够，直接 done 或 process_results 综合分析！"
+                )
+            else:
+                results_text = f"\n已完成 {len(results)} 个子任务"
 
-        # 根据任务类型提供工具提示
+        # 动态获取可用工具列表（V2 ToolRegistry + MCP）
         tool_hints = ""
-        task_lower = task_description.lower()
-        if any(kw in task_lower for kw in ["天气", "气温", "温度"]):
-            tool_hints = "\n【提示】天气任务 → 用 tool action 调用 skill_execute(weather)"
-        elif any(kw in task_lower for kw in ["搜索", "爬取", "热搜", "百度", "微博", "知乎"]):
-            tool_hints = "\n【提示】搜索任务 → 用 tool action 调用 web_search"
-        elif any(kw in task_lower for kw in ["翻译", "translate"]):
-            tool_hints = "\n【提示】翻译任务 → 用 tool action 调用 skill_execute(translator)"
-        elif any(kw in task_lower for kw in ["写", "创建", "保存", "文件"]):
-            tool_hints = "\n【提示】文件任务 → 用 tool action 调用 write_file"
-        elif any(kw in task_lower for kw in ["执行", "运行", "代码", "python"]):
-            tool_hints = "\n【提示】代码任务 → 用 tool action 调用 execute_python"
+        try:
+            tools = await self._get_tools_for_task(task_description)
+            if tools:
+                tool_names = []
+                for t in tools:
+                    fn = t.get("function", {})
+                    name = fn.get("name", "?")
+                    desc = fn.get("description", "")[:60]
+                    tool_names.append(f"  - {name}: {desc}")
+                tool_hints = "\n【Worker 可用工具】\n" + "\n".join(tool_names[:20])
+        except Exception:
+            pass
+
+        # A: 获取用户上下文（画像 + 相关记忆）
+        user_context_str = ""
+        if self.user_id:
+            try:
+                from core.memory.memory_middleware import get_memory_middleware
+                mw = get_memory_middleware()
+                user_context_str = asyncio.get_event_loop().run_until_complete(
+                    mw.get_user_context(self.user_id, task_description)
+                )
+            except Exception:
+                pass
+
+        # B: 检索历史经验 + insight 注入
+        experience_hints = ""
+        if self.vm and self.user_id:
+            try:
+                similar = self.vm.search_memories(
+                    query=task_description,
+                    user_id=self.user_id,
+                    top_k=4,
+                )
+                if similar:
+                    lines = []
+                    for m in similar:
+                        cat = m.get("metadata", {}).get("category", "")
+                        prefix = "💡" if cat == "insight" else "📋"
+                        lines.append(f"{prefix} {m['content'][:200]}")
+                    if lines:
+                        experience_hints = "\n【历史经验参考】\n" + "\n".join(lines)
+            except Exception as e:
+                logger.debug(f"检索经验失败: {e}")
+
+        # 注入用户上下文到任务描述
+        full_task = task_description
+        if user_context_str:
+            full_task = f"{task_description}\n\n{user_context_str}\n\n请根据以上用户信息回答。"
 
         system = (
             "你是队长Agent，使用 ReAct 模式执行任务。\n\n"
             "你的职责是分析任务、决策行动、分配子任务给 Worker 执行。\n"
-            "Worker 会帮你执行工具调用（搜索、写文件、运行代码等）。\n\n"
+            "Worker 会帮你执行工具调用（搜索、执行代码、操作浏览器、读文件等）。\n\n"
             "输出下一步行动的 JSON：\n\n"
             "选项1 - 分配单个子任务给Worker（推荐！大多数任务用这个）:\n"
             '{"done": false, "thinking": "分析...", "action": {"type": "delegate", "task": "子任务描述，要具体可执行"}}\n\n'
@@ -729,14 +1033,20 @@ class LeaderAgent(LLMAgent):
             "选项5 - 任务完成:\n"
             '{"done": true, "thinking": "任务已完成..."}\n\n'
             "决策指南（重要！）:\n"
+            "- 任何涉及本地文件/目录的操作（读取、列出、写入文件等）→ 必须 delegate\n"
             "- 需要搜索+写文件等多步操作 → batch_delegate 或 delegate\n"
             "- 涉及多个独立步骤 → batch_delegate\n"
             "- 单个明确子任务 → delegate\n"
-            "- 只需一个简单操作（如查天气）→ tool\n\n"
+            "- 仅当任务明确为单次网络请求（如查天气、下载单个网页）→ tool\n"
+            "- 子任务应当具体可执行，不要模糊。参考下方工具列表，为每个子任务匹配合适的工具\n"
+            "- 如果涉及浏览器/MCP工具，确保子任务描述包含操作目标\n"
+            "- 上一轮 tool 失败 → 必须改为 delegate，不要重复失败的 action\n"
+            "- 【关键】如果已有结果（见下方已有结果摘要），优先选择 process_results 综合分析，或直接 done 输出最终答案，不要再重复 delegate！\n"
+            "- 【硬性规则】如果上一轮是 batch_delegate 且有成功结果，这一轮必须选择 process_results 或 done，禁止再选 batch_delegate！\n\n"
             "输出纯JSON，不要其他内容。"
         )
 
-        user = f"任务: {task_description}\n\n历史:\n{history_text or '无'}\n\n{results_text}\n\n第{round_num}轮，请思考下一步："
+        user = f"任务: {full_task}\n\n历史:\n{history_text or '无'}\n\n{results_text}\n\n第{round_num}轮，请思考下一步："
 
         result = await _llm_json(system, user, max_tokens=500)
 
@@ -751,7 +1061,8 @@ class LeaderAgent(LLMAgent):
         """ReAct Action 阶段：执行具体行动"""
         
         if action_type == "tool":
-            # 直接调用工具
+            # ponytail: Leader 直接调用工具（设计上"只决策不执行"，但简单任务免去 Worker 分配开销）
+            # 仅用于"查天气"等单步场景，复杂任务仍走 delegate/batch_delegate
             tool_name = action.get("tool_name", "")
             args = action.get("args", {})
             
@@ -812,21 +1123,11 @@ class LeaderAgent(LLMAgent):
             # 统计成功数量
             success_count = sum(1 for r in batch_results if r.get("success"))
             
-            # 有成功结果 → 直接返回，跳过 LLM 分析（ponytail: 省一轮 LLM 调用）
+            # 有成功结果 → 返回结果，由 Leader 在下一轮决定是否需要 process_results 合成
             if success_count > 0:
-                # 提取成功结果的内容
-                result_parts = []
-                for r in batch_results:
-                    if r.get("success"):
-                        data = r.get("result", {})
-                        content = data.get("content", "")
-                        if content:
-                            result_parts.append(content)
-                
                 return {
                     "success": True,
                     "result": {
-                        "content": "\n\n".join(result_parts) if result_parts else json.dumps(batch_results, ensure_ascii=False)[:500],
                         "batch_results": batch_results,
                         "success_count": success_count,
                         "total_count": len(batch_results),
@@ -849,51 +1150,43 @@ class LeaderAgent(LLMAgent):
             }
 
         elif action_type == "process_results":
-            # 处理前一轮的batch_delegate结果（并发→串行的关键环节）
-            # 从context_history中获取上一轮的batch_results
+            # 处理前一轮的delegate/batch_delegate结果
+            # ponytail: 直接返回结果给 leader，不委派给 worker（避免 worker 重复读文件覆盖合成结果）
             prev_results = []
             for h in reversed(context_history):
-                if h.get("action_type") == "batch_delegate" and h.get("result", {}).get("success"):
-                    prev_results = h["result"].get("result", {}).get("batch_results", [])
+                atype = h.get("action_type")
+                if atype in ("batch_delegate", "delegate") and h.get("result", {}).get("success"):
+                    if atype == "batch_delegate":
+                        prev_results = h["result"].get("result", {}).get("batch_results", [])
+                    else:
+                        prev_results = [h["result"]]
                     break
             
             if not prev_results:
                 return {"success": False, "error": "没有找到可处理的前一轮结果"}
             
-            # 提取任务描述（从action中获取，或使用原始任务）
-            process_task = action.get("task", f"综合分析以下结果并生成报告：{original_task}")
+            # 提取各 worker 的 tool_result_summary
+            summaries = []
+            for r in prev_results[:5]:
+                data = r.get("result", {})
+                if isinstance(data, dict):
+                    if "batch_results" in data:
+                        for br in data["batch_results"][:3]:
+                            br_data = br.get("result", {})
+                            if isinstance(br_data, dict):
+                                c = br_data.get("tool_result_summary", br_data.get("content", ""))
+                                if c:
+                                    summaries.append(c[:500])
+                    else:
+                        c = data.get("content", data.get("tool_result_summary", data.get("raw", "")))
+                        if c:
+                            summaries.append(str(c)[:500])
             
-            # 将前一轮结果作为上下文传递给Worker
-            result_context = "\n".join([
-                f"结果{i+1}: {r.get('result', {}).get('raw', str(r.get('result', '')))[:200]}"
-                for i, r in enumerate(prev_results[:5])  # 限制数量避免上下文过长
-            ])
-            
-            enhanced_task = f"{process_task}\n\n【需要处理的结果】\n{result_context}"
-            
-            # 选择第一个空闲 Worker 串行处理
-            worker = workers[0] if workers else None
-            if not worker:
-                return {"success": False, "error": "无可用 Worker"}
-            
-            msg = AgentMessage(
-                from_agent=self.name,
-                content=enhanced_task,
-                message_type="task",
-            )
-            result_str = await worker.process_message(msg)
-            
-            try:
-                data = json.loads(result_str)
-                is_ok = data.get("success", True) is True and data.get("status") != "failed"
-            except Exception:
-                data = {"raw": result_str[:500]}
-                is_ok = False
-            
+            combined = "\n\n".join(summaries) if summaries else "无有效结果"
             return {
-                "success": is_ok,
-                "result": data,
-                "worker": worker.name,
+                "success": True,
+                "result": {"tool_result_summary": combined, "content": combined},
+                "worker": self.name,
                 "processed_count": len(prev_results),
             }
 
@@ -1063,24 +1356,21 @@ class V1LeaderPool:
         logger.info(f"👥 创建队伍: 1 队长 + {worker_count}/{max_workers} Worker (队长={leader.name})")
         return leader, workers
 
-    async def share_memory(self, agents: List[LLMAgent]) -> None:
-        """共享记忆 — 已禁用（消息总线已移除）"""
-        # ponytail: comm_center removed
-        pass
-
     # ─── Worker 池化管理 ──────────────────────────────────────────────
 
     async def get_worker(self, leader_name: str = None) -> Optional[LLMAgent]:
         """从池中获取一个空闲Worker
-        
+
         Args:
             leader_name: 主Agent名称（用于设置Worker的leader_name）
-        
+
         Returns:
-            空闲Worker，或 None（池空且无法创建新Worker）
+            空闲Worker，或 None（池空且达到上限）
         """
         await self._ensure_tool_registry()
         async with self._pool_lock:
+            total_workers = len(self._worker_pool) + len(self._busy_workers)
+
             # 优先从池中获取
             if self._worker_pool:
                 worker = self._worker_pool.pop()
@@ -1090,9 +1380,10 @@ class V1LeaderPool:
                 self._busy_workers[worker.name] = worker
                 logger.debug(f"📦 从池中取出 Worker: {worker.name}")
                 return worker
-            
-            # 池空，尝试创建新Worker
-            if len(self._busy_workers) < 10:  # 最多10个Worker
+
+            # 池空且在容量上限内，创建新Worker
+            # ponytail: 硬上限 10 个，避免内存泄漏
+            if total_workers < 10:
                 team_id = uuid4().hex[:8]
                 worker = LLMAgent(
                     name=f"队员_{team_id}",
@@ -1101,13 +1392,13 @@ class V1LeaderPool:
                 )
                 if leader_name:
                     worker.leader_name = leader_name
-                
+
                 self._all_agents[worker.name] = worker
                 self._busy_workers[worker.name] = worker
                 logger.debug(f"✨ 创建新 Worker: {worker.name}")
                 return worker
-            
-            logger.warning("Worker池已满，无法获取更多Worker")
+
+            logger.warning("Worker池已满(%d)，无法获取更多Worker", total_workers)
             return None
 
     async def return_worker(self, worker: LLMAgent) -> None:

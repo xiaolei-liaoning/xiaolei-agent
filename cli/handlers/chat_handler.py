@@ -167,6 +167,8 @@ export default async function() {{
                         f"    \033[2;37m阶段: {' → '.join(p.title for p in wr.phases)}"
                         f" | {wr.elapsed:.1f}s\033[0m"
                     )
+                if wr.agent_graph and (wr.agent_graph.get('nodes') or wr.agent_graph.get('edges')):
+                    _render_agent_graph(wr.agent_graph)
             else:
                 log_status(f"编排完成但无结果: {wr.error or '无输出'}", color="yellow")
         except Exception as e:
@@ -181,21 +183,79 @@ export default async function() {{
             if not router or not router.is_available():
                 return ""
 
-            prompt = (
-                "生成 JS Workflow 脚本，必须包含 export const meta + export default async function。\n\n"
-                "API: agent(prompt,{label,isFinal}) $dag(nodes) parallel(thunks)\n\n"
-                "代码类任务必须用 $dag 模式：先分析接口，再并行写模块，最后合并。\n"
-                "$dag 示例（照做，不要自己改编排）：\n"
-                "const ctx = await $dag({\n"
-                "  分析: () => agent('分析',{label:'分析'}),\n"
-                "  引擎: {depends:'分析',task: ctx => agent('引擎\\n'+ctx['分析'],{label:'引擎'})},\n"
-                "  UI: {depends:'分析',task: ctx => agent('UI\\n'+ctx['分析'],{label:'UI'})},\n"
-                "  合并: {depends:['引擎','UI'],task: ctx => agent('合并\\n'+ctx['引擎']+ctx['UI'],{label:'合并',isFinal:true})},\n"
-                "})\n"
-                "return ctx['合并'];\n\n"
-                f"任务：{task[:600]}\n\n"
-                "开始："
+            # ── 先识别任务类型 ──
+            task_lower = task[:200].lower()
+
+            code_keywords = [
+                "写代码", "写程序", "写脚本", "写一个", "写个",
+                "实现", "创建", "项目", "模块", "重构", "拆分",
+                "生成代码", "代码生成", "开发",
+                "generat", "implement", "create", "refactor", "build",
+            ]
+            # 反触发词：如果任务包含这些，即使命中 code_keywords 也不判为代码任务
+            code_antitrigger = ["写一篇", "写博客", "写文章", "写报告", "写文档"]
+            is_code_task = (
+                any(kw in task_lower for kw in code_keywords)
+                and not any(kw in task_lower for kw in code_antitrigger)
             )
+
+            # ── 检测到 JS 脚本片段直接执行 ──
+            if "export const meta" not in task and "$dag" not in task and is_code_task:
+                # 代码生成/重构类：保留 $dag 强制模板（已验证可靠）
+                prompt = (
+                    "生成 JS Workflow 脚本，必须包含 export const meta + export default async function。\n\n"
+                    "API: agent(prompt,{label,isFinal}) $dag(nodes) parallel(thunks)\n\n"
+                    "这是代码类任务，必须用 $dag 模式（声明式 DAG 依赖编排）：\n"
+                    "- 先分析接口/设计\n"
+                    "- 再并行写各个模块\n"
+                    "- 最后合并/集成\n\n"
+                    "$dag 示例：\n"
+                    "const ctx = await $dag({\n"
+                    "  分析: () => agent('分析',{label:'分析'}),\n"
+                    "  引擎: {depends:'分析',task: ctx => agent('引擎\\n'+ctx['分析'],{label:'引擎'})},\n"
+                    "  UI: {depends:'分析',task: ctx => agent('UI\\n'+ctx['分析'],{label:'UI'})},\n"
+                    "  合并: {depends:['引擎','UI'],task: ctx => agent('合并\\n'+ctx['引擎']+ctx['UI'],{label:'合并',isFinal:true})},\n"
+                    "})\n"
+                    "return ctx['合并'];\n\n"
+                    f"任务：{task[:600]}\n\n"
+                    "开始："
+                )
+            else:
+                # 其他任务：用编排思维规则，不套模板
+                prompt = (
+                    "生成 JS Workflow 脚本，必须包含 export const meta + export default async function。\n\n"
+                    "【可用 API】\n"
+                    "  - agent(prompt, {label, isFinal}) — 启动一个子 Agent 执行子任务\n"
+                    "  - parallel([thunks]) — 并行启动多个 agent，等待全部完成，返回数组\n"
+                    "  - $dag({key: spec}) — 声明式 DAG 编排（key 间可声明 depends 依赖）\n"
+                    "  - phase(title) — 标记阶段性进度分组\n"
+                    "  - log(msg) — 输出进度消息\n\n"
+                    "【编排规则：根据步骤之间的数据依赖关系选结构，不按任务类型名称选】\n\n"
+                    "规则① 某步的输出是下一步的输入（串行数据流）：\n"
+                    "   用 await agent() 逐个执行，前一结果传后一 prompt\n"
+                    "   例：搜数据 → 分析 → 写报告（每一步依赖上一步结果）\n\n"
+                    "规则② 多步彼此完全独立：\n"
+                    "   用 parallel([() => agent(...), () => agent(...)]) 同时跑\n"
+                    "   例：同时搜百度+微博+知乎，三个结果谁也不用等谁\n\n"
+                    "规则③ 部分步骤有依赖关系、部分可并行（复杂拓扑）：\n"
+                    "   用 $dag() 声明谁依赖谁，引擎自动决定执行顺序\n"
+                    "   例：A 和 B 可并行 → C 依赖 A+B 都完成\n\n"
+                    "规则④ 步骤数量在执行前不确定（动态列表）：\n"
+                    "   用 for 循环把结果集转成 parallel agent\n"
+                    "   例：遍历一组文件，对每个文件开一个 agent 处理\n\n"
+                    "规则⑤ 某步的结果决定是否继续或走哪条路（条件分支）：\n"
+                    "   用 if/else + await agent() 或 await agent() + guard\n"
+                    "   例：搜索结果为空→换搜索词重试；不为空→分析\n\n"
+                    "【三要三不要】\n"
+                    "  ✅ 必须：用 phase() 给步骤逻辑分组\n"
+                    "  ✅ 必须：一个 workflow 里可以混用 parallel + agent + $dag\n"
+                    "  ✅ 必须：子 task 的 prompt 语义完整，能独立理解执行\n"
+                    "  ❌ 不要：强行用 $dag——除非真的有并行+依赖的拓扑关系\n"
+                    "  ❌ 不要：复制示例的变量名和结构——根据实际任务编\n"
+                    "  ❌ 不要：写多余注释——代码清晰即可\n\n"
+                    f"任务：{task[:600]}\n\n"
+                    "开始写 workflow："
+                )
             resp = await asyncio.wait_for(
                 router.chat(
                     [{"role": "user", "content": prompt}],
@@ -521,7 +581,10 @@ export default async function() {{
         from core.multi_agent_v2.agents.base.models import Task
         from core.multi_agent_v2.agents.base.work_agent import WorkAgent
 
+        initial_message = request
         agent = WorkAgent()
+        # ponytail: cli_user 默认 id，接 user_id 模块后可替换
+        agent.user_id = str(getattr(self.cli, 'user_id', 'cli_user'))
         task = Task(task_id=uuid.uuid4().hex[:8], type="general", description=request)
 
         try:
@@ -535,6 +598,15 @@ export default async function() {{
             if answer:
                 print_chat_bubble(answer[:500], is_user=False)
                 self.cli.chat_history.append({"role": "assistant", "content": answer[:500]})
+
+            # ponytail: 对话结束后提取事实，失败静默
+            try:
+                from core.memory.memory_middleware import get_memory_middleware
+                mw = get_memory_middleware()
+                uid = str(getattr(self.cli, 'user_id', 'cli_user'))
+                asyncio.ensure_future(mw.process_turn(uid, initial_message, str(answer)[:500]))
+            except Exception:
+                pass
 
     async def handle_smart_request(self, request: str):
         """处理智能请求"""
@@ -865,3 +937,76 @@ export default async function() {{
         print_color("─" * 50, CliColors.GRAY)
         print_color('使用 /orchestrate "任务" 启动多Agent自动编排', CliColors.GRAY)
         print_color('使用 /smart "任务" 启动智能Agent执行', CliColors.GRAY)
+
+
+# ═══════════════════════════════════════════════════════════════
+# 协作图渲染
+# ═══════════════════════════════════════════════════════════════
+
+def _render_agent_graph(graph: dict):
+    """将 agent_graph 渲染为 Mermaid HTML 并用浏览器打开"""
+    nodes = graph.get("nodes", [])
+    edges = graph.get("edges", [])
+    if not nodes and not edges:
+        return
+
+    from cli.colors import print_success, log_status, CLAUDE
+    log_status("正在生成 Agent 协作图...", color=CLAUDE)
+
+    # 构建 Mermaid 流程图
+    mermaid_lines = ["graph TD"]
+    # 每个 node
+    node_ids = {}
+    for i, n in enumerate(nodes):
+        nid = f"N{i}"
+        label = n.get("label", nid)
+        task = n.get("prompt", "")
+        status = n.get("status", "")
+        badge = "✅" if status == "done" else "⏳"
+        mermaid_lines.append(f'    {nid}["{badge} {label}"]')
+        node_ids[label] = nid
+    # 每个 edge
+    for e in edges:
+        frm = e.get("from", "")
+        to = e.get("to", "")
+        frm_id = node_ids.get(frm, frm)
+        to_id = node_ids.get(to, to)
+        mermaid_lines.append(f"    {frm_id} --> {to_id}")
+
+    mermaid_code = "\n".join(mermaid_lines)
+
+    html = f'''<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8">
+<title>Agent 协作图</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<style>
+  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+  body {{ background: #f0f2f5; font-family: -apple-system, "Microsoft YaHei", sans-serif; padding: 40px; }}
+  .container {{ max-width: 1000px; margin: 0 auto; }}
+  h1 {{ font-size: 22px; margin-bottom: 8px; color: #1a1a2e; }}
+  .subtitle {{ font-size: 13px; color: #666; margin-bottom: 24px; }}
+  .mermaid-wrap {{ background: #fff; border-radius: 12px; padding: 32px; box-shadow: 0 2px 12px rgba(0,0,0,0.08); overflow-x: auto; }}
+  .mermaid-wrap svg {{ max-width: 100%; height: auto; }}
+  .legend {{ display: flex; gap: 20px; margin-top: 16px; font-size: 13px; color: #666; }}
+</style>
+</head>
+<body><div class="container">
+<h1>🤖 Agent 协作图</h1>
+<p class="subtitle">{len(nodes)} 个 Agent · {len(edges)} 条依赖边</p>
+<div class="mermaid-wrap">
+<div class="mermaid">
+{mermaid_code}
+</div>
+</div>
+<div class="legend">
+<span>✅ 已完成</span> <span>⏳ 执行中</span>
+</div>
+</div></body></html>'''
+
+    import tempfile, subprocess
+    path = os.path.join(tempfile.gettempdir(), "agent-collab-graph.html")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(html)
+    subprocess.Popen(["open", path])
+    print_success(f"  ☝️  Agent 协作图已打开: {path}")

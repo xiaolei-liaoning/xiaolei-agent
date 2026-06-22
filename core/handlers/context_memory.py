@@ -59,14 +59,12 @@ def add_to_context_memory(user_id: str, message: str, role: str = "user", skill_
             context_type=context_type
         )
 
-        logger.info("上下文记忆已更新 - 用户: %s, Skill: %s, BFS: %s, 节点数: %d",
-                    user_id, skill_name, need_bfs, len(short_term_memory.nodes))
+        logger.info("上下文记忆已更新 - 用户: %s, Skill: %s, BFS: %s",
+                    user_id, skill_name, need_bfs)
 
         return {
             "success": True,
             "context_id": context_id,
-            "queue_size": len(short_term_memory.queue),
-            "nodes_count": len(short_term_memory.nodes),
             "bfs_enabled": need_bfs
         }
     except Exception as e:

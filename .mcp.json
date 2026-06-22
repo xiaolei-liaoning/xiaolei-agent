@@ -1,12 +1,8 @@
 {
   "mcpServers": {
     "codegraph": {
-      "command": "/opt/homebrew/opt/node@22/bin/node",
-      "args": [
-        "/Users/leiyuxuan/Desktop/小雷版agent/.claude/codegraph/dist/bin/codegraph.js",
-        "serve",
-        "--mcp"
-      ],
+      "command": "codegraph",
+      "args": ["serve", "--mcp"],
       "timeout": 30000
     },
     "playwright": {

@@ -10,6 +10,7 @@ WebSocket 端点已移至 chat_ws.py。
 """
 
 import asyncio
+import json
 import logging
 import time
 from pathlib import Path
@@ -28,6 +29,7 @@ from core.handlers import (
     save_task_log,
 )
 from core.workflow.bfs_processor import get_bfs_processor
+from core.memory.context_compactor import get_compactor
 
 
 logger = logging.getLogger(__name__)
@@ -253,6 +255,15 @@ def _get_bfs_context(user_id: int, depth: int = 3, limit: int = 20) -> Dict[str,
                 for msg in context[:5]
             ]
         }
+        
+        # Add compaction stats if available
+        try:
+            from core.memory.context_compactor import get_compactor
+            compactor = get_compactor()
+            context_summary['compaction_stats'] = compactor.get_compaction_stats()
+        except Exception:
+            pass
+        
         return context_summary
     except Exception as e:
         logger.warning("获取BFS上下文失败: %s", e)
@@ -311,6 +322,21 @@ async def _handle_with_multi_agent(
         except Exception as e:
             logger.warning("添加到BFS上下文失败: %s", e)
 
+        # ===== 上下文压缩：压缩历史消息 =====
+        try:
+            bfs = get_bfs_processor()
+            history = bfs.get_context(user_id=request.user_id, depth=3, limit=20)
+            if history and len(history) > 5:
+                compactor = get_compactor()
+                # Convert history to message format
+                history_msgs = [{"role": m.get("role", "user"), "content": m.get("content", "")} for m in history]
+                compressed = compactor.compact(history_msgs)
+                # Update context_info with compression stats
+                context_info["compaction_stats"] = compactor.get_compaction_stats()
+                logger.debug("上下文压缩完成: %s", compactor.get_compaction_stats())
+        except Exception as e:
+            logger.debug("上下文压缩失败（非关键）: %s", e)
+
         # 处理图片文件（OCR识别）
         ocr_results = []
         if request.file_paths:
@@ -350,11 +376,34 @@ async def _handle_with_multi_agent(
             )
             is_temp_team = False
 
+        # A: 对话记忆 — 设置 user_id 到所有 Agent
+        uid = str(request.user_id)
+        leader.user_id = uid
+        for w in workers:
+            w.user_id = uid
+
         logger.info(f"👥 V1 队伍已创建: 队长={leader.name}, {len(workers)} 个 Worker")
+
+        # ===== 用户记忆：统一中间件 =====
+        user_context_str = ""
+        try:
+            from core.memory.memory_middleware import get_memory_middleware
+            mw = get_memory_middleware()
+            user_context_str = await mw.get_user_context(uid, message)
+        except Exception as e:
+            logger.debug("用户记忆获取失败: %s", e)
+
+        # 注入用户上下文到任务描述
+        task_with_context = message
+        if user_context_str:
+            task_with_context = (
+                f"{message}\n\n【用户已知信息（来自长期记忆）】\n{user_context_str}\n\n"
+                "请根据以上信息回答。如果用户信息中有答案，直接使用，不要搜索。"
+            )
 
         try:
             result = await asyncio.wait_for(
-                leader.supervise_task(message, workers, active_count=len(workers), max_rounds=3),
+                leader.supervise_task(task_with_context, workers, active_count=len(workers), max_rounds=3),
                 timeout=120,
             )
         except asyncio.TimeoutError:
@@ -377,8 +426,10 @@ async def _handle_with_multi_agent(
         else:
             reply_parts.append(f"❌ V1 多Agent 任务未完全完成（{result.get('error', '未知错误')}）\n")
 
-        for i, r in enumerate(all_results):
-            worker_name = r.get("worker", f"worker-{i}")
+        # ponytail: 只显示最后一个结果（避免 batch_delegate 中间结果重复显示）
+        if all_results:
+            r = all_results[-1]
+            worker_name = r.get("worker", "leader")
             task_desc = r.get("task", "")
             worker_ok = r.get("success", False)
             worker_result = r.get("result", {})
@@ -386,21 +437,59 @@ async def _handle_with_multi_agent(
             reply_parts.append(f"\n{status_icon} **{worker_name}**: {task_desc[:80]}")
             result_text = ""
             if isinstance(worker_result, dict):
-                # 优先取 content（KEPA 格式），其次取 result
-                result_text = worker_result.get("content", "") or worker_result.get("result", "")
-                # 如果 result 是 dict，尝试提取子字段
-                if not result_text and isinstance(worker_result.get("result"), dict):
-                    sub = worker_result["result"]
-                    result_text = sub.get("content", "") or sub.get("result", "") or sub.get("text", "")
+                # ponytail: batch_delegate 结果直接提取各 worker 的 tool_result_summary
+                if "batch_results" in worker_result:
+                    summaries = []
+                    for br in worker_result["batch_results"]:
+                        br_data = br.get("result", {})
+                        if isinstance(br_data, dict):
+                            s = br_data.get("tool_result_summary", br_data.get("content", ""))
+                            if s:
+                                summaries.append(s)
+                    result_text = "\n".join(summaries) if summaries else str(worker_result)[:500]
+                elif "result" in worker_result and isinstance(worker_result["result"], dict) and "batch_results" in worker_result["result"]:
+                    # process_results 包装后的格式
+                    inner = worker_result["result"]
+                    summaries = []
+                    for br in inner["batch_results"]:
+                        br_data = br.get("result", {})
+                        if isinstance(br_data, dict):
+                            s = br_data.get("tool_result_summary", br_data.get("content", ""))
+                            if s:
+                                summaries.append(s)
+                    result_text = "\n".join(summaries) if summaries else str(inner)[:500]
+                else:
+                    # ponytail: process_results 返回的 worker_result 结构: {"tool_result_summary": ..., "content": ..., "tool_calls": ...}
+                    # tool_result_summary 可能在顶层，也可能在 result 子字段
+                    result_text = worker_result.get("tool_result_summary", "")
+                    if not result_text and isinstance(worker_result.get("result"), dict):
+                        result_text = worker_result["result"].get("tool_result_summary", "")
+                    if not result_text and "ok" in worker_result:
+                        if worker_result.get("ok"):
+                            result_text = worker_result.get("data", "")
+                        else:
+                            result_text = f"错误: {worker_result.get('error', '未知错误')}"
+                    if not result_text:
+                        content_raw = worker_result.get("content", "") or worker_result.get("result", "")
+                        if content_raw:
+                            try:
+                                parsed = json.loads(content_raw) if isinstance(content_raw, str) else content_raw
+                                if isinstance(parsed, dict):
+                                    result_text = parsed.get("result", "") or parsed.get("details", "") or parsed.get("text", "") or (
+                                        parsed.get("data", "") if "ok" in parsed else ""
+                                    )
+                            except (json.JSONDecodeError, TypeError):
+                                result_text = content_raw
+                    if not result_text and isinstance(worker_result.get("result"), dict):
+                        sub = worker_result["result"]
+                        result_text = sub.get("content", "") or sub.get("result", "") or sub.get("text", "")
+                        if not result_text and "ok" in sub:
+                            result_text = sub.get("data", "")
             elif worker_result:
                 result_text = str(worker_result)
             if result_text:
-                import re
-                # 去掉尾部 JSON 块（markdown 代码块格式）
-                result_text = re.sub(r'\n?[\s]*```json\s*\{.*?\}\s*```.*$', '', result_text, flags=re.DOTALL).strip()
-                # 去掉尾部裸 JSON 对象（从最后一个独立 { 开始）
-                result_text = re.sub(r'\n\{".*$', '', result_text, flags=re.DOTALL).strip()
-                reply_parts.append(f"   {result_text[:2000]}")
+                # 截断过长输出，但保留实际数据
+                reply_parts.append(f"   {result_text[:3000]}")
 
         reply_text = "\n".join(reply_parts)
 
@@ -428,6 +517,14 @@ async def _handle_with_multi_agent(
             logger.debug("已添加AI回复到BFS上下文")
         except Exception as e:
             logger.warning("添加AI回复到BFS上下文失败: %s", e)
+
+        # ===== 对话结束后：自动提取事实 =====
+        try:
+            from core.memory.memory_middleware import get_memory_middleware
+            mw = get_memory_middleware()
+            asyncio.ensure_future(mw.process_turn(uid, message, reply_text))
+        except Exception:
+            pass
 
         return ChatResponse(
             reply=reply_text,

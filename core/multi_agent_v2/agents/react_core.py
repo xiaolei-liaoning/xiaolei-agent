@@ -101,6 +101,22 @@ _DEBUG_PROMPT = (
     "不要留'需要自行添加'给用户。"
 )
 
+_PROJECT_ANALYSIS_PROMPT = (
+    "<project_analysis_protocol>\n"
+    "你正在分析一个项目的结构和代码。请按两阶段执行：\n\n"
+    "【第一阶段：收集信息】\n"
+    "1. 先调用 analyze_project(path) 批量读取关键文件\n"
+    "2. 如果信息不够，调 search_code(query, file_pattern) 补充搜索\n"
+    "3. 收集完成后进入第二阶段\n\n"
+    "【第二阶段：综合分析】\n"
+    "基于已收集的数据，直接输出完整的项目分析报告：\n"
+    "- 项目概览（语言、框架、构建工具）\n"
+    "- 目录结构与各模块职责\n"
+    "- 核心技术栈分析\n"
+    "- 架构亮点与注意事项\n"
+    "</project_analysis_protocol>"
+)
+
 
 def _get_prefix(agent: Any = None) -> str:
     """获取Agent前缀标签"""
@@ -222,6 +238,14 @@ class ReActCoreMiddleware(BaseMiddleware):
                 modules.append(_GAME_DEV_PROMPT)
         if any(kw in task_lower for kw in ["报告", "热搜", "分析", "数据", "总结", "report", "dashboard"]):
             modules.append(_REPORT_PROMPT)
+
+        # ── 项目分析任务：插入两阶段分析 prompt ──
+        analysis_kw = ["分析项目", "项目结构", "项目目录",
+                       "看.*项目", "项目的代码", "分析.*项目"]
+        if any(re.search(kw, task_lower) for kw in analysis_kw):
+            modules.insert(1, _PROJECT_ANALYSIS_PROMPT)
+            ctx.max_iterations = max(ctx.max_iterations, 15)
+
         if ctx.plan:
             modules.append(_PLAN_PROMPT)
         if ctx.forced_instructions or ctx.warnings:
@@ -520,7 +544,6 @@ def build_default_chain() -> MiddlewareChain:
         TruncationMiddleware,
         TodoMiddleware,
     )
-
     chain.add(TruncationMiddleware())
     chain.add(LoopDetectionMiddleware())
     chain.add(ClarificationMiddleware())

@@ -30,7 +30,7 @@ class LlmExtractor:
         """
         # 延迟初始化router
         if self.router is None:
-            from ..engine.llm_backend import get_llm_router
+            from ...engine.llm_backend import get_llm_router
             self.router = get_llm_router()
 
         prompt = f"""请从以下文本中提取关键信息，包括：
