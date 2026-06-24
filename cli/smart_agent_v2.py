@@ -160,7 +160,7 @@ class SmartAgentCLIv2:
             orch = self._orchestrator
 
             # 根据复杂度/关键词动态拆分为多个维度
-            complexity = self._estimate_complexity(user_query)
+            complexity = await self._estimate_complexity(user_query)
             dimensions = self._break_into_dimensions(user_query, complexity)
 
             if len(dimensions) <= 1:
@@ -239,23 +239,27 @@ class SmartAgentCLIv2:
 
         return dimensions[:5]  # 最多 5 个维度
 
-    def _estimate_complexity(self, query: str) -> float:
-        """估算任务复杂度"""
+    async def _estimate_complexity(self, query: str) -> float:
+        """估算任务复杂度（LLM优先）"""
+        try:
+            from core.engine.llm_backend import get_llm_router
+            router = get_llm_router()
+            if router and router.is_available():
+                resp = await router.simple_chat(
+                    f"任务：{query}\n返回一个0.1到0.95之间的数字表示复杂度（0.1=极简单, 0.95=极复杂）。只返回数字：",
+                    temperature=0, max_tokens=10
+                )
+                val = float(str(resp or '0').strip())
+                return min(0.95, max(0.1, val))
+        except Exception:
+            pass
         complexity = 0.3
-        complex_keywords = ["分析", "报告", "复杂", "深入", "全面", "详细"]
-        simple_keywords = ["简单", "快速", "简短", "一句话"]
-
-        for kw in complex_keywords:
-            if kw in query:
-                complexity += 0.2
-        for kw in simple_keywords:
-            if kw in query:
-                complexity -= 0.1
-        if len(query) > 50:
-            complexity += 0.1
-        if len(query) > 100:
-            complexity += 0.1
-
+        for kw in ["分析", "报告", "复杂", "深入", "全面", "详细"]:
+            if kw in query: complexity += 0.2
+        for kw in ["简单", "快速", "简短", "一句话"]:
+            if kw in query: complexity -= 0.1
+        if len(query) > 50: complexity += 0.1
+        if len(query) > 100: complexity += 0.1
         return min(0.95, max(0.1, complexity))
 
     def _estimate_steps(self, query: str) -> int:

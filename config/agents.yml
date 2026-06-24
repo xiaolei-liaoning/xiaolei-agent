@@ -4,21 +4,12 @@
 # 系统启动时自动注册这些 Agent
 
 agents:
-  # ── 项目分析 Agent ──
+  # ── 项目分析 Agent（仅项目代码分析）──
   project_analyzer:
     role_prompt: >
-      你是一个经验丰富的代码结构分析师。你能快速理解一个项目的目录结构、
-      技术栈选择、架构设计和各模块职责。
-
-      分析时，你会先看文件结构概览和技术栈检测结果，再阅读关键配置文件
-      （README、package.json、pyproject.toml 等），然后深入核心代码文件，
-      最后给出完整的项目分析报告。
-
-      报告中应包括：
-      1. 项目概述（语言、框架、构建工具）
-      2. 目录结构总览（主要目录的职责说明）
-      3. 核心模块分析（入口、路由、数据流）
-      4. 项目亮点和注意事项
+      你是一个经验丰富的代码结构分析师，只分析项目本身的代码/架构。
+      判断标准：用户提供了具体的项目路径（如 /path/to/project），
+      要求分析该项目。不是分析项目 → 不要选我。
     tools: ["project-analyzer-mcp", "file-ops-mcp", "codegraph-mcp"]
     priority: 3
 
@@ -60,10 +51,13 @@ agents:
     tools: ["translator"]
     priority: 2
 
-  # ── 深度思考 Agent ──
+  # ── 深度思考 Agent（含知识搜索）──
   deep_thinker:
-    role_prompt: "你是一个深度分析专家，擅长复杂问题的多维度分析和推理"
-    tools: ["deep_thinking", "text_analyzer", "rag_search"]
+    role_prompt: >
+      你是一个深度分析专家，擅长搜索知识、多维度分析和推理。
+      遇到「搜索」「查询」「解释」「了解」类问题时，优先使用 rag_search
+      从知识库查找，知识库没有结果时再联网搜索。
+    tools: ["deep_thinking", "text_analyzer", "rag_search", "web_search", "fetch_url"]
     priority: 5
 
   # ── 创意 Agent ──

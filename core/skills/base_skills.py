@@ -42,14 +42,14 @@ class BaseSkill:
 
 # BaseSkill → 相关的 Expert 类别（缩小216个的匹配范围）
 BASE_TO_EXPERT_CATEGORIES = {
-    "project_analyzer": ["engineering", "specialized"],
-    "web_scraper":    ["engineering", "specialized", "marketing"],
-    "data_analyst":   ["engineering", "finance", "specialized", "supply_chain"],
-    "deep_thinker":   ["specialized", "product_design", "engineering", "strategy"],
+    "project_analyzer": ["engineering", "specialized", "backend", "fullstack", "system-architecture", "frontend", "database", "ai-ml", "generative-ai", "data-engineering", "devops-cloud", "security", "performance", "debugging-quality", "mobile", "context-engineering", "evaluation", "agent-workflows"],
+    "web_scraper":    ["engineering", "specialized", "marketing", "backend"],
+    "data_analyst":   ["engineering", "finance", "specialized", "supply_chain", "data-engineering", "evaluation", "database"],
+    "deep_thinker":   ["specialized", "product_design", "engineering", "strategy", "system-architecture", "generative-ai", "ai-ml"],
     "translator":     ["specialized", "support"],
     "weather_expert": ["specialized"],
-    "system_toolbox": ["engineering", "support", "security"],
-    "creative":       ["design", "game_development", "marketing", "paid_media"],
+    "system_toolbox": ["engineering", "support", "security", "backend", "devops-cloud", "performance", "debugging-quality"],
+    "creative":       ["design", "game_development", "marketing", "paid_media", "frontend", "fullstack"],
     "general":        [],
 }
 
@@ -74,6 +74,22 @@ CATEGORY_TO_DIR = {
     "testing": "testing",
     "security": "security",
     "strategy": "strategy",
+    # agent-dev-prompts categories
+    "frontend": "frontend",
+    "backend": "backend",
+    "fullstack": "fullstack",
+    "database": "database",
+    "ai-ml": "ai-ml",
+    "generative-ai": "generative-ai",
+    "data-engineering": "data-engineering",
+    "devops-cloud": "devops-cloud",
+    "system-architecture": "system-architecture",
+    "performance": "performance",
+    "debugging-quality": "debugging-quality",
+    "mobile": "mobile",
+    "agent-workflows": "agent-workflows",
+    "evaluation": "evaluation",
+    "context-engineering": "context-engineering",
 }
 
 
@@ -181,7 +197,7 @@ class SkillSystem:
                 content = f.read().strip()
             if content:
                 logger.debug(f"📄 加载 Expert MD: {expert_id} ({len(content)} 字符)")
-                return content[:4000]  # ponytail: 截断防 prompt 溢出
+                return content[:16000]  # ponytail: 截断防 prompt 溢出（dev-prompts 最大 15K）
         except Exception as e:
             logger.warning(f"加载 Expert MD 失败 {expert_id}: {e}")
 

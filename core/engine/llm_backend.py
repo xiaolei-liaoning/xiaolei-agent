@@ -150,6 +150,7 @@ class GLMBackend:
         self.model = model or DEFAULT_MODEL
         self.client = None
         self.deepseek_client = None
+        self.openrouter_client = None
         self.deepseek_model = os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL", "deepseek-chat")
         self._token_stats = TokenStats()
         self._rate_limiter = RateLimiter(RATE_LIMIT_RPM)
@@ -175,7 +176,22 @@ class GLMBackend:
             except Exception as e:
                 logger.warning("DeepSeek 客户端初始化失败: %s", e)
 
-        # 1. 初始化 GLM API (fallback)
+        # 1. 初始化 OpenRouter (OpenAI 兼容)
+        openrouter_key = os.getenv("OPENROUTER_API_KEY", "")
+        if openrouter_key:
+            try:
+                import openai
+                self.openrouter_client = openai.AsyncOpenAI(
+                    api_key=openrouter_key,
+                    base_url="https://openrouter.ai/api/v1",
+                )
+                logger.info("OpenRouter 客户端初始化成功")
+            except ImportError:
+                logger.warning("openai 未安装，OpenRouter 客户端不可用")
+            except Exception as e:
+                logger.warning("OpenRouter 客户端初始化失败: %s", e)
+
+        # 2. 初始化 GLM API (fallback)
         if self.api_key:
             try:
                 from zhipuai import ZhipuAI
@@ -244,6 +260,9 @@ class GLMBackend:
         if not await self._rate_limiter.acquire(timeout=15.0):
             return LLMResponse(content="请求过于频繁，请稍后再试")
 
+        logger.info("LLM.chat: api_key=%s client=%s tools=%s",
+                     bool(self.api_key), bool(self.client), bool(tools))
+
         # 0. DeepSeek (OpenAI 兼容) — 优先
         if self.deepseek_client:
             try:
@@ -284,11 +303,42 @@ class GLMBackend:
             except asyncio.TimeoutError:
                 logger.error("DeepSeek API 调用超时(25s)")
             except Exception as e:
-                logger.error(f"DeepSeek API 调用异常: {e}（将尝试GLM API）")
+                logger.error(f"DeepSeek API 调用异常: {e}")
 
-        # 1. GLM 官方 API (fallback)
-        logger.info("LLM.chat: api_key=%s client=%s tools=%s",
-                     bool(self.api_key), bool(self.client), bool(tools))
+        # 1. OpenRouter (OpenAI 兼容) — fallback
+        if self.openrouter_client:
+            try:
+                payload = dict(model=self.deepseek_model, messages=messages,
+                               temperature=temperature, max_tokens=max_tokens)
+                if tools:
+                    payload["tools"] = tools
+                    payload["tool_choice"] = "auto"
+
+                logger.info("LLM → OpenRouter (model=%s, tools=%s)", self.deepseek_model, bool(tools))
+                response = await asyncio.wait_for(
+                    self.openrouter_client.chat.completions.create(**payload),
+                    timeout=180,
+                )
+                if hasattr(response, 'choices') and response.choices:
+                    message = response.choices[0].message
+                    content = getattr(message, 'content', None) or ""
+                    tc = getattr(message, 'tool_calls', None)
+                    logger.info("LLM OpenRouter返回: content_len=%d tool_calls=%s", len(content), bool(tc))
+                    self._consecutive_failures = 0
+                    if tc:
+                        tc_list = [{"id": getattr(t, 'id', ''),
+                                    "type": getattr(t, 'type', 'function'),
+                                    "function": {"name": t.function.name,
+                                                 "arguments": t.function.arguments}}
+                                   for t in tc]
+                        return LLMResponse(content=content, tool_calls=tc_list)
+                    return LLMResponse(content=content or "")
+            except asyncio.TimeoutError:
+                logger.error("OpenRouter API 调用超时(25s)")
+            except Exception as e:
+                logger.error(f"OpenRouter API 调用异常: {e}")
+
+        # 2. GLM (ZhipuAI) — 最后 fallback
         if self.client and self.api_key:
             try:
                 kwargs = dict(model="glm-4-flash", messages=messages,
@@ -298,7 +348,7 @@ class GLMBackend:
                     kwargs["tools"] = tools
                     kwargs["tool_choice"] = "auto"
 
-                logger.info("LLM → GLM API (glm-4-flash, tools=%s)", bool(tools))
+                logger.info("LLM → GLM (glm-4-flash, tools=%s)", bool(tools))
                 response = await asyncio.wait_for(
                     asyncio.to_thread(self.client.chat.completions.create, **kwargs),
                     timeout=180,
@@ -308,7 +358,7 @@ class GLMBackend:
                 content = message.content or ""
                 tc = getattr(message, 'tool_calls', None)
                 logger.info("LLM GLM返回: content_len=%d tool_calls=%s", len(content), bool(tc))
-                self._consecutive_failures = 0  # 成功，重置失败计数
+                self._consecutive_failures = 0
                 if tc:
                     tc_list = [{"id": getattr(t, 'id', ''),
                                 "type": getattr(t, 'type', 'function'),
@@ -323,8 +373,8 @@ class GLMBackend:
                 logger.error(f"GLM API 调用异常: {e}")
 
         self._consecutive_failures += 1
-        logger.warning("所有 LLM API 不可用 (deepseek=%s, glm=%s), 连续失败=%d",
-                       bool(self.deepseek_client), bool(self.client), self._consecutive_failures)
+        logger.warning("所有 LLM API 不可用 (deepseek=%s, openrouter=%s, glm=%s), 连续失败=%d",
+                       bool(self.deepseek_client), bool(self.openrouter_client), bool(self.client), self._consecutive_failures)
         return LLMResponse(content="[LLM_MOCK] 系统正在处理您的请求...")
 
     async def chat(self, messages, temperature=0.7, max_tokens=4096,
@@ -364,6 +414,32 @@ class GLMBackend:
                 return
             except Exception:
                 pass
+
+        if self.deepseek_client:
+            try:
+                response = await self.deepseek_client.chat.completions.create(
+                    model=self.deepseek_model, messages=messages,
+                    temperature=temperature, max_tokens=max_tokens,
+                    stream=True)
+                async for chunk in response:
+                    if chunk.choices and chunk.choices[0].delta.content:
+                        yield chunk.choices[0].delta.content
+                return
+            except Exception:
+                pass
+
+        if self.openrouter_client:
+            try:
+                response = await self.deepseek_client.chat.completions.create(
+                    model=self.deepseek_model, messages=messages,
+                    temperature=temperature, max_tokens=max_tokens,
+                    stream=True)
+                async for chunk in response:
+                    if chunk.choices and chunk.choices[0].delta.content:
+                        yield chunk.choices[0].delta.content
+                return
+            except Exception:
+                pass
         yield "流式响应不可用，请使用非流式接口"
 
     async def chat_structured_stream(self, messages, temperature=0.7, max_tokens=4096,
@@ -386,7 +462,7 @@ class GLMBackend:
         tool_call_buffers: Dict[int, Dict] = {}
         finish_reason = None
 
-        # ── DeepSeek (OpenAI 兼容) ──
+        # ── DeepSeek (优先) ──
         if self.deepseek_client:
             try:
                 payload = dict(model=self.deepseek_model, messages=messages,
@@ -406,13 +482,11 @@ class GLMBackend:
                     delta = chunk.choices[0].delta
                     finish_reason = chunk.choices[0].finish_reason
 
-                    # 文本块
                     if delta.content:
                         full_content += delta.content
                         if on_text:
                             on_text(delta.content)
 
-                    # 工具调用块
                     if delta.tool_calls:
                         for tc_delta in delta.tool_calls:
                             idx = tc_delta.index
@@ -429,7 +503,6 @@ class GLMBackend:
 
                 self._consecutive_failures = 0
 
-                # 组装 tool_calls
                 tool_calls = []
                 if tool_call_buffers:
                     for idx in sorted(tool_call_buffers.keys()):
@@ -438,12 +511,8 @@ class GLMBackend:
                         if not tc_id:
                             tc_id = f"call_{buf['function']['name']}_{int(time.time())}"
                         tool_calls.append({
-                            "id": tc_id,
-                            "type": "function",
-                            "function": {
-                                "name": buf["function"]["name"],
-                                "arguments": buf["function"]["arguments"],
-                            },
+                            "id": tc_id, "type": "function",
+                            "function": {"name": buf["function"]["name"], "arguments": buf["function"]["arguments"]},
                         })
 
                 logger.info("LLM DeepSeek(stream)返回: content_len=%d tool_calls=%s finish=%s",
@@ -453,9 +522,68 @@ class GLMBackend:
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                logger.error(f"DeepSeek 流式调用异常: {e}（将尝试GLM API）")
+                logger.error(f"DeepSeek 流式调用异常: {e}")
 
-        # ── GLM (ZhipuAI, fallback) ──
+        # ── OpenRouter (fallback) ──
+        if self.openrouter_client:
+            try:
+                payload = dict(model="deepseek-chat", messages=messages,
+                               temperature=temperature, max_tokens=max_tokens,
+                               stream=True, stream_options={"include_usage": True})
+                if tools:
+                    payload["tools"] = tools
+                    payload["tool_choice"] = "auto"
+
+                logger.info("LLM → OpenRouter(stream) (tools=%s)", bool(tools))
+                response = await self.openrouter_client.chat.completions.create(**payload)
+
+                async for chunk in response:
+                    if not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta
+                    finish_reason = chunk.choices[0].finish_reason
+
+                    if delta.content:
+                        full_content += delta.content
+                        if on_text:
+                            on_text(delta.content)
+
+                    if delta.tool_calls:
+                        for tc_delta in delta.tool_calls:
+                            idx = tc_delta.index
+                            if idx not in tool_call_buffers:
+                                tool_call_buffers[idx] = {"id": "", "function": {"name": "", "arguments": ""}}
+                            buf = tool_call_buffers[idx]
+                            if tc_delta.id:
+                                buf["id"] = tc_delta.id
+                            if tc_delta.function:
+                                if tc_delta.function.name:
+                                    buf["function"]["name"] += tc_delta.function.name
+                                if tc_delta.function.arguments:
+                                    buf["function"]["arguments"] += tc_delta.function.arguments
+
+                self._consecutive_failures = 0
+
+                tool_calls = []
+                if tool_call_buffers:
+                    for idx in sorted(tool_call_buffers.keys()):
+                        buf = tool_call_buffers[idx]
+                        tool_calls.append({
+                            "id": buf["id"] or f"call_{buf['function']['name']}_{int(time.time())}",
+                            "type": "function",
+                            "function": {"name": buf["function"]["name"], "arguments": buf["function"]["arguments"]},
+                        })
+
+                logger.info("LLM OpenRouter(stream)返回: content_len=%d tool_calls=%s finish=%s",
+                            len(full_content), bool(tool_calls), finish_reason)
+                return LLMResponse(content=full_content, tool_calls=tool_calls if tool_calls else None)
+
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error(f"OpenRouter 流式调用异常: {e}")
+
+        # ── GLM (最后 fallback) ──
         if self.client and self.api_key:
             try:
                 logger.info("LLM → GLM(stream) (tools=%s)", bool(tools))
@@ -522,7 +650,7 @@ class GLMBackend:
         if self._consecutive_failures >= self._max_consecutive_failures:
             logger.warning(f"LLM 连续 {self._consecutive_failures} 次调用失败，标记为不可用")
             return False
-        return self.deepseek_client is not None or self.client is not None
+        return self.client is not None or self.deepseek_client is not None or self.openrouter_client is not None
 
     def _generate_fallback_response(self, messages) -> str:
         for msg in reversed(messages):

@@ -1,0 +1,14 @@
+# Skill → Expert 映射
+# 当 skill_dispatcher 匹配到某个 skill 后，
+# 使用此映射表查找对应的 Expert 角色（来自 agents.yml）
+# 未在此处列出的 skill → 使用系统默认分配
+
+skill_agent_map:
+  project_analysis: project_analyzer
+  data_analysis: data_analyst
+  web_scraper: web_scraper_expert
+  system_toolbox: system_operator
+  weather: weather_expert
+  translator: translator
+  deep_thinking: deep_thinker
+  creative_writing: creative

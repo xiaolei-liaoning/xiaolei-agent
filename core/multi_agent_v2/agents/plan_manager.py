@@ -223,7 +223,14 @@ def update_step_status(ctx: RunContext, prefix: str = "") -> None:
             tn = tr.get("tool_call", {}).get("name", "")
             if tn and tr.get("success"):
                 succeeded[tn] += 1
-        if set(current_step.tool_names) & set(succeeded.keys()):
+        step_tools = set(current_step.tool_names)
+        # ponytail: 搜索工具互换（fetch_url/web_search 视为等价）
+        _search_tools = {"web_search", "fetch_url", "fetch_json", "hot_search"}
+        if step_tools & _search_tools:
+            if succeeded.keys() & _search_tools:
+                current_step.status = "done"
+                return
+        if step_tools & set(succeeded.keys()):
             current_step.status = "done"
             return
 
@@ -366,8 +373,14 @@ def update_step_status(ctx: RunContext, prefix: str = "") -> None:
     if current_step.status not in ("done", "failed") and ctx.react_depth >= 2:
         recent_tools = [r.get("tool_call", {}).get("name", "") for r in ctx.tool_results[-3:]]
         if all(t == "read_file" for t in recent_tools if t):
-            desc_lower = (current_step.description + ctx.task_description).lower()
-            if any(kw in desc_lower for kw in ["替换", "修改", "编辑", "改", "replace", "edit", "change"]):
+            _is_edit = False
+            _flags = getattr(ctx, '_task_flags', None)
+            if _flags:
+                _is_edit = _flags.get("edit", False)
+            if not _is_edit:
+                desc_lower = (current_step.description + ctx.task_description).lower()
+                _is_edit = any(kw in desc_lower for kw in ["替换", "修改", "编辑", "改", "replace", "edit", "change"])
+            if _is_edit:
                 ctx.disallowed_tools = list(set(ctx.disallowed_tools or []) | {"read_file"})
                 ctx._filtered_tools = None  # 清缓存，下次 on_think_start 重新过滤
                 inst = (

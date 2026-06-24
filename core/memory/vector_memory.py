@@ -51,7 +51,7 @@ logger = logging.getLogger(__name__)
 # ─── Embedding 模型配置 ────────────────────────────────────────────────────────
 # 设置环境变量 EMBEDDING_MODEL 来选择模型
 # 可选值: bge-small-zh-v1.5, bge-base-zh-v1.5, bge-large-zh-v1.5, bge-m3, qwen3, local
-_EMBEDDING_MODEL_NAME = os.environ.get("EMBEDDING_MODEL", "bge-small-zh-v1.5")
+_EMBEDDING_MODEL_NAME = os.environ.get("EMBEDDING_MODEL", "local")
 _EMBEDDING_DEVICE = os.environ.get("EMBEDDING_DEVICE", "cpu")
 _EMBEDDING_BATCH_SIZE = 32
 
@@ -87,101 +87,59 @@ _MODEL_CONFIGS = {
 
 
 class LocalEmbeddingFunction:
-    """本地 TF-IDF Embedding 函数（离线备选方案）
+    """本地固定维度哈希 Embedding（离线，永不联网）
 
-    当在线模型不可用时使用简单的 TF-IDF 实现
-    - 无需网络连接
-    - 支持中英文
-    - 输出维度不固定（基于词汇表大小）
+    使用 hashing trick 将任意 token 映射到固定 768 维向量的位置。
+    - 无需网络，无需 sklearn
+    - 维度始终 768，ChromaDB 兼容
+    - 支持中英文混合
+    - 输出已 L2 归一化
     """
 
+    DIM = 768
+
     def __init__(self):
-        self._vectorizer = None
-        self._vocab = {}
-        self._idf = {}
-        self._dimension = 0
+        self._dimension = self.DIM
 
     def _tokenize(self, text: str) -> List[str]:
-        """简单分词"""
-        tokens = re.findall(r"[\w]+", text.lower())
-        return tokens
+        return re.findall(r"[\w]+", text.lower())
 
-    def _build_vocab(self, texts: List[str]):
-        """构建词汇表"""
-        vocab = {}
-        for text in texts:
-            for token in self._tokenize(text):
-                if token not in vocab:
-                    vocab[token] = len(vocab)
-        return vocab
+    def _hash_token(self, token: str) -> int:
+        """将 token 哈希到 [0, DIM-1] 范围内的多个位置。"""
+        h = hash(token) & 0x7FFFFFFF
+        return h % self.DIM
 
-    def _compute_tfidf(
-        self, text: str, vocab: Dict[str, int], idf: Dict[str, float]
-    ) -> List[float]:
-        """计算 TF-IDF 向量"""
-        tokens = self._tokenize(text)
-        tf = {}
-        for token in tokens:
-            tf[token] = tf.get(token, 0) + 1
-
-        max_tf = max(tf.values()) if tf else 1
-        dimension = len(vocab)
-        vector = [0.0] * dimension
-
-        for token, count in tf.items():
-            if token in vocab:
-                tf_norm = count / max_tf
-                idf_val = idf.get(token, 0)
-                vector[vocab[token]] = tf_norm * idf_val
-
-        return vector
+    def _hash_sign(self, token: str) -> int:
+        """为 token 生成符号（正/负），让向量有正有负。"""
+        h = hash("sign_" + token) & 0x1
+        return 1 if h == 0 else -1
 
     def __call__(self, input: List[str]) -> List[List[float]]:
-        """ChromaDB API 调用接口"""
         if not input:
             return []
-
-        try:
-            from sklearn.feature_extraction.text import TfidfVectorizer
-
-            vectorizer = TfidfVectorizer()
-            vectors = vectorizer.fit_transform(input).toarray()
-            return vectors.tolist()
-        except ImportError:
-            logger.warning("sklearn 不可用，使用简单词向量")
-            return self._simple_embedding(input)
-
-    def _simple_embedding(self, texts: List[str]) -> List[List[float]]:
-        """简单词向量（无 sklearn 时）"""
-        vocab = self._build_vocab(texts)
-        self._dimension = len(vocab)
-
-        token_counts = {}
-        for text in texts:
-            for token in self._tokenize(text):
-                token_counts[token] = token_counts.get(token, 0) + 1
-
-        idf = {}
-        N = len(texts)
-        for token, df in token_counts.items():
-            idf[token] = math.log(N / (df + 1)) + 1
-
         vectors = []
-        for text in texts:
-            vector = self._compute_tfidf(text, vocab, idf)
-            vectors.append(vector)
-
+        for text in input:
+            vec = [0.0] * self.DIM
+            tokens = self._tokenize(text)
+            if not tokens:
+                vectors.append(vec)
+                continue
+            for token in tokens:
+                idx = self._hash_token(token)
+                sgn = self._hash_sign(token)
+                vec[idx] += sgn
+            # L2 normalize
+            norm = math.sqrt(sum(x * x for x in vec))
+            if norm > 0:
+                vec = [x / norm for x in vec]
+            vectors.append(vec)
         return vectors
 
     def embed_query(self, text: str) -> List[float]:
-        """单独查询的 embedding"""
         return self(input=[text])[0]
 
     def get_dimension(self) -> int:
-        """获取向量维度"""
-        if self._dimension > 0:
-            return self._dimension
-        return 768
+        return self.DIM
 
 
 class SentenceTransformerEmbeddingFunction:
@@ -410,7 +368,7 @@ class VectorMemoryStore:
                     except Exception as e:
                         logger.error("定时备份失败: %s", e)
 
-        self._backup_thread = threading.Thread(target=backup_scheduler, daemon=False)
+        self._backup_thread = threading.Thread(target=backup_scheduler, daemon=True)
         self._backup_thread.start()
         logger.info("定时备份调度器已启动 (间隔=%d秒)", self._backup_interval)
 
@@ -436,7 +394,10 @@ class VectorMemoryStore:
         try:
             embed_fn = get_bge_embedding_function()
             try:
-                self._collection = self._client.get_collection(name="long_term_memory")
+                self._collection = self._client.get_collection(
+                    name="long_term_memory",
+                    embedding_function=embed_fn,
+                )
                 logger.info("ChromaDB 集合 long_term_memory 已存在")
             except Exception:
                 self._collection = self._client.get_or_create_collection(

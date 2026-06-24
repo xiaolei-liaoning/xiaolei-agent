@@ -92,7 +92,20 @@ class SandboxManager:
         _lines = [l for l in content.split('\n') if l.strip() and not l.strip().startswith('#')]
         _line_count = len(_lines)
         _basename = os.path.basename(file_path).lower()
-        _is_app = any(kw in _basename for kw in ['game', 'snake', 'puzzle', '八数码', '贪吃蛇', '2048', 'app', 'main'])
+        _app_keywords = ['game', 'snake', 'puzzle', '八数码', '贪吃蛇', '2048', 'app', 'main']
+        _is_app = any(kw in _basename for kw in _app_keywords)
+        if not _is_app:
+            try:
+                from core.engine.llm_backend import get_llm_router
+                _router = get_llm_router()
+                if _router and _router.is_available():
+                    _resp = await _router.simple_chat(
+                        f"以下文件名是否看起来像游戏或应用主文件？只回答'是'或'否'\n\n{_basename}",
+                        temperature=0, max_tokens=10
+                    )
+                    _is_app = _resp and '是' in str(_resp)
+            except Exception:
+                pass
 
         # 1. ast.parse 语法检查
         try:
@@ -105,8 +118,20 @@ class SandboxManager:
             _class_count = content.count("class ")
             _func_count = content.count("def ")
             _has_main = "if __name__" in content
-            _has_loop = any(kw in content for kw in ['while ', 'for ', 'pygame.display', 'screen.blit',
-                                                       'update(', 'draw(', 'clock.tick'])
+            _loop_keywords = ['while ', 'for ', 'pygame.display', 'screen.blit', 'update(', 'draw(', 'clock.tick']
+            _has_loop = any(kw in content for kw in _loop_keywords)
+            if not _has_loop:
+                try:
+                    from core.engine.llm_backend import get_llm_router
+                    _router = get_llm_router()
+                    if _router and _router.is_available():
+                        _resp = await _router.simple_chat(
+                            f"以下代码是否包含游戏主循环？只回答'是'或'否'\n\n{content[:1500]}",
+                            temperature=0, max_tokens=10
+                        )
+                        _has_loop = _resp and '是' in str(_resp)
+                except Exception:
+                    pass
 
             _quality_errors = []
 
@@ -146,7 +171,7 @@ class SandboxManager:
         # 3. 沙盒运行时验证（对游戏/应用类文件执行代码检测错误）
         if _is_app:
             try:
-                from core.agent_v1.tools.sandbox_executor import SandboxExecutor, ResourceLimits
+                from core.tools.sandbox_executor import SandboxExecutor, ResourceLimits
 
                 _ex = SandboxExecutor()
                 _limits = ResourceLimits(timeout=5, max_output_size_kb=500)

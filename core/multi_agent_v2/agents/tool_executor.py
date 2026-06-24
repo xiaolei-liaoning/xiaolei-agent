@@ -30,7 +30,7 @@ TOOL_TIMEOUTS = {
 DEFAULT_TIMEOUT = 30
 
 # 可重试的工具类型（网络请求、临时错误）
-RETRYABLE_TOOLS = {"fetch_url", "execute_python", "write_file"}
+RETRYABLE_TOOLS = {"web_search", "fetch_url", "execute_python", "write_file"}
 
 
 def lookup_server(tool_name: str, tool_defs: List[dict]) -> str:

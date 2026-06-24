@@ -184,20 +184,15 @@ export default async function() {{
                 return ""
 
             # ── 先识别任务类型 ──
-            task_lower = task[:200].lower()
-
-            code_keywords = [
-                "写代码", "写程序", "写脚本", "写一个", "写个",
-                "实现", "创建", "项目", "模块", "重构", "拆分",
-                "生成代码", "代码生成", "开发",
-                "generat", "implement", "create", "refactor", "build",
-            ]
-            # 反触发词：如果任务包含这些，即使命中 code_keywords 也不判为代码任务
-            code_antitrigger = ["写一篇", "写博客", "写文章", "写报告", "写文档"]
-            is_code_task = (
-                any(kw in task_lower for kw in code_keywords)
-                and not any(kw in task_lower for kw in code_antitrigger)
-            )
+            from core.engine.llm_backend import get_llm_router
+            router = get_llm_router()
+            is_code_task = False
+            if router and router.is_available():
+                resp = await router.simple_chat(
+                    "判断以下请求是否需要生成代码/脚本。只回答'是'或'否'。注意：写文章/博客/文档不算。\n请求：" + task[:200],
+                    temperature=0, max_tokens=10
+                )
+                is_code_task = '是' in str(resp or '')
 
             # ── 检测到 JS 脚本片段直接执行 ──
             if "export const meta" not in task and "$dag" not in task and is_code_task:
@@ -623,6 +618,7 @@ export default async function() {{
         trace.start(request[:80])
 
         agent = WorkAgent()
+        agent.user_id = str(getattr(self.cli, 'user_id', 'cli_user'))
         task = Task(task_id=uuid.uuid4().hex[:8], type="general", description=request)
 
         try:

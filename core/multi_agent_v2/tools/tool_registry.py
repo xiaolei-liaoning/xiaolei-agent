@@ -590,7 +590,7 @@ async def _handle_search(args: Dict) -> Dict:
     async def _search_one(name: str, url: str, parser):
         for attempt in range(2):
             try:
-                html = await _http_get(url, timeout=15)
+                html = await _http_get(url, timeout=25)
                 results = parser(html)
                 if results:
                     sources.append((name, results))
@@ -604,7 +604,7 @@ async def _handle_search(args: Dict) -> Dict:
     if not sources:
         # 兜底：重试百度
         try:
-            html = await _http_get(f"https://www.baidu.com/s?wd={encoded}&rn=10", timeout=8)
+            html = await _http_get(f"https://www.baidu.com/s?wd={encoded}&rn=10", timeout=20)
             results = extract_search_results_baidu(html)
             if results:
                 sources.append(("百度(重试)", results))
@@ -616,10 +616,24 @@ async def _handle_search(args: Dict) -> Dict:
 
     merged = merge_search_results(sources)
 
-    # ── 检测安全验证/验证码页面（百度安全验证等）──
-    _captcha_keywords = ["百度安全验证", "安全验证", "网络不给力", "请稍后重试", "验证码", "captcha",
-                         "Verify you are human", "unusual traffic", "Please confirm"]
-    if any(kw in merged for kw in _captcha_keywords):
+    # ── 检测安全验证/验证码页面（LLM + 关键词兜底）──
+    _is_captcha = False
+    try:
+        from core.engine.llm_backend import get_llm_router
+        _router = get_llm_router()
+        if _router and _router.is_available():
+            _resp = await _router.simple_chat(
+                f"以下网页内容是否包含安全验证/captcha/反爬检测？只回答'是'或'否'\n\n{merged[:2000]}",
+                temperature=0, max_tokens=10
+            )
+            _is_captcha = _resp and '是' in str(_resp)
+    except Exception:
+        pass
+    if not _is_captcha:
+        _captcha_keywords = ["百度安全验证", "安全验证", "网络不给力", "请稍后重试", "验证码", "captcha",
+                             "Verify you are human", "unusual traffic", "Please confirm"]
+        _is_captcha = any(kw in merged for kw in _captcha_keywords)
+    if _is_captcha:
         logger.warning(f"搜索结果包含验证码/安全验证，丢弃: {merged[:100]}")
         return err("搜索引擎返回验证码页面，无法获取搜索结果。请使用 fetch_url 直接访问目标网址获取数据。")
 
@@ -704,7 +718,7 @@ async def _handle_execute_python(args: Dict) -> Dict:
     # sandbox 模式（失败直接报错，不降级到裸 exec）
     skip_check = args.get("skip_module_check", False)
     try:
-        from core.agent_v1.tools.sandbox_executor import (
+        from core.tools.sandbox_executor import (
             ResourceLimits, SandboxExecutor,
             detect_file_writes, extract_file_paths, get_recommended_path,
             format_file_writes_detected
@@ -784,7 +798,7 @@ async def _handle_execute_shell(args: Dict) -> Dict:
 
     if mode == "sandbox":
         try:
-            from core.agent_v1.tools.sandbox_executor import ResourceLimits, SandboxExecutor
+            from core.tools.sandbox_executor import ResourceLimits, SandboxExecutor
 
             limits = ResourceLimits(timeout=min(timeout, 60), max_output_size_kb=10000)
             ex = SandboxExecutor()
@@ -983,8 +997,8 @@ async def _handle_write_file(args: Dict) -> Dict:
         _actual_desktop = os.path.expanduser("~/Desktop")
         import re as _re
 
-        # 情况 A: Linux 风格 /home/user/Desktop/ → 修正为实际桌面路径
-        _linux_desktop_match = _re.match(r'^/home/[^/]+/Desktop(/.*)?$', path)
+        # 情况 A: Linux 风格 /home/user/Desktop/ 或 /root/Desktop/ → 修正为实际桌面路径
+        _linux_desktop_match = _re.match(r'^/(?:home/[^/]+|root)/Desktop(/.*)?$', path)
         if _linux_desktop_match:
             _rest = _linux_desktop_match.group(1) or ""
             path = _actual_desktop + _rest
@@ -999,6 +1013,7 @@ async def _handle_write_file(args: Dict) -> Dict:
 
         # ── 沙盒路径重定向（如果当前 task 有活动的 SandboxManager）──
         _sb = get_active_sandbox_manager()
+        _original_path = path  # ponytail: 保留原始路径用于写后导出
         if _sb:
             new_path = _sb.redirect_path(path)
             if new_path != path:
@@ -1153,6 +1168,19 @@ async def _handle_write_file(args: Dict) -> Dict:
         if not Path(path).exists():
             return err(f"❌ 文件写入后无法验证（路径不存在）: {path}")
         written = Path(path).read_text(encoding="utf-8")
+
+        # ponytail: 沙盒重定向后，将文件复制到原始路径
+        if _sb and _original_path and path != _original_path:
+            try:
+                _export_dir = os.path.dirname(os.path.expanduser(_original_path))
+                os.makedirs(_export_dir, exist_ok=True)
+                import shutil as _shutil
+                _shutil.copy2(str(path), os.path.expanduser(_original_path))
+                logger.info(f"沙盒文件已导出到原始路径: {_original_path}")
+                # 更新 path 为原始路径，让后续验证和消息使用正确路径
+                path = _original_path
+            except Exception as _ex:
+                logger.warning(f"沙盒文件导出失败 {_original_path}: {_ex}")
         if len(written) < len(content) * 0.5:
             return err(f"❌ 文件写入不完整: 传入{len(content)}字符, 实际{len(written)}字符")
         
@@ -1202,10 +1230,13 @@ async def _handle_read_file(args: Dict) -> Dict:
         entries = sorted(p.iterdir())[:args.get("limit", 200)]
         lines = [f"{'📁' if e.is_dir() else '📄'} {e.name}" for e in entries]
         return ok(f"目录 {path} ({len(entries)} 项):\n" + "\n".join(lines))
-    # ponytail: 多 Agent 场景下缓存会导致 process_results 拿不到实际内容，禁用
-    # cache_key = f"{path}:{args.get('offset', 1)}:{args.get('limit', 2000)}"
-    # if cache_key in _file_read_cache:
-    #     return ok(f"[数据已获取] 内容同前，无需重复读取: {path}")
+    # ponytail: 项目分析缓存拦截 — 已注入上下文的文件直接拒绝，节省一轮
+    try:
+        from core.multi_agent_v2.tools.cache import is_file_cached
+        if is_file_cached(path) and args.get("offset", 1) == 1:
+            return ok(f"[CACHED] '{path}' 的内容已在上面提供。继续分析，不要再读这个文件。")
+    except Exception:
+        pass
     try:
         text = p.read_text(encoding="utf-8")
     except UnicodeDecodeError:
@@ -1390,7 +1421,7 @@ _SANDBOX_TOOL_DEFS = [
         name="write_todos",
         server=SERVER_BUILTIN,
         tags=["task", "tracking"],
-        description="创建和管理任务清单。用于复杂多步骤任务的进度追踪。",
+        description="【自动跟踪】任务进度由系统自动管理，无需手动调用此工具。",
         parameters={
             "type": "object",
             "properties": {
@@ -1430,7 +1461,7 @@ _SANDBOX_TOOL_DEFS = [
         name="execute_python",
         server=SERVER_BUILTIN,
         tags=["code", "sandbox"],
-        description="安全执行 Python 代码。\n- 适用于运行脚本、测试算法、pip 安装包、操作桌面文件\n- mode=sandbox（默认）：沙盒隔离，无法访问桌面/网络\n- mode=local：真实环境，可写 ~/Desktop，可访问网络\n- ⚠️ 需运行系统命令(ls/pwd/git) → 用 execute_shell",
+        description="安全执行 Python 代码。\n- 适用于运行脚本、测试算法、pip 安装包、操作桌面文件\n- mode=sandbox（默认）：沙盒隔离，无法访问桌面/网络\n- mode=local：真实环境，可写 ~/Desktop，可访问网络\n- ⚠️ 需运行系统命令(ls/pwd/git) → 用 execute_shell\n- ⚠️ 抓取网页/API 数据 → 用 fetch_url（execute_python 不是爬虫工具）",
         parameters={
             "type": "object",
             "properties": {

@@ -329,6 +329,26 @@ class EnhancedCLI:
         else:
             rc.print(f"  [{dim}]●[/]  tools initializing…")
 
+        # ── 内置角色列表 ──
+        try:
+            import yaml
+            cfg = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config", "agents.yml")
+            with open(cfg) as f:
+                agents_data = yaml.safe_load(f).get("agents", {})
+            role_names = list(agents_data.keys())
+            rc.print(
+                f"  [{dim}]●[/]  [bold]Agents: {len(role_names)}[/]"
+            )
+            for name in role_names[:4]:
+                info = agents_data[name]
+                prompt = info.get("role_prompt", "")
+                tools = info.get("tools", [])
+                rc.print(f"    [{dim}]·[/] [{brand}]{name}[/{brand}]  ({len(prompt)} chars, {len(tools)} tools)")
+            if len(role_names) > 4:
+                rc.print(f"    [{dim}]·[/]  ... 另有 {len(role_names) - 4} 个（/agents 查看全部）[/{dim}]")
+        except Exception:
+            pass
+
         rc.print()
 
         cmd_table = Table(show_header=False, box=None, padding=(0, 3, 0, 0))

@@ -48,7 +48,7 @@ _BUFFER_SIZE = 10
 _FLUSH_INTERVAL = 30  # 秒
 
 # ─── 向量检索阈值 ────────────────────────────────────────────────────────────
-_COSINE_HIT_THRESHOLD = 0.3  # distance < 0.3 视为命中
+
 
 # ─── 网页正文提取配置 ────────────────────────────────────────────────────────
 _MAX_CONTENT_LENGTH = 3000  # 字符
@@ -300,6 +300,8 @@ class RAGSearchEngine:
             kw_result = await extractor.extract(query)
             if kw_result and kw_result.keywords:
                 logger.debug("关键词提取: %s", [k.word for k in kw_result.keywords])
+                # ponytail: keywords beat raw query for search recall
+                query = " ".join(k.word for k in kw_result.keywords)
         except Exception:
             pass  # 关键词提取失败不影响主流程
 
@@ -568,11 +570,9 @@ class RAGSearchEngine:
             return None
         
         try:
-            results = vs.search_memories(query, user_id=user_id, top_k=3)
+            results = vs.search_memories(query, user_id=None, top_k=3)
             if results:
-                # 检查相似度（distance < 0.3 视为命中）
-                if any(r.get("distance", 1.0) < _COSINE_HIT_THRESHOLD for r in results):
-                    return results
+                return results
         except Exception as exc:
             logger.warning(f"向量库查询失败: {exc}")
         

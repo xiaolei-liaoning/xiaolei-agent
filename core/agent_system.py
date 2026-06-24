@@ -406,6 +406,7 @@ class LLMAgent:
 
         # RAG 检索
         rag_context = await self._do_rag_query(message.content)
+        _rag_hit = bool(rag_context)
 
         extra_context = ""
         if rag_context:
@@ -431,6 +432,14 @@ class LLMAgent:
         # 获取工具列表（先获取，后面 system_prompt 和 ReAct 都要用）
         tools = await self._get_tools_for_task(message.content)
 
+        # ponytail: RAG 命中时隐藏搜索工具，避免 agent 重复联网
+        if _rag_hit and tools:
+            _search_tools = {"rag_search", "web_search", "fetch_url"}
+            before = len(tools)
+            tools = [t for t in tools if t.get("function", {}).get("name") not in _search_tools]
+            if len(tools) < before:
+                extra_context += "\n【注意】知识库已包含相关信息，请直接用知识回答，无需搜索。\n"
+
         # 判断是否有写文件能力
         has_write = any("write_file" in str(t) for t in tools) if tools else False
         file_tip = ""
@@ -448,9 +457,12 @@ class LLMAgent:
             {"role": "user", "content": f"任务内容:\n{message.content}"},
         ]
 
-        # ===== 上下文压缩：压缩对话历史 =====
+        # ===== 上下文压缩：5层压缩架构 =====
         try:
             compactor = get_compactor()
+            # Update assistant timestamp for time-based MC
+            compactor.update_assistant_timestamp()
+            # Run 5-layer compaction
             conversation = compactor.compact(conversation)
         except Exception:
             pass
@@ -906,12 +918,15 @@ class LeaderAgent(LLMAgent):
                            results: List[Dict], round_num: int) -> Dict:
         """ReAct Thought 阶段：分析状态，决定下一步"""
 
-        # ===== 上下文压缩：压缩历史记录 =====
+        # ===== 上下文压缩：5层压缩架构 =====
         try:
             if history and len(history) > 3:
                 compactor = get_compactor()
                 # Convert history to message format for compression
                 history_msgs = [{"role": "assistant", "content": str(h)} for h in history]
+                # Update assistant timestamp for time-based MC
+                compactor.update_assistant_timestamp()
+                # Run 5-layer compaction
                 compressed = compactor.compact(history_msgs)
                 # Extract compressed history back
                 history = [h for h in history if any(c.get("content", "").startswith(str(h)[:50]) for c in compressed if c.get("role") == "assistant")]
@@ -992,25 +1007,37 @@ class LeaderAgent(LLMAgent):
             except Exception:
                 pass
 
-        # B: 检索历史经验 + insight 注入
+        # B: 检索知识库 + 历史经验
         experience_hints = ""
-        if self.vm and self.user_id:
+        if self.vm:
             try:
-                similar = self.vm.search_memories(
-                    query=task_description,
-                    user_id=self.user_id,
-                    top_k=4,
+                # 搜共享知识库（user_id=None）和个人经验
+                shared = self.vm.search_memories(
+                    query=task_description, user_id=None, top_k=3
                 )
-                if similar:
+                personal = []
+                if self.user_id:
+                    personal = self.vm.search_memories(
+                        query=task_description, user_id=self.user_id, top_k=3
+                    )
+                combined = (shared or []) + (personal or [])
+                seen = set()
+                unique = []
+                for m in combined:
+                    cid = m.get("id", "")
+                    if cid not in seen:
+                        seen.add(cid)
+                        unique.append(m)
+                if unique:
                     lines = []
-                    for m in similar:
+                    for m in unique[:5]:
                         cat = m.get("metadata", {}).get("category", "")
                         prefix = "💡" if cat == "insight" else "📋"
                         lines.append(f"{prefix} {m['content'][:200]}")
                     if lines:
-                        experience_hints = "\n【历史经验参考】\n" + "\n".join(lines)
+                        experience_hints = "\n【知识库 + 历史经验参考】\n" + "\n".join(lines)
             except Exception as e:
-                logger.debug(f"检索经验失败: {e}")
+                logger.debug(f"检索知识/经验失败: {e}")
 
         # 注入用户上下文到任务描述
         full_task = task_description

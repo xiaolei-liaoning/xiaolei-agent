@@ -390,7 +390,8 @@ class SkillMCPServer:
                         result_text += f"## {cat}\n"
                         for s in skill_names:
                             meta = self.skills[s]
-                            result_text += f"- **{meta['title']}** ({s}): {meta['description'][:80]}...\n"
+                            chars = meta.get("body_length", 0)
+                            result_text += f"- **{meta['title']}** ({s}) [{chars} chars]: {meta['description'][:80]}...\n"
                         result_text += "\n"
 
                 return {
@@ -418,6 +419,7 @@ class SkillMCPServer:
 **描述**: {meta['description']}
 **版本**: {meta['version']}
 **作者**: {meta['author']}
+**字符数**: {meta.get('body_length', 0)}
 **MCP 模式**: {meta['mcp_mode']}
 **有子 Agent**: {meta['has_agents']}
 

@@ -28,7 +28,7 @@ from core.handlers import (
     save_chat_history,
     save_task_log,
 )
-from core.workflow.bfs_processor import get_bfs_processor
+from core.memory.conversation_history import get_history_manager
 from core.memory.context_compactor import get_compactor
 
 
@@ -234,39 +234,39 @@ def _needs_multi_agent(message: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# 内部函数：获取BFS上下文
+# 内部函数：获取上下文信息
 # ---------------------------------------------------------------------------
-def _get_bfs_context(user_id: int, depth: int = 3, limit: int = 20) -> Dict[str, Any]:
-    """获取用户的BFS上下文信息"""
-    try:
-        bfs = get_bfs_processor()
-        context = bfs.get_context(user_id=user_id, depth=depth, limit=limit)
+def _get_context_info(user_id: int, query: str = "") -> Dict[str, Any]:
+    """获取用户的上下文信息（包括向量记忆）
 
-        # 提取关键信息
-        context_summary = {
-            'has_context': len(context) > 0,
-            'message_count': len(context),
-            'recent_messages': [
-                {
-                    'role': msg.get('role', ''),
-                    'content_preview': msg.get('content', '')[:50],
-                    'timestamp': msg.get('created_at', '')
-                }
-                for msg in context[:5]
-            ]
-        }
-        
-        # Add compaction stats if available
-        try:
-            from core.memory.context_compactor import get_compactor
-            compactor = get_compactor()
-            context_summary['compaction_stats'] = compactor.get_compaction_stats()
-        except Exception:
-            pass
-        
-        return context_summary
+    Args:
+        user_id: 用户ID
+        query: 查询文本（用于向量检索相关记忆）
+    """
+    try:
+        history = get_history_manager()
+        context = history.get_context_info(user_id)
+
+        # 如果有查询，检索相关向量记忆
+        if query:
+            relevant_memories = history.get_relevant_memories(
+                user_id=user_id,
+                query=query,
+                top_k=5,
+            )
+            if relevant_memories:
+                context["relevant_memories"] = [
+                    {
+                        "content": m.get("content", "")[:200],
+                        "category": m.get("metadata", {}).get("category", "general"),
+                        "distance": m.get("distance", 0),
+                    }
+                    for m in relevant_memories
+                ]
+
+        return context
     except Exception as e:
-        logger.warning("获取BFS上下文失败: %s", e)
+        logger.warning("获取上下文失败: %s", e)
         return {'has_context': False, 'error': str(e)}
 
 
@@ -280,7 +280,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
     Web 统一走 V1 队长-队员多Agent系统（LeaderAgent + LLMAgent）。
 
     特性：
-    - 使用BFS管理上下文
+    - 使用对话历史管理器（自动压缩）
     - 支持MessageBus通信
     - 集成RAG引擎
     - 智能Agent自动选择（auto_agent_selection=True时启用）
@@ -291,8 +291,8 @@ async def chat(request: ChatRequest) -> ChatResponse:
 
     start_time: float = time.time()
 
-    # 获取BFS上下文信息
-    context_info = _get_bfs_context(request.user_id, depth=3, limit=10)
+    # 获取上下文信息（包括向量记忆检索）
+    context_info = _get_context_info(request.user_id, query=message)
 
     # 智能Agent自动选择（如果启用）
     execution_plan_info = None
@@ -314,28 +314,13 @@ async def _handle_with_multi_agent(
     try:
         logger.info("🚀 V1 多Agent 开始处理: %s...", message[:60])
 
-        # 保存用户消息到BFS上下文
+        # 保存用户消息到对话历史（自动压缩）
         try:
-            bfs = get_bfs_processor()
-            bfs.add_node(user_id=request.user_id, role="user", content=message)
-            logger.debug("已添加用户消息到BFS上下文")
+            history = get_history_manager()
+            history.add_message(request.user_id, "user", message)
+            logger.debug("已添加用户消息到对话历史")
         except Exception as e:
-            logger.warning("添加到BFS上下文失败: %s", e)
-
-        # ===== 上下文压缩：压缩历史消息 =====
-        try:
-            bfs = get_bfs_processor()
-            history = bfs.get_context(user_id=request.user_id, depth=3, limit=20)
-            if history and len(history) > 5:
-                compactor = get_compactor()
-                # Convert history to message format
-                history_msgs = [{"role": m.get("role", "user"), "content": m.get("content", "")} for m in history]
-                compressed = compactor.compact(history_msgs)
-                # Update context_info with compression stats
-                context_info["compaction_stats"] = compactor.get_compaction_stats()
-                logger.debug("上下文压缩完成: %s", compactor.get_compaction_stats())
-        except Exception as e:
-            logger.debug("上下文压缩失败（非关键）: %s", e)
+            logger.warning("添加到对话历史失败: %s", e)
 
         # 处理图片文件（OCR识别）
         ocr_results = []
@@ -510,13 +495,13 @@ async def _handle_with_multi_agent(
             "success": success,
         })
 
-        # 保存到BFS上下文
+        # 保存AI回复到对话历史
         try:
-            bfs = get_bfs_processor()
-            bfs.add_node(user_id=request.user_id, role="assistant", content=reply_text)
-            logger.debug("已添加AI回复到BFS上下文")
+            history = get_history_manager()
+            history.add_message(request.user_id, "assistant", reply_text)
+            logger.debug("已添加AI回复到对话历史")
         except Exception as e:
-            logger.warning("添加AI回复到BFS上下文失败: %s", e)
+            logger.warning("添加AI回复到对话历史失败: %s", e)
 
         # ===== 对话结束后：自动提取事实 =====
         try:
@@ -556,19 +541,19 @@ async def _handle_with_agent(
     execution_plan_info: Optional[Dict[str, Any]],
     agents_used: Optional[List[str]]
 ) -> ChatResponse:
-    """通过Agent系统处理复杂任务，集成BFS上下文管理和智能选择"""
+    """通过Agent系统处理复杂任务，集成对话历史管理和智能选择"""
     try:
         logger.info("复杂任务，通过Agent系统处理: %s...", message[:50])
 
         from core.tasks.task_processor import task_processor
 
-        # 保存用户消息到BFS上下文
+        # 保存用户消息到对话历史
         try:
-            bfs = get_bfs_processor()
-            bfs.add_node(user_id=request.user_id, role="user", content=message)
-            logger.debug("已添加用户消息到BFS上下文")
+            history = get_history_manager()
+            history.add_message(request.user_id, "user", message)
+            logger.debug("已添加用户消息到对话历史")
         except Exception as e:
-            logger.warning("添加到BFS上下文失败: %s", e)
+            logger.warning("添加到对话历史失败: %s", e)
 
         # 🖼️ 处理图片文件（OCR识别）
         ocr_results = []
@@ -662,13 +647,13 @@ async def _handle_with_agent(
             "elapsed": elapsed
         })
 
-        # 保存到BFS上下文
+        # 保存AI回复到对话历史
         try:
-            bfs = get_bfs_processor()
-            bfs.add_node(user_id=request.user_id, role="assistant", content=reply_text)
-            logger.debug("已添加AI回复到BFS上下文")
+            history = get_history_manager()
+            history.add_message(request.user_id, "assistant", reply_text)
+            logger.debug("已添加AI回复到对话历史")
         except Exception as e:
-            logger.warning("添加AI回复到BFS上下文失败: %s", e)
+            logger.warning("添加AI回复到对话历史失败: %s", e)
 
         return ChatResponse(
             reply=reply_text,
@@ -694,19 +679,19 @@ async def _handle_direct(
     execution_plan_info: Optional[Dict[str, Any]],
     agents_used: Optional[List[str]]
 ) -> ChatResponse:
-    """直接通过SkillDispatcher处理简单任务，跳过Agent，集成BFS上下文管理和智能选择"""
+    """直接通过SkillDispatcher处理简单任务，跳过Agent，集成对话历史管理和智能选择"""
     try:
         from core.handlers import _dispatcher
         if _dispatcher is None:
             raise HTTPException(status_code=503, detail="系统尚未初始化完成")
 
-        # 保存用户消息到BFS上下文
+        # 保存用户消息到对话历史
         try:
-            bfs = get_bfs_processor()
-            bfs.add_node(user_id=request.user_id, role="user", content=message)
-            logger.debug("已添加用户消息到BFS上下文")
+            history = get_history_manager()
+            history.add_message(request.user_id, "user", message)
+            logger.debug("已添加用户消息到对话历史")
         except Exception as e:
-            logger.warning("添加到BFS上下文失败: %s", e)
+            logger.warning("添加到对话历史失败: %s", e)
 
         # 🖼️ 处理图片文件（OCR识别）
         ocr_results = []
@@ -772,13 +757,13 @@ async def _handle_direct(
         save_chat_history(request.user_id, request.agent_id, "user", message)
         save_chat_history(request.user_id, request.agent_id, "assistant", reply_text, tool_call_info)
 
-        # 保存到BFS上下文
+        # 保存AI回复到对话历史
         try:
-            bfs = get_bfs_processor()
-            bfs.add_node(user_id=request.user_id, role="assistant", content=reply_text)
-            logger.debug("已添加AI回复到BFS上下文")
+            history = get_history_manager()
+            history.add_message(request.user_id, "assistant", reply_text)
+            logger.debug("已添加AI回复到对话历史")
         except Exception as e:
-            logger.warning("添加AI回复到BFS上下文失败: %s", e)
+            logger.warning("添加AI回复到对话历史失败: %s", e)
 
         # 保存任务日志
         save_task_log(request.user_id, actual_skill, task_success,
@@ -816,10 +801,9 @@ async def _handle_direct(
 async def get_context(request: ContextRequest):
     """获取用户对话上下文"""
     try:
-        bfs = get_bfs_processor()
-        context = bfs.get_context(
+        history = get_history_manager()
+        messages = history.get_history(
             user_id=request.user_id,
-            depth=request.depth,
             limit=request.limit
         )
 
@@ -827,9 +811,8 @@ async def get_context(request: ContextRequest):
             "success": True,
             "data": {
                 "user_id": request.user_id,
-                "message_count": len(context),
-                "messages": context,
-                "depth": request.depth,
+                "message_count": len(messages),
+                "messages": messages,
                 "limit": request.limit
             }
         }

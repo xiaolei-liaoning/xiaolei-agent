@@ -31,16 +31,21 @@ class AgentTools:
 
         # 根据任务内容判断是否需要工具约束
         disallowed_tools = []
-        task_lower = task.lower()
 
-        # 只读任务：禁止执行和写入
-        if any(kw in task_lower for kw in ["分析", "研究", "查看", "了解", "对比", "评估"]):
+        from core.engine.llm_backend import get_llm_router
+        router = get_llm_router()
+        is_read_only = False
+        if router and router.is_available():
+            resp = await router.simple_chat(
+                "判断以下请求是'只读分析'还是'写入创建'。只回答'只读'或'写入'。\n请求：" + task[:200],
+                temperature=0, max_tokens=10
+            )
+            is_read_only = '只读' in str(resp or '')
+
+        if is_read_only:
             disallowed_tools = ["execute_shell"]
             print(f"  📋 检测到只读任务，禁用执行类工具")
-
-        # 写入任务：禁止危险操作
-        elif any(kw in task_lower for kw in ["写", "创建", "生成", "修改", "部署"]):
-            disallowed_tools = []
+        else:
             print(f"  📋 检测到写入任务")
 
         # 构建 LLM 提示

@@ -10,6 +10,16 @@ from typing import Tuple
 logger = logging.getLogger(__name__)
 
 
+def _has_python_indicators(code: str) -> bool:
+    """检查代码是否有 Python 特征（用于防止 HTML 字符串误检测）"""
+    py_indicators = ["def ", "class ", "import ", "from ", "print(",
+                     "if __name__", "elif ", "except:", "finally:",
+                     "with open", "os.", "sys.", "json.", "asyncio",
+                     "await ", "async def", "return "]
+    score = sum(1 for ind in py_indicators if ind in code)
+    return score >= 2
+
+
 def detect_code_language(code: str) -> Tuple[str, str, str]:
     """
     检测代码语言
@@ -18,11 +28,13 @@ def detect_code_language(code: str) -> Tuple[str, str, str]:
     """
     code_stripped = code.strip()
 
-    # HTML
+    # HTML（但在 Python 特征明显时优先判定为 Python）
     if code_stripped.startswith("<!DOCTYPE") or code_stripped.startswith("<html"):
-        return ("html", ".html", "game")
+        if not _has_python_indicators(code):
+            return ("html", ".html", "game")
     if "<html" in code_stripped or "</html>" in code_stripped:
-        return ("html", ".html", "game")
+        if not _has_python_indicators(code):
+            return ("html", ".html", "game")
 
     # XML
     if code_stripped.startswith("<?xml") or code_stripped.startswith("<rss"):

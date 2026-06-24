@@ -103,17 +103,29 @@ _DEBUG_PROMPT = (
 
 _PROJECT_ANALYSIS_PROMPT = (
     "<project_analysis_protocol>\n"
-    "你正在分析一个项目的结构和代码。请按两阶段执行：\n\n"
-    "【第一阶段：收集信息】\n"
-    "1. 先调用 analyze_project(path) 批量读取关键文件\n"
-    "2. 如果信息不够，调 search_code(query, file_pattern) 补充搜索\n"
-    "3. 收集完成后进入第二阶段\n\n"
-    "【第二阶段：综合分析】\n"
-    "基于已收集的数据，直接输出完整的项目分析报告：\n"
-    "- 项目概览（语言、框架、构建工具）\n"
-    "- 目录结构与各模块职责\n"
-    "- 核心技术栈分析\n"
-    "- 架构亮点与注意事项\n"
+    "你正在深度分析一个项目。\n\n"
+    "【已提供的数据】\n"
+    "- 项目结构概览：文件树、技术栈、依赖、git 统计、import 关系\n"
+    "- 核心代码：选中的关键文件的头部（声明/import）和尾部（调用/main）\n\n"
+    "【重要规则 — 违反以下规则将浪费时间】\n"
+    "- 禁止在首轮调用任何工具（read_file / search_code / execute_shell 等）\n"
+     "   → 首轮必须直接输出分析报告。所有数据已在上面「----」下方的代码区提供。\n"
+    "- 禁止对已提供的文件调用 read_file → 工具会返回 [CACHED] 拒绝，浪费一轮\n"
+    "- 禁止调用 execute_shell / search_files 重新扫描目录 → 文件树已在结构概览中\n"
+    "- 只有在你确认某个核心文件的正文未提供且分析需要时，才从第 2 轮开始补充读\n\n"
+    "【任务】\n"
+    "基于已提供的数据输出完整的分析报告，覆盖以下维度：\n"
+    "   - 项目概览（语言、框架、构建工具、依赖）\n"
+    "   - 目录结构与各模块职责\n"
+    "   - 核心技术栈分析\n"
+    "   - 架构设计与分层\n"
+    "   - 数据流与核心链路（入口 → 处理 → 输出）\n"
+    "   - 关键模块的实现分析\n"
+    "   - 错误处理与边界情况\n"
+    "   - 代码质量评估\n"
+    "   - 改进建议\n\n"
+    "分析结构建议：先宏观（概览、架构）再微观（模块细节），最后总结建议。\n"
+    "如果需要补充阅读（仅适用于未提供的文件），可以用 read_file 或 search_code。\n"
     "</project_analysis_protocol>"
 )
 
@@ -192,28 +204,15 @@ class ReActCoreMiddleware(BaseMiddleware):
                 from core.multi_agent_v2.tools.tool_registry import get_tool_registry
                 reg = get_tool_registry()
                 try:
-                    # 项目分析任务：白名单过滤，排除无关工具
-                    task_lower = ctx.task_description.lower()
-                    analysis_kw = ["分析项目", "项目结构", "项目目录", "项目分析"]
-                    if any(kw in task_lower for kw in analysis_kw):
-                        analysis_tool_names = {"analyze_project", "search_code", "read_file", "search_files"}
-                        filtered = [t for t in tool_cache if t.name in analysis_tool_names]
-                        if not filtered:
-                            filtered = await reg.get_tools_for_task(
-                                ctx.task_description,
-                                max_tools=20,
-                                allowed=ctx.allowed_tools,
-                                disallowed=ctx.disallowed_tools,
-                                tool_preference=ctx.tool_preference,
-                            )
-                    else:
-                        filtered = await reg.get_tools_for_task(
-                            ctx.task_description,
-                            max_tools=20,
-                            allowed=ctx.allowed_tools,
-                            disallowed=ctx.disallowed_tools,
-                            tool_preference=ctx.tool_preference,
-                        )
+                    # 项目分析任务：不再限制工具，LLM 自主决定
+                    # Phase 1+2 的数据已在 task_description 中提供
+                    filtered = await reg.get_tools_for_task(
+                        ctx.task_description,
+                        max_tools=20,
+                        allowed=ctx.allowed_tools,
+                        disallowed=ctx.disallowed_tools,
+                        tool_preference=ctx.tool_preference,
+                    )
                 except Exception:
                     filtered = tool_cache[:20]
                 ctx._filtered_tools = filtered
@@ -237,29 +236,85 @@ class ReActCoreMiddleware(BaseMiddleware):
             from core.multi_agent_v2.tools.schema import get_schema_adapter
             adapter = get_schema_adapter(ctx.model_override)
             ctx.tool_defs = adapter.adapt(raw_defs)
+            # ponytail: 数据已获取 → 隐藏搜索工具，防重复
+            if getattr(ctx, '_data_fetched', False) and ctx.tool_defs:
+                _search_tools = {"web_search", "fetch_url", "fetch_json", "hot_search"}
+                ctx.tool_defs = [t for t in ctx.tool_defs
+                                 if t.get("function", {}).get("name") not in _search_tools]
         else:
             ctx.tool_defs = None
 
         # 构建消息 — 注入计划进度让 agent 知晓已完成/未完成步骤
         plan_context = steps_summary(ctx) if ctx.plan else ""
 
+        # ── LLM 任务分类：替代关键词匹配路由 ──
+        _task_flags = getattr(ctx, '_task_flags', None)
+        if _task_flags is None:
+            _task_desc = (ctx.task_description or "")[:300]
+            _task_flags = {"code": False, "game": False, "report": False, "project_analysis": False,
+                           "desktop_save": False, "search": False, "file_operation": False, "edit": False}
+            try:
+                from core.engine.llm_backend import get_llm_router
+                _router = get_llm_router()
+                if _router and _router.is_available():
+                    _resp = await _router.simple_chat(
+                        "对以下请求，用逗号分隔输出8个数字（1=是，0=否）：\n"
+                        "需要写代码/脚本/HTML？,需要开发游戏？,"
+                        "需要生成报告/分析数据/查热搜？,需要分析项目结构/代码？,"
+                        "需要在桌面保存/生成文件？,需要搜索网络/查百度/热搜？,"
+                        "需要读写/操作文件？,需要替换/修改/编辑已有文件内容？\n请求：" + _task_desc,
+                        temperature=0, max_tokens=32
+                    )
+                    _parts = str(_resp or "").strip().split(",")
+                    if len(_parts) >= 8:
+                        _task_flags = {
+                            "code": _parts[0].strip() == "1",
+                            "game": _parts[1].strip() == "1",
+                            "report": _parts[2].strip() == "1",
+                            "project_analysis": _parts[3].strip() == "1",
+                            "desktop_save": _parts[4].strip() == "1",
+                            "search": _parts[5].strip() == "1",
+                            "file_operation": _parts[6].strip() == "1",
+                            "edit": _parts[7].strip() == "1",
+                        }
+            except Exception:
+                pass
+            ctx._task_flags = _task_flags
+
+        # Tool 过滤：桌面报告已就绪 → 隐藏 execute_python
+        if _task_flags.get("desktop_save") and ctx.tool_defs:
+            ctx.tool_defs = [t for t in ctx.tool_defs
+                             if t.get("function", {}).get("name") != "execute_python"]
+
         # ── 按任务类型组装提示词模块 ──
-        task_lower = ctx.task_description.lower()
         modules = [_BASE_PROMPT]
-        if any(kw in task_lower for kw in ["写", "创建", "代码", "文件", "html", "脚本", "game",
-                                            "游戏", "生成", "编写", "编辑", "爬", "search"]):
+        if _task_flags.get("code"):
             modules.append(_CODE_GEN_PROMPT)
-            if any(kw in task_lower for kw in ["游戏", "game", "棋", "puzzle"]):
+            if _task_flags.get("game"):
                 modules.append(_GAME_DEV_PROMPT)
-        if any(kw in task_lower for kw in ["报告", "热搜", "分析", "数据", "总结", "report", "dashboard"]):
+        if _task_flags.get("report"):
             modules.append(_REPORT_PROMPT)
 
-        # ── 项目分析任务：插入两阶段分析 prompt ──
-        analysis_kw = ["分析项目", "项目结构", "项目目录",
-                       "看.*项目", "项目的代码", "分析.*项目"]
-        if any(re.search(kw, task_lower) for kw in analysis_kw):
+        # ponytail: 工具连续失败 → 从 tool_defs 中移除，强制 LLM 换方案
+        if ctx.tool_defs:
+            _consecutive_fails = {}
+            for r in (getattr(ctx, 'tool_results', []) or []):
+                tn = r.get("tool_call", {}).get("name", "")
+                if not r.get("success"):
+                    _consecutive_fails[tn] = _consecutive_fails.get(tn, 0) + 1
+                else:
+                    _consecutive_fails.pop(tn, None)
+            _dead_tools = {tn for tn, c in _consecutive_fails.items() if c >= 2}
+            if _dead_tools:
+                ctx.tool_defs = [t for t in ctx.tool_defs
+                                 if t.get("function", {}).get("name") not in _dead_tools]
+                logger.info(f"工具连续失败，已隐藏: {_dead_tools}")
+
+        # ── 项目分析任务：插入分析 prompt + 跳过冗余计划 ──
+        if _task_flags.get("project_analysis"):
             modules.insert(1, _PROJECT_ANALYSIS_PROMPT)
             ctx.max_iterations = max(ctx.max_iterations, 15)
+            ctx._skip_plan = True
 
         if ctx.plan:
             modules.append(_PLAN_PROMPT)
@@ -282,6 +337,10 @@ class ReActCoreMiddleware(BaseMiddleware):
         if ctx.personality_prompt:
             system_content = f"{ctx.personality_prompt}\n\n{system_content}"
 
+        # 注入记忆上下文（MemoryMiddleware 写到 knowledge_context）
+        if ctx.knowledge_context:
+            system_content += f"\n\n── 记忆上下文 ──\n{ctx.knowledge_context}\n──"
+
         ctx._pending_messages = [
             {"role": "system", "content": system_content},
             {"role": "user", "content": ctx.task_description},
@@ -298,8 +357,19 @@ class ReActCoreMiddleware(BaseMiddleware):
             fail = total - success
             tools_used = list(set(r.get("tool_call", {}).get("name", "") for r in ctx.tool_results))
             dynamic_context += f"<execution_status>已执行{total}轮: {success}成功/{fail}失败, 工具: {', '.join(tools_used[:5])}</execution_status>\n"
+        # ponytail: 注入失败历史，防止重复尝试已失败的方案
+        failed = getattr(ctx, '_failed_approaches', None)
+        if failed:
+            dynamic_context += "<failed_approaches>\n以下方案已经失败，不要重复尝试:\n"
+            for fa in failed[-5:]:
+                name = fa.get("tool", "?")
+                args_summary = fa.get("args_summary", "")
+                err = fa.get("error", "")[:100]
+                dynamic_context += f"- {name}({args_summary}): {err}\n"
+            dynamic_context += "</failed_approaches>\n"
         dynamic_context += "</system_context>"
         system_content += dynamic_context
+        ctx._pending_messages[0]["content"] = system_content  # ponytail: 写回，否则 dynamic_context 丢失
 
         # ── 2. 构建 LLM 消息（含对话历史 + RAG 增强 + 个性化）──
         messages = ctx._pending_messages.copy()
@@ -314,66 +384,91 @@ class ReActCoreMiddleware(BaseMiddleware):
                 rag_results = await self._rag_query(ctx.task_description)
                 if rag_results:
                     messages[0]["content"] += f"\n\n【知识库参考】\n{rag_results}"
+                    # ponytail: RAG → web_search 串行：先用知识库回答，再用联网补充最新信息
+                    if _task_flags.get("search"):
+                        messages[0]["content"] += "\n\n【搜索策略】知识库提供了基础信息，但对最新/未收录的内容可能不全。先用知识库回答主体，再用 web_search 补充最新数据和细节。禁止一轮就结束。"
             except Exception:
                 pass
 
         if plan_context:
             messages[0]["content"] += plan_context
 
-        # ── 3. 调用 LLM ──
-        try:
-            task = asyncio.create_task(router.chat(
-                messages,
-                temperature=0.7,
-                max_tokens=16384,
-                tools=ctx.tool_defs if ctx.tool_defs else None,
-            ))
+        # ── 3. 调用 LLM（最多 2 次，空转自动重试）──
+        _last_reply = ""
+        for _attempt in range(2):
             try:
-                reply = await asyncio.wait_for(task, timeout=180)
-            except asyncio.TimeoutError:
-                task.cancel()
+                task = asyncio.create_task(router.chat(
+                    messages,
+                    temperature=0.7,
+                    max_tokens=16384,
+                    tools=ctx.tool_defs if ctx.tool_defs else None,
+                ))
                 try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
-                raise
-            except Exception:
-                if not task.done():
+                    reply = await asyncio.wait_for(task, timeout=180)
+                except asyncio.TimeoutError:
                     task.cancel()
-                raise
-            reply = str(reply) if reply else ""
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
+                    raise
+                except Exception:
+                    if not task.done():
+                        task.cancel()
+                    raise
+                reply = str(reply) if reply else ""
 
-            # DEBUG: see what DeepSeek actually returned
-            reply_preview = reply[:500].replace("\n", "\\n")
-            logger.info(f"LLM第{ctx.react_depth}轮回复({len(reply)}字符): {reply_preview}")
-            ctx.knowledge_context += f"\nLLM第{ctx.react_depth}轮: {reply[:300]}"
-            
-            # 解析工具调用
-            tool_calls = parse_tool_calls(reply)
+                # DEBUG: see what DeepSeek actually returned
+                reply_preview = reply[:500].replace("\n", "\\n")
+                logger.info(f"LLM第{ctx.react_depth}轮回复({len(reply)}字符): {reply_preview}")
+                ctx.knowledge_context += f"\nLLM第{ctx.react_depth}轮: {reply[:300]}"
+                
+                # 解析工具调用
+                tool_calls = parse_tool_calls(reply)
 
-            # 过滤：从 tool_defs 里排除掉的工具，解析出来的也不应该执行
-            if tool_calls and ctx.tool_defs:
-                valid_names = {t.get("function", {}).get("name", "") for t in ctx.tool_defs}
-                tool_calls = [tc for tc in tool_calls
-                              if tc.get("function", {}).get("name", "") in valid_names]
+                # 过滤：从 tool_defs 里排除掉的工具，解析出来的也不应该执行
+                if tool_calls and ctx.tool_defs:
+                    valid_names = {t.get("function", {}).get("name", "") for t in ctx.tool_defs}
+                    tool_calls = [tc for tc in tool_calls
+                                  if tc.get("function", {}).get("name", "") in valid_names]
 
-            if tool_calls:
-                ctx._pending_tool_calls = tool_calls
-                ctx._pending_reply = reply
-            else:
-                # 没有工具调用，可能是最终答案
+                if tool_calls:
+                    ctx._pending_tool_calls = tool_calls
+                    ctx._pending_reply = reply
+                    break  # 有工具调用 → 跳出重试循环
+
+                # 没有工具调用
+                _last_reply = reply
                 if len(reply) > 50 and not reply.startswith("{"):
+                    # 可能是最终答案
                     ctx.final_answer = reply
                     ctx.interrupted = True
-                ctx._pending_reply = reply
+                    break
+                # ponytail: 本轮回合内重试，不等下一轮
+                ctx.forced_instructions = (
+                    "你刚输出了思考但没调工具。请立即调用 fetch_url 或 web_search，不要空转。"
+                )
+                # 重建消息（注入强制指令重试）
+                _retry_sys = ctx._pending_messages[0]["content"]
+                _retry_sys += f"\n\n<forced_instructions>\n{ctx.forced_instructions}\n</forced_instructions>"
+                messages = [{"role": "system", "content": _retry_sys},
+                            {"role": "user", "content": ctx.task_description}]
+                if ctx._conversation_history:
+                    messages.extend(ctx._conversation_history)
+                ctx.forced_instructions = ""  # 已内联，清除防重复
+                logger.info(f"第{ctx.react_depth}轮空转，回合内重试 LLM...")
+            except asyncio.TimeoutError:
+                logger.warning(f"LLM 调用超时 (60s)")
+                ctx.last_error = "LLM 调用超时"
+                break
+            except Exception as e:
+                logger.error(f"LLM 调用失败: {e}")
+                ctx.last_error = f"LLM 调用失败: {e}"
+                break
+        else:
+            # 2 次都空转，用最后一次回复
+            ctx._pending_reply = _last_reply
                 
-        except asyncio.TimeoutError:
-            logger.warning(f"LLM 调用超时 (60s)")
-            ctx.last_error = "LLM 调用超时"
-        except Exception as e:
-            logger.error(f"LLM 调用失败: {e}")
-            ctx.last_error = f"LLM 调用失败: {e}"
-
     async def on_think_end(self, ctx: RunContext) -> None:
         """执行工具调用"""
         if not hasattr(ctx, '_pending_tool_calls') or not ctx._pending_tool_calls:
@@ -440,6 +535,32 @@ class ReActCoreMiddleware(BaseMiddleware):
                     "result": result.get("result", {}),
                     "quality": result.get("quality", "unknown"),
                 })
+
+                # ponytail: 记录失败方案，防止重复尝试
+                if not ok and tool_name in ("execute_shell", "execute_python", "fetch_url", "write_file", "web_search"):
+                    if not hasattr(ctx, '_failed_approaches'):
+                        ctx._failed_approaches = []
+                    _args_copy = {k: v for k, v in arguments.items() if k in ("command", "url", "mode")}
+                    _args_summary = "; ".join(f"{k}={v}" for k, v in _args_copy.items())
+                    _err_text = str(result.get("result", {}).get("error", "")) or str(result.get("result", ""))[:100]
+                    ctx._failed_approaches.append({
+                        "tool": tool_name,
+                        "args_summary": _args_summary[:80],
+                        "error": _err_text[:200],
+                    })
+
+                # ponytail: 成功获取数据后标记，防止重复搜索
+                if ok and tool_name in ("fetch_url", "web_search", "hot_search"):
+                    _raw = str(result.get("result", {}))
+                    if any(kw in _raw for kw in ("热搜", "热度:", "条热搜", "条/榜单")):
+                        ctx._data_fetched = True
+                        logger.info("数据已获取，后续将隐藏搜索工具防止重复")
+                        # ponytail: 数据已就绪 → 强制 write_file 输出，防 LLM 画蛇添足调 execute_python
+                        if not ctx.forced_instructions:
+                            ctx.forced_instructions = (
+                                "数据已获取完毕。直接用 write_file 在桌面生成报告，"
+                                "不要再用 execute_python。"
+                            )
 
                 # 打印结果
                 status = "✅" if ok else "❌"
@@ -559,6 +680,8 @@ def build_default_chain() -> MiddlewareChain:
         TruncationMiddleware,
         TodoMiddleware,
     )
+    from .memory_middleware import MemoryMiddleware
+    chain.add(MemoryMiddleware())
     chain.add(TruncationMiddleware())
     chain.add(LoopDetectionMiddleware())
     chain.add(ClarificationMiddleware())
@@ -582,6 +705,7 @@ def build_configured_chain(
     reflection: bool = True,
     kepa: bool = True,
     summarization: bool = True,
+    memory: bool = True,
     loop_warn: int = 3,
     loop_hard: int = 5,
     depth_max: int = 30,
@@ -599,7 +723,10 @@ def build_configured_chain(
         ReflectionMiddleware,
         TruncationMiddleware,
     )
+    from .memory_middleware import MemoryMiddleware
 
+    if memory:
+        chain.add(MemoryMiddleware())
     if summarization:
         chain.add(TruncationMiddleware())
     if loop_detection:
@@ -644,6 +771,12 @@ async def run_react(
         ctx.model_override = model
     if personality_prompt:
         ctx.personality_prompt = personality_prompt
+
+    # ── 项目分析：禁止 read_file + 强制定 3 轮 ──
+    if "Phase 1 扫描" in task_description or "项目结构概览" in task_description:
+        ctx.max_iterations = 3
+        ctx.disallowed_tools = list(set((ctx.disallowed_tools or []) + ["read_file"]))
+        ctx.allowed_tools = ["write_file"]
     ctx.allowed_tools = allowed_tools
     ctx.disallowed_tools = disallowed_tools
     if tool_preference:
@@ -663,11 +796,18 @@ async def run_react(
     prefix = _get_prefix(agent)
 
     # ── 规划阶段 ──
-    ctx.plan = await generate_plan(task_description, ctx)
-    if ctx.plan:
-        display_plan(ctx, prefix=prefix)
+    _has_structure_data = "Phase 1 扫描" in task_description or "项目结构概览" in task_description
+    if _has_structure_data:
+        # 新 Phase 1 已自包含完整分析，LLM 仅需格式化输出 HTML
+        print(f"{prefix}    \033[2;37m📋 分析数据已就绪，LLM 负责格式化 HTML 输出\033[0m")
+        # 项目分析只需要 3 轮（读数据 → 写 HTML → 收尾）
+        ctx.max_iterations = 3
     else:
-        print(f"{prefix}    \033[2;37m📋 无显式计划，自动按 ReAct 循环执行\033[0m")
+        ctx.plan = await generate_plan(task_description, ctx)
+        if ctx.plan:
+            display_plan(ctx, prefix=prefix)
+        else:
+            print(f"{prefix}    \033[2;37m📋 无显式计划，自动按 ReAct 循环执行\033[0m")
 
     while not ctx.interrupted and ctx.react_depth < ctx.max_iterations:
         round_idx = ctx.react_depth + 1
@@ -728,6 +868,19 @@ async def run_react(
                         print(f"{prefix}    \033[1;33m🔄 步骤 {step.index} 失败，已重新规划\033[0m")
                         break
 
+        # ── 项目分析：检测连续 read_file 不输出分析 → 强制中断 ──
+        if _has_structure_data:
+            _recent_tools = [r.get("tool_call", {}).get("name", "") for r in ctx.tool_results[-4:]]
+            if len(_recent_tools) >= 3 and all(t == "read_file" for t in _recent_tools[-3:]):
+                if not ctx.forced_instructions:
+                    ctx.forced_instructions = (
+                        "⚠️ 你已经连续多次调 read_file 但没有输出分析。\n"
+                        "现在必须停下来分析刚才读到的文件内容。\n"
+                        "格式要求：对刚读的目录输出「📁 目录名: 职责分析（1-2句话）」\n"
+                        "然后再决定下一步读哪个文件。"
+                    )
+                    print(f"{prefix}    \033[1;33m⚠️ 检测到连续 read_file 未分析，注入提醒\033[0m")
+
         hr_tool = await chain.on_tool_end(ctx)
         if hr_tool and hr_tool.jump_to == "end":
             ctx.interrupted = True
@@ -740,8 +893,6 @@ async def run_react(
                     step.status = "failed"
                     ctx._step_retries[step.index] = ctx._step_retries.get(step.index, 0) + 1
             continue
-
-    await chain.on_finish(ctx)
 
     # ── 搜索报告自动生成兜底 ──
     if not ctx.final_answer:
@@ -853,6 +1004,9 @@ async def run_react(
                         ctx.final_answer = txt[:1000]
                         break
 
+    # ponytail: on_finish 必须在兜底之后调用，确保 final_answer 非空时写入记忆
+    await chain.on_finish(ctx)
+
     return {
         "success": bool(ctx.final_answer),
         "answer": ctx.final_answer,
@@ -860,3 +1014,5 @@ async def run_react(
         "tool_results": ctx.tool_results,
         "error": ctx.last_error,
     }
+
+

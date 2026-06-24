@@ -466,13 +466,14 @@ class SandboxExecutor:
         # 设置环境变量限制
         env = os.environ.copy()
         env["PYTHONPATH"] = ""  # 清空Python路径
-        env["PATH"] = "/usr/bin:/bin"  # 限制PATH
+        env["PATH"] = "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin"  # 限制PATH，保留常用工具目录
         
         # 如果没有允许的路径，设置受限的家目录
         restricted_home = None
         if not limits.allowed_paths:
             restricted_home = self.sandbox_dir / sandbox_id
             restricted_home.mkdir(exist_ok=True)
+            (restricted_home / "Desktop").mkdir(exist_ok=True)  # ponytail: LLM代码常写 ~/Desktop/
             self._track_file(sandbox_id, restricted_home)
             env["HOME"] = str(restricted_home)
         

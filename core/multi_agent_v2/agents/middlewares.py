@@ -144,16 +144,27 @@ class KEPAMiddleware(BaseMiddleware):
             from core.multi_agent_v2.infrastructure.shared_bus import get_shared_bus
             bus = get_shared_bus()
 
-            desc_lower = ctx.task_description.lower()
             relevant_tags = set()
-            if any(kw in desc_lower for kw in ["搜索", "查询", "百度", "热搜", "search"]):
-                relevant_tags.add("search")
-            if any(kw in desc_lower for kw in ["代码", "程序", "脚本", "code", "python"]):
-                relevant_tags.add("code")
-            if any(kw in desc_lower for kw in ["数据", "分析", "统计", "data", "analysis"]):
-                relevant_tags.add("analysis")
-            if any(kw in desc_lower for kw in ["文件", "写入", "保存", "file", "write"]):
-                relevant_tags.add("file")
+            _flags = getattr(ctx, '_task_flags', None)
+            if _flags:
+                if _flags.get("search"):
+                    relevant_tags.add("search")
+                if _flags.get("code"):
+                    relevant_tags.add("code")
+                if _flags.get("report") or _flags.get("project_analysis"):
+                    relevant_tags.add("analysis")
+                if _flags.get("file_operation") or _flags.get("desktop_save") or _flags.get("edit"):
+                    relevant_tags.add("file")
+            else:
+                desc_lower = ctx.task_description.lower()
+                if any(kw in desc_lower for kw in ["搜索", "查询", "百度", "热搜", "search"]):
+                    relevant_tags.add("search")
+                if any(kw in desc_lower for kw in ["代码", "程序", "脚本", "code", "python"]):
+                    relevant_tags.add("code")
+                if any(kw in desc_lower for kw in ["数据", "分析", "统计", "data", "analysis"]):
+                    relevant_tags.add("analysis")
+                if any(kw in desc_lower for kw in ["文件", "写入", "保存", "file", "write"]):
+                    relevant_tags.add("file")
             relevant_tags.add("kepa")
 
             if not relevant_tags:

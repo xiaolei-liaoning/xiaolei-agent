@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>小雷版Agent · 双引擎智能体系统</title>
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{
+      font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;
+      background:#f8faff;color:#1e293b;overflow-x:hidden
+    }
+
+    /* ===== Hero 顶部渐变背景 ===== */
+    .hero-bg{
+      position:absolute;top:0;left:0;right:0;height:100%;z-index:0;overflow:hidden;
+      background:linear-gradient(165deg,#eef2ff 0%,#f0fdf4 30%,#fefce8 60%,#fdf2f8 100%);
+    }
+    .hero-bg::before{
+      content:'';position:absolute;top:-30%;right:-10%;width:600px;height:600px;
+      background:radial-gradient(circle,rgba(139,92,246,.12) 0%,transparent 70%);
+      animation:hbFloat 12s ease-in-out infinite alternate;
+    }
+    .hero-bg::after{
+      content:'';position:absolute;bottom:-20%;left:-5%;width:500px;height:500px;
+      background:radial-gradient(circle,rgba(6,182,212,.1) 0%,transparent 70%);
+      animation:hbFloat 15s ease-in-out infinite alternate-reverse;
+    }
+    @keyframes hbFloat{0%{transform:translate(0,0) scale(1)}100%{transform:translate(30px,-30px) scale(1.2)}}
+
+    /* ===== 浮动装饰圆 ===== */
+    .orb{
+      position:absolute;border-radius:50%;z-index:0;pointer-events:none;
+      animation:orbFloat var(--d,8s) ease-in-out infinite alternate;
+    }
+    .orb1{width:200px;height:200px;background:radial-gradient(circle,rgba(139,92,246,.08),transparent 70%);top:10%;right:8%;--d:9s}
+    .orb2{width:150px;height:150px;background:radial-gradient(circle,rgba(16,185,129,.08),transparent 70%);bottom:15%;left:5%;--d:7s}
+    .orb3{width:120px;height:120px;background:radial-gradient(circle,rgba(245,158,11,.07),transparent 70%);top:40%;left:60%;--d:11s}
+    .orb4{width:180px;height:180px;background:radial-gradient(circle,rgba(236,72,153,.06),transparent 70%);bottom:30%;right:15%;--d:8.5s}
+    @keyframes orbFloat{0%{transform:translate(0,0) scale(1)}100%{transform:translate(20px,-20px) scale(1.15)}}
+
+    /* ===== Nav ===== */
+    nav{
+      position:fixed;top:0;left:0;right:0;z-index:100;
+      padding:14px 40px;display:flex;justify-content:space-between;align-items:center;
+      background:rgba(255,255,255,.7);backdrop-filter:blur(20px);
+      border-bottom:1px solid rgba(139,92,246,.1)
+    }
+    .logo{display:flex;align-items:center;gap:10px;font-size:17px;font-weight:800;background:linear-gradient(135deg,#7C3AED,#06b6d4);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+    .links{display:flex;gap:28px;list-style:none}
+    .links a{color:#64748b;text-decoration:none;font-size:13px;font-weight:500;transition:color .3s}
+    .links a:hover{color:#7C3AED}
+
+    /* ===== Hero ===== */
+    .hero{
+      position:relative;min-height:100vh;padding:120px 20px 60px;
+      display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;
+      z-index:1;overflow:hidden
+    }
+    .hero-badge{
+      display:inline-flex;align-items:center;gap:8px;padding:8px 20px;border-radius:100px;
+      background:rgba(139,92,246,.08);border:1px solid rgba(139,92,246,.2);
+      font-size:13px;font-weight:600;color:#7C3AED;margin-bottom:28px;
+      backdrop-filter:blur(10px);
+      animation:fadeUp .8s ease-out
+    }
+    .badge-dot{width:8px;height:8px;border-radius:50%;background:#10b981;display:inline-block;animation:hd 2s ease-in-out infinite}
+    @keyframes hd{0%,100%{box-shadow:0 0 0 0 rgba(16,185,129,.5)}50%{box-shadow:0 0 0 10px rgba(16,185,129,0)}}
+
+    .hero h1{
+      font-size:clamp(36px,7vw,72px);font-weight:800;line-height:1.08;margin-bottom:16px;
+      animation:fadeUp .8s ease-out .1s both
+    }
+    .gt{background:linear-gradient(135deg,#7C3AED,#6366F1,#06b6d4,#10b981);background-size:300% 300%;-webkit-background-clip:text;-webkit-text-fill-color:transparent;animation:gtShimmer 6s ease-in-out infinite}
+    @keyframes gtShimmer{0%,100%{background-position:0% 50%}50%{background-position:100% 50%}}
+
+    .hero p{
+      font-size:clamp(15px,1.8vw,20px);color:#64748b;max-width:620px;line-height:1.7;margin-bottom:32px;
+      animation:fadeUp .8s ease-out .2s both
+    }
+    .hero p strong{color:#7C3AED}
+    .btns{display:flex;gap:14px;flex-wrap:wrap;justify-content:center;margin-bottom:32px;animation:fadeUp .8s ease-out .25s both}
+    .btn{
+      padding:14px 32px;border-radius:14px;font-size:15px;font-weight:600;text-decoration:none;
+      display:inline-flex;align-items:center;gap:8px;transition:all .3s;cursor:pointer
+    }
+    .btn1{background:linear-gradient(135deg,#7C3AED,#6366F1);color:#fff;box-shadow:0 4px 24px rgba(124,58,237,.25)}
+    .btn1:hover{transform:translateY(-3px);box-shadow:0 8px 36px rgba(124,58,237,.35)}
+    .btn2{background:rgba(255,255,255,.6);color:#475569;border:1px solid rgba(139,92,246,.15);backdrop-filter:blur(10px)}
+    .btn2:hover{background:#fff;border-color:rgba(139,92,246,.3);transform:translateY(-3px)}
+    @keyframes fadeUp{from{opacity:0;transform:translateY(25px)}to{opacity:1;transform:translateY(0)}}
+
+    .stats{display:flex;gap:40px;animation:fadeUp .8s ease-out .35s both}
+    .st{text-align:center}
+    .sn{font-size:34px;font-weight:800;color:#7C3AED}
+    .sl{font-size:13px;color:#94a3b8;margin-top:2px}
+
+    /* ===== Hero 架构预览卡片 ===== */
+    .hero-row{
+      display:flex;gap:16px;width:100%;max-width:900px;margin-top:36px;flex-wrap:wrap;justify-content:center;
+      animation:fadeUp .8s ease-out .4s both
+    }
+    .hcard{
+      flex:1;min-width:200px;padding:20px 16px;border-radius:16px;text-align:center;
+      background:rgba(255,255,255,.6);backdrop-filter:blur(12px);
+      border:1px solid rgba(139,92,246,.12);
+      transition:all .4s;
+      animation:hcardFloat 3s ease-in-out infinite
+    }
+    .hcard:nth-child(2){animation-delay:.4s}
+    .hcard:nth-child(3){animation-delay:.8s}
+    @keyframes hcardFloat{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
+    .hcard:hover{transform:translateY(-8px) scale(1.02);border-color:rgba(139,92,246,.3);box-shadow:0 20px 60px rgba(139,92,246,.1)}
+    .hcard .ic{font-size:30px;margin-bottom:8px}
+    .hcard h3{font-size:15px;font-weight:700;margin-bottom:4px;color:#1e293b}
+    .hcard p{font-size:12px;color:#94a3b8;margin:0;line-height:1.4}
+
+    /* ===== Scroll indicator ===== */
+    .scroll-down{
+      position:absolute;bottom:24px;left:50%;transform:translateX(-50%);
+      display:flex;flex-direction:column;align-items:center;gap:6px;
+      color:#94a3b8;font-size:11px;animation:fadeUp 1s ease-out .6s both
+    }
+    .sc-arrow{width:18px;height:18px;border-right:2px solid #94a3b8;border-bottom:2px solid #94a3b8;transform:rotate(45deg);animation:scB 2s ease-in-out infinite}
+    @keyframes scB{0%,100%{transform:translateX(-50%) rotate(45deg) translateY(0)}50%{transform:translateX(-50%) rotate(45deg) translateY(6px)}}
+
+    /* ===== Sections ===== */
+    section{
+      position:relative;z-index:1;padding:80px 20px
+    }
+    .in{max-width:1100px;margin:0 auto}
+
+    .slabel{
+      display:inline-flex;align-items:center;gap:8px;padding:6px 16px;border-radius:100px;
+      background:rgba(139,92,246,.06);border:1px solid rgba(139,92,246,.15);
+      font-size:12px;font-weight:600;color:#7C3AED;text-transform:uppercase;letter-spacing:1px;margin-bottom:14px
+    }
+    .stitle{font-size:clamp(26px,3.5vw,40px);font-weight:800;margin-bottom:12px;color:#0f172a}
+    .sdesc{font-size:15px;color:#64748b;max-width:560px;line-height:1.7;margin-bottom:36px}
+    .sdesc strong{color:#7C3AED}
+
+    /* ===== 架构卡 ===== */
+    .acard{
+      width:100%;padding:40px;border-radius:20px;
+      background:rgba(255,255,255,.7);backdrop-filter:blur(16px);
+      border:1px solid rgba(139,92,246,.1);
+      box-shadow:0 4px 30px rgba(139,92,246,.04);
+      position:relative;overflow:hidden
+    }
+    .acard::before{
+      content:'';position:absolute;top:0;left:0;right:0;height:3px;
+      background:linear-gradient(90deg,#7C3AED,#6366F1,#06b6d4,#10b981);
+      opacity:.6
+    }
+    .acont{position:relative;z-index:1}
+
+    /* ===== 节点 ===== */
+    .n{padding:12px 22px;border-radius:12px;font-weight:600;font-size:13px;text-align:center;transition:all .3s;display:inline-block}
+    .n:hover{transform:scale(1.06)}
+    .n-lg{padding:18px 28px;font-size:15px}
+    .n-cpt{
+      background:linear-gradient(135deg,#7C3AED,#6366F1);color:#fff;
+      box-shadow:0 4px 20px rgba(124,58,237,.25);
+      animation:np 3s ease-in-out infinite
+    }
+    .n-wk{
+      background:linear-gradient(135deg,#6366F1,#4f46e5);color:#fff;
+      box-shadow:0 4px 16px rgba(99,102,241,.2);
+      animation:np 3s ease-in-out infinite .5s
+    }
+    .n-tl{
+      background:linear-gradient(135deg,#14b8a6,#0d9488);color:#fff;
+      box-shadow:0 4px 12px rgba(20,184,166,.15)
+    }
+    .n-sm{padding:10px 16px;font-size:11px;background:rgba(255,255,255,.8);border:1px solid rgba(139,92,246,.12);color:#64748b}
+    .n-sm2{background:linear-gradient(135deg,#1e293b,#334155);color:#e2e8f0}
+    @keyframes np{0%,100%{box-shadow:0 4px 16px rgba(124,58,237,.15)}50%{box-shadow:0 4px 36px rgba(124,58,237,.35)}}
+
+    .r{display:flex;gap:14px;justify-content:center;align-items:center;flex-wrap:wrap}
+    .arw{width:2px;height:20px;background:linear-gradient(180deg,#7C3AED,transparent);position:relative}
+    .arw::after{content:'';position:absolute;bottom:-3px;left:-4px;width:10px;height:10px;border-right:2px solid #7C3AED;border-bottom:2px solid #7C3AED;transform:rotate(45deg)}
+
+    .flow{display:flex;gap:5px;align-items:center;font-size:11px;color:#94a3b8}
+    .fd{width:6px;height:6px;border-radius:50%;animation:fdm 1.5s ease-in-out infinite}
+    .f1{background:#7C3AED}
+    .f2{background:#6366F1;animation-delay:.2s}
+    .f3{background:#7C3AED;animation-delay:.4s}
+    @keyframes fdm{0%,100%{transform:translateY(0);opacity:.3}50%{transform:translateY(-10px);opacity:1}}
+
+    /* ===== V2 模块 ===== */
+    .v2-modes{
+      display:flex;gap:24px;justify-content:center;flex-wrap:wrap;margin:10px 0 20px
+    }
+    .v2-mode{
+      flex:1;min-width:200px;text-align:center;padding:18px 14px;border-radius:14px;
+      border:1px solid rgba(139,92,246,.1);background:rgba(255,255,255,.5);
+      transition:all .4s;position:relative;overflow:hidden
+    }
+    .v2-mode:hover{transform:translateY(-4px);box-shadow:0 12px 40px rgba(139,92,246,.08)}
+    .v2-mode .ic{font-size:30px;margin-bottom:8px}
+    .v2-mode h4{font-size:14px;font-weight:700;margin-bottom:4px}
+    .v2-mode p{font-size:12px;color:#94a3b8;line-height:1.5;margin:0}
+
+    .v2-code{
+      background:rgba(15,23,42,.95);border-radius:12px;padding:18px 22px;
+      text-align:left;font-family:'SF Mono',Monaco,Consolas,monospace;
+      font-size:13px;line-height:2;overflow-x:auto;max-width:100%;
+      border:1px solid rgba(139,92,246,.12);margin:14px 0;
+      box-shadow:0 8px 30px rgba(0,0,0,.1)
+    }
+    .kc{color:#f59e0b}.kn{color:#67e8f9}.ks{color:#a78bfa}.kv{color:#6ee7b7}
+    .kss{color:#fcd34d}.kc2{color:#94a3b8}.km{color:#e2e8f0}
+
+    .v2-div{width:2px;height:14px;background:linear-gradient(180deg,#7C3AED,transparent)}
+
+    /* ===== 分割装饰 ===== */
+    .dv{
+      text-align:center;padding:40px 20px;position:relative;z-index:1
+    }
+    .dv span{
+      display:inline-flex;align-items:center;gap:14px;color:#cbd5e1;font-size:12px;letter-spacing:2px;font-weight:500
+    }
+    .dv span::before,.dv span::after{content:'';width:60px;height:1px;background:linear-gradient(90deg,transparent,#cbd5e1)}
+    .dv span::after{background:linear-gradient(90deg,#cbd5e1,transparent)}
+
+    /* ===== Caption ===== */
+    .cg{margin-top:24px;display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px}
+    .cc{
+      padding:18px;border-radius:14px;
+      background:rgba(255,255,255,.5);backdrop-filter:blur(8px);
+      border:1px solid rgba(139,92,246,.06);transition:all .3s
+    }
+    .cc:hover{background:rgba(255,255,255,.8);border-color:rgba(139,92,246,.18);transform:translateY(-3px);box-shadow:0 8px 24px rgba(139,92,246,.06)}
+    .cc .ic{font-size:22px;margin-bottom:6px}
+    .cc h4{font-size:14px;font-weight:600;margin-bottom:4px;color:#0f172a}
+    .cc p{font-size:12px;color:#94a3b8;line-height:1.5}
+
+    /* ===== Features ===== */
+    .fg{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:18px}
+    .fc{
+      padding:28px;border-radius:18px;
+      background:rgba(255,255,255,.6);backdrop-filter:blur(8px);
+      border:1px solid rgba(139,92,246,.06);
+      transition:all .4s;
+      animation:fcIn .6s ease-out both
+    }
+    .fc:nth-child(1){animation-delay:0s}.fc:nth-child(2){animation-delay:.1s}.fc:nth-child(3){animation-delay:.2s}
+    .fc:nth-child(4){animation-delay:.3s}.fc:nth-child(5){animation-delay:.4s}.fc:nth-child(6){animation-delay:.5s}
+    @keyframes fcIn{from{opacity:0;transform:translateY(24px)}to{opacity:1;transform:translateY(0)}}
+    .fc:hover{transform:translateY(-6px);box-shadow:0 20px 60px rgba(139,92,246,.08);border-color:rgba(139,92,246,.18)}
+    .fc .ic{font-size:32px;margin-bottom:14px}
+    .fc h3{font-size:16px;font-weight:700;margin-bottom:8px;color:#0f172a}
+    .fc p{font-size:13px;color:#94a3b8;line-height:1.6;margin:0}
+    .ft{display:inline-block;padding:3px 10px;border-radius:100px;font-size:10px;font-weight:600;margin-top:10px}
+    .tp{background:rgba(124,58,237,.08);color:#7C3AED}
+    .tg{background:rgba(16,185,129,.08);color:#059669}
+    .ta{background:rgba(245,158,11,.08);color:#d97706}
+    .tc{background:rgba(6,182,212,.08);color:#0891b2}
+
+    /* ===== CTA ===== */
+    .cta{
+      text-align:center;padding:80px 20px;position:relative;z-index:1;
+      background:linear-gradient(180deg,rgba(139,92,246,.03),transparent)
+    }
+    .cta h2{font-size:clamp(24px,3.5vw,36px);font-weight:800;color:#0f172a;margin-bottom:12px}
+    .cta p{font-size:15px;color:#94a3b8;max-width:440px;margin:0 auto 28px;line-height:1.7}
+    footer{text-align:center;padding:32px 20px;border-top:1px solid rgba(139,92,246,.06);color:#94a3b8;font-size:13px;position:relative;z-index:1}
+
+    @media(max-width:768px){
+      nav{padding:12px 18px}
+      .links{display:none}
+      .stats{gap:24px}
+      .hero-row{gap:10px}
+      .hcard{min-width:140px;padding:14px}
+      .acard{padding:24px}
+      .v2-modes{gap:14px}
+      .v2-mode{min-width:140px}
+    }
+  </style>
+</head>
+<body>
+
+<!-- Nav -->
+<nav>
+  <div class="logo">⚡ 小雷版Agent</div>
+  <ul class="links">
+    <li><a href="#v1">V1 架构</a></li>
+    <li><a href="#v2">V2 架构</a></li>
+    <li><a href="#feat">核心能力</a></li>
+  </ul>
+</nav>
+
+<!---- HERO ---->
+<section class="hero">
+  <div class="hero-bg"></div>
+  <div class="orb orb1"></div><div class="orb orb2"></div><div class="orb orb3"></div><div class="orb orb4"></div>
+
+  <div class="hero-badge"><span class="badge-dot" style="margin-right:4px"></span> v3.4 · 双架构智能引擎</div>
+  <h1>一套代码<br><span class="gt">两套颠覆性架构</span></h1>
+  <p>
+    从 <strong>V1 队长-队员</strong> 的分工协作，到 <strong>V2 纯JS工作流编排</strong>——<br>
+    简单任务单Agent直通，复杂任务JS编排并行执行
+  </p>
+  <div class="btns">
+    <a href="#v1" class="btn btn1">探索架构 →</a>
+    <a href="#feat" class="btn btn2">核心能力</a>
+  </div>
+  <div class="stats">
+    <div class="st"><div class="sn">2</div><div class="sl">并行架构</div></div>
+    <div class="st"><div class="sn">35+</div><div class="sl">集成工具</div></div>
+    <div class="st"><div class="sn">3</div><div class="sl">层级记忆</div></div>
+    <div class="st"><div class="sn">4</div><div class="sl">路由策略</div></div>
+  </div>
+
+  <div class="hero-row">
+    <div class="hcard">
+      <div class="ic">🧠</div>
+      <h3>V1 队长-队员</h3>
+      <p>LeaderAgent 决策 → Worker 并行 → KEPA 自愈</p>
+    </div>
+    <div class="hcard">
+      <div class="ic">⚙️</div>
+      <h3>V2 JS 工作流编排</h3>
+      <p>纯JS定义工作流 · 单Agent直通 / 多Agent编排</p>
+    </div>
+    <div class="hcard">
+      <div class="ic">⚡</div>
+      <h3>比 V1 更灵活</h3>
+      <p>无队长瓶颈 · 脚本即流程 · agent/parallel/pipeline</p>
+    </div>
+  </div>
+
+  <div class="scroll-down">
+    <span>向下探索</span>
+    <div class="sc-arrow"></div>
+  </div>
+</section>
+
+<!---- V1 ---->
+<div class="dv"><span>✦ V1 队长-队员模式 ✦</span></div>
+
+<section id="v1">
+  <div class="in">
+    <div class="slabel">🚀 分工协作范式</div>
+    <h2 class="stitle"><span class="gt">V1 队长-队员</span> · 智能分治</h2>
+    <p class="sdesc">
+      <strong>LeaderAgent</strong> 动态拆解任务，<strong>Worker</strong> 池并行执行，<strong>KEPA</strong> 闭环反思——<br>
+      队长只决策不执行，队员只执行不决策，角色分离带来极致效率。
+    </p>
+
+    <div class="acard">
+      <div class="acont">
+        <div style="display:flex;flex-direction:column;align-items:center;gap:10px;margin:10px 0">
+          <div class="r"><div class="n n-lg n-cpt">🤖 LeaderAgent<div style="font-weight:400;font-size:12px;opacity:.8">队长 · 决策 · 拆解</div></div></div>
+          <div class="arw"></div>
+          <div class="flow"><span class="fd f1"></span><span class="fd f2"></span><span class="fd f3"></span> ReAct 决策循环</div>
+          <div class="arw"></div>
+          <div class="r">
+            <div class="n n-wk">⚡ Worker 1<div style="font-weight:400;font-size:10px;opacity:.7">并行执行</div></div>
+            <div class="n n-wk">⚡ Worker 2<div style="font-weight:400;font-size:10px;opacity:.7">并行执行</div></div>
+            <div class="n n-wk">⚡ Worker 3<div style="font-weight:400;font-size:10px;opacity:.7">并行执行</div></div>
+            <div class="n n-wk" style="opacity:.6">⚡ 更多<div style="font-weight:400;font-size:10px">...</div></div>
+          </div>
+          <div class="arw"></div>
+          <div class="r">
+            <div class="n n-sm">delegate ▸</div>
+            <div class="n n-sm">batch_delegate ▸</div>
+            <div class="n n-sm">tool ▸</div>
+            <div class="n n-sm">process_results ▸</div>
+            <div class="n n-sm" style="border-color:rgba(245,158,11,.3);color:#d97706">KEPA 反思</div>
+          </div>
+          <div class="arw"></div>
+          <div class="r">
+            <div class="n n-tl">🔧 内置工具</div>
+            <div class="n n-tl">🔌 MCP 工具</div>
+            <div class="n n-tl">🧠 三层记忆</div>
+            <div class="n n-tl">🔍 RAG 检索</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div style="text-align:center;margin-top:8px;color:#94a3b8;font-size:13px">
+      <strong style="color:#7C3AED">ReAct</strong> Thought → Action → Observation · <strong style="color:#7C3AED">batch_delegate</strong> 并行加速 · <strong style="color:#7C3AED">KEPA</strong> ≤3次自愈
+    </div>
+
+    <div class="cg">
+      <div class="cc"><div class="ic">🧠</div><h4>LeaderAgent 队长</h4><p>ReAct 决策循环，动态拆解任务，分配 Worker，分析结果。只决策不执行。</p></div>
+      <div class="cc"><div class="ic">⚡</div><h4>Worker 并行池</h4><p>3~5 个 Worker 并行执行子任务，batch_delegate 一键分发，效率倍增。</p></div>
+      <div class="cc"><div class="ic">🔄</div><h4>KEPA 反思闭环</h4><p>Think → Act → Reflect，自动重试失败任务 ≤3 次，智能自愈。</p></div>
+    </div>
+  </div>
+</section>
+
+<!---- V2 ---->
+<div class="dv"><span>✦ V2 纯JS工作流编排 ✦</span></div>
+
+<section id="v2" style="background:linear-gradient(180deg,transparent,rgba(245,158,11,.02))">
+  <div class="in">
+    <div class="slabel">⚡ 工作流即代码</div>
+    <h2 class="stitle"><span class="gt">V2 · 纯JS Workflow</span> 编排引擎</h2>
+    <p class="sdesc">
+      用 <strong>JavaScript</strong> 直接定义多 Agent 执行流程——<strong style="color:#d97706">比 V1 队长-队员更灵活</strong>。<br>
+      简单任务单 Agent 直通，复杂任务 JS 编排脚本，一键并行执行，无需队长决策。
+    </p>
+
+    <div class="acard">
+      <div class="acont">
+        <div style="display:flex;flex-direction:column;align-items:center;gap:12px">
+
+          <!-- 两种模式 -->
+          <div class="v2-modes">
+            <div class="v2-mode" style="border-color:rgba(16,185,129,.2)">
+              <div class="ic">🌱</div>
+              <h4 style="color:#059669">单Agent 直通模式</h4>
+              <p>简单任务 · 一个Agent · 零配置<br>工具链直通执行</p>
+            </div>
+            <div style="font-size:28px;color:#cbd5e1;display:flex;align-items:center">⟷</div>
+            <div class="v2-mode" style="border-color:rgba(245,158,11,.25);background:rgba(255,255,255,.7)">
+              <div class="ic">⚙️</div>
+              <h4 style="color:#d97706">多Agent JS Workflow</h4>
+              <p>复杂任务 · JS脚本编排流程<br>agent()/parallel()/pipeline()</p>
+            </div>
+          </div>
+
+          <!-- JS Code -->
+          <div class="v2-code">
+            <span class="kc2">// workflow.js — 多Agent工作流示例</span><br>
+            <span class="kc">export</span> <span class="kc">const</span> <span class="kn">workflow</span> = <span class="ks">async</span> (ctx) <span class="kc">=></span> {<br>
+            &nbsp;&nbsp;<span class="kc2">// 第一步：并行搜索和读取</span><br>
+            &nbsp;&nbsp;<span class="kc">const</span> [<span class="kn">hot</span>, <span class="kn">data</span>] = <span class="ks">await</span> ctx.<span class="kv">parallel</span>(<br>
+            &nbsp;&nbsp;&nbsp;&nbsp;() <span class="kc">=></span> ctx.<span class="kv">agent</span>(<span class="kss">"web_search"</span>, { <span class="kss">query</span>: <span class="kss">"热搜"</span> }),<br>
+            &nbsp;&nbsp;&nbsp;&nbsp;() <span class="kc">=></span> ctx.<span class="kv">agent</span>(<span class="kss">"read_file"</span>, { <span class="kss">path</span>: <span class="kss">"data.json"</span> })<br>
+            &nbsp;&nbsp;);<br>
+            <span class="kc2">&nbsp;&nbsp;// 第二步：分析聚合</span><br>
+            &nbsp;&nbsp;<span class="kc">const</span> <span class="kn">report</span> = <span class="ks">await</span> ctx.<span class="kv">agent</span>(<span class="kss">"分析"</span>, { hot, data });<br>
+            <span class="kc2">&nbsp;&nbsp;// 第三步：生成输出</span><br>
+            &nbsp;&nbsp;<span class="kc">return</span> <span class="ks">await</span> ctx.<span class="kv">agent</span>(<span class="kss">"writer"</span>, { report });<br>
+            };
+          </div>
+
+          <div class="v2-div"></div>
+          <div style="color:rgba(99,102,241,.4);font-size:10px;letter-spacing:2px;font-weight:600">共享工具底座平台</div>
+          <div class="v2-div"></div>
+
+          <div class="r">
+            <div class="n n-tl">🔧 10 内置工具</div>
+            <div class="n n-tl">🔌 25+ MCP 自动发现</div>
+            <div class="n n-sm2">🧠 三层记忆注入</div>
+            <div class="n n-sm2">🔍 RAG 实时检索</div>
+            <div class="n n-sm2">🧭 LLM 智能路由</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div style="text-align:center;margin-top:8px;color:#94a3b8;font-size:13px">
+      <strong style="color:#d97706">JS Workflow</strong> 原生 async/await · <strong style="color:#d97706">agent()</strong> / <strong style="color:#d97706">parallel()</strong> / <strong style="color:#d97706">pipeline()</strong> 自由组合
+    </div>
+
+    <div class="cg">
+      <div class="cc"><div class="ic">📄</div><h4>纯JS定义工作流</h4><p>用 async/await 写 Agent 流程，agent()、parallel()、pipeline() 原语自由组合。</p></div>
+      <div class="cc"><div class="ic">⚡</div><h4>单Agent直通</h4><p>简单任务无需编排，一个 Agent 直接调用工具链，零配置开箱即用。</p></div>
+      <div class="cc"><div class="ic">🔄</div><h4>无队长瓶颈</h4><p>不再依赖 LeaderAgent 决策，JS 脚本直接控制执行流，更高效可控。</p></div>
+    </div>
+  </div>
+</section>
+
+<!---- Features ---->
+<div class="dv"><span>✦ 核心能力矩阵 ✦</span></div>
+
+<section id="feat">
+  <div class="in">
+    <div class="slabel">🌟 能力全景</div>
+    <h2 class="stitle">不止于 <span class="gt">架构</span></h2>
+    <p class="sdesc">35+ 工具、双引擎路由、RAG 增强、插件热加载——一套完整的智能体生态。</p>
+    <div class="fg">
+      <div class="fc"><div class="ic">🧠</div><h3>双引擎驱动</h3><p>DeepSeek + GLM 双模型并行，4 种路由策略自动最优匹配，智能容错无感切换。</p><span class="ft tp">双模型</span></div>
+      <div class="fc"><div class="ic">🛠️</div><h3>35+ 工具矩阵</h3><p>10 内置高频工具 + 25+ MCP 即插即用，search · fetch · code · shell 全覆盖。</p><span class="ft tg">即插即用</span></div>
+      <div class="fc"><div class="ic">🗃️</div><h3>三层记忆</h3><p>短期记忆追踪、向量记忆持久化、自我进化引擎从执行中提炼洞察。</p><span class="ft tc">永不遗忘</span></div>
+      <div class="fc"><div class="ic">🔍</div><h3>RAG 增强检索</h3><p>多引擎实时搜索 · 百度/知乎/微博/抖音 · 检索结果直接注入对话上下文。</p><span class="ft ta">实时注入</span></div>
+      <div class="fc"><div class="ic">🔌</div><h3>热插拔插件</h3><p>第三方插件热加载、Remotion 视频渲染引擎、自定义技能注册，无限扩展。</p><span class="ft tp">无限扩展</span></div>
+      <div class="fc"><div class="ic">🔒</div><h3>安全沙箱</h3><p>工具执行沙箱隔离、权限分级控制、安全审计日志，企业级安全保障。</p><span class="ft tg">企业安全</span></div>
+    </div>
+  </div>
+</section>
+
+<div class="cta">
+  <h2>准备好体验了吗？</h2>
+  <p>从单次对话到复杂编排，小雷版Agent 总有一种模式适合你</p>
+  <a href="#" class="btn btn1" onclick="window.scrollTo({top:0,behavior:'smooth'});return false">回到顶部 ↑</a>
+</div>
+
+<footer>
+  <p>小雷版Agent v3.4 · 一套代码，两套架构 · Made with ❤️</p>
+</footer>
+
+</body>
+</html>

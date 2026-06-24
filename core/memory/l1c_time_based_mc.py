@@ -1,0 +1,143 @@
+"""L1c: Time-based microcompact — clears old results when cache expires.
+
+Based on Claude Code's timeBasedMCConfig.ts:
+- Triggers content-clearing when gap since last assistant message > threshold
+- Server-side prompt cache has ~1h TTL, so full prefix will be rewritten
+- Clearing old tool results before request shrinks what gets rewritten
+- Runs BEFORE API call (in microcompactMessages, upstream of callModel)
+
+Default config:
+- enabled: false (opt-in via feature flag)
+- gapThresholdMinutes: 60 (matches server's 1h cache TTL)
+- keepRecent: 5 (keep most recent N compactable tool results)
+"""
+
+import logging
+import time
+from typing import List, Dict, Any, Optional
+
+logger = logging.getLogger(__name__)
+
+# Default configuration (from timeBasedMCConfig.ts:30-34)
+DEFAULT_GAP_THRESHOLD_MINUTES = 60
+DEFAULT_KEEP_RECENT = 5
+
+# Tools whose results are clearable by time-based MC
+TIME_BASED_CLEARABLE_TOOLS = {
+    "shell", "bash", "exec", "execute",
+    "glob", "find_files", "list_files",
+    "grep", "search", "rg", "ripgrep",
+    "read", "read_file", "cat",
+    "web_fetch", "fetch", "http_get",
+    "web_search", "search_web", "google",
+}
+
+
+class L1cTimeBasedMicrocompact:
+    """Time-based microcompact for cache expiration.
+
+    Based on Claude Code's timeBasedMCConfig:
+    - When gap since last assistant message > threshold (default 60min),
+      the server's prompt cache has expired
+    - Clear old tool results to shrink what gets rewritten
+    - Runs BEFORE the API call so the shrunk prompt is what gets sent
+
+    Key insight: Running after the first cache miss would only help
+    subsequent turns, so we run proactively when we detect the gap.
+    """
+
+    def __init__(
+        self,
+        enabled: bool = False,
+        gap_threshold_minutes: float = DEFAULT_GAP_THRESHOLD_MINUTES,
+        keep_recent: int = DEFAULT_KEEP_RECENT,
+    ):
+        self.enabled = enabled
+        self.gap_threshold_minutes = gap_threshold_minutes
+        self.keep_recent = keep_recent
+        self._clears = 0
+        self._tokens_freed = 0
+        self._last_assistant_timestamp: Optional[float] = None
+
+    def update_assistant_timestamp(self, timestamp: Optional[float] = None) -> None:
+        """Update the timestamp of the last assistant message."""
+        self._last_assistant_timestamp = timestamp or time.time()
+
+    def should_clear(self) -> bool:
+        """Check if time-based clearing should trigger."""
+        if not self.enabled:
+            return False
+
+        if self._last_assistant_timestamp is None:
+            return False
+
+        gap_minutes = (time.time() - self._last_assistant_timestamp) / 60
+        return gap_minutes > self.gap_threshold_minutes
+
+    def clear_old_results(
+        self,
+        messages: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """Clear old tool results when cache has expired.
+
+        Based on Claude Code's time-based MC:
+        - Keep only the most recent N compactable tool results
+        - Older results are cleared since cache has expired
+
+        Args:
+            messages: List of message dicts.
+
+        Returns:
+            Modified message list with cleared old results.
+        """
+        if not self.should_clear():
+            return messages
+
+        # Find clearable tool result messages (oldest first)
+        clearable_indices = []
+        for i, msg in enumerate(messages):
+            role = msg.get("role", "")
+            tool_name = msg.get("name", "").lower() if msg.get("name") else ""
+
+            if role == "tool" and tool_name in TIME_BASED_CLEARABLE_TOOLS:
+                clearable_indices.append(i)
+
+        if len(clearable_indices) <= self.keep_recent:
+            return messages
+
+        # Keep only the most recent N, clear the rest
+        to_clear = clearable_indices[:len(clearable_indices) - self.keep_recent]
+
+        cleared_count = 0
+        for i in to_clear:
+            content = str(messages[i].get("content", ""))
+            tokens_freed = len(content) // 4
+
+            messages[i]["content"] = (
+                f"[Tool result cleared by time-based MC — "
+                f"cache expired, ~{tokens_freed} tokens freed]"
+            )
+            cleared_count += 1
+            self._tokens_freed += tokens_freed
+
+        if cleared_count > 0:
+            self._clears += 1
+            gap_minutes = (time.time() - self._last_assistant_timestamp) / 60
+            logger.debug(
+                "L1c: time-based MC cleared %d results (gap=%.1fmin > threshold=%.1fmin), "
+                "freed ~%d tokens",
+                cleared_count,
+                gap_minutes,
+                self.gap_threshold_minutes,
+                self._tokens_freed,
+            )
+
+        return messages
+
+    def get_stats(self) -> Dict[str, int]:
+        """Return clearing statistics."""
+        return {
+            "clears": self._clears,
+            "tokens_freed": self._tokens_freed,
+            "enabled": 1 if self.enabled else 0,
+        }

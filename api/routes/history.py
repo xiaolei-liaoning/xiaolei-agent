@@ -23,67 +23,60 @@ router = APIRouter(prefix="/api", tags=["history"])
 # 语义搜索缓存
 _semantic_cache = {}
 
-async def _semantic_search(user_id: int, query: str, limit: int = 20) -> list:
-    """语义搜索 - 使用向量相似度匹配
-    
+async def _semantic_search(user_id: int, query: str, limit: int = 20, use_knowledge: bool = False) -> list:
+    """语义搜索 — 对话历史用 MySQL，知识用 ChromaDB
+
     Args:
         user_id: 用户ID
         query: 搜索查询
         limit: 返回数量限制
-    
+        use_knowledge: True=搜知识库, False=搜对话历史
+
     Returns:
-        匹配的消息列表（按相似度排序）
+        匹配的消息列表
     """
     try:
-        # 尝试使用 sentence-transformers 进行语义匹配
+        if use_knowledge:
+            # ChromaDB 知识库搜索（领域知识）
+            from core.memory.vector_memory import VectorMemoryStore
+            vm = VectorMemoryStore()
+            if not vm.wait_for_collection(timeout=5.0):
+                return []
+            results = vm.search_memories(query, user_id=user_id, top_k=limit)
+            return [{
+                "id": f"knowledge_{r.get('id','')}",
+                "content": r["content"],
+                "similarity": 1.0 - r["distance"] / 2.0,
+                "role": "knowledge",
+                "source": "vector_memory",
+                "category": r["metadata"].get("category", "general"),
+            } for r in results]
+
+        # MySQL 对话历史搜索（模糊匹配）
+        from core.database import get_session, ChatHistory
+        from sqlalchemy import or_
+        session = get_session()
         try:
-            from sentence_transformers import SentenceTransformer, util
-            import torch
-            
-            # 加载模型
-            model = SentenceTransformer('all-MiniLM-L6-v2')
-            
-            # 获取用户所有消息内容
-            from core.database import get_session, ChatHistory
-            session = get_session()
-            try:
-                records = session.query(ChatHistory).filter_by(user_id=user_id).all()
-                if not records:
-                    return []
-                
-                # 编码查询和所有消息
-                query_embedding = model.encode(query, convert_to_tensor=True)
-                message_embeddings = model.encode(
-                    [r.content for r in records], 
-                    convert_to_tensor=True
-                )
-                
-                # 计算相似度
-                cos_scores = util.cos_sim(query_embedding, message_embeddings)[0]
-                
-                # 排序并返回前N个
-                top_results = torch.topk(cos_scores, k=min(limit, len(records)))
-                
-                results = []
-                for score, idx in zip(top_results.values, top_results.indices):
-                    record = records[idx]
-                    results.append({
-                        "id": record.id,
-                        "content": record.content,
-                        "similarity": float(score),
-                        "role": record.role,
-                        "character_id": record.character_id,
-                    })
-                
-                return results
-            finally:
-                session.close()
-                
-        except ImportError:
-            # 如果没有 sentence-transformers，回退到关键词匹配
-            logger.debug("sentence-transformers not available, falling back to keyword search")
-            return []
-            
+            keywords = query.strip().split()
+            filters = [ChatHistory.content.ilike(f"%{kw}%") for kw in keywords]
+            records = (
+                session.query(ChatHistory)
+                .filter_by(user_id=user_id)
+                .filter(or_(*filters))
+                .order_by(ChatHistory.created_at.desc())
+                .limit(limit)
+                .all()
+            )
+            return [{
+                "id": r.id,
+                "content": r.content,
+                "similarity": 1.0,
+                "role": r.role,
+                "character_id": r.character_id,
+            } for r in records]
+        finally:
+            session.close()
+
     except Exception as e:
         logger.error("语义搜索失败: %s", e)
         return []
@@ -609,101 +602,104 @@ async def get_intelligent_context(
         include_recent: 是否包含最近消息
         max_messages: 最大消息数量
     """
-    from core.handlers import _db_initialized
-    
-    if not _db_initialized:
-        return {"context": [], "total_tokens": 0}
+    # 1. MySQL 对话历史（可选，DB 不可用时跳过）
+    context_messages = []
+    total_tokens = 0
+    strategy = "intelligent"
     
     try:
-        from core.database import get_session, ChatHistory
-        from sqlalchemy import desc, or_
-        session = get_session()
-        try:
-            # 构建基础查询
-            query_obj = session.query(ChatHistory).filter_by(user_id=user_id)
-            
-            if character_id:
-                query_obj = query_obj.filter_by(character_id=character_id)
-            
-            # 获取候选消息
-            candidates = []
-            
-            # 1. 获取点赞消息（权重最高）
-            if prefer_liked:
-                liked_messages = (
-                    query_obj.filter_by(is_liked=True)
-                    .order_by(desc(ChatHistory.weight), desc(ChatHistory.created_at))
-                    .limit(max_messages // 2)
-                    .all()
-                )
-                candidates.extend(liked_messages)
-            
-            # 2. 获取最近消息
-            if include_recent:
-                recent_messages = (
-                    query_obj.order_by(desc(ChatHistory.created_at))
-                    .limit(max_messages)
-                    .all()
-                )
-                # 去重，保留已点赞的
-                recent_ids = {m.id for m in recent_messages}
-                liked_ids = {m.id for m in candidates}
-                for msg in recent_messages:
-                    if msg.id not in liked_ids:
-                        candidates.append(msg)
-            
-            # 3. 如果有查询，进行语义匹配
-            if query and len(candidates) > 0:
-                semantic_results = await _semantic_search(user_id, query, limit=20)
-                if semantic_results:
-                    semantic_ids = {r["id"] for r in semantic_results}
-                    # 将语义匹配到的消息优先放在前面
-                    prioritized = []
-                    remaining = []
-                    for msg in candidates:
-                        if msg.id in semantic_ids:
-                            prioritized.append(msg)
-                        else:
-                            remaining.append(msg)
-                    candidates = prioritized + remaining
-            
-            # 按权重和时间排序
-            candidates.sort(key=lambda x: (x.weight, x.created_at), reverse=True)
-            
-            # 选择最终上下文（考虑token限制）
-            context_messages = []
-            total_tokens = 0
-            
-            # 粗略估算：1 token ≈ 4 字符
-            for msg in candidates[:max_messages]:
-                msg_tokens = len(msg.content) // 4
-                if total_tokens + msg_tokens <= max_tokens:
-                    context_messages.append({
-                        "id": msg.id,
-                        "role": msg.role,
-                        "content": msg.content,
-                        "character_id": msg.character_id,
-                        "is_liked": msg.is_liked,
-                        "weight": msg.weight,
-                        "created_at": msg.created_at.isoformat() if msg.created_at else None,
-                    })
-                    total_tokens += msg_tokens
-                    msg.accessed_count += 1
-                    msg.last_accessed_at = datetime.now()
-            
-            session.commit()
-            
-            return {
-                "context": context_messages,
-                "total_tokens": total_tokens,
-                "message_count": len(context_messages),
-                "strategy": "intelligent"
-            }
-        finally:
-            session.close()
+        from core.handlers import _db_initialized
+        if _db_initialized:
+            from core.database import get_session, ChatHistory
+            from sqlalchemy import desc
+            session = get_session()
+            try:
+                query_obj = session.query(ChatHistory).filter_by(user_id=user_id)
+                
+                if character_id:
+                    query_obj = query_obj.filter_by(character_id=character_id)
+                
+                candidates = []
+                
+                if prefer_liked:
+                    liked = (
+                        query_obj.filter_by(is_liked=True)
+                        .order_by(desc(ChatHistory.weight), desc(ChatHistory.created_at))
+                        .limit(max_messages // 2)
+                        .all()
+                    )
+                    candidates.extend(liked)
+                
+                if include_recent:
+                    recent = (
+                        query_obj.order_by(desc(ChatHistory.created_at))
+                        .limit(max_messages)
+                        .all()
+                    )
+                    recent_ids = {m.id for m in recent}
+                    liked_ids = {m.id for m in candidates}
+                    for msg in recent:
+                        if msg.id not in liked_ids:
+                            candidates.append(msg)
+                
+                candidates.sort(key=lambda x: (x.weight, x.created_at), reverse=True)
+                
+                for msg in candidates[:max_messages]:
+                    msg_tokens = len(msg.content) // 4
+                    if total_tokens + msg_tokens <= max_tokens:
+                        context_messages.append({
+                            "id": msg.id,
+                            "role": msg.role,
+                            "content": msg.content,
+                            "character_id": msg.character_id,
+                            "is_liked": msg.is_liked,
+                            "weight": msg.weight,
+                            "created_at": msg.created_at.isoformat() if msg.created_at else None,
+                        })
+                        total_tokens += msg_tokens
+                        msg.accessed_count += 1
+                        msg.last_accessed_at = datetime.now()
+                
+                session.commit()
+                strategy = "MySQL"
+            finally:
+                session.close()
     except Exception as e:
-        logger.error("智能检索失败: %s", e)
-        return {"context": [], "total_tokens": 0, "error": str(e)}
+        logger.debug("MySQL 历史检索跳过: %s", e)
+    
+    # 2. 如果有查询，同时搜向量知识库（ChromaDB）
+    if query:
+        try:
+            from core.memory.vector_memory import VectorMemoryStore
+            vm = VectorMemoryStore()
+            ready = vm.wait_for_collection(timeout=10.0)
+            logger.info("ChromaDB ready=%s, collection=%s", ready, vm._collection is not None)
+            if ready:
+                knowledge = vm.search_memories(query, user_id=None, top_k=5)
+                logger.info("ChromaDB search '%s' returned %d results", query, len(knowledge))
+                for k in knowledge:
+                    k_tokens = len(k["content"]) // 4
+                    if total_tokens + k_tokens <= max_tokens:
+                        context_messages.append({
+                            "id": f"knowledge_{k.get('id', '')}",
+                            "role": "knowledge",
+                            "content": k["content"],
+                            "source": "vector_memory",
+                            "distance": round(k["distance"], 3),
+                            "category": k["metadata"].get("category", "general"),
+                        })
+                        total_tokens += k_tokens
+                if knowledge:
+                    strategy = "MySQL + ChromaDB"
+        except Exception as e:
+            logger.warning("ChromaDB 知识检索失败: %s", e, exc_info=True)
+    
+    return {
+        "context": context_messages,
+        "total_tokens": total_tokens,
+        "message_count": len(context_messages),
+        "strategy": strategy,
+    }
 
 
 @router.delete("/history/cleanup", summary="清理过期的普通消息")
