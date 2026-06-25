@@ -209,8 +209,9 @@ class EnhancedCLI:
         import uuid
 
         self.session_id = str(uuid.uuid4())[:8]
+        self.user_id = os.environ.get("AGENT_USER_ID", "default_user")
         self.chat_history = []
-        log_info(f"会话已初始化: {self.session_id}")
+        log_info(f"会话已初始化: {self.session_id}, user_id={self.user_id}")
 
     # ──────────────────────────────────────────────
     # 命令路由

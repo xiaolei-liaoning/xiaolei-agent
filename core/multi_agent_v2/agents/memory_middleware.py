@@ -80,6 +80,9 @@ class MemoryMiddleware(BaseMiddleware):
                     )
                     if len(ctx.knowledge_context) > 4000:
                         ctx.knowledge_context = ctx.knowledge_context[-4000:]
+                    print(f"    \033[1;35m🧠 记忆: {len(context)} 字符上下文已注入\033[0m")
+                else:
+                    print(f"    \033[2;35m🧠 记忆: 无相关历史\033[0m")
                 self._last_query = user_input
             except Exception as e:
                 logger.debug(f"V1 记忆检索失败: {e}")
@@ -119,6 +122,7 @@ class MemoryMiddleware(BaseMiddleware):
         if v1_mw is not None:
             try:
                 await v1_mw.process_turn(user_id, ctx.task_description, final_answer)
+                print(f"    \033[1;35m🧠 记忆: 已持久化当前对话\033[0m")
             except Exception as e:
                 logger.debug(f"V1 process_turn 失败: {e}")
 

@@ -99,6 +99,30 @@ class WorkAgent(BaseAgent):
                     task.description = desc
                     print(f"    \033[1;32m📦 Phase 1 结构数据已注入 ({len(phase_data)} 字符)\033[0m")
 
+            # ── SharedBus 工作记忆：搜索其他 Agent 已有成果 ──
+            try:
+                from core.multi_agent_v2.infrastructure.shared_bus import get_shared_bus
+                _bus = get_shared_bus()
+                _found = False
+                for _w in re.findall(r'[一-鿟\w]{2,}', desc)[:5]:
+                    _results = await _bus.search_knowledge(_w)
+                    if _results:
+                        _summaries = []
+                        for _k, _v in _results.items():
+                            _s = _v.get("meta", {}).get("summary", "")
+                            if _s and len(_s) > 10:
+                                _summaries.append(f"  └─ {_s[:200]}")
+                        if _summaries:
+                            desc = f"{desc}\n\n📋 其他 Agent 已有成果:\n" + "\n".join(_summaries)
+                            task.description = desc
+                            _found = True
+                            print(f"    \033[1;35m📋 工作记忆: {len(_summaries)} 条已有成果已注入\033[0m")
+                            break
+                if not _found:
+                    print(f"    \033[2;35m📋 工作记忆: 无已有成果\033[0m")
+            except Exception:
+                pass
+
             # ── 统一走 ReActCore 中间件链 ──
             _mr = task.context.get("max_rounds", 0)
             max_rounds = max(_mr, 10) if _mr else 10
@@ -198,6 +222,24 @@ class WorkAgent(BaseAgent):
                 self.work_history = self.work_history[-100:]
 
             logger.info(f"WorkAgent [轻量] 完成: success={success} {elapsed:.1f}s")
+
+            # ── SharedBus 工作记忆：写入分析成果 ──
+            _answer = str(output)[:300] if output else ""
+            if _answer and len(_answer) > 20 and success:
+                try:
+                    from core.multi_agent_v2.infrastructure.shared_bus import get_shared_bus
+                    _bus = get_shared_bus()
+                    _tags = set(re.findall(r'[一-鿟\w]{2,}', desc)[:5])
+                    await _bus.store_knowledge(
+                        key=f"analysis:{self.agent_id}",
+                        data={"result": output, "task": desc[:200]},
+                        tags=_tags,
+                        source=self.agent_id,
+                        summary=_answer[:200],
+                    )
+                except Exception:
+                    pass
+
             return ar
 
         except Exception as e:

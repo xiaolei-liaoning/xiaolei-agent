@@ -62,7 +62,7 @@ class MemoryMiddleware:
                     mem_lines = []
                     for m in memories:
                         cat = m.get("metadata", {}).get("category", "")
-                        if cat in ("fact", "preference", "personal_info"):
+                        if cat in ("fact", "preference", "personal_info", "experience", "analysis", "insight"):
                             mem_lines.append(f"- {m['content'][:150]}")
                     if mem_lines:
                         parts.append("【相关记忆】\n" + "\n".join(mem_lines))
