@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>小雷版 AI Agent — 编排能力深度评估报告</title>
+<style>
+  :root { --bg: #0d1117; --card: #161b22; --border: #30363d; --text: #e6edf3; --dim: #8b949e; --accent: #58a6ff; --green: #3fb950; --yellow: #d29922; --red: #f85149; --orange: #d76f2c; --purple: #bc8cff; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, 'SF Mono', SFMono-Regular, ui-monospace, 'Segoe UI', sans-serif; line-height: 1.6; padding: 40px 20px; }
+  .container { max-width: 1200px; margin: 0 auto; }
+
+  .header { text-align: center; margin-bottom: 48px; }
+  .header h1 { font-size: 32px; font-weight: 700; margin-bottom: 8px; background: linear-gradient(135deg, var(--accent), var(--purple)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+  .header .subtitle { color: var(--dim); font-size: 14px; }
+  .header .badge { display: inline-block; padding: 4px 14px; border-radius: 12px; font-size: 12px; font-weight: 600; margin: 8px 4px; }
+  .badge-score { background: #1a3a2a; color: var(--green); border: 1px solid var(--green); }
+  .badge-files { background: #1a263a; color: var(--accent); border: 1px solid var(--accent); }
+  .badge-lines { background: #2a1a1a; color: var(--orange); border: 1px solid var(--orange); }
+
+  .arch { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 28px; margin-bottom: 40px; }
+  .arch h2 { font-size: 18px; margin-bottom: 20px; }
+  .arch-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+  .arch-layer { background: #1c2333; border: 1px solid var(--border); border-radius: 8px; padding: 20px; }
+  .arch-layer h3 { font-size: 14px; color: var(--accent); margin-bottom: 8px; }
+  .arch-layer .desc { font-size: 12px; color: var(--dim); margin-bottom: 8px; }
+  .arch-layer .stat { display: flex; gap: 8px; flex-wrap: wrap; }
+  .arch-layer .stat span { font-size: 11px; padding: 2px 8px; border-radius: 6px; background: #0d1117; border: 1px solid var(--border); }
+  .arrow-row { display: flex; justify-content: center; gap: 40px; margin: 16px 0; color: var(--dim); font-size: 12px; }
+
+  .section { margin-bottom: 40px; }
+  .section h2 { font-size: 22px; margin-bottom: 20px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+
+  .test-card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; margin-bottom: 24px; overflow: hidden; }
+  .test-header { padding: 16px 20px; display: flex; align-items: center; gap: 14px; border-bottom: 1px solid var(--border); }
+  .test-header .score { font-size: 22px; font-weight: 700; min-width: 48px; }
+  .test-header .meta { flex: 1; }
+  .test-header .meta h3 { font-size: 15px; font-weight: 600; }
+  .test-header .meta .task-text { font-size: 12px; color: var(--dim); margin-top: 2px; }
+  .test-header .meta .tags { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+  .test-header .meta .tags span { font-size: 11px; padding: 1px 8px; border-radius: 8px; background: #1c2333; border: 1px solid var(--border); }
+  .test-body { padding: 16px 20px; }
+  .test-body .flow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; font-size: 13px; }
+  .test-body .flow .step { background: #0d1117; border: 1px solid var(--border); padding: 4px 10px; border-radius: 6px; font-size: 12px; }
+  .test-body .flow .arrow { color: var(--dim); }
+  .test-body .code-block { background: #0d1117; border: 1px solid var(--border); border-radius: 8px; padding: 16px; overflow-x: auto; max-height: 360px; font-size: 12px; line-height: 1.5; white-space: pre; font-family: 'SF Mono', ui-monospace, monospace; cursor: pointer; position: relative; }
+  .test-body .code-block:hover { max-height: none; }
+  .test-body .code-block .hint { position: absolute; bottom: 8px; right: 12px; font-size: 11px; color: var(--dim); background: #0d1117; padding: 2px 8px; border-radius: 4px; }
+  .test-body .verdict { margin-top: 12px; font-size: 13px; line-height: 1.7; }
+  .test-body .verdict strong { color: var(--accent); }
+
+  .s5 { color: var(--green); } .s4 { color: #7ee787; } .s3 { color: var(--yellow); } .s2 { color: var(--orange); } .s1, .s0 { color: var(--red); }
+
+  .summary { display: grid; grid-template-columns: 2fr 1fr; gap: 24px; }
+  .summary-card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px; }
+  .summary-card h3 { font-size: 15px; margin-bottom: 16px; color: var(--accent); }
+  .summary-table { width: 100%; font-size: 13px; border-collapse: collapse; }
+  .summary-table th, .summary-table td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--border); }
+  .summary-table th { color: var(--dim); font-weight: 500; }
+
+  .big-number { font-size: 48px; font-weight: 700; }
+  .score-final { color: var(--green); }
+  .stat-row { display: flex; gap: 24px; margin: 16px 0; flex-wrap: wrap; }
+  .stat-item { text-align: center; padding: 12px 20px; background: #0d1117; border: 1px solid var(--border); border-radius: 8px; min-width: 100px; }
+  .stat-item .num { font-size: 24px; font-weight: 700; }
+  .stat-item .label { font-size: 11px; color: var(--dim); margin-top: 2px; }
+
+  .timeline { margin-top: 16px; }
+  .tl-row { display: flex; gap: 12px; align-items: baseline; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+  .tl-row .version { font-weight: 600; min-width: 100px; }
+  .tl-row .score-num { font-weight: 700; min-width: 60px; }
+  .tl-row .change { color: var(--dim); }
+
+  .improve { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin-top: 24px; }
+  .improve h3 { color: var(--green); margin-bottom: 12px; }
+  .improve li { margin: 6px 0; font-size: 13px; color: var(--dim); }
+
+  .comparison { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin-top: 24px; overflow-x: auto; }
+  .comparison table { width: 100%; font-size: 13px; border-collapse: collapse; }
+  .comparison th, .comparison td { padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--border); }
+  .comparison th { background: #0d1117; color: var(--dim); font-weight: 500; }
+
+  @media (max-width: 768px) {
+    .arch-grid { grid-template-columns: 1fr; }
+    .summary { grid-template-columns: 1fr; }
+    .stat-row { justify-content: center; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+<div class="header">
+  <h1>🦞 小雷版 AI Agent · 编排能力深度评估</h1>
+  <div class="subtitle">2026-06-24 · 模板抽取重构后 · 10 场景全量测试</div>
+  <div>
+    <span class="badge badge-score">平均评分 4.6/5</span>
+    <span class="badge badge-files">5 核心文件</span>
+    <span class="badge badge-lines">3,195 行代码</span>
+  </div>
+</div>
+
+<div class="arch">
+  <h2>🏗️ 三层编排架构</h2>
+  <div class="arch-grid">
+    <div class="arch-layer">
+      <h3>③ LLM 控制流生成</h3>
+      <div class="stat"><span>chat_handler.py:202-276</span><span>.workflow_prompt_template.md</span><span>439 行</span></div>
+      <div class="desc" style="margin-top:6px;">人话 → LLM 按模板生成 JS workflow 脚本。模板含决策树 + 8 种模式 + 完整示例代码。</div>
+    </div>
+    <div class="arch-layer">
+      <h3>② JS 桥接运行时</h3>
+      <div class="stat"><span>bridge.mjs</span><span>312 行</span></div>
+      <div class="desc" style="margin-top:6px;">翻译层。JS 原语（agent/parallel/\$dag/pipeline）→ IPC → Python 编排引擎。同时含 \$dag 拓扑调度器实现。</div>
+    </div>
+    <div class="arch-layer">
+      <h3>① Python 编排引擎</h3>
+      <div class="stat"><span>orchestrator.py</span><span>578 行</span></div>
+      <div class="desc" style="margin-top:6px;">真正的干活层。AgentPool（8 个预热 WorkAgent）+ agent()/parallel()/pipeline() + Schema 校验 + 重试。</div>
+    </div>
+  </div>
+  <div class="arrow-row">用户输入 → LLM 写 JS → IPC 翻译 → Python 引擎 → WorkAgent 执行</div>
+  <div style="display:flex;justify-content:center;gap:16px;font-size:12px;color:var(--dim);">
+    <span>📄 chat_handler.py <strong style="color:var(--accent)">991</strong> 行</span>
+    <span>📄 bridge.mjs <strong style="color:var(--accent)">312</strong> 行 ✨ 新建</span>
+    <span>📄 orchestrator.py <strong style="color:var(--accent)">578</strong> 行</span>
+    <span>📄 workflow prompt <strong style="color:var(--accent)">439</strong> 行</span>
+  </div>
+</div>
+
+<div class="section">
+  <h2>📊 Before vs After 对比</h2>
+  <div class="comparison">
+    <table>
+      <thead><tr><th>维度</th><th>改前（f-string 内嵌）</th><th>改后（独立文件）</th><th>意义</th></tr></thead>
+      <tbody>
+        <tr><td>模板位置</td><td><code>chat_handler.py:200-253</code> f-string</td><td><code>workflows/.workflow_prompt_template.md</code></td><td>改模板不用碰 Python 代码</td></tr>
+        <tr><td>桥接脚本位置</td><td><code>js_workflow.py:619-931</code> f-string</td><td><code>bridge.mjs</code> 独立文件</td><td>JS 逻辑可直接修改/测试</td></tr>
+        <tr><td>死文件状态</td><td>127 行无人加载</td><td>439 行自动读取</td><td>从死变活</td></tr>
+        <tr><td>桥接后备</td><td>必须完整 321 行 f-string</td><td>5 行读文件 + 60 行精简后备</td><td>文件被删也能用</td></tr>
+        <tr><td>模板后备</td><td>无后备</td><td>20 行内建后备</td><td>文件被删也不丢</td></tr>
+        <tr><td>代码任务分支</td><td>硬编码 "\$dag 强制模板"</td><td>同样走 .md 模板 + 额外提示</td><td>双路径统一</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="section">
+  <h2>🧪 10 场景全量测试</h2>
+  <p style="color:var(--dim);font-size:13px;margin-bottom:20px;">每个用例调用真实 LLM（claude-sonnet）生成 workflow 脚本。点击代码块可展开查看全部。</p>
+
+  <div class="test-card">
+    <div class="test-header">
+      <div class="score s5">5/5</div>
+      <div class="meta">
+        <h3>① Fan-Out（并行收集 → 汇总）</h3>
+        <div class="task-text">搜索百度热搜、微博热搜、知乎热榜，综合对比三者的热点异同</div>
+        <div class="tags"><span>parallel</span><span>serial</span><span>phase</span><span>973 chars</span></div>
+      </div>
+    </div>
+    <div class="test-body">
+      <div class="flow">
+        <span class="step">phase("并行搜索")</span>
+        <span class="arrow">→</span>
+        <span class="step">parallel(百度, 微博, 知乎)</span>
+        <span class="arrow">→</span>
+        <span class="step">phase("综合分析")</span>
+        <span class="arrow">→</span>
+        <span class="step">agent(综合对比, isFinal)</span>
+      </div>
+      <div class="verdict">
+        <strong>✅ 完美命中 Fan-Out 模式。</strong>正确使用 <code>parallel()</code> 而非 \$dag。三个搜索 task 独立并行，结果传给一个汇总 agent。phase() 正确分组，label 完整。模型合理：搜索用 haiku，汇总用 sonnet。
+      </div>
+      <div class="code-block" onclick="this.style.maxHeight='none'">
+export const meta = {
+  name: "多源热点对比",
+  description: "并行搜索百度、微博、知乎的热点数据，综合对比分析异同",
+  phases: [
+    { title: "并行搜索", detail: "同时搜索百度热搜、微博热搜、知乎热榜" },
+    { title: "综合分析", detail: "对比三个平台的热点异同" },
+  ],
+}
+
+export default async function () {
+  phase("并行搜索")
+  const [baidu, weibo, zhihu] = await parallel([
+    () => agent("搜索百度热搜榜，列出当前最热门的10个话题...", { label: "百度热搜", model: "claude-haiku-4-5" }),
+    () => agent("搜索微博热搜榜，列出当前最热门的10个话题...", { label: "微博热搜", model: "claude-haiku-4-5" }),
+    () => agent("搜索知乎热榜，列出当前最热门的10个话题...", { label: "知乎热榜", model: "claude-haiku-4-5" }),
+  ])
+  phase("综合分析")
+  return await agent(
+    `请综合分析以下三个平台的热点数据...百度：${baidu}...微博：${weibo}...知乎：${zhihu}`,
+    { label: "综合对比分析", model: "claude-sonnet-4-6", isFinal: true }
+  )
+}
+        <span class="hint">点击展开全部</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="test-card">
+    <div class="test-header">
+      <div class="score s5">5/5</div>
+      <div class="meta">
+        <h3>② 产出 → 验证（Adversarial Verification）</h3>
+        <div class="task-text">设计一个用户登录模块，然后从安全角度审查它是否存在漏洞</div>
+        <div class="tags"><span>serial</span><span>phase</span><span>if</span><span>agentType:Explore</span><span>1782 chars</span></div>
+      </div>
+    </div>
+    <div class="test-body">
+      <div class="flow">
+        <span class="step">phase("设计")</span><span class="arrow">→</span><span class="step">agent(登录模块)</span><span class="arrow">→</span><span class="step">phase("审查")</span><span class="arrow">→</span><span class="step">agent(agentType:Explore)</span><span class="arrow">→</span><span class="step">if(漏洞) → agent(修复)</span>
+      </div>
+      <div class="verdict">
+        <strong>✅ 完美命中 Adversarial 模式。</strong>审查步骤用 <code>agentType: "Explore"</code> 切换角色为"安全工程师"。if 分支判断是否修复。审查 prompt 含 12 个安全维度自动展开。三个 phase 结构完整。
+      </div>
+      <div class="code-block" onclick="this.style.maxHeight='none'">
+export const meta = {
+  name: "登录模块设计与安全审查",
+  phases: [{ title:"设计" }, { title:"审查" }, { title:"修复" }],
+}
+export default async function () {
+  phase("设计")
+  const loginModule = await agent(`设计用户登录模块...`, { label:"登录模块设计" })
+  phase("审查")
+  const securityReview = await agent(`你是一名资深安全工程师...审查12个维度...`, { label:"安全审查", agentType:"Explore" })
+  phase("修复")
+  if (hasVulnerabilities) { ... }
+}
+        <span class="hint">点击展开全部</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="test-card">
+    <div class="test-header">
+      <div class="score s4">4/5</div>
+      <div class="meta">
+        <h3>③ 分类 → 分支处理</h3>
+        <div class="task-text">检查系统进程，如果 CPU 占用高于 80% 就分析高占用进程，否则生成健康报告</div>
+        <div class="tags"><span>serial</span><span>phase</span><span>if</span><span>1158 chars</span></div>
+      </div>
+    </div>
+    <div class="test-body">
+      <div class="flow">
+        <span class="step">phase("进程检查")</span><span class="arrow">→</span><span class="step">agent(进程信息)</span><span class="arrow">→</span><span class="step">agent(判断CPU)</span><span class="arrow">→</span><span class="step">if(>80%) 高占用 | else 健康报告</span>
+      </div>
+      <div class="verdict"><strong>✅ 正确。</strong>串行 + if/else。扣 1 分因为"判断CPU"可合并到第一步。</div>
+      <div class="code-block" onclick="this.style.maxHeight='none'">{ /* 见完整报告 */ }</div>
+    </div>
+  </div>
+
+  <div class="test-card">
+    <div class="test-header">
+      <div class="score s5">5/5</div>
+      <div class="meta">
+        <h3>④ Generate-and-Filter</h3>
+        <div class="task-text">为 README 生成 5 个 slogan，选出最好的</div>
+        <div class="tags"><span>parallel</span><span>serial</span><span>phase</span><span>1035 chars</span></div>
+      </div>
+    </div>
+    <div class="test-body">
+      <div class="flow">
+        <span class="step">phase("分析") → agent(定位)</span><span class="arrow">→</span><span class="step">parallel(5风格)</span><span class="arrow">→</span><span class="step">phase("评选") → agent(4维度, isFinal)</span>
+      </div>
+      <div class="verdict"><strong>✅ 最精致的输出。</strong>5 种风格 slogan 各用 haiku，评选从 4 维度评分。</div>
+    </div>
+  </div>
+
+  <div class="test-card">
+    <div class="test-header">
+      <div class="score s5">5/5</div>
+      <div class="meta">
+        <h3>⑤ Tournament</h3>
+        <div class="task-text">三方案重构 chat_handler.py，对比选优</div>
+        <div class="tags"><span>parallel</span><span>serial</span><span>phase</span><span>1731 chars</span></div>
+      </div>
+    </div>
+    <div class="test-body">
+      <div class="flow">
+        <span class="step">phase("分析") → agent</span><span class="arrow">→</span><span class="step">parallel(最小改动,模块化,全新)</span><span class="arrow">→</span><span class="step">phase("对比") → agent(7维度, isFinal)</span>
+      </div>
+      <div class="verdict"><strong>✅ 完美。</strong>3 方案 7 维度，含评分表+推荐+实施步骤。</div>
+    </div>
+  </div>
+
+  <div class="test-card">
+    <div class="test-header">
+      <div class="score s5">5/5</div>
+      <div class="meta">
+        <h3>⑥ Loop-Until-Done</h3>
+        <div class="task-text">优化代码质量，迭代直到评分>=60</div>
+        <div class="tags"><span>while</span><span>phase</span><span>log</span><span>2742 chars</span></div>
+      </div>
+    </div>
+    <div class="test-body">
+      <div class="flow">
+        <span class="step">phase("分析")</span><span class="arrow">→</span><span class="step">while(score<60) { agent(改进); log(评分) }</span><span class="arrow">→</span><span class="step">phase("验证")</span>
+      </div>
+      <div class="verdict"><strong>✅ 最复杂。</strong>while + MAX_ROUNDS=8 + log 进度 + 超限报警。</div>
+    </div>
+  </div>
+
+  <div class="test-card">
+    <div class="test-header">
+      <div class="score s5">5/5</div>
+      <div class="meta">
+        <h3>⑦ DAG 交叉</h3>
+        <div class="task-text">搜 AI + Rust → 对比交集 → 深入 → 汇总</div>
+        <div class="tags"><span>\$dag</span><span>4-phase</span><span>1443 chars</span></div>
+      </div>
+    </div>
+    <div class="test-body">
+      <div class="flow">
+        <span class="step">\$dag { aiNews ‖ rustNews → crossAnalysis → deepDive → finalReport }</span>
+      </div>
+      <div class="verdict"><strong>✅ \$dag 正确用法。</strong>4 层依赖链，每步有数据传递。</div>
+    </div>
+  </div>
+
+  <div class="test-card">
+    <div class="test-header">
+      <div class="score s5">5/5</div>
+      <div class="meta">
+        <h3>⑧ 动态批量</h3>
+        <div class="task-text">扫描.py 文件，逐个审查，汇总问题最多三个</div>
+        <div class="tags"><span>.map</span><span>parallel</span><span>phase</span><span>1492 chars</span></div>
+      </div>
+    </div>
+    <div class="test-body">
+      <div class="flow">
+        <span class="step">agent(文件列表) → files.map()</span><span class="arrow">→</span><span class="step">parallel(map(agent))</span><span class="arrow">→</span><span class="step">汇总</span>
+      </div>
+      <div class="verdict"><strong>✅ 正确。</strong>.map() 替代 for，空列表友好提示。</div>
+    </div>
+  </div>
+
+  <div class="test-card">
+    <div class="test-header">
+      <div class="score s5">5/5</div>
+      <div class="meta">
+        <h3>⑨ 容错并行</h3>
+        <div class="task-text">多源搜索，失败跳过</div>
+        <div class="tags"><span>.catch</span><span>parallel</span><span>filter</span><span>1048 chars</span></div>
+      </div>
+    </div>
+    <div class="test-body">
+      <div class="flow">
+        <span class="step">parallel([agent+catch(null)])</span><span class="arrow">→</span><span class="step">filter(Boolean)</span><span class="arrow">→</span><span class="step">汇总|空提示</span>
+      </div>
+      <div class="verdict"><strong>✅ 标准容错。</strong>.catch + null + filter(Boolean)。</div>
+    </div>
+  </div>
+
+  <div class="test-card">
+    <div class="test-header">
+      <div class="score s4">4/5</div>
+      <div class="meta">
+        <h3>⑩ 流水线+分支</h3>
+        <div class="task-text">读文档→分析架构→有安全问题则安全报告否则架构总结</div>
+        <div class="tags"><span>serial</span><span>phase</span><span>if</span><span>1229 chars</span></div>
+      </div>
+    </div>
+    <div class="test-body">
+      <div class="verdict"><strong>✅ 正确。</strong>3 phase + if/else。扣 1 分因为 if 用字符串 contains 而非语义判断。</div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h2>📈 评分总结</h2>
+  <div class="summary">
+    <div class="summary-card">
+      <h3>详细评分</h3>
+      <table class="summary-table">
+        <thead><tr><th>场景</th><th>得分</th><th>关键模式</th><th>代码量</th></tr></thead>
+        <tbody>
+          <tr><td>① Fan-Out</td><td><span class="s5"><strong>5</strong>/5</span></td><td>parallel + serial + phase</td><td>973c</td></tr>
+          <tr><td>② Adversarial</td><td><span class="s5"><strong>5</strong>/5</span></td><td>serial + agentType + if</td><td>1782c</td></tr>
+          <tr><td>③ 分类分支</td><td><span class="s4"><strong>4</strong>/5</span></td><td>serial + if</td><td>1158c</td></tr>
+          <tr><td>④ Generate-Filter</td><td><span class="s5"><strong>5</strong>/5</span></td><td>parallel + serial + phase</td><td>1035c</td></tr>
+          <tr><td>⑤ Tournament</td><td><span class="s5"><strong>5</strong>/5</span></td><td>parallel + serial + phase</td><td>1731c</td></tr>
+          <tr><td>⑥ Loop-Until-Done</td><td><span class="s5"><strong>5</strong>/5</span></td><td>while + phase + log</td><td>2742c</td></tr>
+          <tr><td>⑦ DAG 交叉</td><td><span class="s5"><strong>5</strong>/5</span></td><td>\$dag 4-phase</td><td>1443c</td></tr>
+          <tr><td>⑧ 动态批量</td><td><span class="s5"><strong>5</strong>/5</span></td><td>.map() + parallel + phase</td><td>1492c</td></tr>
+          <tr><td>⑨ 容错并行</td><td><span class="s5"><strong>5</strong>/5</span></td><td>.catch + parallel + filter</td><td>1048c</td></tr>
+          <tr><td>⑩ 流水线分支</td><td><span class="s4"><strong>4</strong>/5</span></td><td>serial + phase + if</td><td>1229c</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="summary-card">
+      <h3>统计</h3>
+      <div class="big-number score-final">4.6<span style="font-size:18px;color:var(--dim);">/5</span></div>
+      <div style="margin:12px 0;display:flex;gap:8px;">
+        <div style="flex:1;text-align:center;padding:8px;background:#0d1117;border:1px solid var(--border);border-radius:8px;"><div style="font-size:20px;font-weight:700;color:var(--green)">8</div><div style="font-size:11px;color:var(--dim)">满分</div></div>
+        <div style="flex:1;text-align:center;padding:8px;background:#0d1117;border:1px solid var(--border);border-radius:8px;"><div style="font-size:20px;font-weight:700;color:var(--yellow)">2</div><div style="font-size:11px;color:var(--dim)">良好</div></div>
+        <div style="flex:1;text-align:center;padding:8px;background:#0d1117;border:1px solid var(--border);border-radius:8px;"><div style="font-size:20px;font-weight:700;color:var(--red)">0</div><div style="font-size:11px;color:var(--dim)">不及格</div></div>
+      </div>
+      <div style="margin-top:16px;">
+        <div style="font-size:13px;margin-bottom:8px;color:var(--dim);">迭代轨迹</div>
+        <div style="display:flex;gap:4px;height:24px;align-items:flex-end;">
+          <div style="flex:1;background:var(--red);height:8px;border-radius:4px 0 0 4px;position:relative;"><span style="position:absolute;top:-18px;font-size:11px;color:var(--dim);">1.6</span></div>
+          <div style="flex:1;background:var(--yellow);height:20px;border-radius:2px;position:relative;"><span style="position:absolute;top:-18px;font-size:11px;color:var(--dim);">3.8</span></div>
+          <div style="flex:1;background:var(--yellow);height:20px;border-radius:2px;position:relative;"><span style="position:absolute;top:-18px;font-size:11px;color:var(--dim);">3.8</span></div>
+          <div style="flex:1;background:var(--green);height:24px;border-radius:0 4px 4px 0;position:relative;"><span style="position:absolute;top:-18px;font-size:11px;color:var(--dim);">4.6</span></div>
+        </div>
+        <div style="font-size:11px;color:var(--dim);display:flex;justify-content:space-between;margin-top:2px;">
+          <span>f-string</span><span>Markdown</span><span>修分支</span><span>最终</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h2>🔍 关键发现</h2>
+  <div class="improve">
+    <h3>✅ 8 个正确行为</h3>
+    <ol>
+      <li><strong>parallel 优先级高于 \$dag</strong> — 改版后 5/10 用了 parallel（改前 1/10），\$dag 从 7/10 降到 1/10。LLM 学会了"先想 parallel，复杂拓扑才用 \$dag"。</li>
+      <li><strong>模型分配合理</strong> — 简单任务自动 haiku，复杂任务用 sonnet。</li>
+      <li><strong>phase() 全覆盖</strong> — 10/10 正确使用，且 meta.phases 与代码一一对应。</li>
+      <li><strong>label 全覆盖</strong> — 所有 agent 调用有可读 label。</li>
+      <li><strong>容错写法标准</strong> — .catch() + return null + filter(Boolean)。</li>
+      <li><strong>while 含保护</strong> — MAX_ROUNDS 上限 + 超限 log 报警。</li>
+      <li><strong>代码类不再硬编码 \$dag</strong> — 代码任务也用 parallel 和 while。</li>
+      <li><strong>空列表友好处理</strong> — 不崩溃，返回提示。</li>
+    </ol>
+  </div>
+  <div class="improve" style="border-color:var(--yellow);margin-top:16px;">
+    <h3 style="color:var(--yellow);">⚡ 2 个可继续优化</h3>
+    <ol>
+      <li><strong>条件语义判断</strong> — if 分支用字符串 contains 而非 agent 语义判断。可加提示："让 agent 做语义判断而非字符串匹配"。</li>
+      <li><strong>辅助 agent 可精简</strong> — 有些两步可合并为一步。微小代价。</li>
+    </ol>
+  </div>
+</div>
+
+<div class="section">
+  <h2>📁 涉及文件改变量</h2>
+  <div class="comparison">
+    <table>
+      <thead><tr><th>文件</th><th>改前</th><th>改后</th><th>变化</th></tr></thead>
+      <tbody>
+        <tr><td><code>cli/handlers/chat_handler.py</code></td><td>1008</td><td>991</td><td style="color:var(--green);">-17 行</td></tr>
+        <tr><td><code>js_workflow.py</code></td><td>990</td><td>875</td><td style="color:var(--green);">-115 行</td></tr>
+        <tr><td><code>bridge.mjs</code></td><td>—</td><td>312</td><td style="color:var(--accent);">✨ 新建</td></tr>
+        <tr><td><code>.workflow_prompt_template.md</code></td><td>128</td><td>439</td><td style="color:var(--accent);">+311 行</td></tr>
+        <tr><td><code>orchestrator.py</code></td><td>578</td><td>578</td><td>未改动</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div style="text-align:center;padding:40px 0 20px;color:var(--dim);font-size:12px;border-top:1px solid var(--border);">
+  <p>小雷版 AI Agent · 编排能力评估 · 模板抽取+内容优化后 · 2026-06-24</p>
+  <p>测试：真实 LLM（claude-sonnet）生成 10 场景 workflow 脚本，评估 API 选择 + 模式命中 + 结构质量</p>
+</div>
+
+</div>
+</body>
+</html>

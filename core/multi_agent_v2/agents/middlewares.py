@@ -925,10 +925,10 @@ class HookMiddleware(BaseMiddleware):
         # 继续执行（参数修改暂不支持，需架构级改造）
         return await next_mw()
 
-    async def on_tool_end(self, ctx: RunContext) -> None:
+    async def on_tool_end(self, ctx: RunContext) -> HookResult:
         """工具执行后调用 AfterTool / OnError Hook"""
         if not ctx.tool_results:
-            return
+            return HookResult()
 
         last_result = ctx.tool_results[-1]
         tool_call = last_result.get("tool_call", {})
@@ -936,7 +936,7 @@ class HookMiddleware(BaseMiddleware):
         arguments = tool_call.get("arguments", {})
 
         if not tool_name:
-            return
+            return HookResult()
 
         # 调用 AfterTool Hook（工具已成功执行）
         if last_result.get("success"):
@@ -956,5 +956,7 @@ class HookMiddleware(BaseMiddleware):
             error_result = await self.hook_manager.run_error(tool_name, arguments, error)
 
             if error_result.retry:
-                last_result["retry"] = True
                 logger.info(f"Hook 请求重试: {tool_name}")
+                return HookResult(jump_to="retry", reason=f"Hook 请求重试 {tool_name}")
+
+        return HookResult()

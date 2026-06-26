@@ -1900,9 +1900,10 @@ class ToolRegistry:
         all_tools = list(self._tools.values())
 
         # Agent 类型硬约束过滤
+        # ponytail: 白名单只约束内置工具，MCP 工具（外部服务器）始终放行
         if allowed is not None:
             allowed_set = set(allowed)
-            all_tools = [t for t in all_tools if t.name in allowed_set]
+            all_tools = [t for t in all_tools if t.name in allowed_set or t.server not in ("__builtin__",)]
         if disallowed is not None:
             disallowed_set = set(disallowed)
             all_tools = [t for t in all_tools if t.name not in disallowed_set]

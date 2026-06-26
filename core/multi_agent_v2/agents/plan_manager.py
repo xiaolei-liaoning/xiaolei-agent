@@ -209,6 +209,7 @@ def update_step_status(ctx: RunContext, prefix: str = "") -> None:
 
     last_result = ctx.tool_results[-1]
     last_success = last_result.get("success", False)
+    tool_has_error = not last_success
 
     done_count = sum(1 for s in ctx.plan if s.status == "done")
     if done_count >= len(ctx.plan):
@@ -234,28 +235,14 @@ def update_step_status(ctx: RunContext, prefix: str = "") -> None:
             current_step.status = "done"
             return
 
-    # 检查最近一次工具调用的结果——仅在工具自身失败时才标记（不检查成功结果的内容）
-    last_result = ctx.tool_results[-1]
-    last_tc = last_result.get("tool_call", {})
-    last_success = last_result.get("success", False)
-    tool_has_error = not last_success
-    # 仅在工具失败时，额外检查结果中是否有明确的代码错误（如 SyntaxError）
+    # 工具失败 → 标记当前步骤为 failed 并触发重规划
     if tool_has_error:
+        # 仅在工具失败时，额外检查结果中是否有明确的代码错误（如 SyntaxError）
         last_raw = str(last_result.get("result", last_result.get("error", "")))
         code_error = any(
             marker in last_raw
             for marker in ["SyntaxError", "NameError", "TypeError"]
         )
-
-    # 获取当前正在执行的步骤（第一个未完成的步骤）
-    done_count = sum(1 for s in ctx.plan if s.status == "done")
-    if done_count >= len(ctx.plan):
-        return
-
-    current_step = ctx.plan[done_count]
-
-    # 工具失败 → 标记当前步骤为 failed 并触发重规划
-    if tool_has_error:
         if current_step.status != "failed":
             current_step.status = "failed"
             ctx._step_retries[current_step.index] = (
@@ -338,7 +325,6 @@ def update_step_status(ctx: RunContext, prefix: str = "") -> None:
 
     # 步骤没有 tool_names → 按成功调用次数 >= 已完成步骤数+1才推进
     if not current_step.tool_names:
-        done_count = sum(1 for s in ctx.plan if s.status == "done")
         _total_ok = sum(1 for r in ctx.tool_results if r.get("success"))
         if _total_ok >= done_count + 1:
             current_step.status = "done"
@@ -431,4 +417,7 @@ async def replan_failed(ctx: RunContext) -> bool:
         s.status = "pending"
     ctx.plan = kept + new_steps
     ctx.plan_generation += 1
+    # ponytail: 重置快照，避免新步骤读到旧快照导致完成检测错误
+    if hasattr(ctx, '_step_tool_snapshots'):
+        ctx._step_tool_snapshots.clear()
     return True

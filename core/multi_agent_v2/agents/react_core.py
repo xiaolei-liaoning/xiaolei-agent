@@ -435,18 +435,33 @@ class ReActCoreMiddleware(BaseMiddleware):
                 if tool_calls:
                     ctx._pending_tool_calls = tool_calls
                     ctx._pending_reply = reply
+                    ctx.consecutive_idle_rounds = 0  # 有工具调用，重置空转计数
                     break  # 有工具调用 → 跳出重试循环
 
                 # 没有工具调用
                 _last_reply = reply
-                if len(reply) > 50 and not reply.startswith("{"):
-                    # 可能是最终答案
+                ctx.consecutive_idle_rounds = getattr(ctx, 'consecutive_idle_rounds', 0) + 1
+                if ctx.consecutive_idle_rounds >= 3:
+                    logger.warning(f"连续 {ctx.consecutive_idle_rounds} 轮空转，强制结束")
+                    ctx.last_error = f"连续 {ctx.consecutive_idle_rounds} 轮空转无工具调用"
+                    break
+                # ponytail: 最终答案判断 — 需要计划完成+回复有实质内容，或回复包含明确的报告结构
+                _plan_done = ctx.plan and all(s.status == "done" for s in ctx.plan)
+                _looks_like_report = any(kw in reply for kw in ("## ", "### ", "**总结", "**结论", "## 总结", "## 结论"))
+                _has_substance = len(reply) > 100 and not reply.startswith("{")
+                if _plan_done and _has_substance:
                     ctx.final_answer = reply
                     ctx.interrupted = True
                     break
-                # ponytail: 本轮回合内重试，不等下一轮
+                if _looks_like_report and _has_substance:
+                    ctx.final_answer = reply
+                    ctx.interrupted = True
+                    break
+                # ponytail: 空跑重试 — 根据可用工具动态建议，不硬编码
+                _avail = [t.get("function", {}).get("name", "") for t in (ctx.tool_defs or [])]
+                _suggest = next((t for t in ["read_file", "web_search", "execute_python"] if t in _avail), "read_file")
                 ctx.forced_instructions = (
-                    "你刚输出了思考但没调工具。请立即调用 fetch_url 或 web_search，不要空转。"
+                    f"你刚输出了思考但没调工具。请立即调用 {_suggest}，不要空转。"
                 )
                 # 重建消息（注入强制指令重试）
                 _retry_sys = ctx._pending_messages[0]["content"]
@@ -581,12 +596,16 @@ class ReActCoreMiddleware(BaseMiddleware):
                                     print(f"{prefix}      \033[36m{line}\033[0m")
 
                 # ── 累积 tool 结果到对话历史（紧跟在 assistant 消息之后）──
-                _tool_id = tc.get("id", f"call_{tool_name}_{ctx.react_depth}")
-                ctx._conversation_history.append({
-                    "role": "tool",
-                    "tool_call_id": _tool_id,
-                    "content": result_text[:2000],
-                    "name": tool_name,
+                # ponytail: 参数校验错误不写入历史（已通过 forced_instructions 驱动重试）
+                if result.get("_validation_error"):
+                    logger.debug(f"跳过校验错误写入历史: {tool_name}")
+                else:
+                    _tool_id = tc.get("id", f"call_{tool_name}_{ctx.react_depth}")
+                    ctx._conversation_history.append({
+                        "role": "tool",
+                        "tool_call_id": _tool_id,
+                        "content": result_text[:2000],
+                        "name": tool_name,
                 })
 
                 # 文件验证（write_file 特殊处理）
@@ -820,7 +839,13 @@ async def run_react(
 
         if ctx.plan and all(s.status == "done" for s in ctx.plan):
             if ctx.forced_instructions:
-                print(f"{prefix}    \033[1;33m⚠️ 计划已完成但有未处理的指令，继续执行\033[0m")
+                _post_rounds = getattr(ctx, '_post_completion_rounds', 0) + 1
+                ctx._post_completion_rounds = _post_rounds
+                if _post_rounds >= 3:
+                    print(f"{prefix}    \033[1;33m⚠️ 完成后已执行 {_post_rounds} 轮改进，强制结束\033[0m")
+                    ctx.interrupted = True
+                    break
+                print(f"{prefix}    \033[1;33m⚠️ 计划已完成但有未处理的指令，继续执行({_post_rounds}/3)\033[0m")
             else:
                 print(f"{prefix}    \033[1;32m✅ 所有计划步骤已完成\033[0m")
                 ctx.interrupted = True
@@ -839,7 +864,11 @@ async def run_react(
 
         # ── 上下文预算检查（主动压缩）──
         if ctx.context_budget is not None:
-            compacted = ctx.context_budget.check_and_compact(ctx)
+            # ponytail: 优先用 LLM 压缩，回退到模板压缩
+            try:
+                compacted = await ctx.context_budget.async_check_and_compact(ctx)
+            except Exception:
+                compacted = ctx.context_budget.check_and_compact(ctx)
             if compacted:
                 print(f"{prefix}    \033[1;33m📦 上下文压缩: 释放了 tokens 预算\033[0m")
 
@@ -849,6 +878,15 @@ async def run_react(
             ctx.last_error = hr_start.reason or "中间件终止(think_start)"
             break
         if hr_start and hr_start.jump_to == "retry":
+            continue
+
+        # ponytail: on_plan_check 补丁 — 启用循环检测+澄清中间件
+        hr_plan = await chain.on_plan_check(ctx)
+        if hr_plan and hr_plan.jump_to == "end":
+            ctx.interrupted = True
+            ctx.last_error = hr_plan.reason or "中间件终止(plan_check)"
+            break
+        if hr_plan and hr_plan.jump_to == "retry":
             continue
 
         hr_end = await chain.on_think_end(ctx)

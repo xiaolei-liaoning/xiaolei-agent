@@ -37,6 +37,31 @@ class ChatHandler:
 
     def __init__(self, cli):
         self.cli = cli
+        self._prompt_template = self._load_prompt_template()
+
+    def _load_prompt_template(self) -> str:
+        """从 workflows/.workflow_prompt_template.md 读取 workflow prompt 模板"""
+        template_path = (
+            Path(__file__).parent.parent.parent
+            / "workflows" / ".workflow_prompt_template.md"
+        )
+        if template_path.exists():
+            return template_path.read_text(encoding="utf-8")
+        return self._builtin_template()
+
+    def _builtin_template(self) -> str:
+        """内置后备模板（文件被删时保证可用）"""
+        return (
+            "生成 JS Workflow 脚本，必须包含 export const meta + export default async function。\n\n"
+            "【可用 API】\n"
+            "  - agent(prompt, {label, isFinal}) — 启动一个子 Agent 执行子任务\n"
+            "  - parallel([thunks]) — 并行启动多个 agent，等待全部完成\n"
+            "  - $dag({key: spec}) — 声明式 DAG 编排\n"
+            "  - phase(title) — 标记阶段性进度分组\n"
+            "  - log(msg) — 输出进度消息\n\n"
+            "任务：{{task}}\n\n"
+            "开始写 workflow："
+        )
 
     # ──────────────────────────────────────────────
     # /run
@@ -131,6 +156,15 @@ class ChatHandler:
         else:
             log_status("LLM 正在编写 JS Workflow 脚本...", color=CLAUDE)
             script = await self._llm_write_workflow(task)
+            if script:
+                # ponytail: 保存生成的脚本到桌面方便调试
+                try:
+                    _dbg_path = os.path.expanduser("~/Desktop/_last_workflow.js")
+                    with open(_dbg_path, "w", encoding="utf-8") as _f:
+                        _f.write(script)
+                    log_status(f"已保存脚本到 {_dbg_path}", color="white")
+                except Exception:
+                    pass
             if script and not self._validate_workflow_script(script, task):
                 log_status("LLM 脚本语义校验未通过，使用固定模板", color="yellow")
                 script = ""
@@ -172,6 +206,10 @@ export default async function() {{
             else:
                 log_status(f"编排完成但无结果: {wr.error or '无输出'}", color="yellow")
         except Exception as e:
+            # ponytail: 语法错误时打印前500字符方便调试
+            if script:
+                _snippet = script[:500].replace("\\", "\\\\").replace("`", "\\`")
+                print(f"    \033[2;37m[debug] 生成脚本前500字符:\033[0m\n{_snippet}\n    \033[2;37m[debug] 脚本总长度: {len(script)} 字符\033[0m")
             pe(f"编排执行失败: {e}")
 
     async def _llm_write_workflow(self, task: str) -> str:
@@ -183,74 +221,35 @@ export default async function() {{
             if not router or not router.is_available():
                 return ""
 
-            # ── 先识别任务类型 ──
-            from core.engine.llm_backend import get_llm_router
-            router = get_llm_router()
-            is_code_task = False
-            if router and router.is_available():
-                resp = await router.simple_chat(
-                    "判断以下请求是否需要生成代码/脚本。只回答'是'或'否'。注意：写文章/博客/文档不算。\n请求：" + task[:200],
-                    temperature=0, max_tokens=10
-                )
-                is_code_task = '是' in str(resp or '')
+            # ── 第一步：匹配 Pattern（先用 LLM 分类）──
+            pattern_match_prompt = (
+                "从以下10个pattern中选出最匹配以下任务的编号，只输出编号(如 ⑩)，不要其他文字。\n\n"
+                "① 纯并行→汇总（多源搜索/多平台对比）\n"
+                "② 串行流水线（分析→报告）\n"
+                "③ 复杂DAG（代码生成/多模块）\n"
+                "④ 动态批量（遍历文件批量处理）\n"
+                "⑤ CodeGraph预扫描→多Agent分析（项目分析首选）\n"
+                "⑥ 迭代循环（代码优化/迭代改进）\n"
+                "⑦ 产出→验证（方案审查/安全审核）\n"
+                "⑧ 多方案Tournament（方案选优）\n"
+                "⑨ 容错并行（多源搜索/个别允许失败）\n"
+                "⑩ 游戏开发专用（植物大战僵尸等）\n\n"
+                "任务：" + task[:300] + "\n\n编号："
+            )
+            pattern_resp = await asyncio.wait_for(
+                router.simple_chat(pattern_match_prompt, temperature=0, max_tokens=10),
+                timeout=15.0,
+            )
+            matched_pattern = str(pattern_resp or "").strip()[:3]
 
-            # ── 检测到 JS 脚本片段直接执行 ──
-            if "export const meta" not in task and "$dag" not in task and is_code_task:
-                # 代码生成/重构类：保留 $dag 强制模板（已验证可靠）
-                prompt = (
-                    "生成 JS Workflow 脚本，必须包含 export const meta + export default async function。\n\n"
-                    "API: agent(prompt,{label,isFinal}) $dag(nodes) parallel(thunks)\n\n"
-                    "这是代码类任务，必须用 $dag 模式（声明式 DAG 依赖编排）：\n"
-                    "- 先分析接口/设计\n"
-                    "- 再并行写各个模块\n"
-                    "- 最后合并/集成\n\n"
-                    "$dag 示例：\n"
-                    "const ctx = await $dag({\n"
-                    "  分析: () => agent('分析',{label:'分析'}),\n"
-                    "  引擎: {depends:'分析',task: ctx => agent('引擎\\n'+ctx['分析'],{label:'引擎'})},\n"
-                    "  UI: {depends:'分析',task: ctx => agent('UI\\n'+ctx['分析'],{label:'UI'})},\n"
-                    "  合并: {depends:['引擎','UI'],task: ctx => agent('合并\\n'+ctx['引擎']+ctx['UI'],{label:'合并',isFinal:true})},\n"
-                    "})\n"
-                    "return ctx['合并'];\n\n"
-                    f"任务：{task[:600]}\n\n"
-                    "开始："
-                )
-            else:
-                # 其他任务：用编排思维规则，不套模板
-                prompt = (
-                    "生成 JS Workflow 脚本，必须包含 export const meta + export default async function。\n\n"
-                    "【可用 API】\n"
-                    "  - agent(prompt, {label, isFinal}) — 启动一个子 Agent 执行子任务\n"
-                    "  - parallel([thunks]) — 并行启动多个 agent，等待全部完成，返回数组\n"
-                    "  - $dag({key: spec}) — 声明式 DAG 编排（key 间可声明 depends 依赖）\n"
-                    "  - phase(title) — 标记阶段性进度分组\n"
-                    "  - log(msg) — 输出进度消息\n\n"
-                    "【编排规则：根据步骤之间的数据依赖关系选结构，不按任务类型名称选】\n\n"
-                    "规则① 某步的输出是下一步的输入（串行数据流）：\n"
-                    "   用 await agent() 逐个执行，前一结果传后一 prompt\n"
-                    "   例：搜数据 → 分析 → 写报告（每一步依赖上一步结果）\n\n"
-                    "规则② 多步彼此完全独立：\n"
-                    "   用 parallel([() => agent(...), () => agent(...)]) 同时跑\n"
-                    "   例：同时搜百度+微博+知乎，三个结果谁也不用等谁\n\n"
-                    "规则③ 部分步骤有依赖关系、部分可并行（复杂拓扑）：\n"
-                    "   用 $dag() 声明谁依赖谁，引擎自动决定执行顺序\n"
-                    "   例：A 和 B 可并行 → C 依赖 A+B 都完成\n\n"
-                    "规则④ 步骤数量在执行前不确定（动态列表）：\n"
-                    "   用 for 循环把结果集转成 parallel agent\n"
-                    "   例：遍历一组文件，对每个文件开一个 agent 处理\n\n"
-                    "规则⑤ 某步的结果决定是否继续或走哪条路（条件分支）：\n"
-                    "   用 if/else + await agent() 或 await agent() + guard\n"
-                    "   例：搜索结果为空→换搜索词重试；不为空→分析\n\n"
-                    "【三要三不要】\n"
-                    "  ✅ 必须：用 phase() 给步骤逻辑分组\n"
-                    "  ✅ 必须：一个 workflow 里可以混用 parallel + agent + $dag\n"
-                    "  ✅ 必须：子 task 的 prompt 语义完整，能独立理解执行\n"
-                    "  ❌ 不要：强行用 $dag——除非真的有并行+依赖的拓扑关系\n"
-                    "  ❌ 不要：复制示例的变量名和结构——根据实际任务编\n"
-                    "  ❌ 不要：写多余注释——代码清晰即可\n\n"
-                    f"任务：{task[:600]}\n\n"
-                    "开始写 workflow："
-                )
+            # ── 第二步：注入 Pattern 提示 ──
+            base_prompt = self._prompt_template.replace("{{task}}", task[:600])
+            prompt = (
+                f"【匹配 Pattern: {matched_pattern}】\n"
+                "严格按照该 pattern 的示例代码结构生成 workflow。\n"
+                "独立模块必须用 parallel() 并行，禁止串行。\n\n"
+                + base_prompt
+            )
             resp = await asyncio.wait_for(
                 router.chat(
                     [{"role": "user", "content": prompt}],
@@ -271,15 +270,23 @@ export default async function() {{
             if export_idx >= 0:
                 text = text[export_idx:].strip()
             # 截掉代码后面的中文说明
+            # ponytail: 跳过 template literal `...` 内的 ${...} 避免 brace 计数被干扰
             fn_idx = text.find("export default async function")
             if fn_idx >= 0:
                 brace_count = 0
                 started = False
+                in_backtick = False
                 for i in range(fn_idx, len(text)):
-                    if text[i] == '{':
+                    ch = text[i]
+                    if ch == '`':
+                        in_backtick = not in_backtick
+                        continue
+                    if in_backtick:
+                        continue
+                    if ch == '{':
                         brace_count += 1
                         started = True
-                    elif text[i] == '}':
+                    elif ch == '}':
                         brace_count -= 1
                         if started and brace_count == 0:
                             text = text[:i+1].strip()
@@ -940,69 +947,158 @@ export default async function() {{
 # ═══════════════════════════════════════════════════════════════
 
 def _render_agent_graph(graph: dict):
-    """将 agent_graph 渲染为 Mermaid HTML 并用浏览器打开"""
+    """将 agent_graph 渲染为执行报告 HTML（含重试/截断/压缩标记）"""
     nodes = graph.get("nodes", [])
     edges = graph.get("edges", [])
+    retry_events = graph.get("retryEvents", [])
+    comp_warnings = graph.get("compressionWarnings", [])
     if not nodes and not edges:
         return
 
     from cli.colors import print_success, log_status, CLAUDE
-    log_status("正在生成 Agent 协作图...", color=CLAUDE)
+    log_status("正在生成执行报告...", color=CLAUDE)
 
-    # 构建 Mermaid 流程图
-    mermaid_lines = ["graph TD"]
-    # 每个 node
     node_ids = {}
+    mermaid_lines = ["graph TD"]
+    node_details = []
+    retry_map = {}
+    for e in retry_events:
+        retry_map.setdefault(e.get("label"), []).append(e)
+
     for i, n in enumerate(nodes):
         nid = f"N{i}"
         label = n.get("label", nid)
-        task = n.get("prompt", "")
-        status = n.get("status", "")
-        badge = "✅" if status == "done" else "⏳"
-        mermaid_lines.append(f'    {nid}["{badge} {label}"]')
+        status = n.get("status", "unknown")
+        duration = n.get("duration", 0)
+        dur_str = f"{duration/1000:.1f}s" if duration else ""
+        model = n.get("model", "")
+
+        truncated = False
+        meta = n.get("metadata", {}) or {}
+        if meta.get("truncated"):
+            truncated = True
+
+        has_retry = label in retry_map
+
+        if status == "failed":
+            badge = "❌"
+            style = "fill:#fee2e2,stroke:#ef4444"
+        elif truncated:
+            badge = "⚠️"
+            style = "fill:#fef3c7,stroke:#f59e0b"
+        elif status == "done":
+            badge = "✅"
+            style = "fill:#dcfce7,stroke:#22c55e"
+        else:
+            badge = "⏳"
+            style = "fill:#e0f2fe,stroke:#3b82f6"
+
+        display = f"{badge} {label}"
+        if dur_str:
+            display += f" ({dur_str})"
+
+        mermaid_lines.append(f'    {nid}["{display}"]')
+        mermaid_lines.append(f'    style {nid} {style}')
         node_ids[label] = nid
-    # 每个 edge
+
+        detail_rows = []
+        detail_rows.append(f"<tr><td>状态</td><td>{badge} {status}</td></tr>")
+        if dur_str:
+            detail_rows.append(f"<tr><td>耗时</td><td>{dur_str}</td></tr>")
+        if model:
+            detail_rows.append(f"<tr><td>模型</td><td>{model}</td></tr>")
+        if truncated:
+            detail_rows.append(f'<tr><td>截断</td><td style="color:#f59e0b">⚠️ 输出不完整 ({meta.get("truncationDetail", "")})</td></tr>')
+        prompt = n.get("prompt", "")
+        if prompt:
+            detail_rows.append(f"<tr><td>任务</td><td style='font-size:12px;color:#666'>{prompt}</td></tr>")
+
+        node_details.append({"label": label, "rows": "".join(detail_rows), "has_retry": has_retry})
+
     for e in edges:
         frm = e.get("from", "")
         to = e.get("to", "")
         frm_id = node_ids.get(frm, frm)
         to_id = node_ids.get(to, to)
-        mermaid_lines.append(f"    {frm_id} --> {to_id}")
+        mermaid_lines.append(f"    {frm_id} -->|依赖| {to_id}")
+
+    # ponytail: 重试边用虚线
+    seen_retry = set()
+    for e in retry_events:
+        label = e.get("label", "")
+        if label in seen_retry:
+            continue
+        seen_retry.add(label)
+        nid = node_ids.get(label, label)
+        mermaid_lines.append(f"    {nid} -.->|重试| {nid}")
 
     mermaid_code = "\n".join(mermaid_lines)
+    detail_html = "".join(
+        f'<div class="node-card"><h3>{n["label"]}</h3>'
+        f'{"<span class=\"retry-badge\">🔄 重试</span>" if n["has_retry"] else ""}'
+        f'<table>{n["rows"]}</table></div>'
+        for n in node_details
+    )
+
+    warning_html = ""
+    if comp_warnings:
+        warning_html = '<div class="warnings"><h3>⚠️ 压缩警告</h3><ul>' + "".join(
+            f'<li><strong>{w.get("label","?")}</strong>: {w.get("detail","")}</li>' for w in comp_warnings
+        ) + "</ul></div>"
 
     html = f'''<!DOCTYPE html>
 <html lang="zh-CN">
 <head><meta charset="UTF-8">
-<title>Agent 协作图</title>
-<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<title>Workflow 执行报告</title>
 <style>
-  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-  body {{ background: #f0f2f5; font-family: -apple-system, "Microsoft YaHei", sans-serif; padding: 40px; }}
-  .container {{ max-width: 1000px; margin: 0 auto; }}
-  h1 {{ font-size: 22px; margin-bottom: 8px; color: #1a1a2e; }}
-  .subtitle {{ font-size: 13px; color: #666; margin-bottom: 24px; }}
-  .mermaid-wrap {{ background: #fff; border-radius: 12px; padding: 32px; box-shadow: 0 2px 12px rgba(0,0,0,0.08); overflow-x: auto; }}
-  .mermaid-wrap svg {{ max-width: 100%; height: auto; }}
-  .legend {{ display: flex; gap: 20px; margin-top: 16px; font-size: 13px; color: #666; }}
+  * {{ margin:0; padding:0; box-sizing:border-box; }}
+  body {{ background:#f0f2f5; font-family:-apple-system,"Microsoft YaHei",sans-serif; padding:40px; }}
+  .container {{ max-width:1200px; margin:0 auto; }}
+  h1 {{ font-size:22px; margin-bottom:4px; color:#1a1a2e; }}
+  .subtitle {{ font-size:13px; color:#666; margin-bottom:24px; }}
+  .row {{ display:flex; gap:24px; }}
+  .col {{ flex:1; min-width:0; }}
+  .diagram {{ background:#fff; border-radius:12px; padding:24px; box-shadow:0 2px 12px rgba(0,0,0,0.08); overflow-x:auto; }}
+  .diagram svg {{ max-width:100%; height:auto; }}
+  .details {{ display:flex; flex-direction:column; gap:12px; }}
+  .node-card {{ background:#fff; border-radius:10px; padding:16px; box-shadow:0 1px 6px rgba(0,0,0,0.06); }}
+  .node-card h3 {{ font-size:15px; margin-bottom:8px; color:#1a1a2e; display:flex; align-items:center; gap:6px; }}
+  .retry-badge {{ font-size:11px; background:#fef3c7; color:#d97706; padding:2px 8px; border-radius:4px; }}
+  .node-card table {{ width:100%; border-collapse:collapse; font-size:13px; }}
+  .node-card td {{ padding:4px 8px; border-bottom:1px solid #f0f0f0; }}
+  .node-card td:first-child {{ color:#888; width:60px; }}
+  .warnings {{ background:#fef3c7; border:1px solid #f59e0b; border-radius:10px; padding:16px; margin-top:20px; }}
+  .warnings h3 {{ font-size:15px; color:#d97706; margin-bottom:8px; }}
+  .warnings li {{ font-size:13px; margin:4px 0; color:#92400e; }}
+  .legend {{ display:flex; gap:20px; margin-top:16px; font-size:12px; color:#666; }}
 </style>
 </head>
 <body><div class="container">
-<h1>🤖 Agent 协作图</h1>
-<p class="subtitle">{len(nodes)} 个 Agent · {len(edges)} 条依赖边</p>
-<div class="mermaid-wrap">
+<h1>🔄 Workflow 执行报告</h1>
+<p class="subtitle">{len(nodes)} 个 Agent · {len(edges)} 条依赖 · {len(retry_events)} 次重试 · {len(comp_warnings)} 个压缩警告</p>
+<div class="row">
+<div class="col diagram">
 <div class="mermaid">
 {mermaid_code}
 </div>
-</div>
 <div class="legend">
-<span>✅ 已完成</span> <span>⏳ 执行中</span>
+<span>✅ 成功</span> <span>⚠️ 输出截断</span> <span>❌ 失败</span> <span>⏳ 运行中</span>
+<span style="margin-left:16px;border-bottom:2px dashed #999">─ 重试</span>
 </div>
-</div></body></html>'''
+</div>
+<div class="col details">
+{detail_html}
+{warning_html}
+</div>
+</div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({{startOnLoad:true,theme:'neutral',flowchart:{{useMaxWidth:true,htmlLabels:true}}}})</script>
+</body></html>'''
 
     import tempfile, subprocess
-    path = os.path.join(tempfile.gettempdir(), "agent-collab-graph.html")
+    path = os.path.join(tempfile.gettempdir(), "workflow-exec-report.html")
     with open(path, "w", encoding="utf-8") as f:
         f.write(html)
     subprocess.Popen(["open", path])
-    print_success(f"  ☝️  Agent 协作图已打开: {path}")
+    print_success(f"  ☝️  执行报告已打开: {path}")

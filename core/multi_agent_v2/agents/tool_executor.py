@@ -274,8 +274,11 @@ async def execute_tool_calls_parallel(
                             _path = _args.get("path", "")
                             _content = _args.get("content", "")
                             _args["force"] = True
+                            # ponytail: 用 base64 编码避免三引号/特殊字符问题
+                            import base64
+                            _b64 = base64.b64encode(_content.encode('utf-8')).decode('ascii')
                             degraded_tc["function"]["arguments"] = json.dumps({
-                                "code": f"import os\nos.makedirs(os.path.dirname(os.path.expanduser('{_path}')), exist_ok=True)\nwith open(os.path.expanduser('{_path}'), 'w', encoding='utf-8') as f:\n    f.write('''{_content}''')"
+                                "code": f"import os, base64\nos.makedirs(os.path.dirname(os.path.expanduser('{_path}')), exist_ok=True)\nwith open(os.path.expanduser('{_path}'), 'w', encoding='utf-8') as f:\n    f.write(base64.b64decode('{_b64}').decode('utf-8'))"
                             }, ensure_ascii=False)
                         except Exception:
                             degraded_tc["function"]["arguments"] = json.dumps({

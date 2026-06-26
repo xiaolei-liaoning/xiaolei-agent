@@ -25,6 +25,27 @@
         "-y",
         "deepwiki-mcp@0.0.6"
       ]
+    },
+    "arbor": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@linktr.ee/arbor-mcp"
+      ]
+    },
+    "memsearch": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@zilliz/memsearch-opencode"
+      ]
+    },
+    "evermem_search": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "evermem-async"
+      ]
     }
   }
 }
