@@ -24,6 +24,16 @@
 - 3 plugin-loading errors identified: `opencode-antigravity-auth` (ESM dir import), `@zilliz/memsearch-opencode` (TS stripping), `superpowers` (no git in $PATH).
 - `.mcp.json` only read by CLI binary, NOT by desktop sidecar.
 
+### Session 2: 项目分析输出截断修复
+- Fix A: 移除 fallback 输出 `[:2000]` `[:1000]` 人肉截断
+- Fix B: LLM max_tokens 16384→32768（主循环 + fallback + 自动报告）
+- Fix C: post-execution 守卫 — write_file 成功即跳出循环，跳过 3 轮空转
+- Fix D: `_extract_text_from_json()` — knowledge_context 存纯文本而非 JSON
+- Fix E: `_trim_desc()` — fallback 总结 prompt 只取前 500 字，释放 context window
+- Fix F: 守卫 final_answer 从 tool_result 提取可读文本（`from_handler`），非 raw JSON
+- 新增 3 个测试用例验证 JSON 泄露/截断/纯文本提取
+- 77 tests passing
+
 ### In Progress
 - 4 MCP servers (arbor, codegraph, evermem_search, memsearch) disconnected in desktop UI → likely Electron $PATH issue for binaries, missing script paths.
 
@@ -33,9 +43,10 @@
 ## Key Decisions
 - Global config is source of truth for MCP (no project-level `opencode.json` in 小雷版agent).
 - ReAct fixes are small, targeted patches in-place rather than middleware chain refactor.
+- 项目分析 fallback 不应偷懒避开 — 需要保留 fallback 总结 LLM 调用来生成完整摘要，而非用工具确认消息草草了事。
 
 ## Relevant Files
-- `core/multi_agent_v2/agents/react_core.py` — Fixes 1, 3-7, 10
+- `core/multi_agent_v2/agents/react_core.py` — Fixes 1, 3-7, 10, A-F
 - `core/multi_agent_v2/agents/middlewares.py` — Fix 2
 - `core/multi_agent_v2/agents/tool_executor.py` — Fix 8
 - `core/multi_agent_v2/agents/plan_manager.py` — Fixes 9, 11

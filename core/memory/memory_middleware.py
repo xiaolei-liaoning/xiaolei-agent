@@ -25,8 +25,8 @@ class MemoryMiddleware:
 
         # 1. 短期记忆（最近对话）
         try:
-            from .short_term_memory import ShortTermMemoryManager
-            stm = ShortTermMemoryManager()
+            from .short_term_memory import get_memory_manager
+            stm = get_memory_manager()
             short_term = stm.get_context(user_id)
             if short_term:
                 lines = ["[最近对话]"]
@@ -75,8 +75,8 @@ class MemoryMiddleware:
         """对话结束后：短期记忆写入 → 提取事实 → 更新画像 → 存入向量记忆"""
         # 0. 短期记忆写入（自动触发 4 层压缩链）
         try:
-            from .short_term_memory import ShortTermMemoryManager
-            stm = ShortTermMemoryManager()
+            from .short_term_memory import get_memory_manager
+            stm = get_memory_manager()
             stm.add(user_id, "user", user_message)
             if assistant_reply:
                 stm.add(user_id, "assistant", assistant_reply[:2000])

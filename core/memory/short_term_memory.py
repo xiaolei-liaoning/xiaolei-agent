@@ -238,11 +238,6 @@ class ShortTermMemoryManager:
         self.absolute_limit = absolute_limit or (max_tokens or ABSOLUTE_LIMIT)
         self.keep_raw = keep_raw
         self.tool_result_keep = tool_result_keep
-        self.soft_limit = soft_limit
-        self.hard_limit = hard_limit
-        self.absolute_limit = absolute_limit
-        self.keep_raw = keep_raw
-        self.tool_result_keep = tool_result_keep
         MEMORY_ROOT.mkdir(parents=True, exist_ok=True)
 
         # 熔断器状态: user_id → 连续失败次数
@@ -469,6 +464,11 @@ class ShortTermMemoryManager:
     #  Layer 1: Micro-compact
     # ══════════════════════════════════════════════════════════════════════
 
+    def _is_tool_result(self, body: str) -> bool:
+        """判断内容是否为工具执行结果"""
+        markers = ["[tool:", "[stdout]", "[stderr]", "exit_code:", "tool_call:"]
+        return any(marker in body[:300] for marker in markers)
+
     def _micro_compact(self, user_id: str):
         """微压缩：裁剪旧的工具结果/系统消息
 
@@ -480,23 +480,18 @@ class ShortTermMemoryManager:
             return
 
         files = _load_files(user_id)
-        # 收集 role=user 且内容像工具结果的消息（tool_result标记）
         tool_results = []
         for f in files:
             role = f["meta"].get("role", "")
             body = f["body"]
-            # 识别工具结果：role=user 且包含 tool_result 标记
-            if role == "user" and len(body) > 100:
+            if role == "user" and self._is_tool_result(body):
                 tool_results.append(f)
-            # 识别 system 注入
             elif role == "system" and len(body) > 200:
                 tool_results.append(f)
 
-        # 如果没超过 keep 数量，不裁剪
         if len(tool_results) <= self.tool_result_keep:
             return
 
-        # 删除最早的多余工具结果
         to_delete = tool_results[:-self.tool_result_keep]
         for f in to_delete:
             try:

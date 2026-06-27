@@ -178,6 +178,23 @@ class SharedBus:
             }
         logger.debug(f"SharedBus 知识已存储: {key} (tags={tags or 'none'})")
 
+    async def cleanup_old_knowledge(self, max_age: float = 1800) -> int:
+        """清理超过 max_age 秒的知识条目（默认30分钟）"""
+        now = time.time()
+        to_remove = []
+        async with self._lock:
+            for key, meta in self._knowledge_meta.items():
+                updated = meta.get("updated_at", 0)
+                if now - updated > max_age:
+                    to_remove.append(key)
+            for key in to_remove:
+                self._knowledge_store.pop(key, None)
+                self._knowledge_tags.pop(key, None)
+                self._knowledge_meta.pop(key, None)
+        if to_remove:
+            logger.info(f"SharedBus 清理了 {len(to_remove)} 条过期知识")
+        return len(to_remove)
+
     async def get_knowledge(self, key: str) -> Optional[Any]:
         """获取指定键名的共享知识"""
         async with self._lock:

@@ -295,27 +295,40 @@ class AdvancedAutomationHub:
         }
     
     async def search_knowledge(self, query: str = "", **kwargs) -> Dict[str, Any]:
-        """知识检索（简单实现）。
+        """从 SharedBus 检索共享知识。
         
         Args:
-            query: 查询内容
+            query: 查询标签/关键词
             
         Returns:
-            检索结果
+            SharedBus 中匹配的知识条目
         """
         logger.info(f"执行search_knowledge: query={query}")
-        
-        results = [
-            f"关于 {query} 的相关信息：",
-            "1. 相关文档A",
-            "2. 相关文档B",
-            "3. 相关文档C"
-        ]
-        
+        if not query:
+            return {"success": True, "reply": "查询内容为空", "data": {"query": "", "count": 0, "items": []}}
+        try:
+            from core.multi_agent_v2.infrastructure.shared_bus import get_shared_bus
+            bus = get_shared_bus()
+            results = await bus.search_knowledge(query)
+            items = []
+            for key, entry in results.items():
+                meta = entry.get("meta", {})
+                summary = meta.get("summary", "")
+                source = meta.get("source", "")
+                if summary:
+                    items.append(f"[{source}] {summary[:200]}")
+            if items:
+                return {
+                    "success": True,
+                    "reply": "\n".join(items),
+                    "data": {"query": query, "count": len(items), "items": items},
+                }
+        except Exception as e:
+            logger.debug(f"SharedBus 检索失败: {e}")
         return {
             "success": True,
-            "reply": "\n".join(results),
-            "data": {"query": query, "count": 3, "items": results},
+            "reply": f"未找到 '{query}' 的相关知识",
+            "data": {"query": query, "count": 0, "items": []},
         }
     
     async def execute_workflow_by_id(self, workflow_id: str, input_data: Dict[str, Any] = None, **kwargs) -> Dict[str, Any]:

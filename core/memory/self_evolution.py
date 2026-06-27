@@ -64,13 +64,12 @@ class SelfEvolutionEngine:
         if not self.vm:
             return
 
-        # 1. 读取未总结的经验（用宽泛查询匹配实际内容）
+        # 1. 读取未总结的经验
         unsummarized = self.vm.search_memories(
-            query="delegate batch_delegate process_results 策略 任务",
+            query="任务 经验 策略 总结 搜索 代码 分析 优化 执行 处理",
             user_id=user_id,
             top_k=50,
         )
-        # 过滤：只取 experience 类别且未标记 summarized
         pending = [
             m for m in unsummarized
             if m.get("metadata", {}).get("category") == "experience"
@@ -116,24 +115,17 @@ class SelfEvolutionEngine:
             except Exception as e:
                 logger.debug(f"写入 insight 失败: {e}")
 
-        # 5. 标记经验已总结
+        # 5. 标记经验已总结（直接更新元数据，安全无丢失）
         for m in pending:
-            try:
-                mid = m.get("id")
-                if mid:
-                    cat = m.get("metadata", {}).get("category", "experience")
-                    self.vm.add_memory(
-                        user_id=user_id,
-                        content=m.get("content", ""),
-                        category=cat,
-                        metadata={
-                            **m.get("metadata", {}),
-                            _EVOLUTION_PREFIX + "summarized": "true",
-                        },
+            mid = m.get("id")
+            if mid:
+                try:
+                    self.vm.update_metadata(
+                        mid,
+                        {_EVOLUTION_PREFIX + "summarized": "true"},
                     )
-                    self.vm.delete_memory(mid)
-            except Exception:
-                pass
+                except Exception:
+                    logger.debug(f"标记经验已总结失败: id={mid}")
 
         self._last_run[user_id] = time.time()
         logger.info(f"🧬 自我进化完成: user={user_id}, {len(pending)}条经验→{len(insights)}条洞察")

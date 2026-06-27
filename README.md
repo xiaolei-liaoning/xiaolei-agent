@@ -1,560 +1,444 @@
 <div align="center">
 
-<!-- Hero Section -->
-<img src="https://img.shields.io/badge/小雷版小龙虾-AI%20Agent%20v3.4-8B5CF6?style=for-the-badge&logo=python&logoColor=white&labelColor=1E1B4B" alt="Title">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 800 180'%3E%3Cdefs%3E%3ClinearGradient id='bg' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0%25' stop-color='%230F172A'/%3E%3Cstop offset='100%25' stop-color='%231E1B4B'/%3E%3C/linearGradient%3E%3ClinearGradient id='accent' x1='0' y1='0' x2='1' y2='0'%3E%3Cstop offset='0%25' stop-color='%238B5CF6'/%3E%3Cstop offset='100%25' stop-color='%2310B981'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='800' height='180' rx='20' fill='url(%23bg)'/%3E%3Ctext x='400' y='60' text-anchor='middle' fill='white' font-size='28' font-weight='800' font-family='system-ui'%3E小雷版小龙虾 AI Agent%3C/text%3E%3Ctext x='400' y='90' text-anchor='middle' fill='%2394A3B8' font-size='14' font-family='system-ui'%3Ev3.4 — CLI (V2) · Web (V1) · 双架构智能引擎%3C/text%3E%3Crect x='180' y='110' width='440' height='40' rx='20' fill='url(%23accent)' opacity='0.9'/%3E%3Ctext x='400' y='136' text-anchor='middle' fill='white' font-size='15' font-weight='700' font-family='system-ui'%3ECLI 走 V2 统一工具型 · Web 走 V1 队长-队员型%3C/text%3E%3C/svg%3E">
+  <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 800 180'%3E%3Cdefs%3E%3ClinearGradient id='bg' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0%25' stop-color='%23F8FAFC'/%3E%3Cstop offset='100%25' stop-color='%23EDE9FE'/%3E%3C/linearGradient%3E%3ClinearGradient id='accent' x1='0' y1='0' x2='1' y2='0'%3E%3Cstop offset='0%25' stop-color='%238B5CF6'/%3E%3Cstop offset='100%25' stop-color='%2310B981'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='800' height='180' rx='20' fill='url(%23bg)' stroke='%23E2E8F0' stroke-width='1'/%3E%3Ctext x='400' y='60' text-anchor='middle' fill='%231E293B' font-size='28' font-weight='800' font-family='system-ui'%3E小雷版小龙虾 AI Agent%3C/text%3E%3Ctext x='400' y='90' text-anchor='middle' fill='%2364748B' font-size='14' font-family='system-ui'%3Ev3.4 — CLI (V2) · Web (V1) · 双架构智能引擎%3C/text%3E%3Crect x='180' y='110' width='440' height='40' rx='20' fill='url(%23accent)' opacity='0.9'/%3E%3Ctext x='400' y='136' text-anchor='middle' fill='white' font-size='15' font-weight='700' font-family='system-ui'%3ECLI 走 V2 统一工具型 · Web 走 V1 队长-队员型%3C/text%3E%3C/svg%3E">
+</picture>
 
 <br>
 
-> 一套代码，两套架构 · 从单次对话到复杂编排，总有一种模式适合你
+<img alt="Python" src="https://img.shields.io/badge/Python_3.13-3776AB?style=flat-square&logo=python&logoColor=white">
+<img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white">
+<img alt="DeepSeek|GLM" src="https://img.shields.io/badge/DeepSeek%20%7C%20GLM-FF6B6B?style=flat-square">
+<img alt="35+ Tools" src="https://img.shields.io/badge/35%2B%20Tools-845EF7?style=flat-square">
+<img alt="ChromaDB" src="https://img.shields.io/badge/ChromaDB-FF6B35?style=flat-square">
+<img alt="77 Tests" src="https://img.shields.io/badge/77%20Tests%20Passing-10B981?style=flat-square">
 
-<br>
-
-![V1](https://img.shields.io/badge/▸_V1_队长_队员-分工协作-8B5CF6?style=flat-square&labelColor=1E1B4B)
-![V2-Single](https://img.shields.io/badge/▸_V2_单Agent-工具直通-10B981?style=flat-square&labelColor=064E3B)
-![V2-Multi](https://img.shields.io/badge/▸_V2_多Agent_JS_Workflow-工作流编排-F59E0B?style=flat-square&labelColor=451A03)
-![Python](https://img.shields.io/badge/Python_3.13-3776AB?style=flat-square&logo=python&logoColor=white)
-![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white)
-![DeepSeek](https://img.shields.io/badge/DeepSeek_|_GLM-FF6B6B?style=flat-square)
-![MCP](https://img.shields.io/badge/35＋_Tools-845EF7?style=flat-square)
-![ChromaDB](https://img.shields.io/badge/ChromaDB-FF6B35?style=flat-square)
+</div>
 
 ---
 
-<!-- Architecture SVG -->
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 80" width="100%" style="max-width:900px;">
-  <defs>
-    <linearGradient id="g1" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#8B5CF6"/>
-      <stop offset="100%" stop-color="#6366F1"/>
-    </linearGradient>
-    <linearGradient id="g2" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#10B981"/>
-      <stop offset="100%" stop-color="#059669"/>
-    </linearGradient>
-    <linearGradient id="g3" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#F59E0B"/>
-      <stop offset="100%" stop-color="#D97706"/>
-    </linearGradient>
-  </defs>
-  <rect x="0" y="0" width="280" height="60" rx="10" fill="url(#g1)" opacity="0.95"/>
-  <text x="140" y="36" text-anchor="middle" fill="white" font-size="16" font-weight="700" font-family="system-ui">V1 队长-队员模式</text>
-  <line x1="290" y1="30" x2="340" y2="30" stroke="#CBD5E1" stroke-width="2" stroke-dasharray="6,4"/>
-  <rect x="350" y="0" width="260" height="60" rx="10" fill="url(#g2)" opacity="0.95"/>
-  <text x="480" y="36" text-anchor="middle" fill="white" font-size="16" font-weight="700" font-family="system-ui">V2 单Agent</text>
-  <line x1="620" y1="30" x2="670" y2="30" stroke="#CBD5E1" stroke-width="2" stroke-dasharray="6,4"/>
-  <rect x="680" y="0" width="210" height="60" rx="10" fill="url(#g3)" opacity="0.95"/>
-  <text x="785" y="36" text-anchor="middle" fill="white" font-size="16" font-weight="700" font-family="system-ui">V2 多Agent</text>
-</svg>
-
-</div>
-
-<br>
-
----
-
-## 目录
-
-<span style="color:#94A3B8;font-size:14px;">
-[一、系统总览](#一系统总览) · [二、V1 架构](#二v1-架构队长-队员模式) · [三、V2 架构](#三v2-架构统一工具型) · [四、架构对比](#四架构对比) · [五、功能矩阵](#五功能矩阵) · [六、快速开始](#六快速开始) · [七、项目结构](#七项目结构)
-</span>
-
----
-
-## 一、系统总览
-
-<div style="display:flex;flex-wrap:wrap;gap:12px;margin:16px 0;">
-
-<div style="flex:1;min-width:260px;padding:16px 20px;background:linear-gradient(135deg,#1E1B4B,#312E81);border-radius:12px;color:white;">
-<h3 style="margin:0 0 6px">🧠 双引擎</h3>
-<p style="margin:0;opacity:0.8;font-size:14px">DeepSeek + GLM，4 种路由策略 · round_robin · least_load · priority · fallback_chain</p>
-</div>
-
-<div style="flex:1;min-width:260px;padding:16px 20px;background:linear-gradient(135deg,#064E3B,#047857);border-radius:12px;color:white;">
-<h3 style="margin:0 0 6px">🛠️ 35+ 工具</h3>
-<p style="margin:0;opacity:0.8;font-size:14px">10 内置 + 25+ MCP · 自动发现即插即用 · 沙箱隔离</p>
-</div>
-
-<div style="flex:1;min-width:260px;padding:16px 20px;background:linear-gradient(135deg,#1E3A5F,#1E40AF);border-radius:12px;color:white;">
-<h3 style="margin:0 0 6px">🗃️ 三层记忆</h3>
-<p style="margin:0;opacity:0.8;font-size:14px">短期记忆 (STM) · 向量记忆 (ChromaDB) · 自我进化引擎</p>
-</div>
-
-<div style="flex:1;min-width:260px;padding:16px 20px;background:linear-gradient(135deg,#4C1D95,#6D28D9);border-radius:12px;color:white;">
-<h3 style="margin:0 0 6px">🔍 RAG 增强</h3>
-<p style="margin:0;opacity:0.8;font-size:14px">多引擎搜索 · 百度/知乎/微博/抖音 · 实时检索注入</p>
-</div>
-
-<div style="flex:1;min-width:260px;padding:16px 20px;background:linear-gradient(135deg,#7C2D12,#C2410C);border-radius:12px;color:white;">
-<h3 style="margin:0 0 6px">🔌 插件系统</h3>
-<p style="margin:0;opacity:0.8;font-size:14px">第三方热加载 · Remotion 视频渲染 · 自定义技能</p>
-</div>
-
-</div>
-
-</div>
-
-<br>
-
----
-
-## 二、V1 架构：队长-队员模式
+## 选择入口
 
 <div align="center">
 
-<!-- V1 Architecture SVG -->
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 420" width="100%" style="max-width:760px;">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 260" width="100%" style="max-width:800px;">
   <defs>
-    <linearGradient id="v1_leader" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#7C3AED"/>
-      <stop offset="100%" stop-color="#5B21B6"/>
-    </linearGradient>
-    <linearGradient id="v1_worker" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#6366F1"/>
-      <stop offset="100%" stop-color="#4338CA"/>
-    </linearGradient>
-    <linearGradient id="v1_tools" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#14B8A6"/>
-      <stop offset="100%" stop-color="#0D9488"/>
-    </linearGradient>
+    <linearGradient id="c_web" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#7C3AED"/><stop offset="100%" stop-color="#5B21B6"/></linearGradient>
+    <linearGradient id="c_cli" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#059669"/><stop offset="100%" stop-color="#047857"/></linearGradient>
   </defs>
 
-  <!-- Background -->
-  <rect x="0" y="0" width="760" height="420" rx="16" fill="#F8FAFC" stroke="#E2E8F0" stroke-width="1"/>
-  <rect x="0" y="0" width="760" height="420" rx="16" fill="url(#v1_bg)" opacity="0.02"/>
+  <rect x="10" y="0" width="380" height="260" rx="14" fill="url(#c_web)"/>
+  <rect x="125" y="16" width="150" height="28" rx="14" fill="rgba(255,255,255,0.15)"/>
+  <text x="200" y="35" text-anchor="middle" fill="white" font-size="12" font-weight="700" font-family="system-ui">V1 队长-队员型</text>
+  <text x="200" y="70" text-anchor="middle" fill="white" font-size="22" font-weight="800" font-family="system-ui">Web UI</text>
+  <text x="200" y="94" text-anchor="middle" fill="#C4B5FD" font-size="13" font-family="monospace">python main.py</text>
+  <text x="200" y="118" text-anchor="middle" fill="#A78BFA" font-size="12" font-family="system-ui">浏览器访问 :8001</text>
+  <line x1="30" y1="138" x2="370" y2="138" stroke="#A78BFA" stroke-width="0.5"/>
+  <text x="200" y="160" text-anchor="middle" fill="#DDD6FE" font-size="12" font-family="system-ui">LeaderAgent 决策分解</text>
+  <text x="200" y="180" text-anchor="middle" fill="#DDD6FE" font-size="12" font-family="system-ui">WorkerAgent 池并行执行</text>
+  <text x="200" y="200" text-anchor="middle" fill="#DDD6FE" font-size="12" font-family="system-ui">多层记忆 + RAG 增强</text>
+  <text x="200" y="225" text-anchor="middle" fill="#A78BFA" font-size="11" font-family="system-ui">适合：多步骤复杂任务，可视化界面</text>
 
-  <!-- Title -->
-  <text x="380" y="36" text-anchor="middle" fill="#1E293B" font-size="18" font-weight="700" font-family="system-ui">V1 队长-队员模式 · 执行流程</text>
+  <rect x="410" y="0" width="380" height="260" rx="14" fill="url(#c_cli)"/>
+  <rect x="525" y="16" width="150" height="28" rx="14" fill="rgba(255,255,255,0.15)"/>
+  <text x="600" y="35" text-anchor="middle" fill="white" font-size="12" font-weight="700" font-family="system-ui">V2 统一工具型</text>
+  <text x="600" y="70" text-anchor="middle" fill="white" font-size="22" font-weight="800" font-family="system-ui">CLI Terminal</text>
+  <text x="600" y="94" text-anchor="middle" fill="#A7F3D0" font-size="13" font-family="monospace">python cli.py</text>
+  <text x="600" y="118" text-anchor="middle" fill="#6EE7B7" font-size="12" font-family="system-ui">TUI REPL 交互</text>
+  <line x1="430" y1="138" x2="770" y2="138" stroke="#6EE7B7" stroke-width="0.5"/>
 
-  <!-- Leader box -->
-  <rect x="290" y="56" width="180" height="70" rx="12" fill="url(#v1_leader)"/>
-  <text x="380" y="86" text-anchor="middle" fill="white" font-size="16" font-weight="700" font-family="system-ui">LeaderAgent</text>
-  <text x="380" y="108" text-anchor="middle" fill="#C4B5FD" font-size="13" font-family="system-ui">队长 · 任务分解 · 动态规划</text>
+  <rect x="430" y="150" width="165" height="100" rx="10" fill="rgba(255,255,255,0.08)"/>
+  <text x="512" y="174" text-anchor="middle" fill="white" font-size="14" font-weight="700" font-family="system-ui">单 Agent</text>
+  <text x="512" y="196" text-anchor="middle" fill="#D1FAE5" font-size="11" font-family="system-ui">ReActCore 4 层中间件</text>
+  <text x="512" y="214" text-anchor="middle" fill="#D1FAE5" font-size="11" font-family="system-ui">AgentPool 8 预热</text>
+  <text x="512" y="232" text-anchor="middle" fill="#D1FAE5" font-size="11" font-family="system-ui">全量工具箱直通</text>
 
-  <!-- ReAct label -->
-  <text x="380" y="150" text-anchor="middle" fill="#64748B" font-size="12" font-family="system-ui">ReAct 循环: Thought → Action → Observation → 继续/完成</text>
-
-  <!-- Arrow down -->
-  <polygon points="380,155 374,155 380,165 386,155" fill="#94A3B8"/>
-  <line x1="380" y1="126" x2="380" y2="155" stroke="#94A3B8" stroke-width="1.5"/>
-
-  <!-- Action types row -->
-  <rect x="20" y="170" width="135" height="44" rx="8" fill="#EDE9FE" stroke="#C4B5FD" stroke-width="1"/>
-  <text x="87" y="196" text-anchor="middle" fill="#7C3AED" font-size="12" font-weight="600" font-family="monospace">delegate ▸</text>
-
-  <rect x="165" y="170" width="145" height="44" rx="8" fill="#EDE9FE" stroke="#C4B5FD" stroke-width="1"/>
-  <text x="237" y="196" text-anchor="middle" fill="#7C3AED" font-size="11" font-weight="600" font-family="monospace">batch_delegate ▸</text>
-
-  <rect x="320" y="170" width="100" height="44" rx="8" fill="#EDE9FE" stroke="#C4B5FD" stroke-width="1"/>
-  <text x="370" y="196" text-anchor="middle" fill="#7C3AED" font-size="12" font-weight="600" font-family="monospace">tool ▸</text>
-
-  <rect x="430" y="170" width="120" height="44" rx="8" fill="#EDE9FE" stroke="#C4B5FD" stroke-width="1"/>
-  <text x="490" y="196" text-anchor="middle" fill="#7C3AED" font-size="10" font-weight="600" font-family="monospace">process_results ▸</text>
-
-  <rect x="560" y="170" width="180" height="44" rx="8" fill="#FEF3C7" stroke="#F59E0B" stroke-width="1"/>
-  <text x="650" y="196" text-anchor="middle" fill="#92400E" font-size="11" font-weight="600" font-family="monospace">KEPA 反思 (≤3次重试)</text>
-
-  <!-- Arrow down to workers -->
-  <polygon points="380,218 374,218 380,228 386,218" fill="#94A3B8"/>
-  <line x1="380" y1="214" x2="380" y2="218" stroke="#94A3B8" stroke-width="1.5"/>
-
-  <!-- Workers -->
-  <text x="380" y="248" text-anchor="middle" fill="#64748B" font-size="11" font-family="system-ui">WorkerAgent 池 (3~5个并行执行)</text>
-
-  <rect x="40" y="258" width="140" height="58" rx="10" fill="url(#v1_worker)"/>
-  <text x="110" y="286" text-anchor="middle" fill="white" font-size="14" font-weight="600" font-family="system-ui">Worker 1</text>
-  <text x="110" y="303" text-anchor="middle" fill="#A5B4FC" font-size="11" font-family="system-ui">并行任务</text>
-
-  <rect x="230" y="258" width="140" height="58" rx="10" fill="url(#v1_worker)"/>
-  <text x="300" y="286" text-anchor="middle" fill="white" font-size="14" font-weight="600" font-family="system-ui">Worker 2</text>
-  <text x="300" y="303" text-anchor="middle" fill="#A5B4FC" font-size="11" font-family="system-ui">并行任务</text>
-
-  <rect x="420" y="258" width="140" height="58" rx="10" fill="url(#v1_worker)"/>
-  <text x="490" y="286" text-anchor="middle" fill="white" font-size="14" font-weight="600" font-family="system-ui">Worker 3</text>
-  <text x="490" y="303" text-anchor="middle" fill="#A5B4FC" font-size="11" font-family="system-ui">并行任务</text>
-
-  <rect x="600" y="258" width="130" height="58" rx="10" fill="url(#v1_worker)" opacity="0.7"/>
-  <text x="665" y="286" text-anchor="middle" fill="white" font-size="14" font-weight="600" font-family="system-ui">...</text>
-
-  <!-- Tools -->
-  <polygon points="380,321 374,321 380,331 386,321" fill="#94A3B8"/>
-  <line x1="380" y1="316" x2="380" y2="321" stroke="#94A3B8" stroke-width="1.5"/>
-
-  <rect x="20" y="338" width="230" height="64" rx="10" fill="url(#v1_tools)"/>
-  <text x="135" y="367" text-anchor="middle" fill="white" font-size="14" font-weight="600" font-family="system-ui">10 内置工具</text>
-  <text x="135" y="387" text-anchor="middle" fill="#A7F3D0" font-size="11" font-family="system-ui">search · fetch · read · write · code · shell · git</text>
-
-  <rect x="265" y="338" width="230" height="64" rx="10" fill="url(#v1_tools)"/>
-  <text x="380" y="367" text-anchor="middle" fill="white" font-size="14" font-weight="600" font-family="system-ui">25+ MCP 工具</text>
-  <text x="380" y="387" text-anchor="middle" fill="#A7F3D0" font-size="11" font-family="system-ui">Playwright · Weather · Translate · CodeGraph · GUI</text>
-
-  <!-- Memory -->
-  <rect x="510" y="338" width="230" height="64" rx="10" fill="#312E81"/>
-  <text x="625" y="367" text-anchor="middle" fill="#C4B5FD" font-size="14" font-weight="600" font-family="system-ui">三层记忆注入</text>
-  <text x="625" y="387" text-anchor="middle" fill="#A78BFA" font-size="10" font-family="system-ui">ContextMemory · STM · RAG · 经验向量库</text>
-
-  <!-- Feedback loop arrow -->
-  <path d="M 520 60 Q 700 60 700 130 Q 700 200 520 200" fill="none" stroke="#A78BFA" stroke-width="1.5" stroke-dasharray="6,3"/>
-  <text x="720" y="130" fill="#7C3AED" font-size="10" font-weight="600" font-family="system-ui" transform="rotate(90,720,130)">反馈循环</text>
+  <rect x="605" y="150" width="165" height="100" rx="10" fill="rgba(255,255,255,0.08)"/>
+  <text x="687" y="174" text-anchor="middle" fill="white" font-size="13" font-weight="700" font-family="system-ui">多 Agent</text>
+  <text x="687" y="196" text-anchor="middle" fill="#D1FAE5" font-size="11" font-family="system-ui">JS 工作流编排</text>
+  <text x="687" y="214" text-anchor="middle" fill="#D1FAE5" font-size="11" font-family="system-ui">Schema 验证 · Budget</text>
+  <text x="687" y="232" text-anchor="middle" fill="#D1FAE5" font-size="11" font-family="system-ui">parallel / pipeline</text>
 </svg>
 
-<br>
-
 </div>
 
-### 工作流
-
-<div>
-
-**第 1 轮** &nbsp;&nbsp; `Thought` 队长分析任务 → `Action` **batch_delegate** → `["搜索热搜", "分析数据"]`
-<br>
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ← 两个 Worker 并行搜索 + 数据读取 → ✅
-
-**第 2 轮** &nbsp;&nbsp; `Thought` 需要生成报告 → `Action` **delegate** → `"整理数据存到桌面"`
-<br>
-&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ← Worker 调用 `write_file` → ✅
-
-**第 3 轮** &nbsp;&nbsp; `Thought` 已全部完成 → `Action` **完成** ✅
-
-</div>
-
-<br>
-
-### V1 核心组件
-
-| 组件 | 文件 | 核心职责 |
-|------|------|---------|
-| **LeaderAgent** | `core/agent_system.py` | ReAct 决策循环 · 拆解任务 · 分配 Worker · 分析结果 |
-| **LLMAgent** (Worker) | `core/agent_system.py` | 执行子任务 · 工具调用 · KEPA 反思 |
-| **V1LeaderPool** | `core/agent_system.py` | Agent 池化管理 · Worker 复用 (上限 10) |
-| **ContextMemory** | `core/agent_system.py` | 每轮对话记忆 (最近 20 条) |
-| **KEPA 反思** | `core/agent_system.py` | Think → Act → Reflect 闭环 |
-
-### V1 关键特性
-
-- 🔀 **角色分离** — 队长只决策不执行，队员只执行不决策
-- ⚡ **并行加速** — `batch_delegate` 多 Worker 并行执行
-- 🔄 **自我修复** — KEPA 自动重试失败任务 (≤3 次)
-- 🧠 **多元记忆** — RAG 检索 + 短期记忆 + 经验向量库
-- 🌱 **自我进化** — 执行后分析经验，提炼洞察存入知识库
-
-<br>
+> **Web 开箱即用** — 浏览器访问，适合可视化、轻量使用<br>
+> **CLI 全功能** — 终端操作，适合开发、数据分析、GUI 自动化、多 Agent 编排
 
 ---
 
-## 三、V2 架构：统一工具型
+## 全链路执行
 
 <div align="center">
 
-<!-- V2 Architecture SVG -->
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 520" width="100%" style="max-width:760px;">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600" width="100%" style="max-width:800px;">
   <defs>
-    <linearGradient id="v2_base" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#1E293B"/>
-      <stop offset="100%" stop-color="#0F172A"/>
-    </linearGradient>
-    <linearGradient id="v2_single" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#10B981"/>
-      <stop offset="100%" stop-color="#047857"/>
-    </linearGradient>
-    <linearGradient id="v2_multi" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#F59E0B"/>
-      <stop offset="100%" stop-color="#B45309"/>
-    </linearGradient>
+    <linearGradient id="g_user" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#475569"/><stop offset="100%" stop-color="#334155"/></linearGradient>
+    <linearGradient id="g_core" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#1E293B"/><stop offset="100%" stop-color="#0F172A"/></linearGradient>
+    <linearGradient id="g_web"  x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#8B5CF6"/><stop offset="100%" stop-color="#6D28D9"/></linearGradient>
+    <linearGradient id="g_cli"  x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#10B981"/><stop offset="100%" stop-color="#059669"/></linearGradient>
+    <linearGradient id="g_v1"   x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#7C3AED"/><stop offset="100%" stop-color="#5B21B6"/></linearGradient>
+    <linearGradient id="g_v2"   x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#059669"/><stop offset="100%" stop-color="#047857"/></linearGradient>
   </defs>
 
-  <rect x="0" y="0" width="760" height="520" rx="16" fill="#F8FAFC" stroke="#E2E8F0" stroke-width="1"/>
+  <rect x="0" y="0" width="800" height="600" rx="16" fill="#F8FAFC" stroke="#E2E8F0" stroke-width="1"/>
+  <text x="400" y="32" text-anchor="middle" fill="#1E293B" font-size="16" font-weight="700" font-family="system-ui">全链路执行流程</text>
 
-  <!-- Title -->
-  <text x="380" y="36" text-anchor="middle" fill="#1E293B" font-size="18" font-weight="700" font-family="system-ui">V2 统一工具型架构 · 两种模式</text>
+  <!-- User Input -->
+  <rect x="320" y="48" width="160" height="36" rx="18" fill="url(#g_user)"/>
+  <text x="400" y="71" text-anchor="middle" fill="white" font-size="14" font-weight="700" font-family="system-ui">用户输入</text>
 
-  <!-- Shared Base -->
-  <rect x="30" y="55" width="700" height="160" rx="14" fill="url(#v2_base)"/>
-  <text x="380" y="80" text-anchor="middle" fill="#94A3B8" font-size="13" font-weight="600" font-family="system-ui">共享工具底盘</text>
+  <!-- Shared Core on TOP -->
+  <line x1="400" y1="84" x2="400" y2="104" stroke="#94A3B8" stroke-width="1.5"/>
+  <polygon points="400,108 394,108 400,116 406,108" fill="#94A3B8"/>
 
-  <!-- ToolRegistry -->
-  <rect x="50" y="95" width="200" height="50" rx="8" fill="#334155"/>
-  <text x="150" y="118" text-anchor="middle" fill="#E2E8F0" font-size="13" font-weight="600" font-family="system-ui">ToolRegistry</text>
-  <text x="150" y="135" text-anchor="middle" fill="#94A3B8" font-size="11" font-family="system-ui">10 内置 + 25+ MCP</text>
+  <rect x="100" y="114" width="600" height="96" rx="12" fill="url(#g_core)"/>
+  <text x="400" y="138" text-anchor="middle" fill="#94A3B8" font-size="12" font-weight="600" font-family="system-ui">共享核心引擎</text>
 
-  <!-- LLM Router -->
-  <rect x="280" y="95" width="200" height="50" rx="8" fill="#334155"/>
-  <text x="380" y="118" text-anchor="middle" fill="#E2E8F0" font-size="13" font-weight="600" font-family="system-ui">LLM Router</text>
-  <text x="380" y="135" text-anchor="middle" fill="#94A3B8" font-size="11" font-family="system-ui">DeepSeek / GLM · 4 种策略</text>
+  <rect x="120" y="150" width="170" height="46" rx="8" fill="#334155"/>
+  <text x="205" y="172" text-anchor="middle" fill="#E2E8F0" font-size="13" font-weight="600" font-family="system-ui">LLM Router</text>
+  <text x="205" y="188" text-anchor="middle" fill="#94A3B8" font-size="11" font-family="system-ui">DeepSeek · GLM · 4 策略</text>
 
-  <!-- MiddlewareChain -->
-  <rect x="510" y="95" width="200" height="50" rx="8" fill="#334155"/>
-  <text x="610" y="118" text-anchor="middle" fill="#E2E8F0" font-size="13" font-weight="600" font-family="system-ui">MiddlewareChain</text>
-  <text x="610" y="135" text-anchor="middle" fill="#94A3B8" font-size="11" font-family="system-ui">4 层中间件 · Depth/ReAct/Ref/KEPA</text>
+  <rect x="310" y="150" width="170" height="46" rx="8" fill="#334155"/>
+  <text x="395" y="172" text-anchor="middle" fill="#E2E8F0" font-size="13" font-weight="600" font-family="system-ui">ToolRegistry</text>
+  <text x="395" y="188" text-anchor="middle" fill="#94A3B8" font-size="11" font-family="system-ui">10 内置 + 25+ MCP</text>
 
-  <!-- Shared resources row -->
-  <rect x="50" y="155" width="660" height="46" rx="8" fill="#475569"/>
-  <text x="380" y="176" text-anchor="middle" fill="#CBD5E1" font-size="12" font-weight="600" font-family="system-ui">共享受限资源</text>
-  <text x="380" y="193" text-anchor="middle" fill="#94A3B8" font-size="11" font-family="system-ui">3 并发信号量 · 沙箱管理器 · 文件缓存 · 输出截断</text>
+  <rect x="500" y="150" width="170" height="46" rx="8" fill="#334155"/>
+  <text x="585" y="172" text-anchor="middle" fill="#E2E8F0" font-size="13" font-weight="600" font-family="system-ui">Memory</text>
+  <text x="585" y="188" text-anchor="middle" fill="#94A3B8" font-size="11" font-family="system-ui">STM · Vector · RAG</text>
 
-  <!-- Arrow to modes -->
-  <line x1="380" y1="215" x2="380" y2="238" stroke="#94A3B8" stroke-width="1.5"/>
-  <polygon points="380,242 374,242 380,248 386,242" fill="#94A3B8"/>
+  <!-- Fork -->
+  <line x1="400" y1="210" x2="400" y2="228" stroke="#94A3B8" stroke-width="1.5"/>
+  <line x1="400" y1="228" x2="210" y2="256" stroke="#94A3B8" stroke-width="1.5"/>
+  <line x1="400" y1="228" x2="590" y2="256" stroke="#94A3B8" stroke-width="1.5"/>
+  <polygon points="210,260 204,252 216,252" fill="#8B5CF6"/>
+  <polygon points="590,260 584,252 596,252" fill="#10B981"/>
+  <text x="210" y="250" text-anchor="middle" fill="#7C3AED" font-size="11" font-weight="700" font-family="system-ui">Web</text>
+  <text x="590" y="250" text-anchor="middle" fill="#059669" font-size="11" font-weight="700" font-family="system-ui">CLI</text>
 
-  <!-- Mode ① - Single Agent -->
-  <rect x="30" y="255" width="360" height="245" rx="14" fill="#ECFDF5" stroke="#10B981" stroke-width="1.5"/>
-  <text x="210" y="282" text-anchor="middle" fill="#065F46" font-size="15" font-weight="700" font-family="system-ui">① V2 单Agent</text>
+  <!-- Web V1 Path -->
+  <rect x="80" y="264" width="260" height="38" rx="8" fill="url(#g_web)"/>
+  <text x="210" y="286" text-anchor="middle" fill="white" font-size="13" font-weight="700" font-family="system-ui">FastAPI · HTML/JS · WebSocket</text>
+  <line x1="210" y1="302" x2="210" y2="316" stroke="#8B5CF6" stroke-width="1.5"/>
+  <polygon points="210,320 204,320 210,328 216,320" fill="#8B5CF6"/>
+  <rect x="80" y="324" width="260" height="38" rx="8" fill="#EDE9FE"/>
+  <text x="210" y="346" text-anchor="middle" fill="#6D28D9" font-size="12" font-weight="600" font-family="system-ui">SkillDispatcher · 技能匹配</text>
+  <line x1="210" y1="362" x2="210" y2="376" stroke="#8B5CF6" stroke-width="1.5"/>
+  <polygon points="210,380 204,380 210,388 216,380" fill="#8B5CF6"/>
+  <rect x="60" y="384" width="300" height="52" rx="10" fill="url(#g_v1)"/>
+  <text x="210" y="408" text-anchor="middle" fill="white" font-size="14" font-weight="700" font-family="system-ui">V1 LeaderAgent</text>
+  <text x="210" y="426" text-anchor="middle" fill="#C4B5FD" font-size="11" font-family="system-ui">ReAct 循环 · batch_delegate · KEPA 反思 ≤3</text>
+  <line x1="210" y1="436" x2="210" y2="454" stroke="#8B5CF6" stroke-width="1.5"/>
+  <polygon points="210,458 204,458 210,466 216,458" fill="#8B5CF6"/>
+  <rect x="60" y="462" width="300" height="36" rx="8" fill="#DDD6FE"/>
+  <text x="210" y="480" text-anchor="middle" fill="#5B21B6" font-size="12" font-weight="600" font-family="system-ui">WorkerAgent 池 (3-5 并行)</text>
+  <text x="210" y="494" text-anchor="middle" fill="#6D28D9" font-size="10" font-family="system-ui">LLMAgent · 工具调用 · 结果组装</text>
 
-  <!-- AgentPool -->
-  <rect x="55" y="296" width="140" height="44" rx="8" fill="#A7F3D0"/>
-  <text x="125" y="320" text-anchor="middle" fill="#065F46" font-size="13" font-weight="600" font-family="system-ui">AgentPool</text>
-  <text x="125" y="335" text-anchor="middle" fill="#047857" font-size="11" font-family="system-ui">8 个预热 Worker</text>
+  <!-- CLI V2 Path -->
+  <rect x="460" y="264" width="260" height="38" rx="8" fill="url(#g_cli)"/>
+  <text x="590" y="286" text-anchor="middle" fill="white" font-size="13" font-weight="700" font-family="system-ui">EnhancedCLI · REPL · 命令路由</text>
+  <line x1="590" y1="302" x2="590" y2="316" stroke="#10B981" stroke-width="1.5"/>
+  <polygon points="590,320 584,320 590,328 596,320" fill="#10B981"/>
+  <rect x="460" y="324" width="260" height="38" rx="8" fill="#D1FAE5"/>
+  <text x="590" y="346" text-anchor="middle" fill="#047857" font-size="12" font-weight="600" font-family="system-ui">CommandParser · 4 组处理器</text>
+  <line x1="590" y1="362" x2="590" y2="376" stroke="#10B981" stroke-width="1.5"/>
+  <polygon points="590,380 584,380 590,388 596,380" fill="#10B981"/>
+  <rect x="460" y="384" width="260" height="52" rx="10" fill="url(#g_v2)"/>
+  <text x="590" y="408" text-anchor="middle" fill="white" font-size="14" font-weight="700" font-family="system-ui">V2 WorkAgent 池 (8 预热)</text>
+  <text x="590" y="426" text-anchor="middle" fill="#A7F3D0" font-size="11" font-family="system-ui">ReActCore · 4 层中间件 · acquire/release</text>
+  <line x1="590" y1="436" x2="590" y2="454" stroke="#10B981" stroke-width="1.5"/>
+  <polygon points="590,458 584,458 590,466 596,458" fill="#10B981"/>
+  <rect x="460" y="462" width="260" height="36" rx="8" fill="#D1FAE5"/>
+  <text x="590" y="480" text-anchor="middle" fill="#047857" font-size="12" font-weight="600" font-family="system-ui">Depth → ReActCore ★ → Reflection → KEPA</text>
 
-  <line x1="195" y1="318" x2="225" y2="318" stroke="#10B981" stroke-width="1.5"/>
-  <polygon points="227,318 221,314 221,322" fill="#10B981"/>
-
-  <rect x="230" y="296" width="140" height="44" rx="8" fill="#10B981"/>
-  <text x="300" y="320" text-anchor="middle" fill="white" font-size="13" font-weight="600" font-family="system-ui">WorkAgent</text>
-  <text x="300" y="335" text-anchor="middle" fill="#A7F3D0" font-size="10" font-family="system-ui">acquire → execute → release</text>
-
-  <!-- Flow -->
-  <line x1="300" y1="340" x2="300" y2="358" stroke="#10B981" stroke-width="1.5"/>
-  <polygon points="300,362 294,362 300,368 306,362" fill="#10B981"/>
-
-  <rect x="55" y="370" width="315" height="36" rx="8" fill="#D1FAE5"/>
-  <text x="212" y="393" text-anchor="middle" fill="#047857" font-size="11" font-weight="600" font-family="monospace">run_react() → 4 层 MiddlewareChain</text>
-
-  <!-- Tags -->
-  <rect x="55" y="416" width="100" height="28" rx="14" fill="#6EE7B7"/>
-  <text x="105" y="435" text-anchor="middle" fill="#065F46" font-size="11" font-weight="600" font-family="system-ui">全量工具</text>
-  <rect x="165" y="416" width="100" height="28" rx="14" fill="#6EE7B7"/>
-  <text x="215" y="435" text-anchor="middle" fill="#065F46" font-size="11" font-weight="600" font-family="system-ui">Skill 注入</text>
-  <rect x="275" y="416" width="95" height="28" rx="14" fill="#6EE7B7"/>
-  <text x="322" y="435" text-anchor="middle" fill="#065F46" font-size="11" font-weight="600" font-family="system-ui">沙箱隔离</text>
-
-  <text x="210" y="475" text-anchor="middle" fill="#047857" font-size="12" font-family="system-ui">「从 AgentPool 借出 → 执行 → 归还，干净利落」</text>
-
-  <!-- Mode ② - Multi Agent -->
-  <rect x="410" y="255" width="320" height="245" rx="14" fill="#FFFBEB" stroke="#F59E0B" stroke-width="1.5"/>
-  <text x="570" y="282" text-anchor="middle" fill="#92400E" font-size="15" font-weight="700" font-family="system-ui">② V2 多Agent (JS Workflow)</text>
-
-  <rect x="435" y="296" width="270" height="44" rx="8" fill="#FDE68A"/>
-  <text x="570" y="318" text-anchor="middle" fill="#92400E" font-size="13" font-weight="600" font-family="system-ui">ClaudeCodeWorkflow</text>
-  <text x="570" y="333" text-anchor="middle" fill="#B45309" font-size="10" font-family="system-ui">Node.js 运行时 · JSON-RPC IPC</text>
-
-  <line x1="570" y1="340" x2="570" y2="358" stroke="#F59E0B" stroke-width="1.5"/>
-  <polygon points="570,362 564,362 570,368 576,362" fill="#F59E0B"/>
-
-  <rect x="435" y="370" width="270" height="36" rx="8" fill="#FEF3C7"/>
-  <text x="570" y="393" text-anchor="middle" fill="#B45309" font-size="11" font-weight="600" font-family="monospace">agent() · parallel() · pipeline() · phase()</text>
-
-  <!-- Tags -->
-  <rect x="435" y="416" width="85" height="28" rx="14" fill="#FCD34D"/>
-  <text x="477" y="435" text-anchor="middle" fill="#92400E" font-size="10" font-weight="600" font-family="system-ui">Schema 验证</text>
-  <rect x="528" y="416" width="80" height="28" rx="14" fill="#FCD34D"/>
-  <text x="568" y="435" text-anchor="middle" fill="#92400E" font-size="10" font-weight="600" font-family="system-ui">Resume 缓存</text>
-  <rect x="616" y="416" width="70" height="28" rx="14" fill="#FCD34D"/>
-  <text x="651" y="435" text-anchor="middle" fill="#92400E" font-size="10" font-weight="600" font-family="system-ui">Budget</text>
-
-  <text x="570" y="475" text-anchor="middle" fill="#B45309" font-size="12" font-family="system-ui">「声明式 API 编排多 Agent 协作」</text>
+  <!-- Merge -->
+  <line x1="210" y1="498" x2="210" y2="530" stroke="#94A3B8" stroke-width="1.5"/>
+  <line x1="590" y1="498" x2="590" y2="530" stroke="#94A3B8" stroke-width="1.5"/>
+  <line x1="210" y1="530" x2="590" y2="530" stroke="#94A3B8" stroke-width="1.5"/>
+  <line x1="400" y1="530" x2="400" y2="548" stroke="#94A3B8" stroke-width="1.5"/>
+  <polygon points="400,552 394,552 400,560 406,552" fill="#94A3B8"/>
+  <rect x="300" y="555" width="200" height="30" rx="15" fill="#475569"/>
+  <text x="400" y="575" text-anchor="middle" fill="white" font-size="12" font-weight="700" font-family="system-ui">输出结果</text>
 </svg>
-
-<br>
 
 </div>
 
-### 模式①：V2 单Agent
+---
 
-单一 WorkAgent 独立完成一个完整任务。从 `AgentPool` 借出 → 执行 → 归还。
+## V1 架构：队长-队员分工型（Web 入口）
 
-#### 执行链路
+### 核心：多轮混合编排
+
+Leader 在 ReAct 循环中可跨轮次混合调度模式——**先并行搜、再串行分析、再并行写**，根据上一步结果动态决策下一步。
 
 ```
-    AgentPool.acquire()
-         │
-    ┌────▼─────────────────────────────────────────────────────┐
-    │                ReActCore.run_react()                      │
-    │                                                          │
-    │  ┌──────────────────────────────────────────────────────┐│
-    │  │ [Layer 1] ReActDepth  —  深度控制 (max_rounds=10)     ││
-    │  ├──────────────────────────────────────────────────────┤│
-    │  │ [Layer 2] ReActCore ★ —  LLM → Tool → Observe → 循环 ││
-    │  ├──────────────────────────────────────────────────────┤│
-    │  │ [Layer 3] Reflection  —  质量评估 · 结果反思          ││
-    │  ├──────────────────────────────────────────────────────┤│
-    │  │ [Layer 4] KEPA        —  重试 / 失败决策              ││
-    │  └──────────────────────────────────────────────────────┘│
-    │                    │                                     │
-    │              ┌─────▼──────┐                              │
-    │              │ LLM Router │                              │
-    │              └─────┬──────┘                              │
-    │                    │                                     │
-    │    ┌───────────────┼───────────────┐                     │
-    │    ▼               ▼               ▼                     │
-    │ 内置工具 (10)    MCP 工具 (25+)  第三方插件               │
-    └──────────────────────────────────────────────────────────┘
-         │
-         AgentPool.release()
+第 1 轮  batch_delegate ──┬── Worker A: 搜索百度热搜       } 并行
+                          └── Worker B: 搜索微博热搜       }
+
+第 2 轮  delegate ────────→ Worker C: 对比分析两平台数据    串行
+
+第 3 轮  batch_delegate ──┬── Worker D: 生成报告到桌面     } 并行
+                          └── Worker E: 生成摘要到剪贴板   }
 ```
 
-### 模式②：V2 多Agent (JS Workflow)
+```
+          ┌─────────────────────────────────────────────────────────┐
+          │                   LeaderAgent                           │
+          │              (ReAct 决策循环 · 多轮混合编排)             │
+          │                                                         │
+          │   ┌──────────────────────────────────────────────────┐  │
+          │   │ 第 1 轮: 分析任务 → 拆解子任务                   │  │
+          │   │          动作: batch_delegate → 分派 3 个 Worker  │  │
+          │   │          等待 → 收集结果 → KEPA 反思             │  │
+          │   ├──────────────────────────────────────────────────┤  │
+          │   │ 第 2 轮: 根据上一步结果，决定下一步               │  │
+          │   │          动作: delegate → 委派 1 个 Worker 分析   │  │
+          │   │          等待 → 收集结果 → KEPA 反思             │  │
+          │   ├──────────────────────────────────────────────────┤  │
+          │   │ 第 3 轮: 动作: batch_delegate → 再次并行         │  │
+          │   │          或 tool → 直接调工具收尾                │  │
+          │   │          完成 ✅                                  │  │
+          │   └──────────────────────────────────────────────────┘  │
+          │                                                         │
+          │   动作类型:                                              │
+          │     delegate (串行) : 单任务 → 单 Worker               │
+          │     batch_delegate (并发) : 多任务 → 多 Worker 并行     │
+          │     tool : 直接调用工具                                 │
+          │     process_results : KEPA 反思 (失败重试 ≤3 次)        │
+          └──────────────────────┬──────────────────────────────────┘
+                                 │
+                    ┌────────────┼────────────┐
+                    │            │            │
+                    ▼            ▼            ▼
+          ┌────────────┐ ┌────────────┐ ┌────────────┐
+          │ WorkerAgent│ │ WorkerAgent│ │ WorkerAgent│
+          │  执行子任务  │ │  执行子任务  │ │  执行子任务  │
+          │  调用工具    │ │  调用工具    │ │  调用工具    │
+          │  LLMAgent   │ │  LLMAgent   │ │  LLMAgent   │
+          └──────┬─────┘ └──────┬─────┘ └──────┬─────┘
+                 │              │              │
+                 ├──────────────┼──────────────┤
+                 │   返回结果到 LeaderAgent     │
+                 └──────────────┼──────────────┘
+                               │
+                    ┌──────────▼──────────┐
+                    │   KEPA 自我反思      │
+                    │  结果评估 · 是否重试  │
+                    └──────────┬──────────┘
+                              │
+                    ┌─────────▼──────────┐
+                    │      重试？         │
+                    └──┬──────────────┬──┘
+                       │              │
+                       ▼              ▼
+              ┌────────────┐    ┌──────────────────┐
+              │ WorkerAgent│    │  进入下一轮 ReAct  │
+              │ 重新执行    │    │  或 完成 ✅       │
+              └──────┬─────┘    └──────────────────┘
+                     │
+                     ▼
+              ┌──────────────────┐
+              │  返回 LeaderAgent │
+              └──────────────────┘
+```
 
-基于 **Node.js 运行时** 的 Claude Code 风格工作流引擎。多个 Agent 通过声明式 API 编排协作。
+**核心特性：**
+- 多轮混合编排 — 每轮 ReAct 可独立选择并发/串行，跨轮次自由组合
+- 角色分离 — 队长只决策不执行，队员只执行不决策
+- 动态拆解 — Leader 根据上一步结果决定下一步的拆分策略
+- KEPA 反思 — 结果自我评估，失败则重试 (≤3 次)
+- 多元记忆 — ContextMemory (20轮) + RAG + STM + 向量库 + 经验进化
 
-#### 编排示例
+---
+
+## V2 架构：统一工具型（CLI 入口）
+
+```
+┌──────────────────────────────────────────────────────┐
+│               AgentPool (8 预热)                      │
+│     acquire() → WorkAgent.execute(task) → release()   │
+└──────────────────────┬───────────────────────────────┘
+                       │
+┌──────────────────────▼───────────────────────────────┐
+│                  ReActCore.run_react()                │
+│                                                      │
+│  ┌──────────────────────────────────────────────────┐│
+│  │ [Layer 1] ReActDepth                              ││
+│  │  深度控制 · max_rounds=10 · 防无限循环            ││
+│  ├──────────────────────────────────────────────────┤│
+│  │ [Layer 2] ReActCore ★                             ││
+│  │  主循环: LLM → 思考 → 动作 → 观察 → 循环         ││
+│  ├──────────────────────────────────────────────────┤│
+│  │ [Layer 3] Reflection                              ││
+│  │  质量评估 · 结果完整性检查                        ││
+│  ├──────────────────────────────────────────────────┤│
+│  │ [Layer 4] KEPA                                    ││
+│  │  重试决策 / 失败决策                              ││
+│  └──────────────────────────────────────────────────┘│
+│                     │                                 │
+│              ┌──────▼──────┐                          │
+│              │ LLM Router  │                          │
+│              └──────┬──────┘                          │
+│                     │                                 │
+│     ┌───────────────┼───────────────┐                 │
+│     ▼               ▼               ▼                 │
+│  内置工具(10)    MCP工具(25+)     第三方插件           │
+└───────────────────────────────────────────────────────┘
+```
+
+**核心特性：**
+- 4 层中间件 — 深度控制 → ReActCore → Reflection → KEPA
+- AgentPool — 8 个预热 Agent 即用即还
+- ToolRegistry — 统一注册、Schema 验证、缓存、Hook
+- 沙箱隔离 — Python/Shell 在沙箱中执行
+
+### V2 多Agent（JS Workflow 编排）
+
+JS Workflow 在 V2 单 Agent 引擎之上叠加编排层，继承全部能力。
 
 ```javascript
-// 📄 workflow.js
-export const meta = {
-  name: "hot_search_analysis",
-  description: "搜索多平台热搜并生成对比报告",
-  phases: [{ title: "搜索" }, { title: "分析" }]
-}
-
+// workflow.js
 export default async function() {
   phase("搜索")
-
-  // 并行搜索两个平台
   const [baidu, weibo] = await parallel([
-    () => agent("搜索百度热搜 TOP 20", { label: "百度热搜" }),
-    () => agent("搜索微博热搜 TOP 20", { label: "微博热搜" })
+    agent("百度热搜 TOP 20", { label: "百度" }),
+    agent("微博热搜 TOP 20", { label: "微博" })
   ])
 
   phase("分析")
-  const report = await agent(`综合对比分析以下数据并生成报告:\n百度: ${baidu}\n微博: ${weibo}`, {
-    label: "对比分析",
+  const report = await agent(`对比分析:\n百度: ${baidu}\n微博: ${weibo}`, {
     schema: { type: "object", properties: { summary: { type: "string" } } }
   })
-
   return report
 }
 ```
 
-#### 编排 API
-
-| 函数 | 签名 | 语义 |
-|------|------|------|
-| `agent` | `agent(prompt, opts?)` | 启动一个子 Agent 执行子任务 |
-| `parallel` | `parallel([thunks])` | 并行执行 → 屏障等待 → 收集结果 |
-| `pipeline` | `pipeline(items, ...stages)` | 流水线，逐阶段传递每个 item |
-| `phase` | `phase(title)` | 标记当前阶段（进度显示分组） |
-| `log` | `log(msg)` | 输出进度消息 |
-| `budget` | `.total / .spent() / .remaining()` | Token 预算追踪硬上限 |
-
-### V2 内置工具 (10 个)
-
-| 工具 | 用途 | 标签 | 沙箱 |
-|------|------|------|:----:|
-| `web_search` | 多引擎联网搜索 (百度/知乎/微博/抖音) | 🔍 | — |
-| `fetch_url` | HTTP GET 抓取网页/API，自动解析热搜 | 🌐 | — |
-| `read_file` | 读取文件/目录 (图片/PDF) | 📖 | — |
-| `write_file` | 新建写入文件 (报告/脚本/HTML) | ✍️ | — |
-| `edit_file` | 精确替换文件某几行 | ✂️ | — |
-| `search_files` | 文件名 glob + 内容正则搜索 | 🔎 | — |
-| `execute_python` | 沙盒/本地执行 Python | 🐍 | ✅ |
-| `execute_shell` | 沙盒/本地执行 Shell 命令 | 💻 | ✅ |
-| `git` | Git 版本控制 (status/add/commit/log) | 📦 | — |
-| `write_todos` | 多步骤任务清单 | ✅ | — |
-
-### V2 MCP 工具 (25+ 个)
-
-> 自动发现 `mcp/` 目录和 `.mcp.json` 配置，运行时即插即用。支持 5s 超时并行连接。
-
-`Playwright` · `CodeGraph` · `Weather` · `Translator` · `DataAnalysis` · `GUI Automation` · `Text Processing` · `Image Generation` · `Web Scraper` · `Search Engine` · `System Toolbox` · `Game` · `Fun` · `Advanced Automation` · `Sandbox Tools` · `OpenClaw` · 及更多 MCP 标准服务器
-
-<br>
+| 函数 | 作用 |
+|------|------|
+| `agent(prompt, opts?)` | 启动子 Agent 执行子任务 |
+| `parallel([thunks])` | 并行执行 → 屏障等待 |
+| `pipeline(items, ...stages)` | 流水线逐阶段传递 |
+| `phase(title)` | 标记当前阶段 |
+| `log(msg)` | 输出进度消息 |
+| `budget` | Token 预算追踪 |
 
 ---
 
-## 四、架构对比
+## 工具系统
 
-| 维度 | V1 队长-队员 | V2 单Agent | V2 多Agent (JS Workflow) |
-|------|:------------:|:----------:|:------------------------:|
-| **协作模式** | Leader ↔ Worker 上下级分工 | 独立执行 | 平等编排协作 |
-| **决策方式** | 队长 ReAct 循环 | ReActCore 中间件链 | 脚本编排 (JS) |
-| **并行能力** | `batch_delegate` 批量并行 | 单线程 | `parallel()` 原生并行 |
-| **通信协议** | MessageBus 消息传递 | 无 (单一 Agent) | JSON-RPC IPC |
-| **记忆系统** | ContextMemory + RAG + STM + 向量库 | temp_memory + RAG | temp_memory (每次重置) |
-| **重试机制** | KEPA 反思 (≤3 次) | 中间件 KEPA | 外部脚本控制 |
-| **适用场景** | 多步骤复杂任务 | 快速问答 · 单步操作 | 复杂编排 · 多步协作 |
-| **技术实现** | 纯 Python | 纯 Python + MCP | Node.js + Python IPC |
-| **最大轮次** | 3 (可配) | 10 (可配) | 按需 |
-| **Agent 管理** | V1LeaderPool | AgentPool (8 预热) | AgentPool (8 预热) |
-| **学习成本** | 📘 中等 | 📗 低 | 📙 较高 (需 JS) |
+| 类别 | 清单 |
+|------|------|
+| **内置 (10)** | `web_search` · `fetch_url` · `read_file` · `write_file` · `edit_file` · `search_files` · `execute_python 🛡️` · `execute_shell 🛡️` · `git` · `write_todos` |
+| **MCP (25+)** | Playwright · Weather · Translator · DataAnalysis · GUI Automation · Web Scraper · Search Engine · System Toolbox · Sandbox Tools · CodeGraph · DeepWiki · Game · Fun · Art · Project Analyzer · OpenClaw · Text Processing · 更多自动发现 |
 
-<br>
+> MCP 工具自动扫描 `mcp/` 目录和 `.mcp.json` 配置，运行时即插即用，5s 超时并行连接。
 
 ---
 
-## 五、功能矩阵
+## 能力总览
 
-| 能力 | V1 | V2 单Agent | V2 多Agent |
-|------|:--:|:----------:|:----------:|
-| LLM 多路由 (DeepSeek/GLM) | ✅ | ✅ | ✅ |
-| ToolRegistry 35+ 工具 | ✅ | ✅ | ✅ |
-| RAG 检索增强 | ✅ | ✅ | — |
-| 短期记忆 (STM) | ✅ | ✅ | — |
-| 向量记忆 (ChromaDB) | ✅ | ✅ | — |
-| 文件写入桌面 | ✅ | ✅ | ✅ |
-| WebSocket 实时通信 | ✅ | ✅ | ✅ |
-| JS Workflow 编排 | — | — | ✅ |
-| Schema 强制验证 | — | — | ✅ |
-| Resume 缓存 | — | — | ✅ |
-| Budget 追踪 | — | — | ✅ |
-| 中间件链扩展 | — | ✅ | — |
-| AgentPool 池化 | — | ✅ | ✅ |
+> V2 多Agent 继承 V2 单Agent 全部能力，叠加编排层特性。
 
-> **选型建议**：需要搜索 + 分析 + 写文件多步 → V1；快速问答、单步工具调用 → V2 单Agent；需要编排多 Agent 协作 + Schema 验证 → V2 多Agent JS Workflow
-
-<br>
+| 能力 | V1 (Web) | V2 单Agent (CLI) | V2 多Agent (Workflow) |
+|------|:--------:|:----------------:|:---------------------:|
+| 联网搜索 | ✅ | ✅ | ⊃ |
+| 文件读写 | ✅ | ✅ | ⊃ |
+| 代码执行 (沙箱) | ✅ | ✅ | ⊃ |
+| 网页抓取 | ✅ | ✅ | ⊃ |
+| Git 操作 | ✅ | ✅ | ⊃ |
+| 数据分析 | ✅ | ✅ | ⊃ |
+| GUI 自动化 (macOS) | — | ✅ | ⊃ |
+| 翻译 / 天气 / 计算 | ✅ | ✅ | ⊃ |
+| 项目分析 | — | ✅ | ⊃ |
+| 游戏 / 趣味工具 | — | ✅ | ⊃ |
+| 实时 WebSocket | ✅ | ✅ | ⊃ |
+| 记忆系统 | ✅ 多层 | ✅ 精简 | ⊃ |
+| JS 编排 | — | — | **+✅** |
+| Schema 验证 | — | — | **+✅** |
+| 进度追踪 | — | — | **+✅** |
+| Budget 上限 | — | — | **+✅** |
 
 ---
 
-## 六、快速开始
+## 快速开始
 
 ```bash
-# 启动
-git clone <repo> && cd 小雷版agent
-cp .env.example .env       # 填入 DEEPSEEK_API_KEY / ZHIPUAI_API_KEY
-python main.py             # 访问 http://127.0.0.1:8001
+# 安装依赖
+pip install -r requirements.txt
 
-# 选项
-DEV_MODE=true  python main.py    # 热重载开发
-AGENT_PORT=8080 python main.py   # 自定义端口
+# 配置 API Key
+cp .env.example .env
+# 编辑 .env 填入: DEEPSEEK_API_KEY 或 ZHIPUAI_API_KEY
+
+# Web (V1) — 浏览器访问 http://127.0.0.1:8001
+python main.py
+
+# CLI (V2) — 终端 REPL
+python cli.py
+
+# CLI 直接执行
+python cli.py 分析这个项目
+python cli.py /run 搜索百度热搜
+python cli.py /automate open_app --app Safari
 ```
-
-<br>
 
 ---
 
-## 七、项目结构
+## 技术栈
+
+```
+Web 框架      FastAPI · Uvicorn · Jinja2
+LLM 后端      DeepSeek · GLM (ZhipuAI) · OpenRouter
+向量数据库    ChromaDB · sentence-transformers
+存储          SQLite · Redis · MySQL
+搜索          DuckDuckGo · BeautifulSoup · 自定义 RAG
+GUI 自动化    PyAutoGUI · pyobjc (macOS)
+浏览器        Playwright
+数据分析      Pandas · Matplotlib · scikit-learn
+MCP 协议      自定义框架 · 25+ 工具服务器
+前端          Tailwind CSS · Marked.js (CDN)
+部署          Docker · Uvicorn · Gunicorn
+测试          pytest · pytest-asyncio · 77+ 用例
+```
+
+---
+
+## 项目结构
 
 ```
 小雷版agent/
-├── main.py                  🚀 FastAPI 入口
-├── api/
-│   ├── pages.py             🎨 前端页面路由
-│   └── routes/
-│       ├── chat.py          💬 核心聊天 API (V1 入口)
-│       └── chat_ws.py       🔌 WebSocket
-├── core/                    ⚙️ 引擎
-│   ├── agent_system.py      ⭐ V1 架构 (Leader + Worker)
-│   ├── engine/
-│   │   ├── llm_backend.py   🧠 LLM 多路由
-│   │   └── skill_dispatcher.py  🎯 技能调度
-│   ├── multi_agent_v2/      ⭐ V2 架构
-│   │   ├── agents/          🤖 WorkAgent · ReActCore · Middleware
-│   │   ├── tools/           🛠️ ToolRegistry (35+)
-│   │   └── workflow/        📋 JS Workflow 引擎
-│   ├── memory/              🗃️ 三层记忆 (STM + Vector + Evolution)
-│   ├── search/              🔍 RAG 搜索引擎
-│   └── mcp/                 🔌 MCP 客户端
-├── mcp/                     🔗 MCP 服务器 (18 台)
-├── static/                  🎨 前端
-├── config/                  📝 配置
-└── plugin/                  🔌 插件
+├── cli.py               CLI 入口 (V2 统一工具型)
+├── main.py              Web 入口 (V1 队长-队员型)
+│
+├── cli/                  CLI 交互层 (42 文件)
+│   ├── enhanced_cli.py   Enhanced REPL · 状态栏
+│   ├── repl.py           REPL 循环
+│   ├── smart_agent_v2.py V2 Agent 交互
+│   └── handlers/         4 组处理器
+│
+├── api/                  Web API 层
+│   ├── pages.py          HTML 页面路由
+│   └── routes/           chat.py · WebSocket
+│
+├── core/                 引擎核心 ⭐
+│   ├── agent_system.py   V1 架构 (Leader + Worker)
+│   ├── engine/           LLM 路由 · 技能调度
+│   ├── multi_agent_v2/   V2 架构 (Agent · Tools · Workflow)
+│   ├── memory/           三层记忆
+│   ├── search/           RAG 搜索
+│   └── mcp/              MCP 客户端
+│
+├── mcp/                  25+ MCP 服务器
+├── static/               Web 前端
+├── config/               配置
+├── tests/                77+ 测试
+└── agency-agents-zh/     216 专家角色
 ```
-
-<br>
 
 ---
 
 <div align="center">
-  <sub>
-  <b>🦞 小雷版小龙虾 AI Agent</b> · 双架构驱动 · 35+ 工具 · 三层记忆 · 工业级稳定
-  </sub>
+  <br>
+  <b>小雷版小龙虾 AI Agent</b> · 一套代码双架构 · CLI 走 V2 · Web 走 V1 · 35+ 工具 · 77 项测试
 </div>

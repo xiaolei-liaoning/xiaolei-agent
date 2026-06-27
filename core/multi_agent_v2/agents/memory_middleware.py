@@ -10,6 +10,7 @@ MemoryMiddleware — V2 记忆中间件
   on_finish       — 写入短期/长期记忆（V1 process_turn 统一处理）
 """
 
+import asyncio
 import logging
 import time
 from typing import Any, Dict, List, Optional
@@ -17,6 +18,8 @@ from typing import Any, Dict, List, Optional
 from .middleware import BaseMiddleware, RunContext
 
 logger = logging.getLogger(__name__)
+
+_NUDGE_INTERVAL = 10
 
 
 class MemoryMiddleware(BaseMiddleware):
@@ -26,7 +29,6 @@ class MemoryMiddleware(BaseMiddleware):
     def __init__(self):
         super().__init__()
         self._v1_mw = None
-        self._last_query = ""
         self._tool_experiences: List[Dict] = []
         self._start_time = 0.0
         self._v1_mw_broken = False
@@ -58,36 +60,34 @@ class MemoryMiddleware(BaseMiddleware):
     # ── on_think_start — 记忆注入 ──────────────────────────
 
     async def on_think_start(self, ctx: RunContext) -> None:
-        """在 LLM 思考前注入短期 + 长期记忆"""
+        """每轮 LLM 思考前注入短期记忆 + 用户画像 + RAG"""
         user_input = ctx.task_description
         if not user_input:
             return
 
         user_id = self._get_user_id()
-
-        # 通过 V1 get_user_context 一次获取短期记忆 + 用户画像 + RAG
         v1_mw = self._ensure_v1_mw()
-        if v1_mw is not None and user_input != self._last_query:
-            try:
-                context = await v1_mw.get_user_context(user_id, user_input)
-                if context:
-                    # ponytail: ⚠️ [最近对话] 优先级高于 [用户画像]——用户刚说的比历史总结更准确
-                    ctx.knowledge_context += (
-                        f"\n── 记忆上下文 ──\n注意：下方 [最近对话] 中的信息优先级最高，"
-                        f"它反映了用户在本轮对话中刚说过的话。"
-                        f"如果 [最近对话] 与 [用户画像] 或 [相关记忆] 有冲突，以 [最近对话] 为准。"
-                        f"\n\n{context}\n──"
-                    )
-                    if len(ctx.knowledge_context) > 4000:
-                        ctx.knowledge_context = ctx.knowledge_context[-4000:]
-                    print(f"    \033[1;35m🧠 记忆: {len(context)} 字符上下文已注入\033[0m")
-                else:
-                    print(f"    \033[2;35m🧠 记忆: 无相关历史\033[0m")
-                self._last_query = user_input
-            except Exception as e:
-                logger.debug(f"V1 记忆检索失败: {e}")
+        if v1_mw is None:
+            return
 
-    # ── on_tool_end — 经验记录 ─────────────────────────────
+        try:
+            context = await v1_mw.get_user_context(user_id, user_input)
+            if context:
+                ctx.knowledge_context += (
+                    f"\n── 记忆上下文 ──\n注意：下方 [最近对话] 中的信息优先级最高，"
+                    f"它反映了用户在本轮对话中刚说过的话。"
+                    f"如果 [最近对话] 与 [用户画像] 或 [相关记忆] 有冲突，以 [最近对话] 为准。"
+                    f"\n\n{context}\n──"
+                )
+                if len(ctx.knowledge_context) > 8000:
+                    ctx.knowledge_context = ctx.knowledge_context[-8000:]
+                print(f"    \033[1;35m🧠 记忆: {len(context)} 字符上下文已注入\033[0m")
+            else:
+                print(f"    \033[2;35m🧠 记忆: 无相关历史\033[0m")
+        except Exception as e:
+            logger.debug(f"V1 记忆检索失败: {e}")
+
+    # ── on_tool_end — 经验记录 + 写入 STM ────────────
 
     async def on_tool_end(self, ctx: RunContext) -> None:
         if not ctx.tool_results:
@@ -109,6 +109,19 @@ class MemoryMiddleware(BaseMiddleware):
         if self._agent is not None and hasattr(self._agent, 'temp_memory'):
             self._agent.temp_memory["memory_experiences"] = self._tool_experiences[-10:]
 
+        # 工具结果写入 STM，供下轮 on_think_start 读取
+        try:
+            from core.memory.short_term_memory import get_memory_manager
+            stm = get_memory_manager()
+            summary = f"[工具执行: {tc.get('name', '?')}] "
+            if latest.get("success"):
+                summary += str(latest.get("result", ""))[:300]
+            else:
+                summary += f"失败: {latest.get('error', '未知错误')[:200]}"
+            stm.add(self._get_user_id(), "assistant", summary)
+        except Exception as e:
+            logger.debug(f"工具结果写入 STM 失败: {e}")
+
     # ── on_finish — 持久化记忆 ─────────────────────────────
 
     async def on_finish(self, ctx: RunContext) -> None:
@@ -127,3 +140,26 @@ class MemoryMiddleware(BaseMiddleware):
                 logger.debug(f"V1 process_turn 失败: {e}")
 
         self._tool_experiences.clear()
+        asyncio.ensure_future(self._after_finish_nudge(user_id, ctx))
+
+    async def _after_finish_nudge(self, user_id: str, ctx: RunContext) -> None:
+        """任务后推动：触发进化 + 向量库清理"""
+        try:
+            from core.memory.memory_nudge import get_memory_nudge
+            if get_memory_nudge().increment(user_id):
+                logger.info(f"🧠 nudge 触发: user={user_id}")
+                try:
+                    from core.memory.self_evolution import get_evolution_engine
+                    await get_evolution_engine().check_and_evolve(user_id, new_experience_count=1)
+                except Exception:
+                    logger.debug("nudge 进化触发失败")
+                try:
+                    from core.memory.vector_memory import VectorMemoryStore
+                    vm = VectorMemoryStore()
+                    if vm.wait_for_collection(timeout=2.0):
+                        vm.cleanup_old_memories(keep_last=2000)
+                        logger.info(f"🧠 nudge 清理: user={user_id}")
+                except Exception:
+                    logger.debug("nudge 清理失败")
+        except Exception:
+            pass

@@ -573,6 +573,31 @@ class VectorMemoryStore:
         self._flush_buffer()
 
     # ── 删除 / 统计 / 清空 ────────────────────────────────────────────────────
+    def update_metadata(self, memory_id: str, metadata: Dict[str, Any]) -> bool:
+        """更新单条记忆的元数据
+
+        Args:
+            memory_id: 记忆 ID
+            metadata:  要合并的新元数据
+
+        Returns:
+            是否成功
+        """
+        if not self._collection:
+            return False
+        try:
+            existing = self._collection.get(ids=[memory_id], include=["metadatas"])
+            if not existing or not existing["ids"]:
+                logger.warning("记忆不存在: %s", memory_id)
+                return False
+            old_meta = existing["metadatas"][0] or {}
+            old_meta.update(metadata)
+            self._collection.update(ids=[memory_id], metadatas=[old_meta])
+            return True
+        except Exception as e:
+            logger.error("更新记忆元数据失败: %s", e)
+            return False
+
     def delete_memory(self, memory_id: str):
         """删除单条记忆"""
         if not self._collection:

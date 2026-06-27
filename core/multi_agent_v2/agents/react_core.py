@@ -130,6 +130,39 @@ _PROJECT_ANALYSIS_PROMPT = (
 )
 
 
+def _trim_desc(desc: str) -> str:
+    """保留任务描述开头（用户请求）和 Phase 1 关键数据（前 1500 字）"""
+    idx = desc.find("\n===== 项目结构概览")
+    if idx == -1:
+        idx = desc.find("Phase 1 扫描")
+    if idx > 0:
+        head = desc[:idx].strip()[:200]
+        phase = desc[idx:idx + 3000]  # 保留 Phase 1 前 3000 字
+        return head + "\n\n" + phase
+    return desc[:500]
+
+
+def _filter_scan_tools(tool_defs: list) -> list:
+    """Phase 1 数据就绪时移除目录扫描工具，只保留写报告工具"""
+    _scan_tools = {"execute_shell", "read_file", "search_files", "grep"}
+    return [t for t in tool_defs
+            if t.get("function", {}).get("name") not in _scan_tools]
+
+
+def _extract_text_from_json(s: str) -> str:
+    """从带 tool_calls 的 JSON 回复中提取 content 文本"""
+    try:
+        obj = json.loads(s)
+        for c in obj.get("choices", []):
+            msg = c.get("message", {})
+            content = msg.get("content", "")
+            if content:
+                return content
+    except (json.JSONDecodeError, TypeError, KeyError, IndexError):
+        pass
+    return ""
+
+
 def _get_prefix(agent: Any = None) -> str:
     """获取Agent前缀标签"""
     if agent and hasattr(agent, "_agent_label"):
@@ -241,6 +274,9 @@ class ReActCoreMiddleware(BaseMiddleware):
                 _search_tools = {"web_search", "fetch_url", "fetch_json", "hot_search"}
                 ctx.tool_defs = [t for t in ctx.tool_defs
                                  if t.get("function", {}).get("name") not in _search_tools]
+            # ponytail: Phase 1 数据已就绪 → 屏蔽扫描工具，防 LLM 重新扫描目录
+            if getattr(ctx, '_has_structure_data', False) and ctx.tool_defs:
+                ctx.tool_defs = _filter_scan_tools(ctx.tool_defs)
         else:
             ctx.tool_defs = None
 
@@ -400,7 +436,7 @@ class ReActCoreMiddleware(BaseMiddleware):
                 task = asyncio.create_task(router.chat(
                     messages,
                     temperature=0.7,
-                    max_tokens=16384,
+                    max_tokens=32768,
                     tools=ctx.tool_defs if ctx.tool_defs else None,
                 ))
                 try:
@@ -421,7 +457,8 @@ class ReActCoreMiddleware(BaseMiddleware):
                 # DEBUG: see what DeepSeek actually returned
                 reply_preview = reply[:500].replace("\n", "\\n")
                 logger.info(f"LLM第{ctx.react_depth}轮回复({len(reply)}字符): {reply_preview}")
-                ctx.knowledge_context += f"\nLLM第{ctx.react_depth}轮: {reply[:300]}"
+                _ctx_text = reply if not reply.startswith("{") else _extract_text_from_json(reply) or reply[:200]
+                ctx.knowledge_context += f"\nLLM第{ctx.react_depth}轮: {_ctx_text[:300]}"
                 
                 # 解析工具调用
                 tool_calls = parse_tool_calls(reply)
@@ -444,15 +481,23 @@ class ReActCoreMiddleware(BaseMiddleware):
                 if ctx.consecutive_idle_rounds >= 3:
                     logger.warning(f"连续 {ctx.consecutive_idle_rounds} 轮空转，强制结束")
                     ctx.last_error = f"连续 {ctx.consecutive_idle_rounds} 轮空转无工具调用"
+                    ctx.interrupted = True
+                    if reply and len(reply) > 20:
+                        ctx.final_answer = reply
                     break
                 # ponytail: 最终答案判断 — 需要计划完成+回复有实质内容，或回复包含明确的报告结构
                 _plan_done = ctx.plan and all(s.status == "done" for s in ctx.plan)
-                _looks_like_report = any(kw in reply for kw in ("## ", "### ", "**总结", "**结论", "## 总结", "## 结论"))
                 _has_substance = len(reply) > 100 and not reply.startswith("{")
                 if _plan_done and _has_substance:
                     ctx.final_answer = reply
                     ctx.interrupted = True
                     break
+                # ponytail: 项目分析首轮是纯文本输出，不触发报告启发式/空跑重试，保存到历史后继续
+                if "Phase 1 扫描" in ctx.task_description and _has_substance:
+                    ctx._conversation_history.append({"role": "assistant", "content": reply})
+                    ctx.final_answer = reply
+                    break
+                _looks_like_report = any(kw in reply for kw in ("## ", "### ", "**总结", "**结论", "## 总结", "## 结论"))
                 if _looks_like_report and _has_substance:
                     ctx.final_answer = reply
                     ctx.interrupted = True
@@ -475,10 +520,12 @@ class ReActCoreMiddleware(BaseMiddleware):
             except asyncio.TimeoutError:
                 logger.warning(f"LLM 调用超时 (60s)")
                 ctx.last_error = "LLM 调用超时"
+                ctx.interrupted = True
                 break
             except Exception as e:
                 logger.error(f"LLM 调用失败: {e}")
                 ctx.last_error = f"LLM 调用失败: {e}"
+                ctx.interrupted = True
                 break
         else:
             # 2 次都空转，用最后一次回复
@@ -816,6 +863,7 @@ async def run_react(
 
     # ── 规划阶段 ──
     _has_structure_data = "Phase 1 扫描" in task_description or "项目结构概览" in task_description
+    ctx._has_structure_data = _has_structure_data
     if _has_structure_data:
         # 新 Phase 1 已自包含完整分析，LLM 仅需格式化输出 HTML
         print(f"{prefix}    \033[2;37m📋 分析数据已就绪，LLM 负责格式化 HTML 输出\033[0m")
@@ -894,6 +942,13 @@ async def run_react(
             ctx.interrupted = True
             ctx.last_error = hr_end.reason or "中间件终止(think_end)"
             break
+
+        # ponytail: 项目分析 — write_file 成功即跳出循环，不走空转，让 fallback 总结
+        if _has_structure_data and ctx.tool_results:
+            _last = ctx.tool_results[-1]
+            if _last.get("success") and _last.get("tool_call", {}).get("name") == "write_file":
+                ctx._write_file_done = True
+                break
 
         if ctx.plan:
             update_step_status(ctx, prefix)
@@ -974,7 +1029,7 @@ async def run_react(
                             _router.chat(
                                 [{"role": "user", "content": _report_prompt}],
                                 temperature=0.3,
-                                max_tokens=6000,
+                                max_tokens=32768,
                             ),
                             timeout=60,
                         )
@@ -993,9 +1048,9 @@ async def run_react(
                                 print(f"{prefix}    \033[1;32m✅ 分析报告已生成: {_report_path}\033[0m")
                                 ctx.final_answer = "✅ 分析报告已生成在桌面: baidu_hot_search_report.html"
                             else:
-                                ctx.final_answer = _html_text[:2000]
+                                ctx.final_answer = _html_text
                         elif _html_text:
-                            ctx.final_answer = _html_text[:2000]
+                            ctx.final_answer = _html_text
                 except Exception as _e:
                     logger.debug(f"自动生成报告失败: {_e}")
 
@@ -1019,11 +1074,11 @@ async def run_react(
                 final_resp = await asyncio.wait_for(
                     router.chat(
                         [
-                            {"role": "system", "content": "基于工具执行结果，用简洁的中文给出总结回答。直接输出结果，不要输出JSON。"},
-                            {"role": "user", "content": f"原始任务: {task_description}\n\n工具执行结果:\n{summary}\n\n请给出最终总结。"},
+                            {"role": "system", "content": "基于工具执行结果，用完整详细的中文给出总结回答。覆盖项目概况、技术栈、目录结构、关键发现。直接输出结果，不要输出JSON。"},
+                            {"role": "user", "content": f"原始任务: {_trim_desc(task_description)}\n\n工具执行结果:\n{summary}\n\n请给出最终总结。"},
                         ],
                         temperature=0.3,
-                        max_tokens=2000,
+                        max_tokens=32768,
                     ),
                     timeout=30,
                 )
@@ -1039,7 +1094,7 @@ async def run_react(
                     raw = last.get("result", "")
                     txt = _fmt_result2(raw)
                     if txt and txt != "None" and txt != "(无输出)":
-                        ctx.final_answer = txt[:1000]
+                        ctx.final_answer = txt
                         break
 
     # ponytail: on_finish 必须在兜底之后调用，确保 final_answer 非空时写入记忆

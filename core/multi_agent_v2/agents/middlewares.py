@@ -104,42 +104,55 @@ class KEPAMiddleware(BaseMiddleware):
     - on_think_start: 查询 SharedBus 中的共享知识 → 注入到 LLM 提示词
     """
     HOOKS = ("on_think_start", "on_tool_end", "on_finish")
+    PROACTIVE_INTERVAL = 3  # 每 N 轮主动读一次 bus
+
+    def __init__(self):
+        super().__init__()
+        self._injected_bus_keys: set = set()
 
     async def on_think_start(self, ctx: RunContext) -> None:
-        """仅在异常时注入 KEPA 分析（正常执行时不干扰 LLM）"""
+        """注入 KEPA 分析（两种路径：异常触发 + 主动每 N 轮）"""
         if not ctx.profile.get("use_shared_bus"):
             return
         if not ctx.tool_results or ctx.iteration < 2:
             return
 
-        # 只在有异常时注入: 连续失败 or 成功率低于 50%
         total = len(ctx.tool_results)
         success = sum(1 for r in ctx.tool_results if r.get("success"))
         fail = total - success
         has_issues = fail >= 2 or (total >= 3 and success / total < 0.5)
-        if not has_issues and not ctx.last_error:
+        is_proactive = ctx.iteration % self.PROACTIVE_INTERVAL == 0
+
+        if not has_issues and not ctx.last_error and not is_proactive:
             return
 
         try:
-            shared = await self._fetch_shared_knowledge(ctx)
+            shared, new_keys = await self._fetch_new_knowledge(ctx)
             evaluation_text = self._build_evaluation(ctx)
             planning_text = self._build_planning(ctx)
 
             lines = [f"\n{KEPA_PREFIX}"]
             if shared:
                 lines.append(f"[跨Agent参考] {shared}")
-            lines.append(f"评估: {evaluation_text}")
-            lines.append(f"规划: {planning_text}")
+            if has_issues or ctx.last_error:
+                lines.append(f"评估: {evaluation_text}")
+                lines.append(f"规划: {planning_text}")
             lines.append("──")
             kepa_text = "\n".join(lines)
             ctx.knowledge_context += kepa_text
             if len(ctx.knowledge_context) > 3000:
                 ctx.knowledge_context = ctx.knowledge_context[-3000:]
+
+            self._injected_bus_keys.update(new_keys)
         except Exception as e:
             logger.debug(f"KEPA 分析注入失败: {e}")
 
-    async def _fetch_shared_knowledge(self, ctx: RunContext) -> str:
-        """从 SharedBus 获取其他 Agent 沉淀的知识"""
+    async def _fetch_new_knowledge(self, ctx: RunContext):
+        """从 SharedBus 获取新的（未被注入过的）知识
+        
+        Returns:
+            (summary_text, new_keys_set)
+        """
         try:
             from core.multi_agent_v2.infrastructure.shared_bus import get_shared_bus
             bus = get_shared_bus()
@@ -168,22 +181,26 @@ class KEPAMiddleware(BaseMiddleware):
             relevant_tags.add("kepa")
 
             if not relevant_tags:
-                return ""
+                return "", set()
 
             snippets = []
+            new_keys = set()
             for tag in relevant_tags:
                 results = await bus.search_knowledge(tag)
                 for key, entry in results.items():
+                    if key in self._injected_bus_keys:
+                        continue
                     meta = entry.get("meta", {})
                     summary = meta.get("summary", "")
                     source = meta.get("source", "")
                     if summary and len(str(summary)) > 10:
                         snippets.append(f"[{source}]: {summary[:200]}")
+                        new_keys.add(key)
             if snippets:
-                return " | ".join(snippets[:3])
-            return ""
+                return " | ".join(snippets[:3]), new_keys
+            return "", set()
         except Exception:
-            return ""
+            return "", set()
 
     async def on_tool_end(self, ctx: RunContext) -> None:
         """工具执行后：提取知识 → 存入 SharedBus + temp_memory"""
@@ -218,6 +235,10 @@ class KEPAMiddleware(BaseMiddleware):
                     tags.add("file")
                 if "分析" in ctx.task_description or "analysis" in ctx.task_description:
                     tags.add("analysis")
+                # 中文关键词 tag — 让 WorkAgent 用中文也能搜到
+                import re
+                cn_kw = set(re.findall(r'[一-鿟]{2,}', ctx.task_description)[:3])
+                tags.update(cn_kw)
 
                 key = f"kepa:{name}:{ctx.iteration}"
                 source = ctx.profile.get("agent_id", "unknown")
@@ -236,7 +257,7 @@ class KEPAMiddleware(BaseMiddleware):
             logger.debug(f"KEPA 知识沉淀失败: {e}")
 
     async def on_finish(self, ctx: RunContext) -> None:
-        """执行完成：最终知识摘要到 SharedBus"""
+        """执行完成：最终知识摘要到 SharedBus + 清理过期知识"""
         if not ctx.profile.get("use_shared_bus"):
             return
         if not ctx.final_answer:
@@ -252,6 +273,8 @@ class KEPAMiddleware(BaseMiddleware):
                 source=source,
                 summary=f"最终结果: {ctx.final_answer[:200]}",
             )
+            # 任务结束，清理过期知识（默认30分钟）
+            await bus.cleanup_old_knowledge()
         except Exception:
             pass
 

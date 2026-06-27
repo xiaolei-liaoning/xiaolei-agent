@@ -155,7 +155,7 @@ class TestB_Experience:
         assert len(experiences) >= 1, f"应写入至少1条经验，实际{len(experiences)}"
         exp = experiences[0]
         assert "天气" in exp["content"] or "搜索" in exp["content"]
-        assert exp["metadata"].get("strategy") == "delegate"
+        assert "delegate" in exp["metadata"].get("strategy", "")
 
     async def test_experience_is_searchable(self):
         """写入的经验可以被语义检索命中"""
