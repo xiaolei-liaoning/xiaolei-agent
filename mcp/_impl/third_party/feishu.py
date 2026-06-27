@@ -21,11 +21,11 @@ class FeishuApp(ThirdPartyApp):
         app_id = self.config.get('config', {}).get('app_id')
         app_secret = self.config.get('config', {}).get('app_secret')
         
-        # 检查API密钥是否配置
-        if not app_id or not app_secret or app_id == 'your_feishu_app_id' or app_secret == 'your_feishu_app_secret':
+         # 检查API密钥是否配置
+        if not app_id or not app_secret:
             return {
                 'success': False,
-                'error': '飞书API 密钥未配置，请在 mcp/_impl/third_party/config.yml 中设置有效的 app_id 和 app_secret'
+                'error': '飞书API 密钥未配置，请在环境变量中设置 FEISHU_APP_ID 和 FEISHU_APP_SECRET'
             }
         
         try:

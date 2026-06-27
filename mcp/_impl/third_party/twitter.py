@@ -21,10 +21,10 @@ class TwitterApp(ThirdPartyApp):
         token = await self.get_auth_token()
         
         # 检查API密钥是否配置
-        if not token or token == 'your_twitter_bearer_token':
+        if not token:
             return {
                 'success': False,
-                'error': 'Twitter API 密钥未配置，请在 mcp/_impl/third_party/config.yml 中设置有效的 Bearer Token'
+                'error': 'Twitter API 密钥未配置，请在环境变量中设置 TWITTER_BEARER_TOKEN'
             }
         
         headers = {

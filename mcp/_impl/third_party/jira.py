@@ -21,11 +21,11 @@ class JiraApp(ThirdPartyApp):
         email = self.config.get('config', {}).get('email')
         api_token = self.config.get('config', {}).get('api_token')
         
-        # 检查API密钥是否配置
-        if not email or not api_token or api_token == 'your_jira_api_token':
+         # 检查API密钥是否配置
+        if not email or not api_token:
             return {
                 'success': False,
-                'error': 'Jira API 密钥未配置，请在 mcp/_impl/third_party/config.yml 中设置有效的 email 和 api_token'
+                'error': 'Jira API 密钥未配置，请在环境变量中设置 JIRA_API_TOKEN'
             }
         
         auth = (email, api_token)

@@ -8,7 +8,7 @@ apps:
     priority: 4
     description: Twitter API集成
     config:
-      api_key: your_twitter_bearer_token
+      api_key: ${TWITTER_BEARER_TOKEN:-}
   
   discord:
     name: Discord
@@ -18,7 +18,7 @@ apps:
     priority: 4
     description: Discord API集成
     config:
-      api_key: your_discord_token
+      api_key: ${DISCORD_TOKEN:-}
   
   jira:
     name: Jira
@@ -28,8 +28,8 @@ apps:
     priority: 3
     description: Jira API集成
     config:
-      email: your_email@example.com
-      api_token: your_jira_api_token
+      email: ${JIRA_EMAIL:-}
+      api_token: ${JIRA_API_TOKEN:-}
   
   slack:
     name: Slack
@@ -39,7 +39,7 @@ apps:
     priority: 4
     description: Slack API集成
     config:
-      api_key: your_slack_api_key
+      api_key: ${SLACK_API_KEY:-}
   
   trello:
     name: Trello
@@ -49,10 +49,9 @@ apps:
     priority: 3
     description: Trello API集成
     config:
-      api_key: your_trello_api_key
-      token: your_trello_token
+      api_key: ${TRELLO_API_KEY:-}
+      token: ${TRELLO_TOKEN:-}
   
-  # 国内应用
   wechat:
     name: 微信
     api_url: https://api.weixin.qq.com
@@ -61,8 +60,8 @@ apps:
     priority: 5
     description: 微信API集成
     config:
-      app_id: ${WECHAT_APP_ID:-your_wechat_app_id}
-      app_secret: ${WECHAT_APP_SECRET:-your_wechat_app_secret}
+      app_id: ${WECHAT_APP_ID:-}
+      app_secret: ${WECHAT_APP_SECRET:-}
   
   dingtalk:
     name: 钉钉
@@ -72,8 +71,8 @@ apps:
     priority: 4
     description: 钉钉API集成
     config:
-      app_key: your_dingtalk_app_key
-      app_secret: your_dingtalk_app_secret
+      app_key: ${DINGTALK_APP_KEY:-}
+      app_secret: ${DINGTALK_APP_SECRET:-}
   
   feishu:
     name: 飞书
@@ -83,8 +82,8 @@ apps:
     priority: 4
     description: 飞书API集成
     config:
-      app_id: your_feishu_app_id
-      app_secret: your_feishu_app_secret
+      app_id: ${FEISHU_APP_ID:-}
+      app_secret: ${FEISHU_APP_SECRET:-}
   
   weibo:
     name: 微博
@@ -94,9 +93,9 @@ apps:
     priority: 4
     description: 微博API集成
     config:
-      app_key: your_weibo_app_key
-      app_secret: your_weibo_app_secret
-      access_token: your_weibo_access_token
+      app_key: ${WEIBO_APP_KEY:-}
+      app_secret: ${WEIBO_APP_SECRET:-}
+      access_token: ${WEIBO_ACCESS_TOKEN:-}
   
   zhihu:
     name: 知乎
@@ -106,8 +105,8 @@ apps:
     priority: 3
     description: 知乎API集成
     config:
-      api_key: your_zhihu_api_key
-      api_secret: your_zhihu_api_secret
+      api_key: ${ZHIHU_API_KEY:-}
+      api_secret: ${ZHIHU_API_SECRET:-}
   
   douyin:
     name: 抖音
@@ -117,8 +116,8 @@ apps:
     priority: 4
     description: 抖音API集成
     config:
-      client_key: your_douyin_client_key
-      client_secret: your_douyin_client_secret
+      client_key: ${DOUYIN_CLIENT_KEY:-}
+      client_secret: ${DOUYIN_CLIENT_SECRET:-}
   
   baidu:
     name: 百度
@@ -128,8 +127,8 @@ apps:
     priority: 3
     description: 百度API集成
     config:
-      api_key: your_baidu_api_key
-      secret_key: your_baidu_secret_key
+      api_key: ${BAIDU_API_KEY:-}
+      secret_key: ${BAIDU_SECRET_KEY:-}
   
   tencent_cloud:
     name: 腾讯云
@@ -139,8 +138,8 @@ apps:
     priority: 3
     description: 腾讯云API集成
     config:
-      secret_id: your_tencent_secret_id
-      secret_key: your_tencent_secret_key
+      secret_id: ${TENCENT_SECRET_ID:-}
+      secret_key: ${TENCENT_SECRET_KEY:-}
   
   alibaba_cloud:
     name: 阿里云
@@ -150,8 +149,8 @@ apps:
     priority: 3
     description: 阿里云API集成
     config:
-      access_key_id: your_alibaba_access_key_id
-      access_key_secret: your_alibaba_access_key_secret
+      access_key_id: ${ALIBABA_ACCESS_KEY_ID:-}
+      access_key_secret: ${ALIBABA_ACCESS_KEY_SECRET:-}
   
   huawei_cloud:
     name: 华为云
@@ -161,6 +160,6 @@ apps:
     priority: 3
     description: 华为云API集成
     config:
-      ak: your_huawei_ak
-      sk: your_huawei_sk
-      project_id: your_huawei_project_id
+      ak: ${HUAWEI_AK:-}
+      sk: ${HUAWEI_SK:-}
+      project_id: ${HUAWEI_PROJECT_ID:-}

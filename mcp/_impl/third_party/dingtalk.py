@@ -21,11 +21,11 @@ class DingTalkApp(ThirdPartyApp):
         app_key = self.config.get('config', {}).get('app_key')
         app_secret = self.config.get('config', {}).get('app_secret')
         
-        # 检查API密钥是否配置
-        if not app_key or not app_secret or app_key == 'your_dingtalk_app_key' or app_secret == 'your_dingtalk_app_secret':
+         # 检查API密钥是否配置
+        if not app_key or not app_secret:
             return {
                 'success': False,
-                'error': '钉钉API 密钥未配置，请在 mcp/_impl/third_party/config.yml 中设置有效的 app_key 和 app_secret'
+                'error': '钉钉API 密钥未配置，请在环境变量中设置 DINGTALK_APP_KEY 和 DINGTALK_APP_SECRET'
             }
         
         try:
