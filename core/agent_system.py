@@ -15,6 +15,7 @@ V2 ToolRegistry 集成：
 
 import asyncio
 import json
+import os
 import re
 import time
 import logging
@@ -409,12 +410,16 @@ class LLMAgent:
                 result["kepa_iterations"] = attempt + 1
                 return result
 
-            if decision != "retry" and confidence >= 0.85:
+            if confidence >= 0.85:
                 result["confidence"] = confidence
                 result["kepa_iterations"] = attempt + 1
                 return result
 
-            # retry
+            if decision != "retry":
+                result["confidence"] = confidence
+                result["kepa_iterations"] = attempt + 1
+                return result
+
             logger.info(f"🔄 {self.name} KEPA 重试 #{attempt + 1}: {reflection.get('reason', '')[:60]}")
             result["retry_reason"] = reflection.get("reason", "")
 
@@ -547,7 +552,8 @@ class LLMAgent:
         except Exception:
             pass
 
-        max_react_rounds = 3  # ponytail: 3 rounds，2轮工具调用 + 1轮生成分析文本
+        _WORKER_MAX_ROUNDS = 8
+        max_react_rounds = _WORKER_MAX_ROUNDS
         result = {}
         all_tool_results = []  # 累积所有轮的 tool_results
 
@@ -791,7 +797,7 @@ class LeaderAgent(LLMAgent):
         self.worker_states: Dict[str, str] = {}  # 跟踪Worker状态
 
     async def supervise_task(self, task_description: str, workers: List[LLMAgent],
-                             active_count: int = 3, max_rounds: int = 5,
+                             active_count: int = 3, max_rounds: Optional[int] = None,
                              skill_id: str = "general") -> Dict:
         """队长 ReAct 主循环：Thought → Action → Observation → 循环/完成
 
@@ -810,6 +816,8 @@ class LeaderAgent(LLMAgent):
         Returns:
             执行结果字典
         """
+        if max_rounds is None:
+            max_rounds = int(os.getenv("AGENT_MAX_ROUNDS", "10"))
         self.active_worker_count = min(active_count, len(workers))
         self._current_skill_id = skill_id
         self.workers = {w.name: w for w in workers}
@@ -904,6 +912,13 @@ class LeaderAgent(LLMAgent):
                         "result": {"success": False, "error": "tool fallback"},
                     })
             
+            # reassign → 增加活跃 Worker 数
+            if action_type == "batch_delegate" and not action_result.get("success"):
+                analysis = action_result.get("result", {}).get("analysis", {})
+                if analysis.get("decision") == "reassign":
+                    self.active_worker_count = min(self.active_worker_count + 1, self.max_workers)
+                    logger.info(f"reassign: 增加活跃 Worker 到 {self.active_worker_count}")
+
             # ponytail: 已有成功结果时，检查是否全部子任务完成，是则强制合成，否则允许继续 delegate
             if action_type == "batch_delegate" and action_result.get("success") and all_results:
                 result_data = action_result.get("result", {})
@@ -1359,6 +1374,8 @@ class LeaderAgent(LLMAgent):
         result = await _llm_json(system, user, max_tokens=800)
         raw_subtasks = result.get("subtasks", [])
         subtasks = [s for s in raw_subtasks if isinstance(s, str)]
+        if len(raw_subtasks) != len(subtasks):
+            logger.debug(f"_decompose_task: 过滤了 {len(raw_subtasks) - len(subtasks)} 个非字符串子任务")
         if not subtasks:
             # 降级：直接返回原任务作为唯一子任务
             return [task_description]
@@ -1473,13 +1490,12 @@ class V1LeaderPool:
             logger.error("加载 agents.yml 配置失败，Worker 将使用默认配置: %s", e)
 
     async def _ensure_tool_registry(self):
-        """确保工具注册表已初始化（工具发现由 V2 ReActCoreMiddleware.on_start 负责）"""
+        """确保 V1 工具注册表已初始化"""
         if self._tool_registry is None:
             try:
-                from core.multi_agent_v2.tools.tool_registry import get_tool_registry
-                self._tool_registry = get_tool_registry()
+                from core.agent_v1_tools.v1_tool_registry import V1ToolRegistry
+                self._tool_registry = V1ToolRegistry()
                 await self._tool_registry.discover_all()
-                # 更新已有 Worker/Leader 的 tool_registry
                 for agent in self._all_agents.values():
                     if agent.tool_registry is None:
                         agent.tool_registry = self._tool_registry
