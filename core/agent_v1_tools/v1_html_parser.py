@@ -1,7 +1,7 @@
 """HTML → 纯文本（V1 独立版）"""
 
-import html
 import re
+from html import unescape as _unescape
 
 
 def html_to_text(html: str, max_length: int = 8000) -> str:
@@ -10,7 +10,7 @@ def html_to_text(html: str, max_length: int = 8000) -> str:
     text = re.sub(r'<(script|style|noscript|iframe|object|embed|svg)[^>]*>.*?</\1>', '', html, flags=re.DOTALL | re.IGNORECASE)
     text = re.sub(r'<!--.*?-->', '', text, flags=re.DOTALL)
     text = re.sub(r'<[^>]+>', ' ', text)
-    text = html.unescape(text)
+    text = _unescape(text)
     text = re.sub(r'[ \t]+', ' ', text)
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()[:max_length]
