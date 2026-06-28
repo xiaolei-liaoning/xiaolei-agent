@@ -5,11 +5,13 @@
 - 无 _written_file_registry / _file_read_cache
 - MCP 工具名统一 mcp_ 前缀
 """
+import asyncio
 import glob as globmod
 import json
 import logging
 import os
 import subprocess
+import tempfile
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
@@ -354,11 +356,178 @@ async def _handle_search_files(args: Dict) -> Dict:
     return err("需要 pattern 或 content_pattern 参数")
 
 
+async def _handle_execute_python(args: Dict) -> Dict:
+    from .v1_tool_result import ok, err
+    code = args.get("code", "")
+    if not code:
+        return err("缺少 code 参数")
+    timeout = min(int(args.get("timeout", 30)), 60)
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, encoding="utf-8") as f:
+        f.write(code)
+        f.flush()
+        try:
+            result = subprocess.run(["python3", f.name], capture_output=True, text=True, timeout=timeout)
+            output = result.stdout
+            if result.stderr:
+                output += f"\n--- stderr ---\n{result.stderr[-2000:]}"
+            return ok(output[:5000] if output else "（无输出）")
+        except subprocess.TimeoutExpired:
+            return err(f"执行超时({timeout}s)")
+        except Exception as e:
+            return err(f"执行失败: {e}")
+        finally:
+            os.unlink(f.name)
+
+
+async def _handle_execute_shell(args: Dict) -> Dict:
+    from .v1_tool_result import ok, err
+    command = args.get("command", "")
+    if not command:
+        return err("缺少 command 参数")
+    timeout = min(int(args.get("timeout", 20)), 60)
+    mode = args.get("mode", "sandbox")
+    if mode == "sandbox":
+        safe_prefixes = ("ls", "pwd", "echo", "cat ", "head ", "tail ", "wc ", "date", "whoami", "uname", "which ", "mkdir ", "cp ", "mv ", "rm ", "grep ", "find ", "chmod ", "sort ", "uniq ", "cut ", "python3 --version", "node --version", "npm --version", "git --version", "pip3 --version")
+        if not any(command.startswith(p) for p in safe_prefixes):
+            return err(f"sandbox 模式仅允许安全命令: {command[:50]}")
+    try:
+        result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=timeout)
+        output = result.stdout
+        if result.stderr:
+            output += f"\n--- stderr ---\n{result.stderr[:500]}"
+        return ok(output[:5000] or "（执行完成，无输出）", returncode=result.returncode)
+    except subprocess.TimeoutExpired:
+        return err(f"执行超时({timeout}s)")
+    except Exception as e:
+        return err(f"执行失败: {e}")
+
+
+async def _handle_git(args: Dict) -> Dict:
+    from .v1_tool_result import ok, err
+    action = args.get("action", "")
+    if not action:
+        return err("缺少 action 参数")
+    msg = args.get("message", "")
+    repo = os.getcwd()
+    cmds = {
+        "status": ["git", "status"],
+        "add": ["git", "add", args.get("files", ".")],
+        "commit": ["git", "commit", "-m", msg] if msg else None,
+        "log": ["git", "log", "--oneline", f"-{args.get('count', 5)}"],
+        "diff": ["git", "diff", "--stat"],
+        "branch": ["git", "branch", "-a"],
+        "pull": ["git", "pull"],
+    }
+    if action not in cmds or cmds[action] is None:
+        return err(f"未知操作或缺少参数: {action}")
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmds[action], cwd=repo, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        )
+        o, e = await asyncio.wait_for(proc.communicate(), timeout=15)
+        text = (o.decode() if o else "") or (e.decode() if e else "(无输出)")
+        return ok(text[:2000], returncode=proc.returncode)
+    except asyncio.TimeoutError:
+        return err("执行超时(15s)")
+    except Exception as e:
+        return err(f"git 失败: {e}")
+
+
+async def _handle_fetch_url(args: Dict) -> Dict:
+    from .v1_tool_result import ok, err
+    import aiohttp, ssl
+    url = args.get("url", "")
+    timeout = int(args.get("timeout", 10))
+    max_length = int(args.get("max_length", 8000))
+    if not url:
+        return err("缺少 url 参数")
+    if url.startswith("http://"):
+        url = "https://" + url[7:]
+    headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
+                body = await resp.text(encoding="utf-8", errors="replace")
+    except (aiohttp.ClientConnectorError, ssl.SSLError):
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=timeout), ssl=False) as resp:
+                body = await resp.text(encoding="utf-8", errors="replace")
+    from .v1_html_parser import html_to_text
+    text = html_to_text(body, max_length=max_length)
+    return ok(text, url=url, raw_length=len(body))
+
+
+async def _handle_search(args: Dict) -> Dict:
+    from .v1_tool_result import ok, err
+    from .v1_html_parser import html_to_text, extract_search_results
+    import aiohttp
+    query = args.get("query", "")
+    if not query:
+        return err("缺少 query 参数")
+    num_results = min(int(args.get("num_results", 8)), 20)
+    from urllib.parse import quote
+    url = f"https://www.baidu.com/s?wd={quote(query)}&rn={num_results}"
+    headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                html = await resp.text(encoding="utf-8", errors="replace")
+        results = extract_search_results(html, engine="baidu")
+        if results:
+            lines = [f"{i+1}. {r['title']}\n   {r['link']}\n   {r['snippet']}" for i, r in enumerate(results)]
+            return ok("\n\n".join(lines), count=len(results))
+        text = html_to_text(html)
+        return ok(text)
+    except Exception as e:
+        return err(f"搜索失败: {e}")
+
+
+async def _handle_text_analyzer(args: Dict) -> Dict:
+    from .v1_tool_result import ok, err
+    text = args.get("text", "")
+    if not text:
+        return err("缺少 text 参数")
+    from core.engine.llm_backend import get_llm_router
+    router = get_llm_router()
+    if not router or not router.is_available():
+        return ok(f"文本长度: {len(text)} 字符\n前200字: {text[:200]}")
+    prompt = f"分析以下文本，输出 JSON：\n{{\"summary\":\"摘要\",\"key_points\":[\"要点1\",...],\"tone\":\"情感倾向\"}}\n\n文本：{text[:3000]}"
+    try:
+        resp = await router.simple_chat(prompt, temperature=0.3, max_tokens=800)
+        return ok(resp or "分析完成")
+    except Exception as e:
+        return ok(f"分析异常，返回原文前500字:\n{text[:500]}")
+
+
+async def _handle_write_todos(args: Dict) -> Dict:
+    from .v1_tool_result import ok, err
+    todos = args.get("todos", [])
+    if not todos:
+        return err("缺少 todos 参数")
+    lines = []
+    for t in todos:
+        if isinstance(t, dict):
+            content = t.get("content", str(t))
+            status = t.get("status", "pending")
+            prefix = "- [x]" if status == "completed" else "- [ ]"
+            lines.append(f"{prefix} {content}")
+        else:
+            lines.append(f"- [ ] {t}")
+    return ok("\n".join(lines), count=len(todos))
+
+
 _HANDLER_MAP: Dict[str, Callable] = {
     "write_file": _handle_write_file,
     "read_file": _handle_read_file,
     "edit_file": _handle_edit_file,
     "search_files": _handle_search_files,
+    "execute_python": _handle_execute_python,
+    "execute_shell": _handle_execute_shell,
+    "git": _handle_git,
+    "fetch_url": _handle_fetch_url,
+    "web_search": _handle_search,
+    "text_analyzer": _handle_text_analyzer,
+    "write_todos": _handle_write_todos,
 }
 
 for sd in _SANDBOX_TOOL_DEFS:
