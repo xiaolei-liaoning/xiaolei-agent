@@ -548,3 +548,67 @@ class V1ToolRegistry:
                     self._tools[sd.name] = sd
             self._initialized = True
         return list(self._tools.values())
+
+    def get_handler(self, name: str) -> Optional[Callable]:
+        h = _HANDLER_MAP.get(name)
+        if h:
+            return h
+        td = self._tools.get(name)
+        if td and td.handler:
+            return td.handler
+        return None
+
+    def validate_arguments(self, name: str, args: Dict) -> tuple:
+        t = self._tools.get(name)
+        if not t:
+            return False, f"未知工具 '{name}'"
+        p = t.parameters
+        if not p:
+            return True, ""
+        props = p.get("properties", {})
+        req = p.get("required", [])
+        errors = []
+        for f in req:
+            if f not in args or args[f] is None or args[f] == "":
+                field_schema = props.get(f, {})
+                desc = field_schema.get("description", "")
+                detail = f"缺少必需参数 '{f}' (类型: {field_schema.get('type', 'any')})"
+                if desc:
+                    detail += f" — {desc[:100]}"
+                errors.append(detail)
+        for k, v in list(args.items()):
+            if k in props:
+                pt = props[k].get("type", "")
+                if pt == "string" and not isinstance(v, str):
+                    args[k] = str(v)
+                elif pt in ("integer", "number") and isinstance(v, str):
+                    try:
+                        args[k] = int(v) if pt == "integer" else float(v)
+                    except ValueError:
+                        errors.append(f"参数 '{k}' 无法从 '{v}' 转换为 {pt}")
+        if errors:
+            detail_lines = [f"参数校验失败 - 工具 '{name}':"]
+            detail_lines += [f"  {e}" for e in errors]
+            detail_lines += ["", "可用参数:"]
+            for pn, ps in props.items():
+                preq = "必填" if pn in req else "可选"
+                pdesc = ps.get("description", "")
+                detail_lines.append(f"  • {pn} ({ps.get('type','any')}, {preq}){' — ' + pdesc[:120] if pdesc else ''}")
+            return False, "\n".join(detail_lines)
+        return True, ""
+
+    async def get_tools_for_task(self, task: str = "", max_tools=20, allowed=None, disallowed=None, tool_preference=None) -> List[ToolDefinition]:
+        if not self._initialized:
+            return list(self._tools.values())[:max_tools]
+        all_tools = list(self._tools.values())
+        if allowed is not None:
+            allowed_set = set(allowed)
+            all_tools = [t for t in all_tools if t.name in allowed_set or t.server not in (SERVER_BUILTIN, "")]
+        if disallowed is not None:
+            disallowed_set = set(disallowed)
+            all_tools = [t for t in all_tools if t.name not in disallowed_set]
+        if tool_preference:
+            preferred = [t for t in all_tools if t.server in tool_preference]
+            others = [t for t in all_tools if t.server not in tool_preference]
+            all_tools = preferred + others
+        return all_tools[:max_tools]
