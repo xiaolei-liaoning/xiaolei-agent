@@ -714,10 +714,12 @@ class LeaderAgent(LLMAgent):
         self.workers: Dict[str, LLMAgent] = {}
         self.max_workers = max_workers
         self.active_worker_count = 3
+        self._current_skill_id = "general"
         self.worker_states: Dict[str, str] = {}  # 跟踪Worker状态
 
     async def supervise_task(self, task_description: str, workers: List[LLMAgent],
-                             active_count: int = 3, max_rounds: int = 5) -> Dict:
+                             active_count: int = 3, max_rounds: int = 5,
+                             skill_id: str = "general") -> Dict:
         """队长 ReAct 主循环：Thought → Action → Observation → 循环/完成
 
         ReAct 模式核心：
@@ -736,6 +738,7 @@ class LeaderAgent(LLMAgent):
             执行结果字典
         """
         self.active_worker_count = min(active_count, len(workers))
+        self._current_skill_id = skill_id
         self.workers = {w.name: w for w in workers}
 
         logger.info(f"🚀 队长 {self.name} 开始 ReAct 执行任务: {task_description}")
@@ -1048,15 +1051,32 @@ class LeaderAgent(LLMAgent):
         if user_context_str:
             full_task = f"{task_description}\n\n{user_context_str}\n\n请根据以上用户信息回答。"
 
+        # 可用 skill 列表
+        skill_hints = ""
+        try:
+            pool_info = getattr(self, '_pool', None)
+            if pool_info is not None:
+                skills = list(pool_info._agent_configs.keys()) if hasattr(pool_info, '_agent_configs') else []
+            else:
+                from core.engine.config_loader import register_agents_from_config
+                skills = [c["id"] for c in register_agents_from_config()]
+            if skills:
+                skill_hints = f"\n可用 skill: {', '.join(skills)}\n当前匹配 skill: {self._current_skill_id or 'general'}\n\n"
+        except Exception:
+            skill_hints = "\n可用 skill: project_analyzer, web_scraper, data_analyst, general\n\n"
+
         system = (
             "你是队长Agent，使用 ReAct 模式执行任务。\n\n"
             "你的职责是分析任务、决策行动、分配子任务给 Worker 执行。\n"
             "Worker 会帮你执行工具调用（搜索、执行代码、操作浏览器、读文件等）。\n\n"
             "输出下一步行动的 JSON：\n\n"
             "选项1 - 分配单个子任务给Worker（推荐！大多数任务用这个）:\n"
-            '{"done": false, "thinking": "分析...", "action": {"type": "delegate", "task": "子任务描述，要具体可执行"}}\n\n'
+            '{"done": false, "thinking": "...", "action": {"type": "delegate", "task": "子任务描述", "skill": "project_analyzer"}}\n\n'
             "选项2 - 批量分配子任务给多个Worker并行执行:\n"
-            '{"done": false, "thinking": "分析...", "action": {"type": "batch_delegate", "tasks": ["子任务1", "子任务2"]}}\n\n'
+            '{"done": false, "thinking": "...", "action": {"type": "batch_delegate", "tasks": [\n'
+            '  {"task": "子任务1", "skill": "project_analyzer"},\n'
+            '  {"task": "子任务2", "skill": "web_scraper"}\n'
+            ']}}\n\n'
             "选项3 - 处理前一轮的batch_delegate结果:\n"
             '{"done": false, "thinking": "基于上一轮结果...", "action": {"type": "process_results", "task": "综合分析并生成报告"}}\n\n'
             "选项4 - 调用工具（仅当任务非常简单、不需要Worker时）:\n"
@@ -1075,7 +1095,7 @@ class LeaderAgent(LLMAgent):
             "- 【关键】如果已有结果（见下方已有结果摘要），优先选择 process_results 综合分析，或直接 done 输出最终答案，不要再重复 delegate！\n"
             "- 【硬性规则】如果上一轮是 batch_delegate 且有成功结果，这一轮必须选择 process_results 或 done，禁止再选 batch_delegate！\n\n"
             "输出纯JSON，不要其他内容。"
-        )
+        ) + skill_hints
 
         user = f"任务: {full_task}\n\n历史:\n{history_text or '无'}\n\n{results_text}\n\n第{round_num}轮，请思考下一步："
 
@@ -1106,6 +1126,7 @@ class LeaderAgent(LLMAgent):
         elif action_type == "delegate":
             # 分配子任务给 Worker
             task = action.get("task", original_task)
+            skill_id = action.get("skill", self._current_skill_id or "general")
             if not task:
                 return {"success": False, "error": "未指定子任务"}
             
@@ -1132,6 +1153,7 @@ class LeaderAgent(LLMAgent):
                 "success": is_ok,
                 "result": data,
                 "worker": worker.name,
+                "skill_id": skill_id,
             }
 
         elif action_type == "batch_delegate":
@@ -1144,9 +1166,22 @@ class LeaderAgent(LLMAgent):
             if not tasks:
                 return {"success": False, "error": "无可用子任务"}
             
+            # 规范化任务：提取 (task_str, skill_id) 对
+            task_skills = []
+            normalized_tasks = []
+            for task_item in tasks:
+                if isinstance(task_item, dict):
+                    t = task_item["task"]
+                    s = task_item.get("skill", self._current_skill_id or "general")
+                else:
+                    t = task_item
+                    s = self._current_skill_id or "general"
+                normalized_tasks.append(t)
+                task_skills.append(s)
+            
             # 使用轮询分配子任务给 Worker
             active_workers = workers[:self.active_worker_count]
-            assignments = self._assign(tasks, active_workers)
+            assignments = self._assign(normalized_tasks, active_workers)
             
             # 并行执行所有子任务
             batch_results = await self._execute_batch(assignments, workers)
@@ -1164,6 +1199,7 @@ class LeaderAgent(LLMAgent):
                         "total_count": len(batch_results),
                     },
                     "workers": [r.get("worker") for r in batch_results],
+                    "skill_ids": task_skills,
                 }
             
             # 全部失败 → 分析原因
@@ -1178,6 +1214,7 @@ class LeaderAgent(LLMAgent):
                     "total_count": len(batch_results),
                 },
                 "workers": [r.get("worker") for r in batch_results],
+                "skill_ids": task_skills,
             }
 
         elif action_type == "process_results":
