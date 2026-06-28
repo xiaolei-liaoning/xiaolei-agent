@@ -539,14 +539,28 @@ class V1ToolRegistry:
     def __init__(self):
         self._tools: Dict[str, ToolDefinition] = {}
         self._initialized = False
+        self._mcp_explored = False
+        self._mcp_adapter = None
 
     async def discover_all(self) -> List[ToolDefinition]:
-        """发现内置工具（MCP 由 MCP adapter 补充）"""
+        """发现内置工具 + MCP 工具"""
         if not self._initialized:
             for sd in _SANDBOX_TOOL_DEFS:
                 if sd.name not in self._tools:
                     self._tools[sd.name] = sd
             self._initialized = True
+        if not self._mcp_explored:
+            try:
+                from .v1_mcp_adapter import V1MCPAdapter
+                self._mcp_adapter = V1MCPAdapter()
+                mcp_defs = await self._mcp_adapter.get_all_tool_defs()
+                for td_dict in mcp_defs:
+                    td = ToolDefinition(**td_dict)
+                    if td.name not in self._tools:
+                        self._tools[td.name] = td
+                self._mcp_explored = True
+            except Exception as e:
+                logger.warning(f"MCP 发现失败: {e}")
         return list(self._tools.values())
 
     def get_handler(self, name: str) -> Optional[Callable]:
@@ -556,6 +570,15 @@ class V1ToolRegistry:
         td = self._tools.get(name)
         if td and td.handler:
             return td.handler
+        # MCP 工具
+        if td and td.server and td.tool_name and td.server not in ("", SERVER_BUILTIN):
+            if self._mcp_adapter is None:
+                return None
+            srv, tname = td.server, td.tool_name
+            async def _mcp_handler(args: dict) -> str:
+                result = await self._mcp_adapter.call_tool(srv, tname, args)
+                return result
+            return _mcp_handler
         return None
 
     def validate_arguments(self, name: str, args: Dict) -> tuple:
