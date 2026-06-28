@@ -332,7 +332,7 @@ async def _handle_with_multi_agent(
                 logger.info(f"已将OCR结果附加到消息，追加字符数: {len(ocr_text)}")
 
         # ========== V1 队长-队员模式执行 ==========
-        from core.agent_system import V1LeaderPool
+        from core.agent_system import V1LeaderPool, V1SkillRouter
 
         # 使用全局池（Worker可复用）
         if not hasattr(_handle_with_multi_agent, '_pool'):
@@ -340,10 +340,15 @@ async def _handle_with_multi_agent(
         pool = _handle_with_multi_agent._pool
         await pool._ensure_tool_registry()
 
+        # skill 匹配
+        skill_router = V1SkillRouter()
+        skill_id = await skill_router.match(message)
+        logger.info(f"🎯 V1 skill 匹配: {skill_id}")
+
         # 从池中获取Worker
         workers = []
         for _ in range(3):
-            w = await pool.get_worker()
+            w = await pool.get_worker(skill_id=skill_id)
             if w:
                 workers.append(w)
 
@@ -359,6 +364,7 @@ async def _handle_with_multi_agent(
                 max_workers=len(workers),
                 tool_registry=pool._tool_registry,
             )
+            leader._pool = pool  # 供 _react_think() 读取 skill 列表
             is_temp_team = False
 
         # A: 对话记忆 — 设置 user_id 到所有 Agent
@@ -383,12 +389,12 @@ async def _handle_with_multi_agent(
         if user_context_str:
             task_with_context = (
                 f"{message}\n\n【用户已知信息（来自长期记忆）】\n{user_context_str}\n\n"
-                "请根据以上信息回答。如果用户信息中有答案，直接使用，不要搜索。"
+                "以上信息供参考。请按用户当前要求执行，不要仅凭历史记录作答。"
             )
 
         try:
             result = await asyncio.wait_for(
-                leader.supervise_task(task_with_context, workers, active_count=len(workers), max_rounds=3),
+                leader.supervise_task(task_with_context, workers, active_count=len(workers), max_rounds=3, skill_id=skill_id),
                 timeout=120,
             )
         except asyncio.TimeoutError:
