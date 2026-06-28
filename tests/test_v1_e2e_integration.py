@@ -226,7 +226,7 @@ async def test_pool_get_return_worker():
 
     await pool.return_worker(w1)
     assert w1.name not in pool._busy_workers
-    assert w1 in pool._worker_pool
+    assert w1 in pool._worker_pool.get("general", [])
 
 
 # ═══════════════════════════════════════════════════════════════════

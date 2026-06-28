@@ -1336,10 +1336,22 @@ class V1LeaderPool:
     def __init__(self):
         self._all_agents: Dict[str, LLMAgent] = {}
         self._tool_registry = None
-        # Worker 池化管理
-        self._worker_pool: List[LLMAgent] = []  # 空闲Worker池
+        # Worker 池化管理 — skill_id → [空闲Worker]
+        self._worker_pool: Dict[str, List[LLMAgent]] = {}
         self._busy_workers: Dict[str, LLMAgent] = {}  # 忙碌中的Worker
         self._pool_lock = asyncio.Lock()  # 池操作锁
+        self._agent_configs: Dict[str, dict] = {}  # agents.yml 配置缓存
+
+    def _load_agent_configs(self):
+        """加载 agents.yml 中的 skill 配置缓存"""
+        if self._agent_configs:
+            return
+        try:
+            from core.engine.config_loader import register_agents_from_config
+            for cfg in register_agents_from_config():
+                self._agent_configs[cfg["id"]] = cfg
+        except Exception as e:
+            logger.error("加载 agents.yml 配置失败，Worker 将使用默认配置: %s", e)
 
     async def _ensure_tool_registry(self):
         """确保工具注册表已初始化（工具发现由 V2 ReActCoreMiddleware.on_start 负责）"""
@@ -1363,6 +1375,7 @@ class V1LeaderPool:
             (LeaderAgent, List[LLMAgent]) — 队长 + 全部 Worker 列表
         """
         await self._ensure_tool_registry()
+        self._load_agent_configs()
         team_id = uuid4().hex[:8]
         leader = LeaderAgent(
             name=f"队长_{team_id}",
@@ -1389,22 +1402,25 @@ class V1LeaderPool:
 
     # ─── Worker 池化管理 ──────────────────────────────────────────────
 
-    async def get_worker(self, leader_name: str = None) -> Optional[LLMAgent]:
-        """从池中获取一个空闲Worker
+    async def get_worker(self, skill_id: str = "general", leader_name: str = None) -> Optional[LLMAgent]:
+        """从池中获取一个空闲Worker（按 skill_id 池化）
 
         Args:
+            skill_id: 技能类型ID，对应 agents.yml 中的 agent id
             leader_name: 主Agent名称（用于设置Worker的leader_name）
 
         Returns:
             空闲Worker，或 None（池空且达到上限）
         """
         await self._ensure_tool_registry()
+        self._load_agent_configs()
         async with self._pool_lock:
-            total_workers = len(self._worker_pool) + len(self._busy_workers)
+            if skill_id not in self._worker_pool:
+                self._worker_pool[skill_id] = []
 
             # 优先从池中获取
-            if self._worker_pool:
-                worker = self._worker_pool.pop()
+            if self._worker_pool[skill_id]:
+                worker = self._worker_pool[skill_id].pop()
                 worker._update_state("idle", "从池中取出")
                 if leader_name:
                     worker.leader_name = leader_name
@@ -1414,19 +1430,23 @@ class V1LeaderPool:
 
             # 池空且在容量上限内，创建新Worker
             # ponytail: 硬上限 10 个，避免内存泄漏
+            total_workers = sum(len(v) for v in self._worker_pool.values()) + len(self._busy_workers)
             if total_workers < 10:
-                team_id = uuid4().hex[:8]
+                config = self._agent_configs.get(skill_id, {})
                 worker = LLMAgent(
-                    name=f"队员_{team_id}",
+                    name=f"队员_{skill_id}_{uuid4().hex[:6]}",
                     role=AgentRole.WORKER,
+                    role_prompt=config.get("role_prompt", ""),
+                    tool_restrictions=config.get("tools", []),
                     tool_registry=self._tool_registry,
                 )
+                worker.skill_id = skill_id
                 if leader_name:
                     worker.leader_name = leader_name
 
                 self._all_agents[worker.name] = worker
                 self._busy_workers[worker.name] = worker
-                logger.debug(f"✨ 创建新 Worker: {worker.name}")
+                logger.debug(f"✨ 创建新 Worker: {worker.name} (skill={skill_id})")
                 return worker
 
             logger.warning("Worker池已满(%d)，无法获取更多Worker", total_workers)
@@ -1434,23 +1454,27 @@ class V1LeaderPool:
 
     async def return_worker(self, worker: LLMAgent) -> None:
         """将Worker归还到池中（任务完成后）
-        
+
         Args:
             worker: 要归还的Worker
         """
         async with self._pool_lock:
             # 从忙碌列表移除
             self._busy_workers.pop(worker.name, None)
-            
+
             # 重置Worker状态
             worker._update_state("idle", "任务完成归还池")
             worker.current_task = None
             worker.last_result = None
-            
+
+            skill_id = getattr(worker, 'skill_id', "general")
+            if skill_id not in self._worker_pool:
+                self._worker_pool[skill_id] = []
+
             # 放回池中
-            if worker not in self._worker_pool:
-                self._worker_pool.append(worker)
-                logger.debug(f"📦 Worker 归还池: {worker.name}")
+            if worker not in self._worker_pool[skill_id]:
+                self._worker_pool[skill_id].append(worker)
+                logger.debug(f"📦 Worker 归还池: {worker.name} (skill={skill_id})")
 
 
     async def discard(self, agents: List[LLMAgent]) -> None:
@@ -1465,9 +1489,7 @@ class V1LeaderPool:
                 self._all_agents.pop(agent.name, None)
                 logger.debug(f"V1LeaderPool: 清理 Leader {agent.name}")
             else:
-                # Worker 放回池中
-                await self.return_worker(agent)
-                logger.debug(f"V1LeaderPool: Worker {agent.name} 归还池")
+                await self.return_worker(agent)  # return_worker 内部已记录日志
 
     def get_agent(self, name: str) -> Optional[LLMAgent]:
         return self._all_agents.get(name)
