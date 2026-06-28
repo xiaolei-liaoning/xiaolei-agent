@@ -15,6 +15,7 @@ V2 ToolRegistry 集成：
 
 import asyncio
 import json
+import re
 import time
 import logging
 from typing import Any, Dict, List, Optional
@@ -27,21 +28,78 @@ logger = logging.getLogger(__name__)
 
 
 class V1SkillRouter:
-    """V1 版 skill 路由 — 输入 task，输出 skill_id"""
+    """V1 版 skill 路由 — 输入 task，输出 skill_id
+
+    增强功能：
+    - 第1层: @skill 确定性路由
+    - 第2层: SkillSystem 三层匹配
+    - 第3层: LLM 意图分类兜底
+    - 第4层: 回退到 general
+    """
 
     def __init__(self):
         self._skill_system = None
+        self._llm_router = None
 
     async def match(self, task: str) -> str:
+        # 第1层: @skill 确定性路由
+        at_match = re.match(r"@(\w+)\s", task)
+        if at_match:
+            skill_name = at_match.group(1)
+            try:
+                if self._skill_system is None:
+                    from core.skills.base_skills import SkillSystem
+                    self._skill_system = SkillSystem()
+                await self._skill_system.match(task)
+                known_skills = [s.id for s in self._skill_system.base_skills.values()] if hasattr(self._skill_system, 'base_skills') else []
+                if skill_name in known_skills:
+                    return skill_name
+            except Exception:
+                pass
+
+        # 第2层: SkillSystem 三层匹配（原有逻辑）
         try:
             if self._skill_system is None:
                 from core.skills.base_skills import SkillSystem
                 self._skill_system = SkillSystem()
             result = await self._skill_system.match(task)
-            return result.skill_id or "general"
+            if result.skill_id and result.skill_id != "general":
+                return result.skill_id
         except Exception as e:
-            logger.debug("V1SkillRouter.match 失败: %s", e)
-            return "general"
+            logger.debug("V1SkillRouter.match 第2层失败: %s", e)
+
+        # 第3层: LLM 意图分类兜底
+        llm_skill = await self._llm_classify(task)
+        if llm_skill:
+            return llm_skill
+
+        # 第4层: 回退到 general
+        return "general"
+
+    async def _llm_classify(self, task: str) -> Optional[str]:
+        try:
+            if self._llm_router is None:
+                from core.engine.llm_backend import get_llm_router
+                self._llm_router = get_llm_router()
+            if not self._llm_router or not self._llm_router.is_available():
+                return None
+            system = ("你是一个技能路由器。从以下技能中选择最匹配的一个，只返回 JSON：\n"
+                      "可用技能: project_analyzer, web_scraper, data_analyst, deep_thinker, translator, weather_expert, system_toolbox, creative, general\n"
+                      '输出: {"skill": "技能名", "confidence": 0.0~1.0, "reason": "简短理由"}')
+            resp = await self._llm_router.simple_chat(
+                user_message=task, system_prompt=system,
+                temperature=0.1, max_tokens=100,
+            )
+            if resp:
+                text = resp.strip().strip("```json").strip("```").strip()
+                parsed = json.loads(text)
+                skill = parsed.get("skill", "")
+                conf = float(parsed.get("confidence", 0.0))
+                if skill and conf >= 0.6 and skill != "general":
+                    return skill
+        except Exception as e:
+            logger.debug("V1SkillRouter LLM 分类失败: %s", e)
+        return None
 
 
 def _get_llm_router():
@@ -120,18 +178,24 @@ async def _llm_json(system_prompt: str, user_message: str, max_tokens: int = 800
 
 SYSTEM_PROMPT_TEMPLATE = """你是一个{role}Agent。你的职责是{description}。
 
-对于给定的任务，你需要：
-1. 分析任务的目标和要求
-2. 直接执行任务，生成完整的实际内容（如写故事就写出完整故事，分析数据就给出详细分析）
-3. 将执行结果放在 result 字段中（必须是实际交付内容，不是状态描述）
+先思考再行动：
+1. 任务目标是什么？当前进度在哪里？
+2. 需要工具就调用，有数据就回答，信息不够继续追问
+3. 不要输出思考过程描述，直接行动
 
-⚠️ 重要：你必须直接完成任务并输出结果，而不是描述你将如何做。例如"写一个故事"→ 直接写出完整故事；"分析数据"→ 直接给出分析结论。
+关键规则：
+- 如果任务明确且有数据，直接执行，不要描述"我将..."
+- 创建文件/报告 → 用 write_file 工具写入（如 ~/Desktop/文件名）
+- 分析任务 → 先读取文件/搜索获取数据，再返回完整分析结果
+- 修改代码 → 用 edit_file（精确字符串替换）
+- 禁止输出被截断/不完整的内容
 
 {extra_context}
 
 {file_tip}
 
-输出格式（JSON，不要包含其他内容）：
+输出格式：
+返回 JSON 格式结果（可直接用工具完成的任务在 result 字段返回实际内容）
 {output_format}"""
 
 OUTPUT_FORMATS = {
@@ -483,7 +547,7 @@ class LLMAgent:
         except Exception:
             pass
 
-        max_react_rounds = 2  # ponytail: 2 rounds，工具调用一次后直接结束
+        max_react_rounds = 3  # ponytail: 3 rounds，2轮工具调用 + 1轮生成分析文本
         result = {}
         all_tool_results = []  # 累积所有轮的 tool_results
 
@@ -507,6 +571,15 @@ class LLMAgent:
 
             all_tool_results.extend(tool_results)
             logger.info(f"🔧 {self.name} 第 {round_num + 1} 轮: {len(tool_calls)} 个工具执行完成")
+
+        # ponytail: 如果最后没有文本回答（全是工具调用），强制补一轮无工具 LLM 调用生成摘要
+        if all_tool_results and not result.get("content", ""):
+            _summarize_prompt = (
+                "任务: " + message.content[:200] +
+                "\n\n你已通过工具获取了数据，请基于已有数据生成最终回答，不要再调用工具。"
+            )
+            conversation.append({"role": "user", "content": _summarize_prompt})
+            result = await self._llm_with_tools_from_conversation(conversation, tools=None)
 
         # 基于所有轮累积的工具结果生成答案
         if all_tool_results:
@@ -552,7 +625,7 @@ class LLMAgent:
             conversation.append({
                 "role": "tool",
                 "tool_call_id": tc.get("id", "call_0"),
-                "content": str(content),  # ponytail: 去掉截断，上层 prompt 做 context 管理
+                "content": str(content)[:1000],  # ponytail: 截断到1000字符，过长会撑爆上下文
             })
 
     async def _llm_with_tools_from_conversation(self, conversation: List[Dict], tools: List[Dict]) -> dict:
@@ -950,18 +1023,16 @@ class LeaderAgent(LLMAgent):
                 )
             history_text = "\n".join(history_lines)
 
-        # ponytail: 检测连续 tool 失败，注入强制 delegate 提示
         if history:
-            last_actions = [h for h in history[-2:] if h["action_type"] == "tool" and not h["result"].get("success")]
-            if last_actions:
-                history_text += "\n\n⚠️ 注意：上一轮 tool 执行失败，你必须选择 delegate 或 batch_delegate，禁止再次选择 tool！"
-            # 检测连续 batch_delegate，强制合成
             last_batch = [h for h in history[-2:] if h["action_type"] in ("batch_delegate", "delegate")]
             if last_batch and results:
-                history_text += "\n\n🚨 已有结果！下一轮必须选择 process_results 或 done，禁止再选 batch_delegate 或 delegate！"
+                history_text += "\n→ 上一轮是 delegate，本轮必须 process_results"
 
         results_text = ""
         if results:
+            # 最近一次 action 类型
+            last_action = history[-1]["action_type"] if history else None
+            has_delegate_recently = last_action in ("delegate", "batch_delegate")
             # 提取已有结果的关键内容
             result_summaries = []
             for r in results[-3:]:
@@ -980,9 +1051,7 @@ class LeaderAgent(LLMAgent):
                             result_summaries.append(str(c)[:200])
             if result_summaries:
                 results_text = (
-                    f"\n【⚠️ 已有结果 - 不要再重复相同任务！】\n"
-                    + "\n".join(result_summaries)
-                    + "\n\n→ 如果结果足够，直接 done 或 process_results 综合分析！"
+                    f"\n【已有结果】\n" + "\n".join(result_summaries)
                 )
             else:
                 results_text = f"\n已完成 {len(results)} 个子任务"
@@ -1066,34 +1135,19 @@ class LeaderAgent(LLMAgent):
             skill_hints = "\n可用 skill: project_analyzer, web_scraper, data_analyst, general\n\n"
 
         system = (
-            "你是队长Agent，使用 ReAct 模式执行任务。\n\n"
-            "你的职责是分析任务、决策行动、分配子任务给 Worker 执行。\n"
-            "Worker 会帮你执行工具调用（搜索、执行代码、操作浏览器、读文件等）。\n\n"
-            "输出下一步行动的 JSON：\n\n"
-            "选项1 - 分配单个子任务给Worker（推荐！大多数任务用这个）:\n"
-            '{"done": false, "thinking": "...", "action": {"type": "delegate", "task": "子任务描述", "skill": "project_analyzer"}}\n\n'
-            "选项2 - 批量分配子任务给多个Worker并行执行:\n"
-            '{"done": false, "thinking": "...", "action": {"type": "batch_delegate", "tasks": [\n'
-            '  {"task": "子任务1", "skill": "project_analyzer"},\n'
-            '  {"task": "子任务2", "skill": "web_scraper"}\n'
-            ']}}\n\n'
-            "选项3 - 处理前一轮的batch_delegate结果:\n"
-            '{"done": false, "thinking": "基于上一轮结果...", "action": {"type": "process_results", "task": "综合分析并生成报告"}}\n\n'
-            "选项4 - 调用工具（仅当任务非常简单、不需要Worker时）:\n"
-            '{"done": false, "thinking": "分析...", "action": {"type": "tool", "tool_name": "工具名", "args": {...}}}\n\n'
-            "选项5 - 任务完成:\n"
-            '{"done": true, "thinking": "任务已完成..."}\n\n'
-            "决策指南（重要！）:\n"
-            "- 任何涉及本地文件/目录的操作（读取、列出、写入文件等）→ 必须 delegate\n"
-            "- 需要搜索+写文件等多步操作 → batch_delegate 或 delegate\n"
-            "- 涉及多个独立步骤 → batch_delegate\n"
-            "- 单个明确子任务 → delegate\n"
-            "- 仅当任务明确为单次网络请求（如查天气、下载单个网页）→ tool\n"
-            "- 子任务应当具体可执行，不要模糊。参考下方工具列表，为每个子任务匹配合适的工具\n"
-            "- 如果涉及浏览器/MCP工具，确保子任务描述包含操作目标\n"
-            "- 上一轮 tool 失败 → 必须改为 delegate，不要重复失败的 action\n"
-            "- 【关键】如果已有结果（见下方已有结果摘要），优先选择 process_results 综合分析，或直接 done 输出最终答案，不要再重复 delegate！\n"
-            "- 【硬性规则】如果上一轮是 batch_delegate 且有成功结果，这一轮必须选择 process_results 或 done，禁止再选 batch_delegate！\n\n"
+            "你是队长Agent。严格按以下三轮流程执行，不得跳过任何一步：\n\n"
+            "第1轮 → delegate（或 batch_delegate）给 Worker 执行\n"
+            "第2轮 → process_results 综合分析 Worker 返回的结果\n"
+            "第3轮 → done 结束\n\n"
+            "格式：\n"
+            'delegate: {"done":false,"action":{"type":"delegate","task":"子任务","skill":"skill名"}}\n'
+            'batch_delegate: {"done":false,"action":{"type":"batch_delegate","tasks":[{"task":"子任务1","skill":"skill名"},...]}}\n'
+            'process_results: {"done":false,"action":{"type":"process_results","task":"综合分析"}}\n'
+            'done: {"done":true,"thinking":"已完成..."}\n\n'
+            "规则：\n"
+            "- 除非用户要求保存文件，否则不要自己决定写文件\n"
+            "- 用户要求保存到桌面 → delegate 的 task 里写明用 write_file\n"
+            "- 不得跳过 process_results 直接 done\n"
             "输出纯JSON，不要其他内容。"
         ) + skill_hints
 
@@ -1246,11 +1300,39 @@ class LeaderAgent(LLMAgent):
                                 if c:
                                     summaries.append(c[:500])
                     else:
-                        c = data.get("content", data.get("tool_result_summary", data.get("result", data.get("raw", ""))))
+                        cc = data.get("content", "") or ""
+                        tc = data.get("tool_result_summary", "") or ""
+                        c = cc or tc
                         if c:
                             summaries.append(str(c)[:500])
             
             combined = "\n\n".join(summaries) if summaries else "无有效结果"
+
+            # ponytail: 只有任务显式要求保存到桌面时才自动写文件
+            _should_write = (
+                "保存到桌面" in original_task or "保存到 ~/Desktop" in original_task
+                or "保存到 ~/桌面" in original_task
+            )
+            if self.tool_registry and _should_write:
+                import re as _re
+                _path = None
+                _name_match = _re.search(r'(?:文件名为?|file_name|filename)\s*[:：]?\s*([\w.\-]+)', original_task)
+                if _name_match:
+                    _path = f"~/Desktop/{_name_match.group(1)}"
+                if not _path:
+                    _abs_match = _re.search(r'保存到\s*([~/][\w/.\-]+)', original_task)
+                    if _abs_match:
+                        _path = _abs_match.group(1)
+                if _path:
+                    try:
+                        _handler = self.tool_registry.get_handler("write_file")
+                        if _handler:
+                            await _handler({"path": _path, "content": combined})
+                            logger.info(f"📝 process_results 自动写入文件: {_path}")
+                            combined = f"✅ 报告已保存到 {_path}\n\n{combined[:200]}...\n\n（完整内容见文件）"
+                    except Exception as _e:
+                        logger.warning(f"自动写文件失败: {_e}")
+
             return {
                 "success": True,
                 "result": {"tool_result_summary": combined, "content": combined},
@@ -1474,7 +1556,7 @@ class V1LeaderPool:
                     name=f"队员_{skill_id}_{uuid4().hex[:6]}",
                     role=AgentRole.WORKER,
                     role_prompt=config.get("role_prompt", ""),
-                    tool_restrictions=config.get("tools", []),
+                    tool_restrictions=None,  # ponytail: V1 不限制工具（agents.yml tools 为 V2 MCP 名）
                     tool_registry=self._tool_registry,
                 )
                 worker.skill_id = skill_id
