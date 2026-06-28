@@ -26,6 +26,24 @@ from uuid import uuid4
 logger = logging.getLogger(__name__)
 
 
+class V1SkillRouter:
+    """V1 版 skill 路由 — 输入 task，输出 skill_id"""
+
+    def __init__(self):
+        self._skill_system = None
+
+    async def match(self, task: str) -> str:
+        try:
+            if self._skill_system is None:
+                from core.skills.base_skills import SkillSystem
+                self._skill_system = SkillSystem()
+            result = await self._skill_system.match(task)
+            return result.skill_id or "general"
+        except Exception as e:
+            logger.debug("V1SkillRouter.match 失败: %s", e)
+            return "general"
+
+
 def _get_llm_router():
     """懒加载 LLM router，避免模块级导入触发 LLM 后端初始化"""
     from core.engine.llm_backend import get_llm_router
@@ -158,12 +176,14 @@ class ContextMemory:
 class LLMAgent:
     """统一 LLM Agent — KEPA + RAG + 反问 + 上下文 + 工具调用 + 消息总线"""
 
-    def __init__(self, name: str, role: AgentRole, tool_registry=None):
+    def __init__(self, name: str, role: AgentRole, tool_registry=None, role_prompt: str = "", tool_restrictions: Optional[List[str]] = None):
         self.name = name
         self.role = role
         self.status = "idle"
         self.context = ContextMemory()
         self.tool_registry = tool_registry  # V2 ToolRegistry 引用
+        self.role_prompt = role_prompt
+        self.tool_restrictions = tool_restrictions  # None=不限制, []=禁全部
         self._tool_cache = None  # 缓存的工具列表
         self._tool_cache_time = 0  # 缓存时间戳（用于TTL）
         self._task_id = None  # 当前任务 ID
@@ -179,14 +199,6 @@ class LLMAgent:
         self._stm = None
         # B/C: 向量记忆 (VectorMemoryStore)
         self._vm = None
-
-    @property
-    def stm(self):
-        """Lazy init ShortTermMemoryManager"""
-        if self._stm is None and self.user_id:
-            from core.memory.short_term_memory import get_memory_manager
-            self._stm = get_memory_manager()
-        return self._stm
 
     @property
     def vm(self):
@@ -250,7 +262,10 @@ class LLMAgent:
         """执行单个工具调用"""
         if not self.tool_registry:
             return {"success": False, "error": "工具注册表未初始化"}
-        
+
+        if self.tool_restrictions is not None and tool_name not in self.tool_restrictions:
+            return {"success": False, "error": f"工具 {tool_name} 不在该角色的白名单中（可用: {self.tool_restrictions}）"}
+
         handler = self.tool_registry.get_handler(tool_name)
         if not handler:
             return {"success": False, "error": f"未找到工具: {tool_name}"}
@@ -401,7 +416,8 @@ class LLMAgent:
 
     async def _handle_message(self, message: AgentMessage) -> str:
         """处理消息 — ReAct 循环（Think→Act→Observe→循环）"""
-        role, desc, fmt_type = self._get_role_config()
+        role, default_desc, fmt_type = self._get_role_config()
+        desc = self.role_prompt or default_desc
         output_format = OUTPUT_FORMATS.get(fmt_type, OUTPUT_FORMATS["execute"])
 
         # RAG 检索
@@ -536,7 +552,7 @@ class LLMAgent:
             conversation.append({
                 "role": "tool",
                 "tool_call_id": tc.get("id", "call_0"),
-                "content": str(content)[:2000],  # ponytail: 截断防溢出
+                "content": str(content),  # ponytail: 去掉截断，上层 prompt 做 context 管理
             })
 
     async def _llm_with_tools_from_conversation(self, conversation: List[Dict], tools: List[Dict]) -> dict:
@@ -742,37 +758,23 @@ class LeaderAgent(LLMAgent):
                 task_description, context_history, all_results, round_num
             )
             
-            # ponytail: 程序化强制 — 已有成功结果且 round>=2 时，直接 done
+            # ponytail: 程序化强制 — 已有成功结果且 round>=4 时，直接 done（比之前 >=2 多给 2 轮，让深度分析有机会继续）
             successful = [r for r in all_results if r.get("success")]
-            if successful and round_num >= 2 and not thought.get("done"):
-                logger.info(f"🔒 已有 {len(successful)} 个成功结果，强制 done（跳过 LLM 决策）")
-                # 从已有结果中提取内容作为 final_result
-                last_content = ""
-                for r in reversed(successful):
-                    data = r.get("result", {})
-                    if isinstance(data, dict):
-                        c = data.get("tool_result_summary", data.get("content", ""))
-                        if c:
-                            last_content = c[:2000]
-                            break
-                thought = {"done": True, "thinking": "已有足够结果", "final_result": last_content or "任务已完成"}
-            
-            # ponytail: 程序化强制 — 已有成功结果且 round>=2 时，直接 done
-            successful = [r for r in all_results if r.get("success")]
-            if successful and round_num >= 2 and not thought.get("done"):
+            if successful and round_num >= 4 and not thought.get("done"):
                 logger.info(f"🔒 已有 {len(successful)} 个成功结果，强制 done（跳过 LLM 决策）")
                 # 用 LLM 的 thinking 作为 final_result（如果有的话），否则用 raw 结果
                 final = thought.get("thinking", "")
                 if not final or len(final) < 20:
-                    # LLM 没有生成有意义的合成，用 raw 结果
                     for r in reversed(successful):
                         data = r.get("result", {})
                         if isinstance(data, dict):
                             c = data.get("tool_result_summary", data.get("content", ""))
                             if c:
-                                final = c[:2000]
+                                final = c[:5000]
                                 break
                 thought = {"done": True, "thinking": final or "任务已完成", "final_result": final or "任务已完成"}
+            
+            # ponytail: 程序化强制 — 已有成功结果且 round>=4 时，直接 done（已由上一块处理，此处不会触发）
             
             # 检查是否任务完成（必须在 force done 之后）
             if thought.get("done"):
@@ -826,14 +828,16 @@ class LeaderAgent(LLMAgent):
                         "result": {"success": False, "error": "tool fallback"},
                     })
             
-            # ponytail: 已有成功结果时，禁止再 delegate/batch_delegate，强制合成
-            if action_type in ("delegate", "batch_delegate") and action_result.get("success") and all_results:
-                successful_results = [r for r in all_results if r.get("success")]
-                if successful_results:
-                    logger.info("🔒 已有成功结果，强制切换为 process_results")
+            # ponytail: 已有成功结果时，检查是否全部子任务完成，是则强制合成，否则允许继续 delegate
+            if action_type == "batch_delegate" and action_result.get("success") and all_results:
+                result_data = action_result.get("result", {})
+                success_count = result_data.get("success_count", 0)
+                total_count = result_data.get("total_count", 0)
+                if total_count > 0 and success_count >= total_count:
+                    logger.info("🔒 全部子任务完成，强制切换为 process_results")
                     context_history.append({
                         "round": round_num,
-                        "thought": "系统强制：已有成功结果，下一轮必须使用 process_results 综合分析",
+                        "thought": "系统强制：全部子任务已完成，下一轮必须使用 process_results 综合分析",
                         "action_type": "system_override",
                         "action": {"type": "process_results", "task": f"综合分析以下结果并生成最终答案：{task_description}"},
                         "result": {"success": False, "error": "force process_results"},
@@ -1205,7 +1209,7 @@ class LeaderAgent(LLMAgent):
                                 if c:
                                     summaries.append(c[:500])
                     else:
-                        c = data.get("content", data.get("tool_result_summary", data.get("raw", "")))
+                        c = data.get("content", data.get("tool_result_summary", data.get("result", data.get("raw", ""))))
                         if c:
                             summaries.append(str(c)[:500])
             
