@@ -5,8 +5,11 @@
 - 无 _written_file_registry / _file_read_cache
 - MCP 工具名统一 mcp_ 前缀
 """
+import glob as globmod
 import json
 import logging
+import os
+import subprocess
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
@@ -248,7 +251,119 @@ _SANDBOX_TOOL_DEFS = [
     ),
 ]
 
-_HANDLER_MAP: Dict[str, Callable] = {}
+async def _handle_write_file(args: Dict) -> Dict:
+    from .v1_tool_result import ok, err
+    path = os.path.expanduser(args.get("path", ""))
+    content = args.get("content", "")
+    if not path and "content" not in args:
+        return err("缺少 path 或 content 参数")
+    try:
+        dirpath = os.path.dirname(path)
+        if dirpath:
+            os.makedirs(dirpath, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+        return ok(f"已写入 {len(content)} 字符到 {path}", path=path, from_handler=f"文件已保存到 {path}")
+    except Exception as e:
+        return err(f"写入失败: {e}")
+
+
+async def _handle_read_file(args: Dict) -> Dict:
+    from .v1_tool_result import ok, err
+    path = os.path.expanduser(args.get("path", ""))
+    if not path:
+        return err("缺少 path 参数")
+    try:
+        if os.path.isdir(path):
+            entries = sorted(os.listdir(path))
+            return ok("\n".join(e + "/" if os.path.isdir(os.path.join(path, e)) else e for e in entries))
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+        offset = args.get("offset", 1)
+        limit = args.get("limit", 2000)
+        page = lines[offset - 1 : offset - 1 + limit]
+        result = "".join(page)
+        if offset > 1 or len(page) < len(lines):
+            result = f"(lines {offset}-{offset + len(page) - 1}/{len(lines)})\n{result}"
+        return ok(result, path=path)
+    except Exception as e:
+        return err(f"读取失败: {e}")
+
+
+async def _handle_edit_file(args: Dict) -> Dict:
+    from .v1_tool_result import ok, err
+    path = os.path.expanduser(args.get("path", ""))
+    old = args.get("old_string", "")
+    new = args.get("new_string", "")
+    replace_all = args.get("replace_all", False)
+    if not path or not old:
+        return err("缺少 path 或 old_string 参数")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
+        if replace_all:
+            count = content.count(old)
+            if count == 0:
+                return err(f"未找到匹配: {old[:50]}")
+            content = content.replace(old, new)
+        else:
+            idx = content.find(old)
+            if idx == -1:
+                return err(f"未找到匹配: {old[:50]}")
+            content = content[:idx] + new + content[idx + len(old):]
+            count = 1
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+        return ok(f"替换了 {count} 处", path=path, count=count)
+    except Exception as e:
+        return err(f"编辑失败: {e}")
+
+
+async def _handle_search_files(args: Dict) -> Dict:
+    from .v1_tool_result import ok, err
+    pattern = args.get("pattern", "")
+    content_pattern = args.get("content_pattern", "")
+    search_path = args.get("path", ".")
+    limit = args.get("limit", 200)
+    include = args.get("include", "")
+    if pattern:
+        results = []
+        for p in globmod.glob(os.path.expanduser(os.path.join(search_path, pattern)), recursive=True):
+            if len(results) >= limit:
+                break
+            results.append(p)
+        return ok("\n".join(results))
+    elif content_pattern:
+        try:
+            grep_args = ["grep", "-rn", "-l"]
+            if include:
+                grep_args.extend(["--include", include])
+            else:
+                for ext in ("*.py", "*.js", "*.ts", "*.md", "*.json", "*.yaml", "*.yml"):
+                    grep_args.extend(["--include", ext])
+            grep_args.extend(["--", content_pattern, os.path.expanduser(search_path)])
+            out = subprocess.check_output(
+                grep_args, stderr=subprocess.DEVNULL, timeout=10, text=True
+            )
+            lines = out.strip().split("\n") if out.strip() else []
+            return ok("\n".join(lines[:limit]))
+        except subprocess.CalledProcessError:
+            return ok("无匹配结果")
+        except Exception as e:
+            return err(f"搜索失败: {e}")
+    return err("需要 pattern 或 content_pattern 参数")
+
+
+_HANDLER_MAP: Dict[str, Callable] = {
+    "write_file": _handle_write_file,
+    "read_file": _handle_read_file,
+    "edit_file": _handle_edit_file,
+    "search_files": _handle_search_files,
+}
+
+for sd in _SANDBOX_TOOL_DEFS:
+    if sd.name in _HANDLER_MAP:
+        sd.handler = _HANDLER_MAP[sd.name]
 
 
 class V1ToolRegistry:
