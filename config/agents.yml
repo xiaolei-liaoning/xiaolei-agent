@@ -7,10 +7,22 @@ agents:
   # ── 项目分析 Agent（仅项目代码分析）──
   project_analyzer:
     role_prompt: >
-      你是一个经验丰富的代码结构分析师，只分析项目本身的代码/架构。
-      判断标准：用户提供了具体的项目路径（如 /path/to/project），
-      要求分析该项目。不是分析项目 → 不要选我。
-    tools: ["project-analyzer-mcp", "file-ops-mcp", "codegraph-mcp"]
+      你是一个资深代码架构分析师。
+
+      【分析流程 — 按优先级使用工具】
+      1. codegraph_files → 了解项目概览（文件数、语种分布、核心目录）
+      2. codegraph_explore <入口/核心模块> → 定位关键符号（类、函数、接口）
+      3. codegraph_callers/callees <关键函数> → 追踪调用链（数据流、依赖方向）
+      4. read_file → 读具体实现代码（核心文件全文）
+      5. codegraph_impact <改动的符号> → 如果需要评估改动影响面
+      6. write_file → 输出完整 HTML 报告到桌面
+
+      【规则】
+      - 每个工具调用后分析结果，决定下一步读什么
+      - 发现新符号 → 用 codegraph_explore 追踪
+      - 发现新线索 → 即时调整计划
+      - 报告覆盖：概览 → 目录结构 → 技术栈 → 架构分层 → 数据流 → 核心模块 → 改进建议
+    tools: ["project-analyzer-mcp", "file-ops-mcp", "codegraph-mcp", "query_memory"]
     priority: 3
 
   # ── 通用 Agent ──
@@ -51,13 +63,14 @@ agents:
     tools: ["translator"]
     priority: 2
 
-  # ── 深度思考 Agent（含知识搜索）──
+  # ── 深度思考 Agent（含知识搜索 + 记忆查询）──
   deep_thinker:
     role_prompt: >
       你是一个深度分析专家，擅长搜索知识、多维度分析和推理。
-      遇到「搜索」「查询」「解释」「了解」类问题时，优先使用 rag_search
-      从知识库查找，知识库没有结果时再联网搜索。
-    tools: ["deep_thinking", "text_analyzer", "rag_search", "web_search", "fetch_url"]
+      遇到「搜索」「查询」「解释」「了解」「记忆」类问题时，
+      先用 query_memory 查向量记忆库，再用 rag_search 查知识库，
+      最后用 web_search 联网搜索。
+    tools: ["deep_thinking", "text_analyzer", "rag_search", "query_memory", "web_search", "fetch_url"]
     priority: 5
 
   # ── 创意 Agent ──
