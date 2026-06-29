@@ -135,8 +135,11 @@ class LocalEmbeddingFunction:
             vectors.append(vec)
         return vectors
 
-    def embed_query(self, text: str) -> List[float]:
-        return self(input=[text])[0]
+    def embed_query(self, input=None, text=None, **kwargs):
+        t = input if input is not None else text
+        if isinstance(t, list):
+            t = t[0] if t else ""
+        return self([t]) if t else [[0.0] * self.DIM]
 
     def get_dimension(self) -> int:
         return self.DIM
@@ -195,15 +198,11 @@ class SentenceTransformerEmbeddingFunction:
                 logger.error(f"模型加载失败: {e}, 回退到本地TF-IDF方案")
                 raise
 
-    def __call__(self, input: List[str]) -> List[List[float]]:
-        """ChromaDB API 调用接口
-
-        Args:
-            input: 文本列表
-
-        Returns:
-            embedding 列表
-        """
+    def __call__(self, input):
+        if input is None:
+            return []
+        if not isinstance(input, list):
+            input = [input]
         if not input:
             return []
 
@@ -224,16 +223,11 @@ class SentenceTransformerEmbeddingFunction:
             local_embed = LocalEmbeddingFunction()
             return local_embed(input)
 
-    def embed_query(self, text: str) -> List[float]:
-        """单独查询的 embedding
-
-        Args:
-            text: 单条查询文本
-
-        Returns:
-            embedding 向量
-        """
-        return self(input=[text])[0]
+    def embed_query(self, input=None, text=None, **kwargs):
+        t = input if input is not None else text
+        if isinstance(t, list):
+            t = t[0] if t else ""
+        return self([t]) if t else [[0.0] * self.model_config["dim"]]
 
     def get_dimension(self) -> int:
         """获取 embedding 向量维度"""
@@ -327,14 +321,15 @@ class VectorMemoryStore:
         # ponytail: 嵌入模型在后台线程初始化，不阻塞启动
         self._embedding_ready = False
         self._collection_ready_event = threading.Event()
-        self._start_embedding_init()
 
-        # 批量写入缓冲区
+        # 批量写入缓冲区（必须在 _start_embedding_init 之前分配，防线程竞争）
         self._memory_buffer: List[tuple] = []
         self._buffer_lock = threading.Lock()
         self._last_flush_time = time.time()
         self._buffer_size = 10
         self._flush_interval = 30  # 秒
+
+        self._start_embedding_init()
 
         # 定时备份配置
         self._backup_enabled = True
@@ -402,7 +397,6 @@ class VectorMemoryStore:
             except Exception:
                 self._collection = self._client.get_or_create_collection(
                     name="long_term_memory",
-                    metadata={"description": "用户长期记忆库 (text2vec-base-chinese)"},
                     embedding_function=embed_fn,
                 )
                 logger.info("ChromaDB 集合 long_term_memory 已创建")
@@ -410,8 +404,21 @@ class VectorMemoryStore:
             self._collection_ready_event.set()
             logger.info("ChromaDB 集合 long_term_memory 就绪")
         except Exception as e:
-            logger.error("ChromaDB 初始化失败: %s", e)
-            self._collection = None
+            logger.error("ChromaDB sentence-transformer 初始化失败: %s", e)
+            # 回退到本地 TF-IDF
+            try:
+                from core.memory.vector_memory import LocalEmbeddingFunction
+                embed_fn = LocalEmbeddingFunction()
+                self._collection = self._client.get_or_create_collection(
+                    name="long_term_memory",
+                    embedding_function=embed_fn,
+                )
+                self._embedding_ready = True
+                self._collection_ready_event.set()
+                logger.info("ChromaDB 使用本地 TF-IDF 降级成功")
+            except Exception as e2:
+                logger.error("ChromaDB TF-IDF 降级也失败: %s", e2)
+                self._collection = None
 
     def wait_for_collection(self, timeout: float = 10.0) -> bool:
         """等待集合就绪（后台线程初始化完成）
@@ -541,21 +548,21 @@ class VectorMemoryStore:
             )
 
             memories: List[Dict[str, Any]] = []
-            if results and results["ids"] and results["ids"][0]:
-                for mem_id, doc, meta, dist in zip(
-                    results["ids"][0],
-                    results["documents"][0],
-                    results["metadatas"][0],
-                    results["distances"][0],
-                ):
-                    memories.append(
-                        {
-                            "id": mem_id,
-                            "content": doc,
-                            "metadata": meta,
-                            "distance": dist,
-                        }
-                    )
+            if results and results.get("ids"):
+                ids0 = results["ids"][0]
+                if not isinstance(ids0, list):
+                    ids0 = [ids0] if ids0 is not None else []
+                docs0 = results.get("documents", [[]])[0]
+                if not isinstance(docs0, list):
+                    docs0 = [docs0] if docs0 is not None else []
+                metas0 = results.get("metadatas", [[]])[0]
+                if not isinstance(metas0, list):
+                    metas0 = [metas0] if metas0 is not None else []
+                dists0 = results.get("distances", [[]])[0]
+                if not isinstance(dists0, list):
+                    dists0 = [dists0] if dists0 is not None else []
+                for mem_id, doc, meta, dist in zip(ids0, docs0, metas0, dists0):
+                    memories.append({"id": mem_id, "content": doc, "metadata": meta, "distance": dist})
 
             logger.debug(
                 "向量检索: query=%s, user_id=%s, 命中=%d",
@@ -628,10 +635,9 @@ class VectorMemoryStore:
             embed_fn = get_bge_embedding_function()
             self._collection = self._client.get_or_create_collection(
                 name="long_term_memory",
-                metadata={"description": "用户长期记忆库 (text2vec-base-chinese)"},
                 embedding_function=embed_fn,
             )
-            logger.info("向量库已清空并重建 (text2vec-base-chinese)")
+            logger.info("向量库已清空并重建")
         except Exception as e:
             logger.error("清空向量库失败: %s", e)
             self._collection = old_collection  # 恢复旧引用
