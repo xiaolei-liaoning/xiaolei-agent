@@ -114,7 +114,11 @@ class LocalEmbeddingFunction:
         h = hash("sign_" + token) & 0x1
         return 1 if h == 0 else -1
 
-    def __call__(self, input: List[str]) -> List[List[float]]:
+    def __call__(self, input):
+        if input is None:
+            return []
+        if not isinstance(input, list):
+            input = [input]
         if not input:
             return []
         vectors = []
@@ -139,7 +143,7 @@ class LocalEmbeddingFunction:
         t = input if input is not None else text
         if isinstance(t, list):
             t = t[0] if t else ""
-        return self([t]) if t else [[0.0] * self.DIM]
+        return self([t])[0] if t else [0.0] * self.DIM
 
     def get_dimension(self) -> int:
         return self.DIM
@@ -227,7 +231,7 @@ class SentenceTransformerEmbeddingFunction:
         t = input if input is not None else text
         if isinstance(t, list):
             t = t[0] if t else ""
-        return self([t]) if t else [[0.0] * self.model_config["dim"]]
+        return self([t])[0] if t else [0.0] * self.model_config["dim"]
 
     def get_dimension(self) -> int:
         """获取 embedding 向量维度"""
