@@ -587,6 +587,36 @@ class VectorMemoryStore:
                 len(memories),
             )
             return memories
+        except TypeError as e:
+            logger.warning("向量检索类型错误 (%s)，尝试重建 collection...", e)
+            self._rebuild_collection()
+            try:
+                results = self._collection.query(
+                    query_texts=[query],
+                    n_results=top_k,
+                    where=where_filter if where_filter else None,
+                )
+                memories: List[Dict[str, Any]] = []
+                if results and results.get("ids"):
+                    ids0 = results["ids"][0]
+                    if not isinstance(ids0, list):
+                        ids0 = [ids0] if ids0 is not None else []
+                    docs0 = results.get("documents", [[]])[0]
+                    if not isinstance(docs0, list):
+                        docs0 = [docs0] if docs0 is not None else []
+                    metas0 = results.get("metadatas", [[]])[0]
+                    if not isinstance(metas0, list):
+                        metas0 = [metas0] if metas0 is not None else []
+                    dists0 = results.get("distances", [[]])[0]
+                    if not isinstance(dists0, list):
+                        dists0 = [dists0] if dists0 is not None else []
+                    for mem_id, doc, meta, dist in zip(ids0, docs0, metas0, dists0):
+                        memories.append({"id": mem_id, "content": doc, "metadata": meta, "distance": dist})
+                logger.info("重建后检索成功，命中=%d", len(memories))
+                return memories
+            except Exception as e2:
+                logger.error("重建后检索仍然失败: %s", e2)
+                return []
         except Exception as e:
             logger.error("向量检索失败: %s", e)
             return []
@@ -594,6 +624,22 @@ class VectorMemoryStore:
     def flush(self):
         """强制刷入缓冲区（测试用）"""
         self._flush_buffer()
+
+    # ── 重建 ──────────────────────────────────────────────────────────────────
+    def _rebuild_collection(self):
+        """删除旧 collection 并用当前 embedding function 重建"""
+        try:
+            self._client.delete_collection("long_term_memory")
+        except Exception:
+            pass
+        embed_fn = get_bge_embedding_function()
+        self._collection = self._client.get_or_create_collection(
+            name="long_term_memory",
+            embedding_function=embed_fn,
+        )
+        self._embedding_ready = True
+        self._collection_ready_event.set()
+        logger.info("ChromaDB collection 已重建")
 
     # ── 删除 / 统计 / 清空 ────────────────────────────────────────────────────
     def update_metadata(self, memory_id: str, metadata: Dict[str, Any]) -> bool:
