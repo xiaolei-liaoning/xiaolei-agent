@@ -101,6 +101,29 @@ class LocalEmbeddingFunction:
     def __init__(self):
         self._dimension = self.DIM
 
+    @staticmethod
+    def name() -> str:
+        return "local"
+
+    def get_config(self) -> Dict[str, Any]:
+        return {"dim": self.DIM}
+
+    @staticmethod
+    def build_from_config(config: Dict[str, Any]) -> 'LocalEmbeddingFunction':
+        return LocalEmbeddingFunction()
+
+    def validate_config(self, config: Dict[str, Any]) -> None:
+        pass
+
+    def validate_config_update(self, old_config: Dict[str, Any], new_config: Dict[str, Any]) -> None:
+        pass
+
+    def supported_spaces(self) -> List[str]:
+        return ["cosine", "l2", "ip"]
+
+    def default_space(self) -> str:
+        return "cosine"
+
     @property
     def dimensionality(self) -> int:
         return self.DIM
@@ -148,8 +171,8 @@ class LocalEmbeddingFunction:
     def embed_query(self, input=None, text=None, **kwargs):
         t = input if input is not None else text
         if isinstance(t, list):
-            t = t[0] if t else ""
-        return self([t])[0] if t else [0.0] * self.DIM
+            return self(t)
+        return self([t]) if t else [[0.0] * self.DIM]
 
     def get_dimension(self) -> int:
         return self.DIM
@@ -236,12 +259,35 @@ class SentenceTransformerEmbeddingFunction:
     def embed_query(self, input=None, text=None, **kwargs):
         t = input if input is not None else text
         if isinstance(t, list):
-            t = t[0] if t else ""
-        return self([t])[0] if t else [0.0] * self.model_config["dim"]
+            return self(t)
+        return self([t]) if t else [[0.0] * self.model_config["dim"]]
 
     @property
     def dimensionality(self) -> int:
         return self.model_config["dim"]
+
+    def get_config(self) -> Dict[str, Any]:
+        return {"model_type": self.model_type, "dim": self.model_config["dim"]}
+
+    @staticmethod
+    def name() -> str:
+        return "sentence_transformer"
+
+    @staticmethod
+    def build_from_config(config: Dict[str, Any]) -> 'SentenceTransformerEmbeddingFunction':
+        return SentenceTransformerEmbeddingFunction(model_type=config.get("model_type", "bge-small-zh-v1.5"))
+
+    def validate_config(self, config: Dict[str, Any]) -> None:
+        pass
+
+    def validate_config_update(self, old_config: Dict[str, Any], new_config: Dict[str, Any]) -> None:
+        pass
+
+    def supported_spaces(self) -> List[str]:
+        return ["cosine", "l2", "ip"]
+
+    def default_space(self) -> str:
+        return "cosine"
 
     def get_dimension(self) -> int:
         """获取 embedding 向量维度"""
