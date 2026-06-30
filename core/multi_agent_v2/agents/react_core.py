@@ -664,7 +664,11 @@ class ReActCoreMiddleware(BaseMiddleware):
                         qa_passed = not warnings  # 无警告 = 通过
 
                         # ── 迭代式质量改进：Write → Review → Improve ──
-                        if qa_passed and not getattr(ctx, '_fi_consumed', False):
+                        # V2-C6 fix: 项目分析任务跳过质量改进循环
+                        _task_flags_local = getattr(ctx, '_task_flags', {}) or {}
+                        if _task_flags_local.get("project_analysis"):
+                            pass  # 项目分析报告：跳过质量改进
+                        elif qa_passed and not getattr(ctx, '_fi_consumed', False):
                             _iter_key = f"write_iter:{path}"
                             if not hasattr(ctx, '_file_iterations'):
                                 ctx._file_iterations = {}
@@ -848,12 +852,16 @@ async def run_react(
 
     prefix = _get_prefix(agent)
 
-    # ── 规划阶段 ──
-    ctx.plan = await generate_plan(task_description, ctx)
-    if ctx.plan:
-        display_plan(ctx, prefix=prefix)
+    # ── 规划阶段 ──（V2-C5 fix: _skip_plan 真的跳过 generate_plan）
+    if getattr(ctx, '_skip_plan', False):
+        ctx.plan = None
+        print(f"{prefix}    \033[2;37m📋 项目分析任务：跳过计划生成，直接执行\033[0m")
     else:
-        print(f"{prefix}    \033[2;37m📋 无显式计划，自动按 ReAct 循环执行\033[0m")
+        ctx.plan = await generate_plan(task_description, ctx)
+        if ctx.plan:
+            display_plan(ctx, prefix=prefix)
+        else:
+            print(f"{prefix}    \033[2;37m📋 无显式计划，自动按 ReAct 循环执行\033[0m")
 
     while not ctx.interrupted and ctx.react_depth < ctx.max_iterations:
         round_idx = ctx.react_depth + 1
