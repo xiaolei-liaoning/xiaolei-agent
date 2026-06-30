@@ -440,9 +440,20 @@ class TestWebSearch:
     async def test_all_engines_fail(self):
         from core.multi_agent_v2.tools.tool_registry import _handle_search
 
-        with patch(
-            "core.multi_agent_v2.tools.tool_registry._http_get",
-            new=AsyncMock(side_effect=TimeoutError("timeout")),
+        # 4路并发搜索各有独立HTTP栈，需要全mock
+        with (
+            patch(
+                "core.multi_agent_v2.tools.tool_registry._http_get",
+                new=AsyncMock(side_effect=TimeoutError("timeout")),
+            ),
+            patch(
+                "requests.get",
+                side_effect=TimeoutError("timeout"),
+            ),
+            patch(
+                "urllib.request.urlopen",
+                side_effect=TimeoutError("timeout"),
+            ),
         ):
             result = await _handle_search({"query": "test query"})
         assert result["ok"] is False
