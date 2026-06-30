@@ -573,7 +573,16 @@ class VectorMemoryStore:
             self._collection.add(ids=ids, documents=docs, metadatas=metas)
             logger.info("ChromaDB 批量写入 %d 条记忆", len(items))
         except Exception as e:
-            logger.error("批量写入 ChromaDB 失败: %s", e)
+            logger.warning("批量写入失败 (%s)，重建后重试...", e)
+            self._rebuild_collection()
+            try:
+                ids = [item[0] for item in items]
+                docs = [item[1] for item in items]
+                metas = [item[2] for item in items]
+                self._collection.add(ids=ids, documents=docs, metadatas=metas)
+                logger.info("重建后批量写入成功: %d 条", len(items))
+            except Exception as e2:
+                logger.error("重建后写入仍然失败: %s", e2)
         finally:
             self._memory_buffer.clear()
             self._last_flush_time = time.time()
@@ -633,8 +642,8 @@ class VectorMemoryStore:
                 len(memories),
             )
             return memories
-        except TypeError as e:
-            logger.warning("向量检索类型错误 (%s)，尝试重建 collection...", e)
+        except Exception as e:
+            logger.warning("向量检索失败 (%s)，尝试重建 collection...", e)
             self._rebuild_collection()
             try:
                 results = self._collection.query(
@@ -663,9 +672,6 @@ class VectorMemoryStore:
             except Exception as e2:
                 logger.error("重建后检索仍然失败: %s", e2)
                 return []
-        except Exception as e:
-            logger.error("向量检索失败: %s", e)
-            return []
 
     def flush(self):
         """强制刷入缓冲区（测试用）"""
