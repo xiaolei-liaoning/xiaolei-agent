@@ -362,6 +362,28 @@ async def _handle_execute_python(args: Dict) -> Dict:
     if not code:
         return err("缺少 code 参数")
     timeout = min(int(args.get("timeout", 30)), 60)
+    mode = args.get("mode", "sandbox")  # V1-C2 fix: 真实读取 mode 参数
+
+    if mode == "sandbox":
+        # V1-C2 fix: sandbox 模式走真实 SandboxExecutor，做模块黑名单/写入拦截/资源限制
+        try:
+            from core.tools.sandbox_executor import SandboxExecutor, ResourceLimits
+            limits = ResourceLimits(timeout=timeout)
+            ex = SandboxExecutor()
+            r = await ex.execute_python(
+                code, limits=limits, skip_module_check=args.get("skip_module_check", False)
+            )
+            if r.status.value == "completed":
+                out = r.stdout or ""
+                if r.stderr:
+                    out += f"\n--- stderr ---\n{r.stderr[-2000:]}"
+                return ok(out[:5000] if out else "（无输出）")
+            else:
+                return err(f"沙盒执行失败: {r.error_message or r.stderr or '未知错误'}"[:3000])
+        except Exception as e:
+            return err(f"沙盒启动失败: {e}")
+
+    # mode=local：真实 subprocess.run，无安全隔离
     with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, encoding="utf-8") as f:
         f.write(code)
         f.flush()
