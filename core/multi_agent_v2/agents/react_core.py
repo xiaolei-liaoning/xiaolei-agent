@@ -226,7 +226,6 @@ class ReActCoreMiddleware(BaseMiddleware):
             ctx.last_error = "LLM 不可用"
             return
 
-        ctx.react_depth += 1
         ctx.iteration = ctx.react_depth
 
         # ── 任务感知工具筛选（首轮筛选后缓存复用）──
@@ -274,9 +273,6 @@ class ReActCoreMiddleware(BaseMiddleware):
                 _search_tools = {"web_search", "fetch_url", "fetch_json", "hot_search"}
                 ctx.tool_defs = [t for t in ctx.tool_defs
                                  if t.get("function", {}).get("name") not in _search_tools]
-            # ponytail: Phase 1 数据已就绪 → 屏蔽扫描工具，防 LLM 重新扫描目录
-            if getattr(ctx, '_has_structure_data', False) and ctx.tool_defs:
-                ctx.tool_defs = _filter_scan_tools(ctx.tool_defs)
         else:
             ctx.tool_defs = None
 
@@ -362,7 +358,7 @@ class ReActCoreMiddleware(BaseMiddleware):
         # 注入强制指令（如：文件写入失败需要重试）
         if ctx.forced_instructions:
             system_content += f"\n\n<forced_instructions>\n{ctx.forced_instructions}\n</forced_instructions>"
-            ctx.forced_instructions = ""  # 用完清除
+            ctx._fi_consumed = True  # 标记已消费，保留值供同轮后续路径使用
         
         # 注入警告信息（如：循环检测警告）
         if ctx.warnings:
@@ -491,11 +487,6 @@ class ReActCoreMiddleware(BaseMiddleware):
                 if _plan_done and _has_substance:
                     ctx.final_answer = reply
                     ctx.interrupted = True
-                    break
-                # ponytail: 项目分析首轮是纯文本输出，不触发报告启发式/空跑重试，保存到历史后继续
-                if "Phase 1 扫描" in ctx.task_description and _has_substance:
-                    ctx._conversation_history.append({"role": "assistant", "content": reply})
-                    ctx.final_answer = reply
                     break
                 _looks_like_report = any(kw in reply for kw in ("## ", "### ", "**总结", "**结论", "## 总结", "## 结论"))
                 if _looks_like_report and _has_substance:
@@ -673,7 +664,7 @@ class ReActCoreMiddleware(BaseMiddleware):
                         qa_passed = not warnings  # 无警告 = 通过
 
                         # ── 迭代式质量改进：Write → Review → Improve ──
-                        if qa_passed and not ctx.forced_instructions:
+                        if qa_passed and not getattr(ctx, '_fi_consumed', False):
                             _iter_key = f"write_iter:{path}"
                             if not hasattr(ctx, '_file_iterations'):
                                 ctx._file_iterations = {}
@@ -838,11 +829,7 @@ async def run_react(
     if personality_prompt:
         ctx.personality_prompt = personality_prompt
 
-    # ── 项目分析：禁止 read_file + 强制定 3 轮 ──
-    if "Phase 1 扫描" in task_description or "项目结构概览" in task_description:
-        ctx.max_iterations = 3
-        ctx.disallowed_tools = list(set((ctx.disallowed_tools or []) + ["read_file"]))
-        ctx.allowed_tools = ["write_file"]
+    # ponytail: 不再对 "Phase 1 扫描" 做特殊限制，走通用 ReAct 流程
     ctx.allowed_tools = allowed_tools
     ctx.disallowed_tools = disallowed_tools
     if tool_preference:
@@ -862,25 +849,20 @@ async def run_react(
     prefix = _get_prefix(agent)
 
     # ── 规划阶段 ──
-    _has_structure_data = "Phase 1 扫描" in task_description or "项目结构概览" in task_description
-    ctx._has_structure_data = _has_structure_data
-    if _has_structure_data:
-        # 新 Phase 1 已自包含完整分析，LLM 仅需格式化输出 HTML
-        print(f"{prefix}    \033[2;37m📋 分析数据已就绪，LLM 负责格式化 HTML 输出\033[0m")
-        # 项目分析只需要 3 轮（读数据 → 写 HTML → 收尾）
-        ctx.max_iterations = 3
+    ctx.plan = await generate_plan(task_description, ctx)
+    if ctx.plan:
+        display_plan(ctx, prefix=prefix)
     else:
-        ctx.plan = await generate_plan(task_description, ctx)
-        if ctx.plan:
-            display_plan(ctx, prefix=prefix)
-        else:
-            print(f"{prefix}    \033[2;37m📋 无显式计划，自动按 ReAct 循环执行\033[0m")
+        print(f"{prefix}    \033[2;37m📋 无显式计划，自动按 ReAct 循环执行\033[0m")
 
     while not ctx.interrupted and ctx.react_depth < ctx.max_iterations:
         round_idx = ctx.react_depth + 1
         print(
             f"\n{prefix}    \033[1;37m━━━ 第 {round_idx}/{ctx.max_iterations} 轮 ━━━\033[0m"
         )
+
+        if hasattr(ctx, '_fi_consumed'):
+            delattr(ctx, '_fi_consumed')
 
         if ctx.plan:
             display_plan(ctx, prefix=prefix)
@@ -920,6 +902,7 @@ async def run_react(
             if compacted:
                 print(f"{prefix}    \033[1;33m📦 上下文压缩: 释放了 tokens 预算\033[0m")
 
+        ctx.react_depth += 1
         hr_start = await chain.on_think_start(ctx)
         if hr_start and hr_start.jump_to == "end":
             ctx.interrupted = True
@@ -943,13 +926,6 @@ async def run_react(
             ctx.last_error = hr_end.reason or "中间件终止(think_end)"
             break
 
-        # ponytail: 项目分析 — write_file 成功即跳出循环，不走空转，让 fallback 总结
-        if _has_structure_data and ctx.tool_results:
-            _last = ctx.tool_results[-1]
-            if _last.get("success") and _last.get("tool_call", {}).get("name") == "write_file":
-                ctx._write_file_done = True
-                break
-
         if ctx.plan:
             update_step_status(ctx, prefix)
             failed_steps = [s for s in ctx.plan if s.status == "failed"]
@@ -961,19 +937,6 @@ async def run_react(
                         print(f"{prefix}    \033[1;33m🔄 步骤 {step.index} 失败，已重新规划\033[0m")
                         break
 
-        # ── 项目分析：检测连续 read_file 不输出分析 → 强制中断 ──
-        if _has_structure_data:
-            _recent_tools = [r.get("tool_call", {}).get("name", "") for r in ctx.tool_results[-4:]]
-            if len(_recent_tools) >= 3 and all(t == "read_file" for t in _recent_tools[-3:]):
-                if not ctx.forced_instructions:
-                    ctx.forced_instructions = (
-                        "⚠️ 你已经连续多次调 read_file 但没有输出分析。\n"
-                        "现在必须停下来分析刚才读到的文件内容。\n"
-                        "格式要求：对刚读的目录输出「📁 目录名: 职责分析（1-2句话）」\n"
-                        "然后再决定下一步读哪个文件。"
-                    )
-                    print(f"{prefix}    \033[1;33m⚠️ 检测到连续 read_file 未分析，注入提醒\033[0m")
-
         hr_tool = await chain.on_tool_end(ctx)
         if hr_tool and hr_tool.jump_to == "end":
             ctx.interrupted = True
@@ -981,10 +944,11 @@ async def run_react(
             break
         if hr_tool and hr_tool.jump_to == "retry":
             ctx.warnings.append(f"[重试] {hr_tool.reason}。")
-            for step in ctx.plan:
-                if step.status == "running":
-                    step.status = "failed"
-                    ctx._step_retries[step.index] = ctx._step_retries.get(step.index, 0) + 1
+            if ctx.plan:
+                for step in ctx.plan:
+                    if step.status == "running":
+                        step.status = "failed"
+                        ctx._step_retries[step.index] = ctx._step_retries.get(step.index, 0) + 1
             continue
 
     # ── 搜索报告自动生成兜底 ──
@@ -1096,6 +1060,16 @@ async def run_react(
                     if txt and txt != "None" and txt != "(无输出)":
                         ctx.final_answer = txt
                         break
+
+    # ponytail: 长文本分析结果自动保存到桌面
+    if ctx.final_answer and len(ctx.final_answer) > 1000:
+        _path = os.path.expanduser("~/Desktop/project_analysis_report.html")
+        try:
+            with open(_path, "w", encoding="utf-8") as _f:
+                _f.write(ctx.final_answer)
+            print(f"    \033[1;32m📝 分析报告已保存: {_path}\033[0m")
+        except Exception:
+            pass
 
     # ponytail: on_finish 必须在兜底之后调用，确保 final_answer 非空时写入记忆
     await chain.on_finish(ctx)
