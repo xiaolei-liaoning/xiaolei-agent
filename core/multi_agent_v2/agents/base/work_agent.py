@@ -66,12 +66,8 @@ class WorkAgent(BaseAgent):
         """重置 Agent 状态，为下次复用做准备"""
         self.work_history = []
         self._model_override = ""
-        self._cached_file_paths = set()
-        try:
-            from core.multi_agent_v2.tools.cache import clear_project_file_cache
-            clear_project_file_cache()
-        except Exception:
-            pass
+        self._cached_file_paths = set()  # V2-C4 fix: 只清自己的 per-agent 缓存
+        # 不再调 clear_project_file_cache()，那会清全局 set 影响池中其他 agent
         self.reset_temp_memory()
         self.personality = ""
         self.role = ""

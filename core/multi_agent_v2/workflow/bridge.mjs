@@ -221,6 +221,14 @@ globalThis.$dag = async function(nodes) {
             }
         }
     }
+    // ponytail: 校验所有依赖节点必须在 DAG 中声明
+    for (const [name, node] of Object.entries(graph)) {
+        for (const dep of node.deps) {
+            if (!(dep in graph)) {
+                throw new Error(`DAG node "${name}" depends on "${dep}" which is not a key in $dag()`);
+            }
+        }
+    }
     const inDegree = {}, adj = {};
     for (const n of names) { inDegree[n] = 0; adj[n] = []; }
     for (const [name, node] of Object.entries(graph)) {

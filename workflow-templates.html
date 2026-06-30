@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>V2 JS Workflow 10 模版流程图</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #0f172a; color: #e2e8f0; padding: 40px; max-width: 1200px; margin: auto; }
+  h1 { text-align: center; color: #38bdf8; font-size: 28px; margin-bottom: 40px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; }
+  @media (max-width: 800px) { .grid { grid-template-columns: 1fr; } }
+  .card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 20px; box-shadow: 0 4px 12px rgba(0,0,0,.3); }
+  .card h2 { margin: 0 0 4px 0; font-size: 18px; }
+  .card .badge { display: inline-block; background: #38bdf8; color: #0f172a; border-radius: 20px; padding: 0 10px; font-weight: 700; font-size: 12px; line-height: 22px; margin-right: 6px; }
+  .card .match { color: #94a3b8; font-size: 13px; margin: 2px 0 12px 0; }
+  .card .usage { color: #facc15; font-size: 13px; margin: 8px 0 0 0; border-top: 1px solid #334155; padding-top: 8px; }
+  .mermaid { margin: 8px 0; display: flex; justify-content: center; }
+</style>
+</head>
+<body>
+<h1>🧩 V2 JS Workflow · 10 种编排模式</h1>
+<div class="grid">
+
+<div class="card">
+  <h2><span class="badge">①</span>纯并行 → 汇总</h2>
+  <div class="match">多源搜索、多维度分析、批量调研</div>
+  <div class="mermaid">
+graph LR
+  S[任务] --> P[parallel]
+  P --> A1[agent 百度]
+  P --> A2[agent 微博]
+  P --> A3[agent 知乎]
+  A1 --> R[agent 汇总]
+  A2 --> R
+  A3 --> R
+  R --> O[结果]
+  style S fill:#1e40af,color:#fff
+  style P fill:#854d0e,color:#fff
+  style R fill:#15803d,color:#fff
+  style O fill:#1e293b,color:#fff,stroke:#38bdf8
+  </div>
+  <div class="usage">每个子 agent 完全独立，最后一次性汇总</div>
+</div>
+
+<div class="card">
+  <h2><span class="badge">②</span>串行流水线</h2>
+  <div class="match">搜索→分析→报告、读取→处理→输出</div>
+  <div class="mermaid">
+graph LR
+  S[任务] --> A1[agent 搜索]
+  A1 --> A2[agent 分析]
+  A2 --> A3[agent 报告]
+  A3 --> O[结果]
+  style S fill:#1e40af,color:#fff
+  style A1 fill:#334155,color:#fff
+  style A2 fill:#334155,color:#fff
+  style A3 fill:#15803d,color:#fff
+  style O fill:#1e293b,color:#fff,stroke:#38bdf8
+  </div>
+  <div class="usage">前一步的 output as context 传给下一步</div>
+</div>
+
+<div class="card">
+  <h2><span class="badge">③</span>复杂 DAG</h2>
+  <div class="match">代码生成、多模块、有分支依赖</div>
+  <div class="mermaid">
+graph LR
+  S[任务] --> D[agent 架构设计]
+  D --> E[agent 引擎模块]
+  D --> U[agent UI模块]
+  E --> I[agent 集成合并]
+  U --> I
+  I --> O[结果]
+  style S fill:#1e40af,color:#fff
+  style D fill:#854d0e,color:#fff
+  style E fill:#334155,color:#fff
+  style U fill:#334155,color:#fff
+  style I fill:#15803d,color:#fff
+  style O fill:#1e293b,color:#fff,stroke:#38bdf8
+  </div>
+  <div class="usage">$dag 拓扑编排，支持 depends 声明</div>
+</div>
+
+<div class="card">
+  <h2><span class="badge">④</span>动态批量</h2>
+  <div class="match">遍历文件→逐个分析、动态结果集批量处理</div>
+  <div class="mermaid">
+graph LR
+  S[任务] --> A1[agent 获取列表]
+  A1 --> P[parallel]
+  P --> F1[agent 文件1]
+  P --> F2[agent 文件2]
+  P --> FN[agent 文件N...]
+  F1 --> R[agent 汇总]
+  F2 --> R
+  FN --> R
+  R --> O[结果]
+  style S fill:#1e40af,color:#fff
+  style A1 fill:#854d0e,color:#fff
+  style P fill:#4f46e5,color:#fff
+  style F1,F2,FN fill:#334155,color:#fff
+  style R fill:#15803d,color:#fff
+  style O fill:#1e293b,color:#fff,stroke:#38bdf8
+  </div>
+  <div class="usage">parallel 数组是运行时动态生成的</div>
+</div>
+
+<div class="card">
+  <h2><span class="badge">⑤</span>CodeGraph 预扫描 → 多 Agent 分析</h2>
+  <div class="match">项目结构分析、技术栈评估</div>
+  <div class="mermaid">
+graph LR
+  S[任务] --> C[agent CodeGraph扫描]
+  C --> P[parallel]
+  P --> A1[agent 架构分析]
+  P --> A2[agent 组件分析]
+  P --> A3[agent 技术栈分析]
+  A1 --> R[agent HTML报告]
+  A2 --> R
+  A3 --> R
+  R --> O[结果]
+  style S fill:#1e40af,color:#fff
+  style C fill:#854d0e,color:#fff
+  style P fill:#4f46e5,color:#fff
+  style A1,A2,A3 fill:#334155,color:#fff
+  style R fill:#15803d,color:#fff
+  style O fill:#1e293b,color:#fff,stroke:#38bdf8
+  </div>
+  <div class="usage">扫描 agent 强制用 codegraph 工具，分析 agent 只看文本不做工具调用</div>
+</div>
+
+<div class="card">
+  <h2><span class="badge">⑥</span>迭代循环</h2>
+  <div class="match">代码优化、Bug修复、迭代改进</div>
+  <div class="mermaid">
+graph LR
+  S[任务] --> A[agent 初始分析]
+  A --> L{score &lt; 80?}
+  L -->|是| M[agent 改进]
+  M --> L
+  L -->|否| F[agent 最终审查]
+  F --> O[结果]
+  style S fill:#1e40af,color:#fff
+  style A fill:#334155,color:#fff
+  style L fill:#854d0e,color:#fff
+  style M fill:#4f46e5,color:#fff
+  style F fill:#15803d,color:#fff
+  style O fill:#1e293b,color:#fff,stroke:#38bdf8
+  </div>
+  <div class="usage">while 循环配合评分阈值，最多 5 轮</div>
+</div>
+
+<div class="card">
+  <h2><span class="badge">⑦</span>产出 → 验证</h2>
+  <div class="match">方案审查、安全审核、事实核查</div>
+  <div class="mermaid">
+graph LR
+  S[任务] --> D[agent 方案设计]
+  D --> V[agent 独立审查]
+  V --> Q{发现问题?}
+  Q -->|是| R[agent 修订方案]
+  Q -->|否| O1[直接通过]
+  R --> O[结果]
+  O1 --> O
+  style S fill:#1e40af,color:#fff
+  style D fill:#334155,color:#fff
+  style V fill:#854d0e,color:#fff
+  style Q fill:#4f46e5,color:#fff
+  style R fill:#4f46e5,color:#fff
+  style O1 fill:#15803d,color:#fff
+  style O fill:#1e293b,color:#fff,stroke:#38bdf8
+  </div>
+  <div class="usage">验证 agent 用 agentType: Explore 切换视角</div>
+</div>
+
+<div class="card">
+  <h2><span class="badge">⑧</span>多方案 Tournament</h2>
+  <div class="match">方案选优、技术选型、架构决策</div>
+  <div class="mermaid">
+graph LR
+  S[任务] --> A[agent 现状分析]
+  A --> P[parallel]
+  P --> PA[agent 方案A 最小改动]
+  P --> PB[agent 方案B 重构]
+  P --> PC[agent 方案C 全新]
+  PA --> C[agent 对比评选]
+  PB --> C
+  PC --> C
+  C --> O[结果]
+  style S fill:#1e40af,color:#fff
+  style A fill:#334155,color:#fff
+  style P fill:#4f46e5,color:#fff
+  style PA,PB,PC fill:#334155,color:#fff
+  style C fill:#15803d,color:#fff
+  style O fill:#1e293b,color:#fff,stroke:#38bdf8
+  </div>
+  <div class="usage">并行生成多个方案，再作为上下文传给评选 agent</div>
+</div>
+
+<div class="card">
+  <h2><span class="badge">⑨</span>容错并行</h2>
+  <div class="match">多源搜索（单个源允许失败）、不稳定服务</div>
+  <div class="mermaid">
+graph LR
+  S[任务] --> P[parallel .catch]
+  P --> A1[agent 百度]
+  P --> A2[agent 微博]
+  P --> A3[agent 知乎]
+  A1 -.->|失败| N1[null]
+  A2 --> R[agent 汇总<br/>filter(Boolean)]
+  A3 --> R
+  N1 -.-> R
+  R --> O[结果]
+  style S fill:#1e40af,color:#fff
+  style P fill:#854d0e,color:#fff
+  style A1,A2,A3 fill:#334155,color:#fff
+  style N1 fill:#dc2626,color:#fff
+  style R fill:#15803d,color:#fff
+  style O fill:#1e293b,color:#fff,stroke:#38bdf8
+  </div>
+  <div class="usage">每个 agent().catch(() => null)，汇总时 filter 掉 null</div>
+</div>
+
+<div class="card">
+  <h2><span class="badge">⑩</span>游戏开发专用</h2>
+  <div class="match">任何游戏开发任务（PVZ、贪吃蛇等）</div>
+  <div class="mermaid">
+graph LR
+  S[任务] --> D[agent 架构设计<br/>write_file DESIGN.md]
+  D --> E[agent 游戏引擎]
+  D --> G[agent 游戏对象]
+  D --> U[agent 渲染与UI]
+  D --> R[agent 资源与音效]
+  E --> I[agent 集成合并<br/>read_file → game.html]
+  G --> I
+  U --> I
+  R --> I
+  I --> O[结果]
+  style S fill:#1e40af,color:#fff
+  style D fill:#854d0e,color:#fff
+  style E,G,U,R fill:#334155,color:#fff
+  style I fill:#15803d,color:#fff
+  style O fill:#1e293b,color:#fff,stroke:#38bdf8
+  </div>
+  <div class="usage">$dag 拓扑，文件路径固定在 ~/Desktop/&lt;game&gt;/ 下</div>
+</div>
+
+</div>
+</body>
+</html>

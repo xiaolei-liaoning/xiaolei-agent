@@ -108,19 +108,7 @@ async def execute_tool_call(
             # 添加质量标识
             if result.get("success"):
                 result["quality"] = "retry_success" if attempt > 0 else "success"
-
-                # 检查 Tail Call
-                from core.multi_agent_v2.tools.tail_call import get_tail_call_handler
-                handler = get_tail_call_handler()
-                tail_call = handler.extract_tail_call(result.get("result"))
-                if tail_call:
-                    result["tail_call"] = {
-                        "tool_name": tail_call.tool_name,
-                        "arguments": tail_call.arguments,
-                        "reason": tail_call.reason,
-                    }
-                    logger.info(f"检测到 Tail Call: {tail_call.tool_name}")
-
+                # V2-M3 fix: TailCall 提取后从不执行，删除这段死代码
             else:
                 # 检查是否是可重试的错误
                 err_text = str(result.get("result", {}).get("error", ""))

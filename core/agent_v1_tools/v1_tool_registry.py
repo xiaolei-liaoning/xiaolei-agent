@@ -409,9 +409,19 @@ async def _handle_execute_shell(args: Dict) -> Dict:
     timeout = min(int(args.get("timeout", 20)), 60)
     mode = args.get("mode", "sandbox")
     if mode == "sandbox":
-        safe_prefixes = ("ls", "pwd", "echo", "cat ", "head ", "tail ", "wc ", "date", "whoami", "uname", "which ", "mkdir ", "cp ", "mv ", "rm ", "grep ", "find ", "chmod ", "sort ", "uniq ", "cut ", "python3 --version", "node --version", "npm --version", "git --version", "pip3 --version")
-        if not any(command.startswith(p) for p in safe_prefixes):
-            return err(f"sandbox 模式仅允许安全命令: {command[:50]}")
+        # V1-C3 fix: 用真实 ShellGuard 替代脆弱的前缀检查
+        try:
+            from core.multi_agent_v2.tools.shell_guard import get_shell_guard
+            guard = get_shell_guard(sandbox_mode=True)
+            scan_result = guard.scan(command)
+            if not scan_result.safe:
+                risk_desc = "; ".join(r.description for r in scan_result.risks) if scan_result.risks else "危险命令"
+                return err(f"安全策略阻止: {risk_desc}\n命令: {command}")
+        except ImportError:
+            # ShellGuard 不可用时回退到前缀检查（兼容性）
+            safe_prefixes = ("ls", "pwd", "echo", "cat ", "head ", "tail ", "wc ", "date", "whoami", "uname", "which ", "mkdir ", "cp ", "mv ", "rm ", "grep ", "find ", "chmod ", "sort ", "uniq ", "cut ")
+            if not any(command.startswith(p) for p in safe_prefixes):
+                return err(f"sandbox 模式仅允许安全命令: {command[:50]}")
     try:
         result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=timeout)
         output = result.stdout
