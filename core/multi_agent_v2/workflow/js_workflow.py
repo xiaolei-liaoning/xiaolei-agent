@@ -490,7 +490,26 @@ class ClaudeCodeWorkflow:
                         "timeout": opts.get("timeout", batch_timeout),
                     })
 
-                results = await py_parallel(tasks, timeout=batch_timeout)
+                # V2-C7 fix: 用 semaphore 限制 batch 内并发，防 AgentPool 临时创建爆发
+                _sem = self._ipc_semaphore
+                async def _limited_parallel(task_list, timeout):
+                    async def _run_one(t):
+                        async with _sem:
+                            from core.multi_agent_v2.orchestration.orchestrator import agent as _agent
+                            return await _agent(t["prompt"], {"label": t.get("label"), "model": t.get("model"),
+                                                              "subagent_type": t.get("subagent_type"),
+                                                              "timeout": t.get("timeout", batch_timeout)})
+                    import asyncio as _aio
+                    try:
+                        results = await _aio.wait_for(
+                            _aio.gather(*[_run_one(t) for t in task_list], return_exceptions=True),
+                            timeout=timeout
+                        )
+                    except _aio.TimeoutError:
+                        results = []
+                    return [r for r in results if not isinstance(r, Exception)]
+
+                results = await _limited_parallel(tasks, batch_timeout)
 
                 response_results = []
                 for r in results:
@@ -801,6 +820,14 @@ globalThis.$dag = async function(nodes) {{
             for (const dep of deps) {{
                 edges.push({{ from: dep, to: name }});
                 globalThis._dagEdges.push({{ from: dep, to: name }});
+            }}
+        }}
+    }}
+    // ponytail: 校验所有依赖节点必须在 DAG 中声明，避免外部引用导致静默塌缩
+    for (const [name, node] of Object.entries(graph)) {{
+        for (const dep of node.deps) {{
+            if (!(dep in graph)) {{
+                throw new Error('DAG node "' + name + '" depends on "' + dep + '" which is not a key in $dag()');
             }}
         }}
     }}

@@ -746,13 +746,13 @@ def build_default_chain() -> MiddlewareChain:
     chain.add(TruncationMiddleware())
     chain.add(LoopDetectionMiddleware())
     chain.add(ClarificationMiddleware())
+    chain.add(KEPAMiddleware())       # V2-C1: KEPA 移到 ReActCore 之前，跨 Agent 知识当轮生效
     chain.add(TodoMiddleware())
     chain.add(PermissionMiddleware())
     chain.add(HookMiddleware())
     chain.add(ReActDepthMiddleware())
     chain.add(ReActCoreMiddleware())
     chain.add(ReflectionMiddleware())
-    chain.add(KEPAMiddleware())
     return chain
 
 
