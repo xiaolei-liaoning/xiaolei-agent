@@ -143,7 +143,7 @@ _llm_semaphore = asyncio.Semaphore(3)  # 限制最多 3 个并发 LLM 调用，�
 
 
 async def _llm_json(system_prompt: str, user_message: str, max_tokens: int = 800) -> dict:
-    """调用 LLM 并返回解析后的 JSON（含 1 次重试）"""
+    """调用 LLM 并返回解析后的 JSON（含 1 次重试 + 提取兜底）"""
     last_error = None
     for attempt in range(2):  # 原始 + 1 次重试
         try:
@@ -169,6 +169,20 @@ async def _llm_json(system_prompt: str, user_message: str, max_tokens: int = 800
             if attempt == 0:
                 user_message += f"\n\n（注意：上次 LLM 调用失败: {e}。请重试。）"
                 continue
+    # ponytail: 兜底 - 用 LLM 提取 JSON
+    try:
+        router = _get_llm_router()
+        extract_prompt = f"从以下文本中提取 JSON 对象并返回（仅返回 JSON）：\n\n{user_message}"
+        messages = [
+            {"role": "system", "content": "你是一个 JSON 提取器，只输出 JSON 格式。"},
+            {"role": "user", "content": extract_prompt},
+        ]
+        async with _llm_semaphore:
+            response = await router.chat(messages, temperature=0.3, max_tokens=max_tokens)
+        cleaned = (response or "").strip().strip("```json").strip("```").strip()
+        return json.loads(cleaned)
+    except Exception:
+        pass
     logger.warning(f"LLM JSON 解析最终失败: {last_error}")
     return {}
 
