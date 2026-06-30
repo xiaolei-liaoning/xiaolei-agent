@@ -1106,9 +1106,9 @@ class LeaderAgent(LLMAgent):
             try:
                 from core.memory.memory_middleware import get_memory_middleware
                 mw = get_memory_middleware()
-                user_context_str = asyncio.get_event_loop().run_until_complete(
-                    mw.get_user_context(self.user_id, task_description)
-                )
+                # V1-C1 fix: run_until_complete 在运行中的事件循环里会 RuntimeError
+                #           被外层 except 吞掉导致 user_context 永远空，改用 await
+                user_context_str = await mw.get_user_context(self.user_id, task_description)
             except Exception:
                 pass
 
