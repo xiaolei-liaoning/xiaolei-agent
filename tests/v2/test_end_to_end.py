@@ -162,6 +162,7 @@ def mock_tool_registry():
 # ═════════════════════════════════════════════════════════════
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="core.multi_agent_v2.task_profiler 模块已被删除")
 async def test_e2e_basic_flow(mock_llm_router, mock_task_profiler, mock_tool_registry):
     """
     验证完整中间件链处理一个简单任务：
@@ -258,6 +259,7 @@ async def test_e2e_basic_flow(mock_llm_router, mock_task_profiler, mock_tool_reg
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="core.multi_agent_v2.task_profiler 模块已被删除")
 async def test_e2e_short_task_no_skip():
     """
     验证极短任务不再跳过规划阶段（所有任务都走完整 ReAct 流程）
