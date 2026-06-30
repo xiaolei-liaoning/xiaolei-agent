@@ -101,6 +101,10 @@ class LocalEmbeddingFunction:
     def __init__(self):
         self._dimension = self.DIM
 
+    @property
+    def dimensionality(self) -> int:
+        return self.DIM
+
     def _tokenize(self, text: str) -> List[str]:
         return re.findall(r"[\w]+", text.lower())
 
@@ -123,6 +127,8 @@ class LocalEmbeddingFunction:
             return []
         vectors = []
         for text in input:
+            if not isinstance(text, str):
+                text = str(text)
             vec = [0.0] * self.DIM
             tokens = self._tokenize(text)
             if not tokens:
@@ -232,6 +238,10 @@ class SentenceTransformerEmbeddingFunction:
         if isinstance(t, list):
             t = t[0] if t else ""
         return self([t])[0] if t else [0.0] * self.model_config["dim"]
+
+    @property
+    def dimensionality(self) -> int:
+        return self.model_config["dim"]
 
     def get_dimension(self) -> int:
         """获取 embedding 向量维度"""
@@ -473,6 +483,8 @@ class VectorMemoryStore:
         if not self._collection:
             logger.warning("集合未就绪，无法添加记忆")
             return None
+
+        content = str(content)  # ponytail: 确保 str，避免 int 传入 ChromaDB 导致 len() 失败
 
         if category not in VALID_CATEGORIES:
             logger.warning("无效 category=%s, 将使用 general", category)
