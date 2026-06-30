@@ -242,14 +242,28 @@ export default async function() {{
             )
             matched_pattern = str(pattern_resp or "").strip()[:3]
 
-            # ── 第二步：注入 Pattern 提示 ──
-            base_prompt = self._prompt_template.replace("{{task}}", task[:600])
-            prompt = (
-                f"【匹配 Pattern: {matched_pattern}】\n"
-                "严格按照该 pattern 的示例代码结构生成 workflow。\n"
-                "独立模块必须用 parallel() 并行，禁止串行。\n\n"
-                + base_prompt
-            )
+            # ── 第二步：靶向注入 Pattern 提示 ──
+            extracted = self._extract_pattern_sections(matched_pattern)
+            if extracted:
+                rules = (
+                    "严格按照以下模板的结构生成 workflow。\n"
+                    "独立模块必须用 parallel() 并行，禁止串行。\n"
+                    "可以组合/嵌套多个模板来满足任务需求。\n"
+                )
+                prompt = (
+                    f"【匹配 Pattern: {matched_pattern}】\n"
+                    + rules
+                    + "\n参考模板：\n" + extracted + "\n\n"
+                    + "任务：" + task[:600]
+                )
+            else:
+                base_prompt = self._prompt_template.replace("{{task}}", task[:600])
+                prompt = (
+                    f"【匹配 Pattern: {matched_pattern}】\n"
+                    "严格按照该 pattern 的示例代码结构生成 workflow。\n"
+                    "独立模块必须用 parallel() 并行，禁止串行。\n\n"
+                    + base_prompt
+                )
             resp = await asyncio.wait_for(
                 router.chat(
                     [{"role": "user", "content": prompt}],
@@ -296,6 +310,22 @@ export default async function() {{
             return text
         except Exception:
             return ""
+
+    def _extract_pattern_sections(self, pattern_str: str) -> str:
+        """从 workflow 模板中提取匹配编号的代码段"""
+        nums = re.findall(r'[①-⑩]', pattern_str)
+        if not nums:
+            return ""
+        path = Path(__file__).parent.parent.parent / "workflows" / ".workflow_prompt_template.md"
+        if not path.exists():
+            return ""
+        sections = re.split(r"\n(?=### [①-⑩])", path.read_text(encoding="utf-8"))
+        matched = []
+        for s in sections:
+            m = re.match(r"### ([①-⑩])", s.strip())
+            if m and m.group(1) in nums:
+                matched.append(s.strip())
+        return "\n\n---\n\n".join(matched)
 
     def _validate_workflow_script(self, script: str, task: str) -> bool:
         if "export const meta" not in script:
@@ -1014,6 +1044,17 @@ def _render_agent_graph(graph: dict):
             detail_rows.append(f"<tr><td>任务</td><td style='font-size:12px;color:#666'>{prompt}</td></tr>")
 
         node_details.append({"label": label, "rows": "".join(detail_rows), "has_retry": has_retry})
+
+    # ponytail: 按 startTime 排序加隐式边，让 mermaid graph TD 从上往下排列
+    time_sorted = sorted(
+        [(f"N{i}", n.get("startTime", 0) or 0) for i, n in enumerate(nodes)],
+        key=lambda x: x[1],
+    )
+    for j in range(len(time_sorted) - 1):
+        curr_id = time_sorted[j][0]
+        next_id = time_sorted[j + 1][0]
+        if curr_id != next_id:
+            mermaid_lines.append(f"    {curr_id} --> {next_id}")
 
     for e in edges:
         frm = e.get("from", "")
