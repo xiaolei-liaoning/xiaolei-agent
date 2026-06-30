@@ -18,6 +18,7 @@ WorkAgent - 统一智能体（精简版）
 
 import asyncio
 import logging
+import re
 import time
 from typing import Any, Dict, List, Optional
 
@@ -268,9 +269,9 @@ class WorkAgent(BaseAgent):
 
         print(f"    \033[1;36m📂 项目分析：CodeGraph 扫描 + 文件头部读取\033[0m")
 
-        # 1. 提取路径
+        # 1. 提取路径（支持中文/全角字符，V2-C8 fix）
         path = None
-        for pat in [r'(~[^\s，,]+/[a-zA-Z0-9_./-]+)', r'(/[a-zA-Z0-9_./-]+)', r'(\.\.[a-zA-Z0-9_./-]+)']:
+        for pat in [r'(~[^\s，,]+/[\w\u4e00-\u9fff./-]+)', r'(/[\w\u4e00-\u9fff./-]+)', r'(\.\.[\w\u4e00-\u9fff./-]+)']:
             m = re.search(pat, desc)
             if m:
                 c = os.path.expanduser(m.group(1))
