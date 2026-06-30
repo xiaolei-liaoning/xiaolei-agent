@@ -206,8 +206,8 @@ class SkillSystem:
         from core.engine.llm_backend import get_llm_router
         router = get_llm_router()
         if router and router.is_available():
-            lines = [f"  {s.id}: {s.role_prompt}" + (f"  [{', '.join(s.tools[:3])}]" if s.tools else "") for s in self.base_skills.values()]
-            prompt = f"任务：{task}\n\n选最匹配的 1 个角色：\n" + "\n".join(lines) + "\n\n只输出角色 ID："
+            lines = [f"  {s.id}: {s.role_prompt[:80]}" + (f"  [{', '.join(s.tools[:3])}]" if s.tools else "") for s in sorted(self.base_skills.values(), key=lambda x: -x.priority)]
+            prompt = f"任务：{task}\n\n选最匹配的 1 个角色：\n" + "\n".join(lines) + "\n\n只输出角色 ID。如果不确定，选 general。"
             resp = (await router.simple_chat(prompt, temperature=0.2, max_tokens=30) or "").strip().lower()
             for sid in self.base_skills:
                 if sid in resp:
