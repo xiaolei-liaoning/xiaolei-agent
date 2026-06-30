@@ -548,6 +548,7 @@ class ClaudeCodeWorkflow:
                     return
 
                 # 递归执行子 workflow（传入 args）
+                # V2-M11 fix: 用新 ClaudeCodeWorkflow 实例，避免 self 状态被冲掉导致父 workflow 挂死
                 # 保存父 workflow 状态
                 parent_phase = self._phase_records
                 parent_current_phase = self._current_phase
@@ -555,13 +556,18 @@ class ClaudeCodeWorkflow:
                 parent_count = self._agent_count
                 parent_models = self._model_records
                 
-                sub_result = await self.run(script, args=wf_args)
+                sub_wf = ClaudeCodeWorkflow(self.config)
+                # 共享 resume cache 让相同 prompt 命中缓存
+                sub_wf._resume_cache = self._resume_cache
+                sub_wf._cache_hits = self._cache_hits
+                sub_wf._cache_misses = self._cache_misses
+                sub_result = await sub_wf.run(script, args=wf_args)
                 
                 # 保存子 workflow 结果
-                sub_phase = self._phase_records
-                sub_log = self._log_buffer
-                sub_count = self._agent_count
-                sub_models = self._model_records
+                sub_phase = sub_wf._phase_records
+                sub_log = sub_wf._log_buffer
+                sub_count = sub_wf._agent_count
+                sub_models = sub_wf._model_records
                 
                 # 恢复父 workflow 状态并合并子结果
                 self._phase_records = parent_phase + sub_phase
@@ -714,7 +720,7 @@ let _budgetSpent = 0;
 const _budgetModelSpent = {{}};
 
 const budget = {{
-    total: {budget_total},
+    total: {"null" if budget_total is None else int(budget_total)},
     spent() {{
         return _budgetSpent;
     }},
