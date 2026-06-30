@@ -63,6 +63,14 @@ class BaiduSearch(BaseSearchEngine):
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
             'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
         }
+        self._session = None
+
+    def _get_session(self):
+        if self._session is None:
+            import requests
+            self._session = requests.Session()
+            self._session.headers.update(self._headers)
+        return self._session
 
     def search(self, query: str, num_results: int = 5) -> List[Dict[str, Any]]:
         """执行百度搜索"""
@@ -70,33 +78,38 @@ class BaiduSearch(BaseSearchEngine):
             import requests
             from bs4 import BeautifulSoup
 
-            url = f"https://www.baidu.com/s?wd={requests.utils.quote(query)}"
-            response = requests.get(url, headers=self._headers, timeout=10)
+            # ponytail: 基本 session 复用 + 稳定 CSS 选择器，完整反爬需要 Playwright
+            session = self._get_session()
+            url = f"https://www.baidu.com/s?wd={requests.utils.quote(query)}&rn={num_results}"
+            response = session.get(url, headers=self._headers, timeout=15)
             response.encoding = 'utf-8'
 
             soup = BeautifulSoup(response.text, 'html.parser')
             results = []
 
-            for h3 in soup.find_all('h3')[:num_results]:
+            for container in soup.select('.result.c-container')[:num_results]:
+                h3 = container.find('h3')
+                if not h3:
+                    continue
                 link = h3.find('a')
-                if link:
-                    title = h3.get_text(strip=True)
-                    url = link.get('href', '')
-                    
-                    if url.startswith('/link?url='):
-                        url = 'https://www.baidu.com' + url
-                    
-                    next_p = h3.find_next('p')
-                    snippet = next_p.get_text(strip=True)[:500] if next_p else ''
-                    
-                    results.append({
-                        "title": title,
-                        "url": url,
-                        "snippet": snippet,
-                        "source": "baidu"
-                    })
+                if not link:
+                    continue
+                title = h3.get_text(strip=True)
+                link_url = link.get('href', '')
+
+                abstract = container.select_one('.c-abstract')
+                snippet = abstract.get_text(strip=True)[:500] if abstract else ''
+
+                results.append({
+                    "title": title,
+                    "url": link_url,
+                    "snippet": snippet,
+                    "source": "baidu"
+                })
 
             logger.info(f"百度搜索成功: {len(results)} 个结果")
+            if not results:
+                logger.warning(f"百度搜索返回 0 个结果, 响应长度: {len(response.text)}")
             return results
 
         except ImportError:
@@ -203,7 +216,7 @@ class SearchEngineFactory:
             搜索引擎实例
         """
         if engine_type == "auto":
-            return cls.create("baidu")
+            return cls.create("duckduckgo")
 
         engine_class = cls._engines.get(engine_type, FallbackSearch)
         return engine_class()
@@ -211,11 +224,11 @@ class SearchEngineFactory:
     @classmethod
     def create_with_fallback(cls) -> BaseSearchEngine:
         """创建带回退机制的搜索引擎（快速模式，不做连通性测试）"""
-        for engine_type in ["baidu", "bing", "duckduckgo"]:
+        # ponytail: duckduckgo 用官方库解析可靠，baidu 解析脆弱易被反爬
+        for engine_type in ["duckduckgo", "bing", "baidu"]:
             try:
                 engine = cls.create(engine_type)
                 if engine_type != "fallback":
-                    # 跳过连通性测试——失败由调用方处理
                     logger.info(f"搜索引擎 {engine_type} 已实例化")
                     return engine
             except Exception as e:
