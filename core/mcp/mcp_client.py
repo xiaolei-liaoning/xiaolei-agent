@@ -100,6 +100,12 @@ class MCPClientManager:
         self._connections: Dict[str, _Connection] = {}
         self._http_connections: Dict[str, _HttpConnection] = {}
         self._server_locks: Dict[str, asyncio.Lock] = {}
+        self._request_counter: Dict[str, int] = {}
+
+    def _get_request_id(self, server_name: str) -> int:
+        counter = self._request_counter.get(server_name, 0) + 1
+        self._request_counter[server_name] = counter
+        return counter
 
     def _get_server_lock(self, name: str) -> asyncio.Lock:
         """获取/创建每台服务器的独立锁，避免不同 MCP 服务器串行排队"""
@@ -194,7 +200,8 @@ class MCPClientManager:
         else:
             process = await self._get_or_reconnect_stdio(server_name)
             resp = await self._send_request_with_retry(
-                process, "tools/list", None, request_id=2,
+                process, "tools/list", None,
+                request_id=self._get_request_id(server_name),
                 server_name=server_name
             )
             if resp and "result" in resp:
@@ -235,7 +242,7 @@ class MCPClientManager:
             resp = await self._send_request_with_retry(
                 process, "tools/call",
                 {"name": tool_name, "arguments": arguments or {}},
-                request_id=2,
+                request_id=self._get_request_id(server_name),
                 server_name=server_name,
             )
             if resp and "result" in resp:
@@ -367,7 +374,9 @@ class MCPClientManager:
                         f"(等待 {delay:.1f}s, 错误: {e})"
                     )
                     await asyncio.sleep(delay)
+        # ponytail: 最后重试失败后清理连接，避免死进程永久占用
         logger.error(f"请求失败（已达最大重试次数）: {method}: {last_error}")
+        await self._cleanup_connection(server_name)
         return None
 
     async def _send_request(
@@ -380,7 +389,12 @@ class MCPClientManager:
     ) -> Optional[dict]:
         """发送 JSON-RPC 请求（带锁保护，避免并发读写破坏协议）"""
         lock = self._get_server_lock(server_name)
-        async with lock:
+        try:
+            await asyncio.wait_for(lock.acquire(), timeout=35.0)
+        except asyncio.TimeoutError:
+            logger.error(f"[mcp:{server_name}] 锁获取超时, method={method}")
+            return None
+        try:
             request = {
                 "jsonrpc": "2.0",
                 "id": request_id,
@@ -397,6 +411,8 @@ class MCPClientManager:
                 process.stdout.readline(), timeout=30.0
             )
             return json.loads(response_line.decode()) if response_line else None
+        finally:
+            lock.release()
 
     async def _send_notification(
         self,
@@ -427,6 +443,7 @@ class MCPClientManager:
             proc_env = os.environ.copy()
             proc_env.update(config["env"])
 
+        process_timeout = config.get("process_timeout", 60.0)  # ponytail: npx 首次下载常超 10s
         process = await asyncio.wait_for(
             asyncio.create_subprocess_exec(
                 config["command"],
@@ -437,9 +454,22 @@ class MCPClientManager:
                 cwd=config["cwd"],
                 env=proc_env,
             ),
-            timeout=10.0,
+            timeout=process_timeout,
         )
+        # ponytail: 异步消费 stderr，防止管道缓冲区满导致进程阻塞
+        asyncio.create_task(self._consume_stderr(name, process))
         return process
+
+    async def _consume_stderr(self, name: str, process: asyncio.subprocess.Process):
+        """异步读取并记录 stderr，防止管道缓冲区满"""
+        try:
+            while True:
+                line = await process.stderr.readline()
+                if not line:
+                    break
+                logger.debug(f"[mcp:{name}] {line.decode().rstrip()}")
+        except Exception as e:
+            logger.debug(f"[mcp:{name}] stderr consumer 结束: {e}")
 
     async def _cleanup_connection(self, name: str):
         """清理连接进程和 HTTP 连接"""
