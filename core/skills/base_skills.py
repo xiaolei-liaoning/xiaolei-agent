@@ -9,7 +9,6 @@
 """
 import logging
 import os
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -216,9 +215,8 @@ class SkillSystem:
         return self.base_skills.get("general")
 
     async def _match_expert(self, task: str, base_id: str) -> Optional[dict]:
-        """jieba 分词预筛 + LLM 精排：任务分词后逐词匹配描述，取 Top-4 交 LLM"""
+        """category 过滤 + LLM 全量选择"""
         cats = BASE_TO_EXPERT_CATEGORIES.get(base_id, [])
-        # general 没有关联分类时回退到所有分类
         if not cats and base_id == "general":
             cats = list(self.experts.keys())
         candidates = []
@@ -230,65 +228,12 @@ class SkillSystem:
         from core.engine.llm_backend import get_llm_router
         router = get_llm_router()
         if not router or not router.is_available():
-            return None
+            return candidates[0]
 
-        # ── 第 1 步：jieba 分词预筛 ──
-        import jieba
-        # 只用 jieba 分任务的词（短，0.2s 一次），不分析描述
-        raw_tokens = jieba.lcut(task)
-        # 过滤：中文词 2+字，英文词 3+字母，去重
-        task_words = set()
-        for w in raw_tokens:
-            w = w.strip()
-            if not w: continue
-            if re.match(r'^[一-龥]{2,}$', w):
-                task_words.add(w)
-            elif re.match(r'^[a-zA-Z]{3,}$', w):
-                task_words.add(w.lower())
-        task_lower = task.lower()
-
-        scored = []
-        for a in candidates:
-            score = 0.0
-            desc = (a.get("description", "") or "")
-            desc_lower = desc.lower()
-            name = a.get("name", "")
-
-            # a) 分词中文词 → 描述子串匹配（每个词 1 分）
-            matched = set()
-            for w in task_words:
-                if w in desc:
-                    matched.add(w)
-                    score += 1.0
-            # b) 任务词 → YAML keywords 补刀
-            for kw in a.get("keywords", []):
-                if len(kw) >= 2 and kw.lower() in task_lower and kw not in matched:
-                    score += 0.5
-            # c) 角色名在任务中出现 → 强信号
-            if name and name.lower() in task_lower:
-                score += 2.0
-
-            if score > 0:
-                # 归一化分数：命中词数 / 任务总词数
-                norm = score / max(len(task_words), 1)
-                scored.append((norm, score, a))
-
-        if not scored:
-            return None
-
-        # 按归一化分降序取 Top-4
-        scored.sort(key=lambda x: (-x[0], -x[1]))
-        top = [a for _, _, a in scored[:4]]
-
-        # Top-1 领先明显 → 直接采纳
-        if len(scored) >= 2 and scored[0][0] - scored[1][0] >= 0.3:
-            logger.debug(f"Expert 规则强势命中: {scored[0][2].get('name')} (norm={scored[0][0]:.2f})")
-            return scored[0][2]
-
-        # ── 第 2 步：LLM 精排 — 从 Top-4 里选最匹配的 ──
         lines = []
-        for a in top:
-            lines.append(f"  {a.get('emoji','👤')} {a.get('name','?')} — {(a.get('description','') or '')[:120]}")
+        for a in candidates:
+            desc = (a.get("description", "") or "")[:60]
+            lines.append(f"  {a.get('id', '?')}: {a.get('name', '?')} — {desc}")
         prompt = (
             f"任务：{task}\n\n"
             f"从以下专家中选最匹配的 1 个：\n"
@@ -296,12 +241,10 @@ class SkillSystem:
             "\n\n仔细阅读任务和每个专家的描述，只输出专家 ID："
         )
         resp = (await router.simple_chat(prompt, temperature=0.1, max_tokens=30) or "").strip().lower()
-        for a in top:
+        for a in candidates:
             if a.get("id", "") in resp:
-                logger.debug(f"Expert LLM 精排选中: {a.get('name')}")
                 return a
-        logger.debug(f"Expert LLM 精排无结果，降级为规则 Top-1: {scored[0][2].get('name')}")
-        return scored[0][2] if scored else None
+        return candidates[0]
 
     def _match_guidance(self, base_id: str) -> str:
         """根据 BaseSkill ID 找对应的 Guidance"""
