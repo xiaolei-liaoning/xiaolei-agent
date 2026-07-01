@@ -1052,7 +1052,7 @@ async def run_react(
                         temperature=0.3,
                         max_tokens=32768,
                     ),
-                    timeout=30,
+                    timeout=120,
                 )
                 text = str(final_resp) if final_resp else ""
                 if text and text != "None" and len(text) > 20:
