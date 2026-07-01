@@ -1071,7 +1071,7 @@ async def run_react(
 
     # ponytail: 长文本分析结果自动保存到桌面
     if ctx.final_answer and len(ctx.final_answer) > 1000:
-        _path = os.path.expanduser("~/Desktop/project_analysis_report.html")
+        _path = os.path.expanduser("~/Desktop/project_analysis_report.md")
         try:
             with open(_path, "w", encoding="utf-8") as _f:
                 _f.write(ctx.final_answer)

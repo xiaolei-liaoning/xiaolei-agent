@@ -285,7 +285,7 @@ class GLMBackend:
 
                     finish_reason = getattr(response.choices[0], 'finish_reason', None)
                     is_truncated = finish_reason == 'length'
-                    if is_truncated:
+                    if is_truncated and max_tokens > 100:
                         logger.warning(f"⚠️ LLM输出被截断! finish_reason=length, content_len={len(content)}")
 
                     logger.info("LLM DeepSeek返回: content_len=%d tool_calls=%s truncated=%s", len(content), bool(tc), is_truncated)
