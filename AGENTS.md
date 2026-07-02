@@ -8,7 +8,7 @@
 
 ## Progress
 ### Done
-- Fix 1: `chain.on_plan_check(ctx)` called between `on_think_start` and `on_think_end` in `react_core.py` main loop → LoopDetectionMiddleware and ClarificationMiddleware now active.
+- Fix 1: `chain.on_plan_check(ctx)` called between `on_llm_invoke` and `on_tool_invoke` in `react_core.py` main loop → LoopDetectionMiddleware and ClarificationMiddleware now active.
 - Fix 2: `HookMiddleware.on_tool_end()` returns `HookResult(jump_to="retry")` instead of `None` → retry requests consumed.
 - Fix 3: Main loop calls `async_check_and_compact()` (async, LLM-capable), falls back to template compaction on exception.
 - Fix 4: Final answer heuristic tightened: requires plan completed + >100 chars, or explicit report markers.
@@ -17,7 +17,7 @@
 - Fix 7: Post-completion `forced_instructions` loop capped at 3 rounds.
 - Fix 8: `write_file` fallback uses base64 encode/decode, replacing fragile `'''` approach.
 - Fix 9: `replan_failed()` clears `ctx._step_tool_snapshots`.
-- Fix 10: `on_think_end()` skips writing `_validation_error` results to conversation history.
+- Fix 10: `on_tool_invoke()` skips writing `_validation_error` results to conversation history.
 - Fix 11: `update_step_status()` eliminated redundant re-computations.
 - Verified via unit tests (16 scenarios) + 2 end-to-end CLI tasks.
 - Investigated MCP: all 7 servers defined in `~/.config/opencode/opencode.jsonc` (v1 format, top-level `mcp` key). Desktop sidecar reads global config + plugin-registered MCP servers.

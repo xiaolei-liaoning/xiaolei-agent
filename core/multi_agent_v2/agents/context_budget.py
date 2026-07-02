@@ -310,7 +310,7 @@ class ContextBudgetManager:
             import asyncio
             response = await asyncio.wait_for(
                 router.chat(messages, temperature=0.3, max_tokens=1024),
-                timeout=30,
+                timeout=60,
             )
             text = str(response) if response else ""
             if text and text != "None" and len(text) > 20:

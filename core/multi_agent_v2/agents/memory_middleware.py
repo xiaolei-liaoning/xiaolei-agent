@@ -5,7 +5,7 @@ MemoryMiddleware — V2 记忆中间件
 不再用 importlib 绕路、不再硬编码 user_id。
 
 三阶段钩子：
-  on_think_start  — 读取短期记忆 + 用户画像 + RAG → 注入 personality
+  on_llm_invoke  — 读取短期记忆 + 用户画像 + RAG → 注入 personality
   on_tool_end     — 记录工具执行经验到 temp_memory
   on_finish       — 写入短期/长期记忆（V1 process_turn 统一处理）
 """
@@ -24,7 +24,7 @@ _NUDGE_INTERVAL = 10
 
 class MemoryMiddleware(BaseMiddleware):
     """记忆中间件 — V2 读写 V1 同一套记忆引擎"""
-    HOOKS = ("on_think_start", "on_tool_end", "on_finish")
+    HOOKS = ("on_llm_invoke", "on_tool_end", "on_finish")
 
     def __init__(self):
         super().__init__()
@@ -57,9 +57,9 @@ class MemoryMiddleware(BaseMiddleware):
             self._v1_mw_broken = True
             return None
 
-    # ── on_think_start — 记忆注入 ──────────────────────────
+    # ── on_llm_invoke — 记忆注入 ──────────────────────────
 
-    async def on_think_start(self, ctx: RunContext) -> None:
+    async def on_llm_invoke(self, ctx: RunContext) -> None:
         """每轮 LLM 思考前注入短期记忆 + 用户画像 + RAG"""
         user_input = ctx.task_description
         if not user_input:
@@ -109,7 +109,7 @@ class MemoryMiddleware(BaseMiddleware):
         if self._agent is not None and hasattr(self._agent, 'temp_memory'):
             self._agent.temp_memory["memory_experiences"] = self._tool_experiences[-10:]
 
-        # 工具结果写入 STM，供下轮 on_think_start 读取
+        # 工具结果写入 STM，供下轮 on_llm_invoke 读取
         try:
             from core.memory.short_term_memory import get_memory_manager
             stm = get_memory_manager()

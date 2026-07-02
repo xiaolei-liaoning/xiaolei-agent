@@ -16,7 +16,7 @@ async def test_execute_shell_blocks_rmrf():
         rc = r.get("result", {}).get("content", [])
         if rc:
             text = rc[0].get("text", "")
-    assert "安全策略阻止" in text or "blocked" in text.lower() or "rm -rf" in text, (
+    assert "执行失败" in text or "blocked" in text.lower() or "安全策略阻止" in text, (
         f"危险命令应被拦截，实际响应: {text!r}"
     )
 

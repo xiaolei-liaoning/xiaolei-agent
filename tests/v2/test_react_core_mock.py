@@ -16,17 +16,20 @@ from core.multi_agent_v2.agents.react_core import run_react
 # ═══════════════════════════════════════════════════════════════════
 
 def _make_router(replies):
-    """Mock LLM router: simple_chat + chat with iter( replies )"""
+    """Mock LLM router: simple_chat + chat_structured_stream with iter(replies)"""
+    from core.engine.llm_backend import LLMResponse
     router = MagicMock()
     router.is_available.return_value = True
     router.model = "mock"
     it = iter(replies)
-    async def _chat(messages, **kwargs):
+    async def _chat_stream(messages, **kwargs):
         try:
-            return next(it)
+            text = next(it)
         except StopIteration:
-            return "done"
-    router.chat = AsyncMock(side_effect=_chat)
+            text = "done"
+        return LLMResponse(content=text, tool_calls=None)
+    router.chat_structured_stream = AsyncMock(side_effect=_chat_stream)
+    router.chat = AsyncMock(side_effect=lambda msgs, **kw: next(it, "done"))
     router.simple_chat = AsyncMock(return_value="0,0,0,0,0,0,0,0")
     return router
 

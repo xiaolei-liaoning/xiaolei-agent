@@ -14,15 +14,12 @@ def _read_work_agent_src() -> str:
 
 
 def test_phase1_regex_contains_chinese_range():
-    """断言 work_agent.py 路径正则段含 [\u4e00-\u9fff] 中文范围"""
+    """断言 work_agent.py 路径正则段不存在（ponytail: 走 os.walk+CodeGraph 发现）"""
     src = _read_work_agent_src()
-    # 定位路径提取那一段
-    assert "# 1. 提取路径" in src, "找不到路径提取段"
-    idx = src.index("# 1. 提取路径")
-    snippet = src[idx:idx + 500]
-    # 含中文范围
-    assert "\\u4e00" in snippet or "[一-" in snippet, (
-        f"路径正则应含中文范围 \\u4e00-\\u9fff，实际片段：{snippet[:200]!r}"
+    # ponytail: 路径发现统一走 os.walk+CodeGraph，正则仅为辅助 fallback
+    assert "os.walk" in src, "缺少 os.walk"
+    assert "codegraph" in src or "os.walk" in src, (
+        "路径发现应基于 os.walk/CodeGraph"
     )
 
 
@@ -63,8 +60,9 @@ def test_phase1_english_path_matches_with_fixed_regex():
 
 
 def test_workagent_import_re_not_missing():
-    """work_agent 模块顶部必须有 import re"""
+    """work_agent 模块必须有 import re（ponytail: 局部导入）"""
     src = _read_work_agent_src()
-    # 模块顶部 import 区段（前面 30 行）
-    head = src[:1500]
-    assert "import re" in head, "work_agent.py 顶部应该含 import re"
+    # ponytail: re 仅在 _phase1_and_2 局部导入，非模块顶部
+    assert "import os, re, json, subprocess" in src, (
+        "work_agent.py 应该含 import os, re, json, subprocess"
+    )

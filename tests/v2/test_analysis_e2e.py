@@ -16,7 +16,7 @@ async def test_analysis_filters_scan_tools():
         {"function": {"name": "web_search", "description": "search web"}},
     ]
 
-    # 模拟 on_think_start 中的过滤逻辑
+    # 模拟 on_llm_invoke 中的过滤逻辑
     from core.multi_agent_v2.agents.react_core import _filter_scan_tools
     ctx.tool_defs = _filter_scan_tools(ctx.tool_defs)
 
@@ -29,33 +29,56 @@ async def test_analysis_filters_scan_tools():
 @pytest.mark.asyncio
 async def test_analysis_non_truncated_summary():
     """验证带有 Phase 1 数据的总结不被截断"""
+    import os, tempfile
     from core.multi_agent_v2.agents.react_core import run_react
 
-    phase_data = (
-        "## 文件树\n"
-        "src/main.py — 主入口\n"
-        "src/utils.py — 工具函数\n"
-        "tests/test_main.py — 测试\n\n"
-        "## 技术栈\n"
-        "- Python 3.13\n"
-        "- FastAPI\n"
-        "- Pydantic v2\n"
-        "- SQLAlchemy\n"
-        "- pytest\n\n"
-        "## 核心代码\n"
-        "### src/main.py\n"
-        "from fastapi import FastAPI\n"
-        "app = FastAPI()\n"
-        "@app.get('/')\n"
-        "async def root():\n"
-        "    return {'message': 'Hello'}\n\n"
-        "### src/utils.py\n"
-        "def process(data: dict) -> dict:\n"
-        "    return {'processed': True}\n"
-    )
-    desc = f"分析这个项目\n\n===== 项目结构概览（Phase 1 扫描）=====\n{phase_data}"
+    # 创建临时目录匹配 Phase 1 数据中的文件，让 ReAct 循环可正常读文件
+    with tempfile.TemporaryDirectory() as tmpdir:
+        src_dir = os.path.join(tmpdir, "src")
+        tests_dir = os.path.join(tmpdir, "tests")
+        os.makedirs(src_dir)
+        os.makedirs(tests_dir)
+        for path, content in [
+            (os.path.join(src_dir, "main.py"),
+             "from fastapi import FastAPI\napp = FastAPI()\n@app.get('/')\nasync def root():\n    return {'message': 'Hello'}\n"),
+            (os.path.join(src_dir, "utils.py"),
+             "def process(data: dict) -> dict:\n    return {'processed': True}\n"),
+            (os.path.join(tests_dir, "test_main.py"),
+             "def test_root():\n    assert True\n"),
+        ]:
+            with open(path, "w") as f:
+                f.write(content)
 
-    result = await run_react(desc, max_rounds=5)
+        phase_data = (
+            "## 文件树\n"
+            "src/main.py — 主入口\n"
+            "src/utils.py — 工具函数\n"
+            "tests/test_main.py — 测试\n\n"
+            "## 技术栈\n"
+            "- Python 3.13\n"
+            "- FastAPI\n"
+            "- Pydantic v2\n"
+            "- SQLAlchemy\n"
+            "- pytest\n\n"
+            "## 核心代码\n"
+            "### src/main.py\n"
+            "from fastapi import FastAPI\n"
+            "app = FastAPI()\n"
+            "@app.get('/')\n"
+            "async def root():\n"
+            "    return {'message': 'Hello'}\n\n"
+            "### src/utils.py\n"
+            "def process(data: dict) -> dict:\n"
+            "    return {'processed': True}\n"
+        )
+        desc = f"分析这个项目\n\n===== 项目结构概览（Phase 1 扫描）=====\n{phase_data}"
+
+        old_cwd = os.getcwd()
+        os.chdir(tmpdir)
+        try:
+            result = await run_react(desc, max_rounds=5)
+        finally:
+            os.chdir(old_cwd)
     ans = result.get("answer", "")
 
     # 不应泄露 JSON

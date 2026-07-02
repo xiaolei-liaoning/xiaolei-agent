@@ -552,16 +552,7 @@ def _format_github_trending_html(html_text: str, source_name: str) -> Optional[s
 
 
 async def _handle_search(args: Dict) -> Dict:
-    """联网搜索 — 多路径多栈并发，谁先出好结果就用谁
-
-    四路并发，每路用不同的 HTTP 栈：
-      - Bing(aiohttp)       → aiohttp（SSL verify → no-verify → urllib fallback）
-      - Baidu(requests)     → requests（不同 TLS 实现）
-      - DDG(aiohttp)        → aiohttp
-      - Bing(urllib)        → urllib（最底层系统调用）
-
-    asyncio.wait(FIRST_COMPLETED)，第一路质量合格就取消其余立即返回。
-    """
+    """联网搜索 — Bing + Baidu + DDG 三引擎并发，结果合并去重"""
     from urllib.parse import quote
     from core.multi_agent_v2.tools.html_parser import (
         extract_search_results_bing,
@@ -582,85 +573,71 @@ async def _handle_search(args: Dict) -> Dict:
     if is_hot:
         hot_results = await _handle_hot_search(query)
         if hot_results:
+            # 兼容旧格式返回
             text = hot_results.get("result", {}).get("content", [{}])[0].get("text", "")
             if text:
                 return ok(text)
 
-    # ── 不同网络栈的搜索方法 ──
-    async def _stack_aiohttp(name: str, url: str, parser):
-        """栈A: aiohttp（自带 SSL verify → no-verify → urllib 三级降级）"""
-        html = await _http_get(url, timeout=20)
-        return parser(html)
-
-    async def _stack_requests(name: str, url: str, parser):
-        """栈B: requests 同步（独立 TLS 栈，aiohttp 不通时可能通）"""
-        import requests as _req
-        _loop = asyncio.get_event_loop()
-        def _sync():
-            _resp = _req.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=20, verify=False)
-            _resp.encoding = "utf-8"
-            return parser(_resp.text)
-        return await _loop.run_in_executor(None, _sync)
-
-    async def _stack_urllib(name: str, url: str, parser):
-        """栈C: urllib（最底层系统调用，某些网络环境唯独这个能通）"""
-        import ssl, urllib.request
-        _ctx = ssl.create_default_context()
-        _ctx.check_hostname = False
-        _ctx.verify_mode = ssl.CERT_NONE
-        _req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(_req, timeout=20, context=_ctx) as _resp:
-            return parser(_resp.read().decode("utf-8", errors="replace"))
-
-    async def _score(results: list, name: str) -> int:
-        """质量分：结果数(×3) + 摘要长度(×2) + 有效URL(×1) - 验证码(直接-1)"""
-        if not results:
-            return 0
-        _joined = " ".join(r.get("snippet", "") + r.get("title", "") for r in results)
-        if any(k in _joined for k in ("百度安全验证", "安全验证", "验证码", "captcha", "unusual traffic")):
-            return -1
-        _n = len(results)
-        _avg = sum(len(r.get("snippet", "")) for r in results) / max(_n, 1)
-        _urls = sum(1 for r in results if r.get("url") and not r["url"].startswith("/"))
-        return min(_n, 10) * 3 + min(int(_avg), 100) * 2 + min(_urls, 10)
-
-    # ── 四路并发 ──
-    coros = [
-        ("Bing(aiohttp)", _stack_aiohttp("Bing", f"https://cn.bing.com/search?q={encoded}", extract_search_results_bing)),
-        ("Baidu(requests)", _stack_requests("Baidu", f"https://www.baidu.com/s?wd={encoded}&rn=10", extract_search_results_baidu)),
-        ("DDG(aiohttp)", _stack_aiohttp("DDG", f"https://html.duckduckgo.com/html/?q={encoded}", extract_search_results_ddg)),
-        ("Bing(urllib)", _stack_urllib("Bing", f"https://cn.bing.com/search?q={encoded}", extract_search_results_bing)),
+    # 三引擎并发（超时从8秒提升到15秒，每引擎重试2次）
+    engines = [
+        ("Bing", f"https://cn.bing.com/search?q={encoded}&count=10", extract_search_results_bing),
+        ("百度", f"https://www.baidu.com/s?wd={encoded}&rn=10", extract_search_results_baidu),
+        ("DuckDuckGo", f"https://html.duckduckgo.com/html/?q={encoded}", extract_search_results_ddg),
     ]
 
-    pending = {asyncio.create_task(c, name=nm) for nm, c in coros}
-    results = []
-    deadline = asyncio.get_event_loop().time() + 35
+    sources = []
 
-    while pending and asyncio.get_event_loop().time() < deadline:
-        done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED, timeout=10)
-        for t in done:
-            nm = t.get_name()
+    async def _search_one(name: str, url: str, parser):
+        for attempt in range(2):
             try:
-                res = t.result()
-                s = await _score(res, nm)
-                results.append((nm, res, s))
-                logger.info(f"搜索 [{nm}] 返回 {len(res) if res else 0} 条, 质量分={s}")
-                if s >= 15:
-                    for p in pending:
-                        p.cancel()
-                    logger.info(f"搜索命中 [{nm}] 质量分={s}, {len(res)}条")
-                    return ok(merge_search_results([(nm, res)]))
-            except Exception as e:
-                logger.warning(f"搜索失败 [{nm}]: {type(e).__name__}: {str(e)[:120]}")
+                html = await _http_get(url, timeout=25)
+                results = parser(html)
+                if results:
+                    sources.append((name, results))
+                    return
+            except Exception:
+                if attempt == 0:
+                    await asyncio.sleep(1)
 
-    # ── 全部失败：合并所有可用结果 ──
-    good = [(nm, res) for nm, res, sc in results if res and sc > 0]
-    if not good:
-        return err("搜索暂不可用（所有引擎均不可用）。可尝试 fetch_url 手动获取：fetch_url(url='https://www.baidu.com/s?wd='+查询关键词, max_length=80000)")
+    await asyncio.gather(*[_search_one(n, u, p) for n, u, p in engines])
 
-    best = max(results, key=lambda x: x[2])
-    logger.info(f"搜索合并 {len(good)} 路，最佳: [{best[0]}] 分={best[2]}")
-    return ok(merge_search_results(good))
+    if not sources:
+        # 兜底：重试百度
+        try:
+            html = await _http_get(f"https://www.baidu.com/s?wd={encoded}&rn=10", timeout=20)
+            results = extract_search_results_baidu(html)
+            if results:
+                sources.append(("百度(重试)", results))
+        except Exception:
+            pass
+
+    if not sources:
+        return err("搜索暂不可用（所有搜索引擎均超时）。请使用 fetch_url 工具手动获取数据：fetch_url(url='https://www.baidu.com/s?wd=查询关键词&rn=10', max_length=80000)")
+
+    merged = merge_search_results(sources)
+
+    # ── 检测安全验证/验证码页面（LLM + 关键词兜底）──
+    _is_captcha = False
+    try:
+        from core.engine.llm_backend import get_llm_router
+        _router = get_llm_router()
+        if _router and _router.is_available():
+            _resp = await _router.simple_chat(
+                f"以下网页内容是否包含安全验证/captcha/反爬检测？只回答'是'或'否'\n\n{merged[:2000]}",
+                temperature=0, max_tokens=10
+            )
+            _is_captcha = _resp and '是' in str(_resp)
+    except Exception:
+        pass
+    if not _is_captcha:
+        _captcha_keywords = ["百度安全验证", "安全验证", "网络不给力", "请稍后重试", "验证码", "captcha",
+                             "Verify you are human", "unusual traffic", "Please confirm"]
+        _is_captcha = any(kw in merged for kw in _captcha_keywords)
+    if _is_captcha:
+        logger.warning(f"搜索结果包含验证码/安全验证，丢弃: {merged[:100]}")
+        return err("搜索引擎返回验证码页面，无法获取搜索结果。请使用 fetch_url 直接访问目标网址获取数据。")
+
+    return ok(merged)
 
 
 def _detect_code_language(code: str) -> tuple:
@@ -806,14 +783,13 @@ async def _handle_execute_shell(args: Dict) -> Dict:
     if not command:
         return {"result": {"content": [{"text": "缺少 command 参数"}]}}
     
-    # 安全检查：使用 ShellGuard 扫描命令（V2-C3 fix: 改用 ScanResult 字段）
+    # 安全检查：使用 ShellGuard 扫描命令
     try:
-        from core.multi_agent_v2.tools.shell_guard import get_shell_guard
-        guard = get_shell_guard()
-        scan_result = guard.scan(command)
-        if not scan_result.safe:
-            risk_desc = "; ".join(r.description for r in scan_result.risks) if scan_result.risks else "危险命令"
-            return {"result": {"content": [{"text": f"❌ 命令被安全策略阻止: {risk_desc}\n命令: {command}"}]}}
+        from core.multi_agent_v2.tools.shell_guard import ShellGuard
+        guard = ShellGuard()
+        issues = guard.scan(command)
+        if issues.get("blocked"):
+            return {"result": {"content": [{"text": f"命令被安全策略阻止: {issues.get('reason', '未知原因')}"}]}}
     except Exception:
         pass  # ShellGuard 不可用时跳过检查
     
@@ -1404,6 +1380,12 @@ async def _handle_search_files(args: Dict) -> Dict:
 # ═══════════════════════════════════════════════════════════════════
 
 
+async def _handle_arbor_viz(args: Dict) -> Dict:
+    """ARBOR 假设树可视化 — 委托给 arbor_viz 模块"""
+    from core.multi_agent_v2.tools.arbor_viz import handle_arbor_viz
+    return await handle_arbor_viz(args)
+
+
 async def _handle_text_analyzer(args: Dict) -> Dict:
     """文本分析 — 基于 LLM 的深度文本理解"""
     from core.multi_agent_v2.tools.tool_result import ok, err
@@ -1646,6 +1628,35 @@ _SANDBOX_TOOL_DEFS = [
             },
         },
         handler=_handle_search_files,
+    ),
+    ToolDefinition(
+        name="arbor_viz",
+        server=SERVER_BUILTIN,
+        tags=["viz", "tree"],
+        description="【ARBOR 假设树可视化】生成交互式 HTML 树形图，展示假设树的预测/选择/实施过程。节点颜色表示状态(implemented/selected/predicted/pruned)，箭头颜色匹配子节点。适用于展示决策树、假设推理、预测链路。",
+        parameters={
+            "type": "object",
+            "properties": {
+                "nodes": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string", "description": "节点唯一 ID"},
+                            "parent_id": {"type": "string", "description": "父节点 ID（根节点填空或 root）"},
+                            "status": {"type": "string", "enum": ["predicted", "selected", "implemented", "pruned"], "description": "predicted=预测中(蓝) | selected=已选定(绿) | implemented=已实施(深绿) | pruned=已剪枝(灰)"},
+                            "detail": {"type": "string", "description": "节点详情（可选）"},
+                        },
+                        "required": ["id", "parent_id", "status"],
+                    },
+                    "description": "节点列表，构成假设树结构",
+                },
+                "title": {"type": "string", "description": "图表标题（可选）"},
+                "output_path": {"type": "string", "description": "输出路径（默认 ~/Desktop/arbor_tree.html）"},
+            },
+            "required": ["nodes"],
+        },
+        handler=_handle_arbor_viz,
     ),
     ToolDefinition(
         name="text_analyzer",

@@ -202,7 +202,10 @@ export default async function() {{
                         f" | {wr.elapsed:.1f}s\033[0m"
                     )
                 if wr.agent_graph and (wr.agent_graph.get('nodes') or wr.agent_graph.get('edges')):
-                    _render_agent_graph(wr.agent_graph)
+                    g = wr.agent_graph
+                    phases_data = [{"title": p.title, "detail": p.detail} for p in wr.phases] if wr.phases else []
+                    g['_phases'] = phases_data
+                    _render_agent_graph(g)
             else:
                 log_status(f"编排完成但无结果: {wr.error or '无输出'}", color="yellow")
         except Exception as e:
@@ -976,110 +979,189 @@ export default async function() {{
 # 协作图渲染
 # ═══════════════════════════════════════════════════════════════
 
+def _badge_style(status: str, truncated: bool):
+    if status == "failed":
+        return "❌", "fill:#fee2e2,stroke:#ef4444", "#ef4444"
+    if truncated:
+        return "⚠️", "fill:#fef3c7,stroke:#f59e0b", "#f59e0b"
+    if status == "done":
+        return "✅", "fill:#dcfce7,stroke:#22c55e", "#22c55e"
+    return "⏳", "fill:#e0f2fe,stroke:#3b82f6", "#3b82f6"
+
+
 def _render_agent_graph(graph: dict):
-    """将 agent_graph 渲染为执行报告 HTML（含重试/截断/压缩标记）"""
+    """将 agent_graph 渲染为执行报告 HTML（含阶段/依赖/重试标记）"""
     nodes = graph.get("nodes", [])
     edges = graph.get("edges", [])
     retry_events = graph.get("retryEvents", [])
     comp_warnings = graph.get("compressionWarnings", [])
+    phases_meta = graph.get("_phases", [])
     if not nodes and not edges:
         return
 
     from cli.colors import print_success, log_status, CLAUDE
     log_status("正在生成执行报告...", color=CLAUDE)
 
-    node_ids = {}
-    mermaid_lines = ["graph TD"]
-    node_details = []
     retry_map = {}
     for e in retry_events:
         retry_map.setdefault(e.get("label"), []).append(e)
 
-    for i, n in enumerate(nodes):
-        nid = f"N{i}"
+    # ── 按 phase 分组 ──
+    phase_names = [p["title"] for p in phases_meta] if phases_meta else []
+    phase_groups: dict[str, list] = {}
+    for n in nodes:
+        p = n.get("phase") or ""
+        phase_groups.setdefault(p, []).append(n)
+    # 无 phase 的归入"未分组"
+    if "" in phase_groups and len(phase_groups[""]) == len(nodes):
+        phase_groups.clear()
+
+    # ── 构建 Mermaid ──
+    mermaid_lines = ["graph TD"]
+    global_nid = 0
+    node_ids = {}
+    all_details = []
+
+    def _emit_node(n):
+        nonlocal global_nid
+        nid = f"N{global_nid}"
+        global_nid += 1
         label = n.get("label", nid)
         status = n.get("status", "unknown")
         duration = n.get("duration", 0)
         dur_str = f"{duration/1000:.1f}s" if duration else ""
-        model = n.get("model", "")
-
-        truncated = False
-        meta = n.get("metadata", {}) or {}
-        if meta.get("truncated"):
-            truncated = True
-
+        truncated = bool((n.get("metadata") or {}).get("truncated"))
         has_retry = label in retry_map
-
-        if status == "failed":
-            badge = "❌"
-            style = "fill:#fee2e2,stroke:#ef4444"
-        elif truncated:
-            badge = "⚠️"
-            style = "fill:#fef3c7,stroke:#f59e0b"
-        elif status == "done":
-            badge = "✅"
-            style = "fill:#dcfce7,stroke:#22c55e"
-        else:
-            badge = "⏳"
-            style = "fill:#e0f2fe,stroke:#3b82f6"
+        badge, style, _ = _badge_style(status, truncated)
 
         display = f"{badge} {label}"
         if dur_str:
             display += f" ({dur_str})"
-
         mermaid_lines.append(f'    {nid}["{display}"]')
         mermaid_lines.append(f'    style {nid} {style}')
         node_ids[label] = nid
 
-        detail_rows = []
-        detail_rows.append(f"<tr><td>状态</td><td>{badge} {status}</td></tr>")
+        rows = [f"<tr><td>状态</td><td>{badge} {status}</td></tr>"]
         if dur_str:
-            detail_rows.append(f"<tr><td>耗时</td><td>{dur_str}</td></tr>")
+            rows.append(f"<tr><td>耗时</td><td>{dur_str}</td></tr>")
+        model = n.get("model", "")
         if model:
-            detail_rows.append(f"<tr><td>模型</td><td>{model}</td></tr>")
+            rows.append(f"<tr><td>模型</td><td>{model}</td></tr>")
         if truncated:
-            detail_rows.append(f'<tr><td>截断</td><td style="color:#f59e0b">⚠️ 输出不完整 ({meta.get("truncationDetail", "")})</td></tr>')
+            rows.append(f'<tr><td style="color:#f59e0b">截断</td><td style="color:#f59e0b">⚠️ 输出不完整</td></tr>')
         prompt = n.get("prompt", "")
         if prompt:
-            detail_rows.append(f"<tr><td>任务</td><td style='font-size:12px;color:#666'>{prompt}</td></tr>")
+            rows.append(f"<tr><td>任务</td><td style='font-size:12px;color:#666'>{prompt[:120]}</td></tr>")
+        all_details.append({"label": label, "rows": "".join(rows), "has_retry": has_retry, "phase": n.get("phase", "")})
 
-        node_details.append({"label": label, "rows": "".join(detail_rows), "has_retry": has_retry})
+        return nid
 
-    # ponytail: 按 startTime 排序加隐式边，让 mermaid graph TD 从上往下排列
-    time_sorted = sorted(
-        [(f"N{i}", n.get("startTime", 0) or 0) for i, n in enumerate(nodes)],
-        key=lambda x: x[1],
-    )
-    for j in range(len(time_sorted) - 1):
-        curr_id = time_sorted[j][0]
-        next_id = time_sorted[j + 1][0]
-        if curr_id != next_id:
-            mermaid_lines.append(f"    {curr_id} --> {next_id}")
+    # 按 phase 分组 + 时间排序
+    phase_order = []
+    _auto_edge_count = 0
+    PHASE_FILLS = ["#f0f7ff", "#fefce8", "#f0fdf4", "#fef2f2", "#f5f3ff"]
+    if phase_groups:
+        for phase_title, phase_nodes in phase_groups.items():
+            phase_nodes.sort(key=lambda x: x.get("startTime", 0) or 0)
+            phase_order.append((phase_title, phase_nodes))
+        # 按最早 startTime 排序
+        phase_order.sort(key=lambda x: min((n.get("startTime", 0) or 0) for n in x[1]))
+        for idx, (phase_title, phase_nodes) in enumerate(phase_order):
+            display_phase = phase_title if phase_title else "未分组"
+            phase_color = PHASE_FILLS[idx % len(PHASE_FILLS)]
+            mermaid_lines.append(f"    subgraph SG{idx}[{display_phase}]")
+            mermaid_lines.append(f"    style SG{idx} fill:{phase_color},stroke:#cbd5e1,stroke-width:1")
+            for n in phase_nodes:
+                _emit_node(n)
+            mermaid_lines.append("    end")
+        # ── 自动在 phase 之间加边（fan-out / fan-in / 顺序连） ──
+        for idx in range(len(phase_order) - 1):
+            _, cur_nodes = phase_order[idx]
+            _, next_nodes = phase_order[idx + 1]
+            if not cur_nodes or not next_nodes:
+                continue
+            cn_ids = [node_ids.get(n.get("label", "")) for n in cur_nodes if node_ids.get(n.get("label", ""))]
+            nn_ids = [node_ids.get(n.get("label", "")) for n in next_nodes if node_ids.get(n.get("label", ""))]
+            if not cn_ids or not nn_ids:
+                continue
+            if len(cn_ids) == 1 and len(nn_ids) >= 1:
+                for nid in nn_ids:
+                    mermaid_lines.append(f"    {cn_ids[0]} --> {nid}")
+                    _auto_edge_count += 1
+            elif len(nn_ids) == 1:
+                for cid in cn_ids:
+                    mermaid_lines.append(f"    {cid} --> {nn_ids[0]}")
+                    _auto_edge_count += 1
+            else:
+                mermaid_lines.append(f"    {cn_ids[-1]} -->|阶段| {nn_ids[0]}")
+                _auto_edge_count += 1
+    else:
+        # 无 phase 信息：纯时间线
+        sorted_nodes = sorted(nodes, key=lambda x: x.get("startTime", 0) or 0)
+        for i, n in enumerate(sorted_nodes):
+            _emit_node(n)
+            # 自动加顺序边
+            if i > 0:
+                prev_id = node_ids.get(sorted_nodes[i-1].get("label", ""))
+                cur_id = node_ids.get(n.get("label", ""))
+                if prev_id and cur_id:
+                    mermaid_lines.append(f"    {prev_id} --> {cur_id}")
 
+    # 显式依赖边
     for e in edges:
         frm = e.get("from", "")
         to = e.get("to", "")
-        frm_id = node_ids.get(frm, frm)
-        to_id = node_ids.get(to, to)
-        mermaid_lines.append(f"    {frm_id} -->|依赖| {to_id}")
+        if frm in node_ids and to in node_ids:
+            mermaid_lines.append(f"    {node_ids[frm]} -->|依赖| {node_ids[to]}")
 
-    # ponytail: 重试边用虚线
+    # 重试虚线
     seen_retry = set()
     for e in retry_events:
         label = e.get("label", "")
         if label in seen_retry:
             continue
         seen_retry.add(label)
-        nid = node_ids.get(label, label)
-        mermaid_lines.append(f"    {nid} -.->|重试| {nid}")
+        if label in node_ids:
+            mermaid_lines.append(f"    {node_ids[label]} -.->|重试| {node_ids[label]}")
 
     mermaid_code = "\n".join(mermaid_lines)
-    detail_html = "".join(
-        f'<div class="node-card"><h3>{n["label"]}</h3>'
-        f'{"<span class=\"retry-badge\">🔄 重试</span>" if n["has_retry"] else ""}'
-        f'<table>{n["rows"]}</table></div>'
-        for n in node_details
-    )
+
+    # ── 按 phase 分组的详情卡片 ──
+    phase_detail_blocks = []
+    if phase_groups:
+        for phase_title, phase_nodes in phase_groups.items():
+            display_phase = phase_title if phase_title else "未分组"
+            total = len(phase_nodes)
+            ok = sum(1 for n in phase_nodes if n.get("status") == "done")
+            cards = ""
+            for n in phase_nodes:
+                label = n.get("label", "?")
+                has_retry = label in retry_map
+                badge, _, color = _badge_style(n.get("status", "unknown"), (n.get("metadata") or {}).get("truncated", False))
+                dur_str = f"{(n.get('duration', 0) / 1000):.1f}s" if n.get("duration") else ""
+                cards += f'''
+      <div class="node-card" style="border-left:4px solid {color}">
+        <h3>{badge} {label} <span class="node-time">{dur_str}</span></h3>
+        {"<span class=\"retry-badge\">🔄 重试</span>" if has_retry else ""}
+      </div>'''
+            phase_detail_blocks.append(f'''
+    <div class="phase-detail">
+      <div class="phase-detail-header">
+        <h2>📁 {display_phase}</h2>
+        <span class="phase-stats">{ok}/{total} 成功</span>
+      </div>
+      {cards}
+    </div>''')
+    else:
+        # 无 phase：平铺卡片
+        for d in all_details:
+            phase_detail_blocks.append(f'''
+    <div class="node-card">
+      <h3>{d["label"]}</h3>
+      {"<span class=\"retry-badge\">🔄 重试</span>" if d["has_retry"] else ""}
+    </div>''')
+
+    detail_html = "".join(phase_detail_blocks)
 
     warning_html = ""
     if comp_warnings:
@@ -1097,17 +1179,21 @@ def _render_agent_graph(graph: dict):
   .container {{ max-width:1200px; margin:0 auto; }}
   h1 {{ font-size:22px; margin-bottom:4px; color:#1a1a2e; }}
   .subtitle {{ font-size:13px; color:#666; margin-bottom:24px; }}
-  .row {{ display:flex; gap:24px; }}
-  .col {{ flex:1; min-width:0; }}
-  .diagram {{ background:#fff; border-radius:12px; padding:24px; box-shadow:0 2px 12px rgba(0,0,0,0.08); overflow-x:auto; }}
+  .layout {{ display:flex; gap:24px; align-items:flex-start; }}
+  @media (max-width:900px) {{ .layout {{ flex-direction:column; }} }}
+  .diagram {{ flex:1; min-width:0; background:#fff; border-radius:12px; padding:24px; box-shadow:0 2px 12px rgba(0,0,0,0.08); overflow-x:auto; }}
   .diagram svg {{ max-width:100%; height:auto; }}
-  .details {{ display:flex; flex-direction:column; gap:12px; }}
-  .node-card {{ background:#fff; border-radius:10px; padding:16px; box-shadow:0 1px 6px rgba(0,0,0,0.06); }}
-  .node-card h3 {{ font-size:15px; margin-bottom:8px; color:#1a1a2e; display:flex; align-items:center; gap:6px; }}
-  .retry-badge {{ font-size:11px; background:#fef3c7; color:#d97706; padding:2px 8px; border-radius:4px; }}
-  .node-card table {{ width:100%; border-collapse:collapse; font-size:13px; }}
-  .node-card td {{ padding:4px 8px; border-bottom:1px solid #f0f0f0; }}
-  .node-card td:first-child {{ color:#888; width:60px; }}
+  .details {{ width:340px; display:flex; flex-direction:column; gap:16px; }}
+  @media (max-width:900px) {{ .details {{ width:auto; }} }}
+  .phase-detail {{ background:#fff; border-radius:10px; overflow:hidden; box-shadow:0 1px 6px rgba(0,0,0,0.06); }}
+  .phase-detail-header {{ display:flex; justify-content:space-between; align-items:center; padding:10px 14px; background:#f8fafc; border-bottom:1px solid #e2e8f0; }}
+  .phase-detail-header h2 {{ font-size:14px; margin:0; color:#1e293b; }}
+  .phase-stats {{ font-size:11px; color:#64748b; background:#e2e8f0; padding:1px 8px; border-radius:8px; }}
+  .node-card {{ padding:10px 14px; border-bottom:1px solid #f0f0f0; }}
+  .node-card:last-child {{ border-bottom:none; }}
+  .node-card h3 {{ font-size:13px; margin:0; color:#1a1a2e; display:flex; align-items:center; gap:4px; }}
+  .node-time {{ font-size:11px; color:#94a3b8; font-weight:normal; margin-left:auto; }}
+  .retry-badge {{ font-size:10px; background:#fef3c7; color:#d97706; padding:1px 6px; border-radius:3px; }}
   .warnings {{ background:#fef3c7; border:1px solid #f59e0b; border-radius:10px; padding:16px; margin-top:20px; }}
   .warnings h3 {{ font-size:15px; color:#d97706; margin-bottom:8px; }}
   .warnings li {{ font-size:13px; margin:4px 0; color:#92400e; }}
@@ -1116,9 +1202,9 @@ def _render_agent_graph(graph: dict):
 </head>
 <body><div class="container">
 <h1>🔄 Workflow 执行报告</h1>
-<p class="subtitle">{len(nodes)} 个 Agent · {len(edges)} 条依赖 · {len(retry_events)} 次重试 · {len(comp_warnings)} 个压缩警告</p>
-<div class="row">
-<div class="col diagram">
+<p class="subtitle">{len(nodes)} 个 Agent · {len(edges) + _auto_edge_count} 条依赖 · {len(retry_events)} 次重试 · {len(comp_warnings)} 个压缩警告 · {len(phase_names)} 阶段</p>
+<div class="layout">
+<div class="diagram">
 <div class="mermaid">
 {mermaid_code}
 </div>
@@ -1127,7 +1213,7 @@ def _render_agent_graph(graph: dict):
 <span style="margin-left:16px;border-bottom:2px dashed #999">─ 重试</span>
 </div>
 </div>
-<div class="col details">
+<div class="details">
 {detail_html}
 {warning_html}
 </div>

@@ -59,12 +59,12 @@ class PassthroughMiddleware(BaseMiddleware):
         self.calls.append("on_start")
         return None
 
-    async def on_think_start(self, ctx):
-        self.calls.append("on_think_start")
+    async def on_llm_invoke(self, ctx):
+        self.calls.append("on_llm_invoke")
         return None
 
-    async def on_think_end(self, ctx):
-        self.calls.append("on_think_end")
+    async def on_tool_invoke(self, ctx):
+        self.calls.append("on_tool_invoke")
         return None
 
     async def on_tool_end(self, ctx):
@@ -80,12 +80,12 @@ class InterruptMiddleware(BaseMiddleware):
     """会在指定钩子中断执行的中间件"""
     HOOKS = ()
 
-    def __init__(self, interrupt_hook: str = "on_think_end"):
+    def __init__(self, interrupt_hook: str = "on_tool_invoke"):
         super().__init__()
         self.interrupt_hook = interrupt_hook
 
-    async def on_think_end(self, ctx):
-        if self.interrupt_hook == "on_think_end":
+    async def on_tool_invoke(self, ctx):
+        if self.interrupt_hook == "on_tool_invoke":
             ctx.interrupted = True
             ctx.final_answer = "中断测试"
             return HookResult(jump_to="end", reason="测试中断")

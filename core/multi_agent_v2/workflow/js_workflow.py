@@ -36,6 +36,7 @@ class WorkflowConfig:
     max_agents: int = 1000
     budget_total: int = 1_000_000  # 默认100万token预算
     resume_cache: bool = True  # 是否启用 resume 缓存
+    agent_timeout: int = 300  # ponytail: 单 agent 默认超时，JS 侧可用 opts.timeout 覆盖
 
 
 class ClaudeCodeWorkflow:
@@ -297,10 +298,13 @@ class ClaudeCodeWorkflow:
                     stdout_task, stderr_task, stdin_task, ipc_task,
                     return_exceptions=True,
                 )
-                for t in list(self._ipc_tasks):
-                    t.cancel()
-                if self._ipc_tasks:
-                    await asyncio.gather(*self._ipc_tasks, return_exceptions=True)
+                try:
+                    for t in list(self._ipc_tasks):
+                        t.cancel()
+                    if self._ipc_tasks:
+                        await asyncio.gather(*self._ipc_tasks, return_exceptions=True)
+                except RecursionError:
+                    pass
                 self._ipc_tasks.clear()
                 return WorkflowResult(
                     success=False,
@@ -317,10 +321,14 @@ class ClaudeCodeWorkflow:
             )
 
             # 取消还在跑的 IPC 任务（create_task 产生的）
-            for t in list(self._ipc_tasks):
-                t.cancel()
-            if self._ipc_tasks:
-                await asyncio.gather(*self._ipc_tasks, return_exceptions=True)
+            # ponytail: Python 3.14 Task.cancel() 递归 bug，防止嵌套 workflow 时 RecursionError
+            try:
+                for t in list(self._ipc_tasks):
+                    t.cancel()
+                if self._ipc_tasks:
+                    await asyncio.gather(*self._ipc_tasks, return_exceptions=True)
+            except RecursionError:
+                pass
             self._ipc_tasks.clear()
 
             if process.stdin:
@@ -390,6 +398,9 @@ class ClaudeCodeWorkflow:
                         return
                     self._cache_misses += 1
 
+                # ponytail: 用 WorkflowConfig.agent_timeout 作为默认超时
+                opts.setdefault("timeout", self.config.agent_timeout)
+                
                 # ── 提取并注入工作流上下文 ──
                 wf_ctx = opts.pop("_workflowContext", {})
                 if wf_ctx:
@@ -490,26 +501,7 @@ class ClaudeCodeWorkflow:
                         "timeout": opts.get("timeout", batch_timeout),
                     })
 
-                # V2-C7 fix: 用 semaphore 限制 batch 内并发，防 AgentPool 临时创建爆发
-                _sem = self._ipc_semaphore
-                async def _limited_parallel(task_list, timeout):
-                    async def _run_one(t):
-                        async with _sem:
-                            from core.multi_agent_v2.orchestration.orchestrator import agent as _agent
-                            return await _agent(t["prompt"], {"label": t.get("label"), "model": t.get("model"),
-                                                              "subagent_type": t.get("subagent_type"),
-                                                              "timeout": t.get("timeout", batch_timeout)})
-                    import asyncio as _aio
-                    try:
-                        results = await _aio.wait_for(
-                            _aio.gather(*[_run_one(t) for t in task_list], return_exceptions=True),
-                            timeout=timeout
-                        )
-                    except _aio.TimeoutError:
-                        results = []
-                    return [r for r in results if not isinstance(r, Exception)]
-
-                results = await _limited_parallel(tasks, batch_timeout)
+                results = await py_parallel(tasks, timeout=batch_timeout)
 
                 response_results = []
                 for r in results:
@@ -548,26 +540,23 @@ class ClaudeCodeWorkflow:
                     return
 
                 # 递归执行子 workflow（传入 args）
-                # V2-M11 fix: 用新 ClaudeCodeWorkflow 实例，避免 self 状态被冲掉导致父 workflow 挂死
                 # 保存父 workflow 状态
                 parent_phase = self._phase_records
                 parent_current_phase = self._current_phase
                 parent_log = self._log_buffer
                 parent_count = self._agent_count
                 parent_models = self._model_records
+                # ponytail: 临时替换 _ipc_tasks 为空集，防子 workflow cleanup 误杀父任务
+                parent_ipc_tasks = self._ipc_tasks
+                self._ipc_tasks = set()
                 
-                sub_wf = ClaudeCodeWorkflow(self.config)
-                # 共享 resume cache 让相同 prompt 命中缓存
-                sub_wf._resume_cache = self._resume_cache
-                sub_wf._cache_hits = self._cache_hits
-                sub_wf._cache_misses = self._cache_misses
-                sub_result = await sub_wf.run(script, args=wf_args)
+                sub_result = await self.run(script, args=wf_args)
                 
                 # 保存子 workflow 结果
-                sub_phase = sub_wf._phase_records
-                sub_log = sub_wf._log_buffer
-                sub_count = sub_wf._agent_count
-                sub_models = sub_wf._model_records
+                sub_phase = self._phase_records
+                sub_log = self._log_buffer
+                sub_count = self._agent_count
+                sub_models = self._model_records
                 
                 # 恢复父 workflow 状态并合并子结果
                 self._phase_records = parent_phase + sub_phase
@@ -575,6 +564,7 @@ class ClaudeCodeWorkflow:
                 self._log_buffer = parent_log + sub_log
                 self._agent_count = parent_count + sub_count
                 self._model_records = {**parent_models, **sub_models}
+                self._ipc_tasks = parent_ipc_tasks
 
                 response = {
                     "id": msg_id,
@@ -720,7 +710,7 @@ let _budgetSpent = 0;
 const _budgetModelSpent = {{}};
 
 const budget = {{
-    total: {"null" if budget_total is None else int(budget_total)},
+    total: {budget_total},
     spent() {{
         return _budgetSpent;
     }},
@@ -758,7 +748,8 @@ globalThis.log = async function(msg) {{
 // ── agent() — 调用子 Agent（支持多模型路由、Resume 缓存） ──
 globalThis.agent = async function(prompt, opts = {{}}) {{
     const label = opts.label || `Agent #${{++globalThis._agentCount}}`;
-    globalThis._agentCalls.push({{label: label, prompt: ''+(prompt||'').substring(0,80), status: 'running', startTime: Date.now()}});
+    const _ar = {{label, prompt: ''+(prompt||'').substring(0,80), status: 'running', phase: currentPhase || '', startTime: Date.now()}};
+    globalThis._agentCalls.push(_ar);
     console.log(`[Agent] ${{label}}${{opts.model ? ' [' + opts.model + ']' : ''}}: ${{String(prompt).substr(0, 100)}}`);
 
     // 自动注入工作流上下文
@@ -772,8 +763,12 @@ globalThis.agent = async function(prompt, opts = {{}}) {{
 
     const result = await send('agent', {{ prompt, opts: enhancedOpts }});
     if (result.error) {{
+        _ar.status = 'failed';
+        _ar.duration = Date.now() - _ar.startTime;
         throw new Error(result.error);
     }}
+    _ar.status = 'done';
+    _ar.duration = Date.now() - _ar.startTime;
 
     // Schema 解析
     if (opts.schema && result.output) {{
@@ -826,14 +821,6 @@ globalThis.$dag = async function(nodes) {{
             for (const dep of deps) {{
                 edges.push({{ from: dep, to: name }});
                 globalThis._dagEdges.push({{ from: dep, to: name }});
-            }}
-        }}
-    }}
-    // ponytail: 校验所有依赖节点必须在 DAG 中声明，避免外部引用导致静默塌缩
-    for (const [name, node] of Object.entries(graph)) {{
-        for (const dep of node.deps) {{
-            if (!(dep in graph)) {{
-                throw new Error('DAG node "' + name + '" depends on "' + dep + '" which is not a key in $dag()');
             }}
         }}
     }}

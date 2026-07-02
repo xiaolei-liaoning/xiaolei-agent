@@ -46,7 +46,7 @@ def get_llm_config():
         supported_models = [
             "glm-4-flash", "glm-4-plus", "glm-4-air",
             "glm-4.7-flash", "glm-4-free", "glm-3-turbo",
-            "deepseek-chat",
+            "deepseek-chat", "deepseek-v4-flash", "deepseek-v4-flash-free",
         ]
     return FallbackLLMConfig()
 
@@ -151,7 +151,7 @@ class GLMBackend:
         self.client = None
         self.deepseek_client = None
         self.openrouter_client = None
-        self.deepseek_model = os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL", "deepseek-chat")
+        self.deepseek_model = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
         self._token_stats = TokenStats()
         self._rate_limiter = RateLimiter(RATE_LIMIT_RPM)
         self._model_lock = threading.Lock()
@@ -527,7 +527,7 @@ class GLMBackend:
         # ── OpenRouter (fallback) ──
         if self.openrouter_client:
             try:
-                payload = dict(model="deepseek-chat", messages=messages,
+                payload = dict(model=self.deepseek_model, messages=messages,
                                temperature=temperature, max_tokens=max_tokens,
                                stream=True, stream_options={"include_usage": True})
                 if tools:

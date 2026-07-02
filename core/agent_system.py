@@ -856,9 +856,9 @@ class LeaderAgent(LLMAgent):
                 task_description, context_history, all_results, round_num
             )
             
-            # ponytail: 程序化强制 — 已有成功结果且 round>=4 时，直接 done（比之前 >=2 多给 2 轮，让深度分析有机会继续）
+            # ponytail: 程序化强制 — 已有成功结果且 round>=3 时，直接 done（匹配 chat.py max_rounds=3）
             successful = [r for r in all_results if r.get("success")]
-            if successful and round_num >= 4 and not thought.get("done"):
+            if successful and round_num >= 3 and not thought.get("done"):
                 logger.info(f"🔒 已有 {len(successful)} 个成功结果，强制 done（跳过 LLM 决策）")
                 # 用 LLM 的 thinking 作为 final_result（如果有的话），否则用 raw 结果
                 final = thought.get("thinking", "")
@@ -934,30 +934,54 @@ class LeaderAgent(LLMAgent):
                     logger.info(f"reassign: 增加活跃 Worker 到 {self.active_worker_count}")
 
             # ponytail: 已有成功结果时，检查是否全部子任务完成，是则强制合成，否则允许继续 delegate
+            # Bug 3 fix: partial success 也触发 process_results，不静默丢失败子任务
             if action_type == "batch_delegate" and action_result.get("success") and all_results:
                 result_data = action_result.get("result", {})
                 success_count = result_data.get("success_count", 0)
                 total_count = result_data.get("total_count", 0)
-                if total_count > 0 and success_count >= total_count:
-                    logger.info("🔒 全部子任务完成，强制切换为 process_results")
+                if total_count > 0 and success_count > 0:
+                    logger.info(f"🔒 {success_count}/{total_count} 子任务完成，强制切换为 process_results")
                     context_history.append({
                         "round": round_num,
-                        "thought": "系统强制：全部子任务已完成，下一轮必须使用 process_results 综合分析",
+                        "thought": f"系统强制：{success_count}/{total_count} 子任务已完成，下一轮必须使用 process_results 综合分析（失败子任务也需报告）",
                         "action_type": "system_override",
                         "action": {"type": "process_results", "task": f"综合分析以下结果并生成最终答案：{task_description}"},
                         "result": {"success": False, "error": "force process_results"},
                     })
 
-        success = len(all_results) > 0 and all(r.get("success") for r in all_results)
-        
-        # 统计子任务总数（支持批量分配的嵌套结构）
-        total_subtasks = 0
+        # Bug 5 fix: success 不再因 all_results 全 success-gated 而恒真，按子任务实际成功率判断
+        total_subtask_count = 0
+        successful_subtask_count = 0
         for r in all_results:
             result_data = r.get("result", {})
             if isinstance(result_data, dict) and "batch_results" in result_data:
-                total_subtasks += len(result_data["batch_results"])
+                for br in result_data["batch_results"]:
+                    total_subtask_count += 1
+                    if br.get("success"):
+                        successful_subtask_count += 1
             else:
-                total_subtasks += 1
+                total_subtask_count += 1
+                if r.get("success"):
+                    successful_subtask_count += 1
+        success = successful_subtask_count > 0 and successful_subtask_count == total_subtask_count
+
+        # Bug 8 fix: 全失败时给用户错误详情
+        if successful_subtask_count == 0 and total_subtask_count > 0:
+            _fail_msgs = []
+            for h in context_history:
+                _r = h.get("result", {})
+                if isinstance(_r, dict) and not _r.get("success") and _r.get("error"):
+                    _fail_msgs.append(str(_r["error"])[:200])
+            if _fail_msgs:
+                all_results.append({
+                    "success": False,
+                    "result": {"tool_result_summary": "失败原因: " + "; ".join(_fail_msgs[:3]),
+                               "content": "失败原因: " + "; ".join(_fail_msgs[:3])},
+                    "worker": self.name,
+                })
+
+        # 统计子任务总数（支持批量分配的嵌套结构）
+        total_subtasks = total_subtask_count
         
         logger.info(f"{'✅' if success else '❌'} ReAct 任务完成: 共 {round_num} 轮, {total_subtasks} 个子任务")
 
@@ -1027,21 +1051,7 @@ class LeaderAgent(LLMAgent):
                            results: List[Dict], round_num: int) -> Dict:
         """ReAct Thought 阶段：分析状态，决定下一步"""
 
-        # ===== 上下文压缩：5层压缩架构 =====
-        try:
-            if history and len(history) > 3:
-                compactor = get_compactor()
-                # Convert history to message format for compression
-                history_msgs = [{"role": "assistant", "content": str(h)} for h in history]
-                # Update assistant timestamp for time-based MC
-                compactor.update_assistant_timestamp()
-                # Run 5-layer compaction
-                compressed = compactor.compact(history_msgs)
-                # Extract compressed history back
-                history = [h for h in history if any(c.get("content", "").startswith(str(h)[:50]) for c in compressed if c.get("role") == "assistant")]
-        except Exception:
-            pass
-
+        # Bug 9 fix: 删除无效的上下文压缩死代码（prefix 匹配永远失败，只白跑 compact()）
         history_text = ""
         if history:
             history_lines = []
@@ -1071,13 +1081,19 @@ class LeaderAgent(LLMAgent):
                         for br in data["batch_results"][:3]:
                             br_data = br.get("result", {})
                             if isinstance(br_data, dict):
-                                c = br_data.get("tool_result_summary", br_data.get("content", ""))
-                                if c:
-                                    result_summaries.append(c[:200])
+                                # Bug 3 fix: 失败的也报给 Leader，不只报成功的
+                                if br.get("success"):
+                                    c = br_data.get("tool_result_summary", br_data.get("content", ""))
+                                    if c:
+                                        result_summaries.append(str(c)[:1500])
+                                else:
+                                    _err = br_data.get("error", br_data.get("tool_result_summary", ""))
+                                    _task = br.get("task", "未知子任务")[:80]
+                                    result_summaries.append(f"❌ 子任务失败[{_task}]: {str(_err)[:150]}")
                     else:
                         c = data.get("content", data.get("result", data.get("tool_result_summary", "")))
                         if c:
-                            result_summaries.append(str(c)[:200])
+                            result_summaries.append(str(c)[:1500])
             if result_summaries:
                 results_text = (
                     f"\n【已有结果】\n" + "\n".join(result_summaries)
@@ -1262,12 +1278,37 @@ class LeaderAgent(LLMAgent):
                 normalized_tasks.append(t)
                 task_skills.append(s)
             
-            # 使用轮询分配子任务给 Worker
-            active_workers = workers[:self.active_worker_count]
+            # ponytail: 按 skill_id 从池里取匹配的 worker，替代 round-robin
+            # Bug 1 fix: 追踪 pool 拉取的 worker，finally 归还，防池泄漏
+            active_workers = []
+            _pool_pulled = []  # 从池拉取的 worker，需归还
+            for i, skill in enumerate(task_skills):
+                try:
+                    w = await self._pool.get_worker(skill, self.name)
+                    if w:
+                        active_workers.append(w)
+                        _pool_pulled.append(w)
+                    else:
+                        w = await self._pool.get_worker("general", self.name)
+                        if w:
+                            active_workers.append(w)
+                            _pool_pulled.append(w)
+                        else:
+                            active_workers.append(workers[i % len(workers)])
+                except Exception:
+                    active_workers.append(workers[i % len(workers)])
             assignments = self._assign(normalized_tasks, active_workers)
             
             # 并行执行所有子任务
-            batch_results = await self._execute_batch(assignments, workers)
+            try:
+                batch_results = await self._execute_batch(assignments, workers)
+            finally:
+                # Bug 1 fix: 归还 pool 拉取的 worker，防 _busy_workers 永久泄漏
+                for pw in _pool_pulled:
+                    try:
+                        await self._pool.return_worker(pw)
+                    except Exception:
+                        pass
             
             # 统计成功数量
             success_count = sum(1 for r in batch_results if r.get("success"))
@@ -1302,7 +1343,7 @@ class LeaderAgent(LLMAgent):
 
         elif action_type == "process_results":
             # 处理前一轮的delegate/batch_delegate结果
-            # ponytail: 直接返回结果给 leader，不委派给 worker（避免 worker 重复读文件覆盖合成结果）
+            # Bug 2 fix: 加 LLM 合成，不再纯字符串拼接
             prev_results = []
             for h in reversed(context_history):
                 atype = h.get("action_type")
@@ -1327,15 +1368,43 @@ class LeaderAgent(LLMAgent):
                             if isinstance(br_data, dict):
                                 c = br_data.get("tool_result_summary", br_data.get("content", ""))
                                 if c:
-                                    summaries.append(c[:500])
+                                    summaries.append(str(c)[:1500])
                     else:
                         cc = data.get("content", "") or ""
                         tc = data.get("tool_result_summary", "") or ""
                         c = cc or tc
                         if c:
-                            summaries.append(str(c)[:500])
+                            summaries.append(str(c)[:1500])
             
-            combined = "\n\n".join(summaries) if summaries else "无有效结果"
+            combined = "\n\n---\n\n".join(summaries) if summaries else "无有效结果"
+
+            # Bug 2 fix: LLM 合成 — 把拼接结果交给 LLM 生成连贯报告
+            if len(summaries) > 1 and combined != "无有效结果":
+                try:
+                    _synth_prompt = (
+                        "你是队长Agent。以下是多个Worker的执行结果，请综合分析生成一份连贯、完整的最终报告。\n"
+                        "保留所有关键数据和结论，不要遗漏。直接输出报告正文，不要加前言。\n\n"
+                        f"任务：{original_task[:200]}\n\n各Worker结果：\n{combined[:8000]}"
+                    )
+                    _synth_resp = await _llm_json(
+                        "你是综合分析助手，输出纯文本报告。",
+                        _synth_prompt, max_tokens=4000,
+                    )
+                    # _llm_json 返回 dict，合成用纯文本，改直接调 router
+                    from core.engine.llm_backend import get_llm_router
+                    _router = get_llm_router()
+                    if _router and _router.is_available():
+                        _synth_text = await asyncio.wait_for(
+                            _router.chat(
+                                [{"role": "user", "content": _synth_prompt}],
+                                temperature=0.5, max_tokens=4000,
+                            ),
+                            timeout=60.0,
+                        )
+                        if _synth_text and len(str(_synth_text)) > 50:
+                            combined = str(_synth_text)
+                except Exception as _e:
+                    logger.debug(f"LLM 合成失败，用拼接结果: {_e}")
 
             # ponytail: 只有任务显式要求保存到桌面时才自动写文件
             _should_write = (

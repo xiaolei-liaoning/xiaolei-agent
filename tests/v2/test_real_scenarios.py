@@ -658,7 +658,7 @@ async def test_edge_empty_run_detection():
     ctx.react_depth = 3
     ctx.tool_calls = []
 
-    hook_result = await mw.on_think_start(ctx)
+    hook_result = await mw.on_llm_invoke(ctx)
 
     if hook_result and hook_result.jump_to == "end":
         assert ctx.interrupted

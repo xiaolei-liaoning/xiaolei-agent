@@ -2,7 +2,7 @@
 MiddlewareChain — 模块化中间件管道
 
 将 Agent 的 ReAct 执行流程拆分为多个可组合的中间件阶段。
-每个中间件可拦截 on_start / on_think_start / on_think_end / on_tool_end / on_finish
+每个中间件可拦截 on_start / on_llm_invoke / on_tool_invoke / on_tool_end / on_finish
 五个生命周期钩子，实现关注点分离。
 """
 
@@ -52,7 +52,7 @@ class RunContext:
         "use_shared_bus": True, "use_memory_store": False,
     })
 
-    # ── 工具发现缓存（on_start 发现，on_think_start 筛选）──
+    # ── 工具发现缓存（on_start 发现，on_llm_invoke 筛选）──
     _tool_cache: Optional[List[Any]] = None       # discover_all() 全量结果
     _filtered_tools: Optional[List[Any]] = None   # get_tools_for_task() 筛选结果（首轮缓存）
 
@@ -147,11 +147,11 @@ class BaseMiddleware:
         """执行开始"""
         pass
 
-    async def on_think_start(self, ctx: RunContext) -> Optional[HookResult]:
+    async def on_llm_invoke(self, ctx: RunContext) -> Optional[HookResult]:
         """LLM 思考前"""
         pass
 
-    async def on_think_end(self, ctx: RunContext) -> Optional[HookResult]:
+    async def on_tool_invoke(self, ctx: RunContext) -> Optional[HookResult]:
         """LLM 思考后"""
         pass
 
@@ -228,16 +228,16 @@ class MiddlewareChain:
                     return HookResult(jump_to="end")
         return HookResult()
 
-    async def on_think_start(self, ctx: RunContext) -> HookResult:
+    async def on_llm_invoke(self, ctx: RunContext) -> HookResult:
         for mw in self._middlewares:
-            if mw.HOOKS and "on_think_start" not in mw.HOOKS:
+            if mw.HOOKS and "on_llm_invoke" not in mw.HOOKS:
                 continue
             try:
-                hr = await mw.on_think_start(ctx)
+                hr = await mw.on_llm_invoke(ctx)
                 if hr and hr.jump_to != "continue":
                     return hr
             except Exception as e:
-                logger.warning(f"Middleware {mw} on_think_start error: {e}")
+                logger.warning(f"Middleware {mw} on_llm_invoke error: {e}")
                 # 核心 middleware 失败时中断执行，避免静默空转
                 mw_name = type(mw).__name__
                 if "ReActCore" in mw_name or "Core" in mw_name:
@@ -246,16 +246,16 @@ class MiddlewareChain:
                     return HookResult(jump_to="end")
         return HookResult()
 
-    async def on_think_end(self, ctx: RunContext) -> HookResult:
+    async def on_tool_invoke(self, ctx: RunContext) -> HookResult:
         for mw in self._middlewares:
-            if mw.HOOKS and "on_think_end" not in mw.HOOKS:
+            if mw.HOOKS and "on_tool_invoke" not in mw.HOOKS:
                 continue
             try:
-                hr = await mw.on_think_end(ctx)
+                hr = await mw.on_tool_invoke(ctx)
                 if hr and hr.jump_to != "continue":
                     return hr
             except Exception as e:
-                logger.warning(f"Middleware {mw} on_think_end error: {e}")
+                logger.warning(f"Middleware {mw} on_tool_invoke error: {e}")
         return HookResult()
 
     async def on_plan_check(self, ctx: RunContext) -> HookResult:
@@ -349,7 +349,7 @@ class MiddlewareChain:
                             "error": error_msg,
                             "result": {"error": error_msg},
                             "tool_call": tool_args,
-                            "_validation_error": True,  # 标记校验错误，on_think_end 据此跳过历史记录
+                            "_validation_error": True,  # 标记校验错误，on_tool_invoke 据此跳过历史记录
                         }
                     try:
                         result = await handler(args)

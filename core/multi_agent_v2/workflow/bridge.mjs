@@ -119,7 +119,7 @@ globalThis.agent = async function(prompt, opts = {}) {
     const label = opts.label || `Agent #${++globalThis._agentCount}`;
     const startTime = Date.now();
     const callIdx = globalThis._agentCalls.length;
-    globalThis._agentCalls.push({label, prompt: ''+(prompt||'').substring(0,80), status: 'running', startTime});
+    globalThis._agentCalls.push({label, prompt: ''+(prompt||'').substring(0,80), status: 'running', startTime, phase: currentPhase});
     console.log(`[Agent] ${label}${opts.model ? ' [' + opts.model + ']' : ''}: ${String(prompt).substr(0, 100)}`);
 
     // 自动注入工作流上下文
@@ -218,14 +218,6 @@ globalThis.$dag = async function(nodes) {
             for (const dep of deps) {
                 edges.push({ from: dep, to: name });
                 globalThis._dagEdges.push({ from: dep, to: name });
-            }
-        }
-    }
-    // ponytail: 校验所有依赖节点必须在 DAG 中声明
-    for (const [name, node] of Object.entries(graph)) {
-        for (const dep of node.deps) {
-            if (!(dep in graph)) {
-                throw new Error(`DAG node "${name}" depends on "${dep}" which is not a key in $dag()`);
             }
         }
     }

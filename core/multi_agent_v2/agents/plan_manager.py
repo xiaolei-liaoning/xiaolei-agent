@@ -368,7 +368,7 @@ def update_step_status(ctx: RunContext, prefix: str = "") -> None:
                 _is_edit = any(kw in desc_lower for kw in ["替换", "修改", "编辑", "改", "replace", "edit", "change"])
             if _is_edit:
                 ctx.disallowed_tools = list(set(ctx.disallowed_tools or []) | {"read_file"})
-                ctx._filtered_tools = None  # 清缓存，下次 on_think_start 重新过滤
+                ctx._filtered_tools = None  # 清缓存，下次 on_llm_invoke 重新过滤
                 inst = (
                     "⚠️ read_file 已被禁用！你已经读取了文件内容，现在必须使用 edit_file 工具进行修改。"
                     "用法：edit_file(path='文件路径', old_string='要替换的原文', new_string='替换后的新内容')"

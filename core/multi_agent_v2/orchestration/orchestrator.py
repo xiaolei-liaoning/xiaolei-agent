@@ -306,6 +306,13 @@ async def _execute_agent(
 
     try:
         start = time.time()
+        # ponytail: heartbeat — 长时间 agent 执行时每 30s 显示进度，避免用户以为卡死
+        _hb_interval = 30
+        async def _heartbeat():
+            while True:
+                await asyncio.sleep(_hb_interval)
+                logger.info(f"Agent [{label}] 执行中... ({time.time()-start:.0f}s / timeout={timeout}s)")
+        _hb_task = asyncio.create_task(_heartbeat())
         max_retries = opts.get("schema_max_retries", 3)
         result = None
         last_error = None
@@ -407,6 +414,7 @@ async def _execute_agent(
         logger.warning(f"Agent [{label}] 异常: {traceback.format_exc()}")
         return AgentResult(success=False, error=str(e), label=label)
     finally:
+        _hb_task.cancel()
         pool_agent.reset()
         _agent_pool.release(pool_agent)
 
@@ -524,6 +532,9 @@ async def pipeline(
     timeout_per_step: int = 120,
 ) -> AgentResult:
     """流水线执行：前一步的输出作为后一步的输入。
+    
+    自动检测步骤依赖关系：无 `{prev_output}` 引用的独立步骤会并行执行。
+    ponytail: 从纯串行改为按依赖层级并行，缩短串行链耗时。
 
     Args:
         steps: 步骤列表，每个步骤是 dict:
@@ -545,26 +556,57 @@ async def pipeline(
     """
     if not steps:
         return AgentResult(success=True, output="", error=None, execution_time=0.0)
-    
-    prev_output = ""
-    for i, step in enumerate(steps):
+
+    # ponytail: 按依赖分层 — 使用 {prev_output} 的步骤必须等前一步
+    levels = []
+    current_level = []
+    for step in steps:
         prompt_template = step.get("prompt", "")
-        label = step.get("label", f"步骤{i+1}")
+        if "{prev_output}" in prompt_template:
+            if current_level:
+                levels.append(current_level)
+                current_level = []
+            current_level = [step]
+            levels.append(current_level)
+            current_level = []
+        else:
+            current_level.append(step)
+    if current_level:
+        levels.append(current_level)
 
-        # 替换 {prev_output} 占位符
-        prompt = prompt_template.replace("{prev_output}", prev_output[:3000])
-
-        opts = {"timeout": timeout_per_step}
-        if "subagent_type" in step:
-            opts["agentType"] = step["subagent_type"]
-
-        result = await agent(prompt, opts)
-
-        if not result.success:
-            result.error = f"流水线在步骤 [{label}] 失败: {result.error}"
-            return result
-
-        prev_output = str(result.output) if result.output else ""
+    prev_output = ""
+    for level in levels:
+        if len(level) == 1:
+            step = level[0]
+            prompt_template = step.get("prompt", "")
+            label = step.get("label", "步骤")
+            prompt = prompt_template.replace("{prev_output}", prev_output[:3000])
+            opts = {"timeout": timeout_per_step}
+            if "subagent_type" in step:
+                opts["agentType"] = step["subagent_type"]
+            result = await agent(prompt, opts)
+            if not result.success:
+                result.error = f"流水线在步骤 [{label}] 失败: {result.error}"
+                return result
+            prev_output = str(result.output) if result.output else ""
+        else:
+            # 独立步骤并发执行
+            async def _run_one(step):
+                label = step.get("label", "步骤")
+                opts = {"timeout": timeout_per_step}
+                if "subagent_type" in step:
+                    opts["agentType"] = step["subagent_type"]
+                r = await agent(step.get("prompt", ""), opts)
+                if not r.success:
+                    r.error = f"流水线在步骤 [{label}] 失败: {r.error}"
+                return r
+            results = await asyncio.gather(*[_run_one(s) for s in level], return_exceptions=True)
+            for i, r in enumerate(results):
+                if isinstance(r, Exception):
+                    return AgentResult(success=False, error=f"流水线步骤 [{level[i].get('label','?')}] 异常: {r}", label=level[i].get('label',''))
+                if not r.success:
+                    return r
+            prev_output = str(results[-1].output) if results and results[-1].output else ""
 
     return result
 

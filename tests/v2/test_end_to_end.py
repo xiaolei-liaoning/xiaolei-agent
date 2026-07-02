@@ -1,8 +1,8 @@
 """
 端到端测试：完整中间件链处理任务
 
-使用 mock LLM 驱动真实中间件链，验证从 on_start → on_think_start
-→ on_think_end → on_tool_end → on_finish 的全流程数据流正确。
+使用 mock LLM 驱动真实中间件链，验证从 on_start → on_llm_invoke
+→ on_tool_invoke → on_tool_end → on_finish 的全流程数据流正确。
 """
 import json
 import time
@@ -60,13 +60,13 @@ class HookTracer(BaseMiddleware):
 
     async def on_start(self, ctx):
         self._trace("on_start", ctx)
-    async def on_think_start(self, ctx):
-        self._trace("on_think_start", ctx)
+    async def on_llm_invoke(self, ctx):
+        self._trace("on_llm_invoke", ctx)
     async def on_plan_check(self, ctx):
         self._trace("on_plan_check", ctx)
         return None
-    async def on_think_end(self, ctx):
-        self._trace("on_think_end", ctx)
+    async def on_tool_invoke(self, ctx):
+        self._trace("on_tool_invoke", ctx)
     async def on_tool_end(self, ctx):
         self._trace("on_tool_end", ctx)
     async def on_finish(self, ctx):
@@ -167,8 +167,8 @@ async def test_e2e_basic_flow(mock_llm_router, mock_task_profiler, mock_tool_reg
     """
     验证完整中间件链处理一个简单任务：
     1. on_start 初始化上下文
-    2. on_think_start 生成 LLM 调用并产生 pending_tool_calls
-    3. on_think_end 执行工具并写入 tool_results
+    2. on_llm_invoke 生成 LLM 调用并产生 pending_tool_calls
+    3. on_tool_invoke 执行工具并写入 tool_results
     4. on_tool_end 触发 Hook/Reflection/KEPA
     5. on_finish 收尾
     """
@@ -207,17 +207,17 @@ async def test_e2e_basic_flow(mock_llm_router, mock_task_profiler, mock_tool_reg
         assert hasattr(ctx, '_tool_cache'), "on_start 应填充 _tool_cache"
         assert len(ctx._tool_cache) >= 0  # mock 可能返回空列表，不报错即可
 
-        # ── 阶段 2: on_think_start (调用 LLM) ──
-        await chain.on_think_start(ctx)
-        assert ctx.react_depth >= 1, "on_think_start 应增加 react_depth"
-        assert hasattr(ctx, '_pending_tool_calls'), "on_think_start 应设置 _pending_tool_calls"
+        # ── 阶段 2: on_llm_invoke (调用 LLM) ──
+        await chain.on_llm_invoke(ctx)
+        assert ctx.react_depth >= 1, "on_llm_invoke 应增加 react_depth"
+        assert hasattr(ctx, '_pending_tool_calls'), "on_llm_invoke 应设置 _pending_tool_calls"
         assert len(ctx._pending_tool_calls) > 0, "mock LLM 应返回工具调用"
 
-        # ── 阶段 3: on_think_end (执行工具, 本轮结束跳过) ──
+        # ── 阶段 3: on_tool_invoke (执行工具, 本轮结束跳过) ──
         # 实际工具执行需要真实 handler；mock 环境下 tool_executor 会因找不到 handler 而报错
         # 如果工具没有 handler，execute_tool_call 会返回错误结果
         # 我们手动模拟一个结果来测试后续流程
-        await chain.on_think_end(ctx)
+        await chain.on_tool_invoke(ctx)
 
         # 验证 on_tool_end 回调（包括 HookMiddleware / ReflectionMiddleware / KEPAMiddleware）
         # 这时 tool_results 应该非空（哪怕工具执行失败也会有错误结果）
@@ -233,8 +233,8 @@ async def test_e2e_basic_flow(mock_llm_router, mock_task_profiler, mock_tool_reg
     # ── 验证钩子调用顺序 ──
     hook_names = [e["hook"] for e in tracer.events]
     assert "on_start" in hook_names, "应调用 on_start"
-    assert "on_think_start" in hook_names, "应调用 on_think_start"
-    assert "on_think_end" in hook_names, "应调用 on_think_end"
+    assert "on_llm_invoke" in hook_names, "应调用 on_llm_invoke"
+    assert "on_tool_invoke" in hook_names, "应调用 on_tool_invoke"
     assert "on_finish" in hook_names, "应调用 on_finish"
 
     print(f"\n钩子调用顺序: {hook_names}")
@@ -242,14 +242,14 @@ async def test_e2e_basic_flow(mock_llm_router, mock_task_profiler, mock_tool_reg
 
     # on_start 时 depth=0（当 tracer 在 ReActCore 之前时）
     start_events = [e for e in tracer.events if e["hook"] == "on_start"]
-    think_end_events = [e for e in tracer.events if e["hook"] == "on_think_end"]
+    think_end_events = [e for e in tracer.events if e["hook"] == "on_tool_invoke"]
     if start_events:
         assert start_events[0]["depth"] == 0, "on_start 时的 react_depth 应为 0"
-    # on_think_end 在 ReActCore 执行工具之后，此时 depth>=1
+    # on_tool_invoke 在 ReActCore 执行工具之后，此时 depth>=1
     if think_end_events:
-        assert think_end_events[0]["depth"] >= 1, "on_think_end 时 depth 应为 >= 1"
+        assert think_end_events[0]["depth"] >= 1, "on_tool_invoke 时 depth 应为 >= 1"
 
-        # on_think_end 之后 pending_tool_calls 已被消费，但工具结果已被记录
+        # on_tool_invoke 之后 pending_tool_calls 已被消费，但工具结果已被记录
     if think_end_events:
         pass
 
@@ -410,7 +410,7 @@ async def test_e2e_middleware_full_order():
         # 触发 plan_check (LoopDetection + Clarification)
         await chain.on_plan_check(ctx)
 
-        await chain.on_think_start(ctx)
+        await chain.on_llm_invoke(ctx)
 
         # 加一些 tool_results 触发 on_tool_end
         ctx.tool_results.append({
@@ -419,7 +419,7 @@ async def test_e2e_middleware_full_order():
         })
         await chain.on_tool_end(ctx)
 
-        await chain.on_think_end(ctx)
+        await chain.on_tool_invoke(ctx)
         await chain.on_finish(ctx)
 
     # 验证没有报错

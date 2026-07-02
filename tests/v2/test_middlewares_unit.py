@@ -89,7 +89,7 @@ async def test_truncation_keeps_recent_5_rounds():
             "success": True, "result": f"round_{i}",
         })
         ctx.iteration = i + 1
-        await mw.on_think_start(ctx)
+        await mw.on_llm_invoke(ctx)
 
     # 应该保留最近 5×2 = 10 条（每轮 2 条），但至少不会更多
     # 具体 trim 逻辑可能保留最近 5 轮的 pair
@@ -105,7 +105,7 @@ async def test_react_depth_interrupts_after_max():
     ctx.react_depth = 31  # 超过 max(30, 20)=30
     mw = ReActDepthMiddleware()
     await mw.on_start(ctx)
-    await mw.on_think_start(ctx)
+    await mw.on_llm_invoke(ctx)
     assert ctx.interrupted, "react_depth=31 应该 interrupt"
 
 
@@ -116,7 +116,7 @@ async def test_react_depth_allows_within_limit():
     ctx.react_depth = 5
     mw = ReActDepthMiddleware()
     await mw.on_start(ctx)
-    await mw.on_think_start(ctx)
+    await mw.on_llm_invoke(ctx)
     assert not ctx.interrupted
 
 

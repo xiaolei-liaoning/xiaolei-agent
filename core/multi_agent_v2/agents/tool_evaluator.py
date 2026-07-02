@@ -126,11 +126,7 @@ def evaluate_tool_result(
 
     # ── read_file 评估 ──
     if name == "read_file":
-        if text_len == 0:
-            return "[评估] ⚠️ 文件为空或无法读取\n📌 建议：检查文件路径和权限"
-        elif "权限" in text or "拒绝" in text or "not found" in text.lower():
-            return "[评估] ⚠️ 文件读取异常\n📌 建议：检查路径或权限，换用 execute_shell 的 ls/cat 命令"
-        return f"[评估] ✅ 文件读取成功（{text_len}字符）\n📌 建议：内容已获取，可基于此继续处理"
+        return ""  # ponytail: 结果本身已含文件内容，模板评估纯属噪音
 
     # ── execute_shell 评估 ──
     if name == "execute_shell":

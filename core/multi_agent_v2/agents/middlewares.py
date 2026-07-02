@@ -33,11 +33,11 @@ KEPA_PREFIX = "── KEPA 分析 ──"
 
 class ReActDepthMiddleware(BaseMiddleware):
     """追踪 ReAct 深度，防止无限循环 + 检测连续失败"""
-    HOOKS = ("on_think_start", "on_tool_end")
+    HOOKS = ("on_llm_invoke", "on_tool_end")
 
     MAX_DEPTH = 30
 
-    async def on_think_start(self, ctx: RunContext) -> None:
+    async def on_llm_invoke(self, ctx: RunContext) -> None:
         max_depth = max(self.MAX_DEPTH, ctx.max_iterations)
         if ctx.react_depth > max_depth:
             ctx.interrupted = True
@@ -101,16 +101,16 @@ class KEPAMiddleware(BaseMiddleware):
     """KEPA 闭环 — 知识沉淀 + 跨 Agent 共享
 
     - on_tool_end: 从工具结果提取知识 → 存入 SharedBus 共享存储
-    - on_think_start: 查询 SharedBus 中的共享知识 → 注入到 LLM 提示词
+    - on_llm_invoke: 查询 SharedBus 中的共享知识 → 注入到 LLM 提示词
     """
-    HOOKS = ("on_think_start", "on_tool_end", "on_finish")
+    HOOKS = ("on_llm_invoke", "on_tool_end", "on_finish")
     PROACTIVE_INTERVAL = 3  # 每 N 轮主动读一次 bus
 
     def __init__(self):
         super().__init__()
         self._injected_bus_keys: set = set()
 
-    async def on_think_start(self, ctx: RunContext) -> None:
+    async def on_llm_invoke(self, ctx: RunContext) -> None:
         """注入 KEPA 分析（两种路径：异常触发 + 主动每 N 轮）"""
         if not ctx.profile.get("use_shared_bus"):
             return
@@ -318,7 +318,7 @@ class LoopDetectionMiddleware(BaseMiddleware):
 
     # 工具级频率阈值覆盖（参考 deerflow 的 per-tool config）
     TOOL_FREQ_LIMITS = {
-        "read_file": {"warn": 8, "hard": 15},
+        "read_file": {"warn": 20, "hard": 999},  # ponytail: 不设硬上限，读文件不应触发循环检测
         "execute_shell": {"warn": 6, "hard": 12},
         "execute_python": {"warn": 6, "hard": 12},
         "web_search": {"warn": 4, "hard": 8},
@@ -699,6 +699,30 @@ class ClarificationMiddleware(BaseMiddleware):
 
 
 # ════════════════════════════════════════════════════════════════
+# ReasoningMiddleware — 每轮先思考再调工具
+# ════════════════════════════════════════════════════════════════
+
+class ReasoningMiddleware(BaseMiddleware):
+    """提取并展示 LLM 的思考过程（思考由 ReActCore 的预思考阶段生成）
+
+    on_plan_check 阶段检查 LLM 回复中是否含 <thinking> 标签，有则提取打印。
+    """
+    HOOKS = ("on_plan_check",)
+
+    async def on_plan_check(self, ctx: RunContext) -> Optional[HookResult]:
+        pending = getattr(ctx, '_pending_tool_calls', None)
+        if not pending:
+            return None
+        reply = getattr(ctx, '_pending_reply', '') or ''
+        import re
+        m = re.search(r'<thinking>(.*?)</thinking>', reply, re.DOTALL)
+        if m:
+            txt = m.group(1).strip()[:200]
+            print(f"    \033[1;36m🤔 推理: {txt}\033[0m")
+        return None
+
+
+# ════════════════════════════════════════════════════════════════
 # TodoMiddleware — 任务完整性保护
 # ════════════════════════════════════════════════════════════════
 
@@ -753,13 +777,13 @@ class TruncationMiddleware(BaseMiddleware):
 
     注: 原名 SummarizationMiddleware，因实际只做截断而改名。
     """
-    HOOKS = ("on_think_start",)
+    HOOKS = ("on_llm_invoke",)
 
     def __init__(self, keep_recent: int = 5, max_messages: int = 40):
         self.keep_recent = keep_recent
         self.max_messages = max_messages
 
-    async def on_think_start(self, ctx: RunContext) -> None:
+    async def on_llm_invoke(self, ctx: RunContext) -> None:
         """在构建消息前，清理过旧的 tool_results"""
         if not ctx.tool_results or len(ctx.tool_results) <= self.keep_recent:
             return
@@ -781,7 +805,7 @@ class CompactionMiddleware(BaseMiddleware):
     所有压缩逻辑已合并到 context_budget.ContextBudgetManager，
     此中间件仅做适配桥接，去除重复的 LLM 调用和上下文重建逻辑。
     """
-    HOOKS = ("on_think_start",)
+    HOOKS = ("on_llm_invoke",)
 
     def __init__(
         self,
@@ -804,7 +828,7 @@ class CompactionMiddleware(BaseMiddleware):
     def reset_task_state(self):
         self._compacted_rounds.clear()
 
-    async def on_think_start(self, ctx: RunContext) -> None:
+    async def on_llm_invoke(self, ctx: RunContext) -> None:
         """LLM 调用前检查上下文是否溢出，必要时压缩"""
         # 委托给 ContextBudgetManager
         ctx.context_budget = self.budget

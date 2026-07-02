@@ -55,7 +55,7 @@ _BASE_PROMPT = (
     "先思考再行动：\n"
     "1. 任务目标是什么？当前进度在哪里？\n"
     "2. 需要工具就调用，有数据就回答，信息不够继续追问\n"
-    "3. 不要输出思考过程描述，直接行动\n\n"
+    "3. 在调用工具前用 <thinking>标签输出推理\n\n"
     "关键规则：\n"
     "- 每轮必须输出工具调用或最终答案，禁止空转\n"
     "- 如果任务明确，直接执行，不要描述'我将...'\n"
@@ -102,31 +102,11 @@ _DEBUG_PROMPT = (
 )
 
 _PROJECT_ANALYSIS_PROMPT = (
-    "<project_analysis_protocol>\n"
-    "你正在深度分析一个项目。\n\n"
-    "【已提供的数据】\n"
-    "- 项目结构概览：文件树、技术栈、依赖、git 统计、import 关系\n"
-    "- 核心代码：选中的关键文件的头部（声明/import）和尾部（调用/main）\n\n"
-    "【重要规则 — 违反以下规则将浪费时间】\n"
-    "- 禁止在首轮调用任何工具（read_file / search_code / execute_shell 等）\n"
-     "   → 首轮必须直接输出分析报告。所有数据已在上面「----」下方的代码区提供。\n"
-    "- 禁止对已提供的文件调用 read_file → 工具会返回 [CACHED] 拒绝，浪费一轮\n"
-    "- 禁止调用 execute_shell / search_files 重新扫描目录 → 文件树已在结构概览中\n"
-    "- 只有在你确认某个核心文件的正文未提供且分析需要时，才从第 2 轮开始补充读\n\n"
-    "【任务】\n"
-    "基于已提供的数据输出完整的分析报告，覆盖以下维度：\n"
-    "   - 项目概览（语言、框架、构建工具、依赖）\n"
-    "   - 目录结构与各模块职责\n"
-    "   - 核心技术栈分析\n"
-    "   - 架构设计与分层\n"
-    "   - 数据流与核心链路（入口 → 处理 → 输出）\n"
-    "   - 关键模块的实现分析\n"
-    "   - 错误处理与边界情况\n"
-    "   - 代码质量评估\n"
-    "   - 改进建议\n\n"
-    "分析结构建议：先宏观（概览、架构）再微观（模块细节），最后总结建议。\n"
-    "如果需要补充阅读（仅适用于未提供的文件），可以用 read_file 或 search_code。\n"
-    "</project_analysis_protocol>"
+    "<project_analysis>\n"
+    "【数据已就绪】下方「===== 项目结构概览」包含完整文件树、核心文件头部、关键符号。\n"
+    "【规则】首轮禁止调工具，直接用已有数据输出报告。已注入的文件调 read_file 将返回 [CACHED]。\n"
+    "【覆盖】概览→目录→技术栈→架构→数据流→核心模块→改进建议。\n"
+    "</project_analysis>"
 )
 
 
@@ -208,7 +188,7 @@ class ReActCoreMiddleware(BaseMiddleware):
             ctx._tool_cache = list(_SANDBOX_TOOL_DEFS)
             logger.debug(f"工具发现异常: {e}")
 
-    async def on_think_start(self, ctx: RunContext) -> None:
+    async def on_llm_invoke(self, ctx: RunContext) -> None:
         """每轮 LLM 调用"""
         if ctx.interrupted or ctx.react_depth >= ctx.max_iterations:
             return
@@ -273,6 +253,10 @@ class ReActCoreMiddleware(BaseMiddleware):
                 _search_tools = {"web_search", "fetch_url", "fetch_json", "hot_search"}
                 ctx.tool_defs = [t for t in ctx.tool_defs
                                  if t.get("function", {}).get("name") not in _search_tools]
+            # Phase 1 数据已就绪 → 移除目录扫描工具，LLM 直接基于注入数据写摘要
+            if "===== 项目结构概览" in (ctx.task_description or "") and ctx.tool_defs:
+                ctx.tool_defs = _filter_scan_tools(ctx.tool_defs)
+                ctx._skip_plan = True
         else:
             ctx.tool_defs = None
 
@@ -426,6 +410,7 @@ class ReActCoreMiddleware(BaseMiddleware):
             messages[0]["content"] += plan_context
 
         # ── 3. 调用 LLM（最多 2 次，空转自动重试）──
+        # ponytail: LLM 会在回复中输出 thinking 文本 + tool_calls，由 system prompt 引导
         _last_reply = ""
         for _attempt in range(2):
             try:
@@ -474,22 +459,22 @@ class ReActCoreMiddleware(BaseMiddleware):
                 # 没有工具调用
                 _last_reply = reply
                 ctx.consecutive_idle_rounds = getattr(ctx, 'consecutive_idle_rounds', 0) + 1
-                if ctx.consecutive_idle_rounds >= 3:
+                if ctx.consecutive_idle_rounds >= 6:
                     logger.warning(f"连续 {ctx.consecutive_idle_rounds} 轮空转，强制结束")
                     ctx.last_error = f"连续 {ctx.consecutive_idle_rounds} 轮空转无工具调用"
                     ctx.interrupted = True
                     if reply and len(reply) > 20:
                         ctx.final_answer = reply
                     break
-                # ponytail: 最终答案判断 — 需要计划完成+回复有实质内容，或回复包含明确的报告结构
-                _plan_done = ctx.plan and all(s.status == "done" for s in ctx.plan)
+                # ponytail: 最终答案判断 — 无工具调用但回复有实质内容即视为完成
+                # 工作流子 Agent 常直接靠 LLM 知识回答 KBA（如"列出Python框架"），无需工具
                 _has_substance = len(reply) > 100 and not reply.startswith("{")
-                if _plan_done and _has_substance:
+                if _has_substance:
                     ctx.final_answer = reply
                     ctx.interrupted = True
                     break
-                _looks_like_report = any(kw in reply for kw in ("## ", "### ", "**总结", "**结论", "## 总结", "## 结论"))
-                if _looks_like_report and _has_substance:
+                _plan_done = ctx.plan and all(s.status == "done" for s in ctx.plan)
+                if _plan_done:
                     ctx.final_answer = reply
                     ctx.interrupted = True
                     break
@@ -522,7 +507,7 @@ class ReActCoreMiddleware(BaseMiddleware):
             # 2 次都空转，用最后一次回复
             ctx._pending_reply = _last_reply
                 
-    async def on_think_end(self, ctx: RunContext) -> None:
+    async def on_tool_invoke(self, ctx: RunContext) -> None:
         """执行工具调用"""
         if not hasattr(ctx, '_pending_tool_calls') or not ctx._pending_tool_calls:
             return
@@ -634,16 +619,12 @@ class ReActCoreMiddleware(BaseMiddleware):
                                     print(f"{prefix}      \033[36m{line}\033[0m")
 
                 # ── 累积 tool 结果到对话历史（紧跟在 assistant 消息之后）──
-                # ponytail: 参数校验错误不写入历史（已通过 forced_instructions 驱动重试）
-                if result.get("_validation_error"):
-                    logger.debug(f"跳过校验错误写入历史: {tool_name}")
-                else:
-                    _tool_id = tc.get("id", f"call_{tool_name}_{ctx.react_depth}")
-                    ctx._conversation_history.append({
-                        "role": "tool",
-                        "tool_call_id": _tool_id,
-                        "content": result_text[:2000],
-                        "name": tool_name,
+                _tool_id = tc.get("id", f"call_{tool_name}_{ctx.react_depth}")
+                ctx._conversation_history.append({
+                    "role": "tool",
+                    "tool_call_id": _tool_id,
+                    "content": result_text[:2000],
+                    "name": tool_name,
                 })
 
                 # 文件验证（write_file 特殊处理）
@@ -664,11 +645,7 @@ class ReActCoreMiddleware(BaseMiddleware):
                         qa_passed = not warnings  # 无警告 = 通过
 
                         # ── 迭代式质量改进：Write → Review → Improve ──
-                        # V2-C6 fix: 项目分析任务跳过质量改进循环
-                        _task_flags_local = getattr(ctx, '_task_flags', {}) or {}
-                        if _task_flags_local.get("project_analysis"):
-                            pass  # 项目分析报告：跳过质量改进
-                        elif qa_passed and not getattr(ctx, '_fi_consumed', False):
+                        if qa_passed and not getattr(ctx, '_fi_consumed', False):
                             _iter_key = f"write_iter:{path}"
                             if not hasattr(ctx, '_file_iterations'):
                                 ctx._file_iterations = {}
@@ -737,6 +714,7 @@ def build_default_chain() -> MiddlewareChain:
         LoopDetectionMiddleware,
         PermissionMiddleware,
         ReActDepthMiddleware,
+        ReasoningMiddleware,
         ReflectionMiddleware,
         TruncationMiddleware,
         TodoMiddleware,
@@ -746,11 +724,12 @@ def build_default_chain() -> MiddlewareChain:
     chain.add(TruncationMiddleware())
     chain.add(LoopDetectionMiddleware())
     chain.add(ClarificationMiddleware())
-    chain.add(KEPAMiddleware())       # V2-C1: KEPA 移到 ReActCore 之前，跨 Agent 知识当轮生效
+    chain.add(ReasoningMiddleware())
     chain.add(TodoMiddleware())
     chain.add(PermissionMiddleware())
     chain.add(HookMiddleware())
     chain.add(ReActDepthMiddleware())
+    chain.add(KEPAMiddleware())
     chain.add(ReActCoreMiddleware())
     chain.add(ReflectionMiddleware())
     return chain
@@ -759,6 +738,7 @@ def build_default_chain() -> MiddlewareChain:
 def build_configured_chain(
     loop_detection: bool = True,
     clarification: bool = True,
+    reasoning: bool = True,
     todo: bool = True,
     permission: bool = True,
     hook: bool = True,
@@ -777,6 +757,7 @@ def build_configured_chain(
         KEPAMiddleware,
         LoopDetectionMiddleware,
         ClarificationMiddleware,
+        ReasoningMiddleware,
         TodoMiddleware,
         PermissionMiddleware,
         HookMiddleware,
@@ -794,6 +775,8 @@ def build_configured_chain(
         chain.add(LoopDetectionMiddleware(warn_threshold=loop_warn, hard_limit=loop_hard))
     if clarification:
         chain.add(ClarificationMiddleware())
+    if reasoning:
+        chain.add(ReasoningMiddleware())
     if todo:
         chain.add(TodoMiddleware())
     if permission:
@@ -804,11 +787,11 @@ def build_configured_chain(
         mw = ReActDepthMiddleware()
         mw.MAX_DEPTH = depth_max
         chain.add(mw)
+    if kepa:
+        chain.add(KEPAMiddleware())
     chain.add(ReActCoreMiddleware())
     if reflection:
         chain.add(ReflectionMiddleware())
-    if kepa:
-        chain.add(KEPAMiddleware())
     return chain
 
 
@@ -852,10 +835,12 @@ async def run_react(
 
     prefix = _get_prefix(agent)
 
-    # ── 规划阶段 ──（V2-C5 fix: _skip_plan 真的跳过 generate_plan）
-    if getattr(ctx, '_skip_plan', False):
+    # ── 规划阶段 ──
+    # ponytail: Phase 1 数据已就绪则跳过计划（数据本身就是"计划"）
+    _has_phase1 = "===== 项目结构概览" in (task_description or "")
+    if _has_phase1:
         ctx.plan = None
-        print(f"{prefix}    \033[2;37m📋 项目分析任务：跳过计划生成，直接执行\033[0m")
+        print(f"{prefix}    \033[2;37m📋 Phase 1 数据已就绪，跳过计划直接生成摘要\033[0m")
     else:
         ctx.plan = await generate_plan(task_description, ctx)
         if ctx.plan:
@@ -911,7 +896,7 @@ async def run_react(
                 print(f"{prefix}    \033[1;33m📦 上下文压缩: 释放了 tokens 预算\033[0m")
 
         ctx.react_depth += 1
-        hr_start = await chain.on_think_start(ctx)
+        hr_start = await chain.on_llm_invoke(ctx)
         if hr_start and hr_start.jump_to == "end":
             ctx.interrupted = True
             ctx.last_error = hr_start.reason or "中间件终止(think_start)"
@@ -928,7 +913,7 @@ async def run_react(
         if hr_plan and hr_plan.jump_to == "retry":
             continue
 
-        hr_end = await chain.on_think_end(ctx)
+        hr_end = await chain.on_tool_invoke(ctx)
         if hr_end and hr_end.jump_to == "end":
             ctx.interrupted = True
             ctx.last_error = hr_end.reason or "中间件终止(think_end)"
@@ -1052,7 +1037,7 @@ async def run_react(
                         temperature=0.3,
                         max_tokens=32768,
                     ),
-                    timeout=120,
+                    timeout=30,
                 )
                 text = str(final_resp) if final_resp else ""
                 if text and text != "None" and len(text) > 20:
@@ -1069,13 +1054,13 @@ async def run_react(
                         ctx.final_answer = txt
                         break
 
-    # ponytail: 长文本分析结果自动保存到桌面
-    if ctx.final_answer and len(ctx.final_answer) > 1000:
-        _path = os.path.expanduser("~/Desktop/project_analysis_report.md")
+    # ponytail: final_answer 自动保存到桌面（>=50字），天气/问答等短结果也能持久化
+    if ctx.final_answer and len(ctx.final_answer) >= 50:
+        _path = os.path.expanduser("~/Desktop/v2_result.txt")
         try:
             with open(_path, "w", encoding="utf-8") as _f:
                 _f.write(ctx.final_answer)
-            print(f"    \033[1;32m📝 分析报告已保存: {_path}\033[0m")
+            print(f"    \033[1;32m📝 结果已保存: {_path}\033[0m")
         except Exception:
             pass
 

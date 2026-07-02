@@ -129,7 +129,8 @@ class TestOutputBounder:
             TOOL_OUTPUT_LIMITS, DEFAULT_OUTPUT_LIMIT, bound_result
         )
         # 精确匹配
-        assert TOOL_OUTPUT_LIMITS.get("read_file", DEFAULT_OUTPUT_LIMIT) == 3000
+        # ponytail: read_file 限制已调大为 100000
+        assert TOOL_OUTPUT_LIMITS.get("read_file", DEFAULT_OUTPUT_LIMIT) == 100000
         assert TOOL_OUTPUT_LIMITS.get("execute_shell", DEFAULT_OUTPUT_LIMIT) == 5000
         assert TOOL_OUTPUT_LIMITS.get("execute_python", DEFAULT_OUTPUT_LIMIT) == 5000
         # 未知工具回退默认值
@@ -325,27 +326,27 @@ class TestMiddlewareExecution:
         execution_log = []
 
         class MW1(BaseMiddleware):
-            HOOKS = ("on_start", "on_think_start", "on_think_end")
+            HOOKS = ("on_start", "on_llm_invoke", "on_tool_invoke")
 
             async def on_start(self, ctx):
                 execution_log.append("start1")
 
-            async def on_think_start(self, ctx):
+            async def on_llm_invoke(self, ctx):
                 execution_log.append("think_start1")
 
-            async def on_think_end(self, ctx):
+            async def on_tool_invoke(self, ctx):
                 execution_log.append("think_end1")
 
         class MW2(BaseMiddleware):
-            HOOKS = ("on_start", "on_think_start", "on_think_end")
+            HOOKS = ("on_start", "on_llm_invoke", "on_tool_invoke")
 
             async def on_start(self, ctx):
                 execution_log.append("start2")
 
-            async def on_think_start(self, ctx):
+            async def on_llm_invoke(self, ctx):
                 execution_log.append("think_start2")
 
-            async def on_think_end(self, ctx):
+            async def on_tool_invoke(self, ctx):
                 execution_log.append("think_end2")
 
         ctx = RunContext(task_description="test")
@@ -357,11 +358,11 @@ class TestMiddlewareExecution:
         assert execution_log == ["start1", "start2"], f"on_start 顺序错误: {execution_log}"
         execution_log.clear()
 
-        await chain.on_think_start(ctx)
+        await chain.on_llm_invoke(ctx)
         assert execution_log == ["think_start1", "think_start2"]
 
         execution_log.clear()
-        await chain.on_think_end(ctx)
+        await chain.on_tool_invoke(ctx)
         assert execution_log == ["think_end1", "think_end2"]
 
     @pytest.mark.asyncio
@@ -377,14 +378,14 @@ class TestMiddlewareExecution:
             async def on_start(self, ctx):
                 execution_log.append("start")
 
-            async def on_think_start(self, ctx):
+            async def on_llm_invoke(self, ctx):
                 execution_log.append("should_not_run")
 
         ctx = RunContext(task_description="test")
         chain = MiddlewareChain()
         chain.add(OnlyStart())
-        await chain.on_think_start(ctx)
-        assert "should_not_run" not in execution_log, "on_think_start 不应被执行"
+        await chain.on_llm_invoke(ctx)
+        assert "should_not_run" not in execution_log, "on_llm_invoke 不应被执行"
 
     @pytest.mark.asyncio
     async def test_middleware_interrupt_propagation(self):
@@ -393,22 +394,22 @@ class TestMiddlewareExecution:
         )
 
         class InterruptMW(BaseMiddleware):
-            HOOKS = ("on_think_start",)
+            HOOKS = ("on_llm_invoke",)
 
-            async def on_think_start(self, ctx):
+            async def on_llm_invoke(self, ctx):
                 return HookResult(jump_to="end", reason="测试中断")
 
         class AfterInterrupt(BaseMiddleware):
-            HOOKS = ("on_think_start",)
+            HOOKS = ("on_llm_invoke",)
 
-            async def on_think_start(self, ctx):
+            async def on_llm_invoke(self, ctx):
                 pytest.fail("中断后不应执行此中间件")
 
         ctx = RunContext(task_description="test")
         chain = MiddlewareChain()
         chain.add(InterruptMW())
         chain.add(AfterInterrupt())
-        result = await chain.on_think_start(ctx)
+        result = await chain.on_llm_invoke(ctx)
         assert result.jump_to == "end"
         assert result.reason == "测试中断"
 
@@ -738,10 +739,10 @@ class TestFullFlowIntegration:
         # Mock the LLM router
         mock_router = AsyncMock()
 
-        # Mock first call (understanding) - return empty to test second call path
+        # ponytail: 合并后只需 1 次 chat 调用
         mock_router.chat = AsyncMock()
         mock_router.chat.side_effect = [
-            "创建一个贪吃蛇游戏 HTML 文件",  # understanding
+            "这是一个贪吃蛇游戏，需要用 write_file 在桌面创建 snake_game.html",  # understand
             "步骤|用 write_file 在桌面创建 snake_game.html（贪吃蛇游戏完整代码）|write_file",  # plan
         ]
 
@@ -800,7 +801,7 @@ class TestFullFlowIntegration:
         """验证 output_bounder 被 react_core 调用"""
         import inspect
         from core.multi_agent_v2.agents.react_core import ReActCoreMiddleware
-        source = inspect.getsource(ReActCoreMiddleware.on_think_end)
+        source = inspect.getsource(ReActCoreMiddleware.on_tool_invoke)
         assert "bound_tool_output" in source, "react_core 应调用 bound_tool_output"
 
     @pytest.mark.asyncio

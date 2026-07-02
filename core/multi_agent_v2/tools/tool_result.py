@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 TOOL_OUTPUT_LIMITS: Dict[str, int] = {
     "read": 3000,
-    "read_file": 3000,
+    "read_file": 100000,  # ponytail: 从 3000 拉到 100K，避免 agent 反复调用只为了读完一个文件
     "write": 3000,
     "write_file": 3000,
     "edit": 3000,

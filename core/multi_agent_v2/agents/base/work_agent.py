@@ -18,7 +18,6 @@ WorkAgent - 统一智能体（精简版）
 
 import asyncio
 import logging
-import re
 import time
 from typing import Any, Dict, List, Optional
 
@@ -66,8 +65,12 @@ class WorkAgent(BaseAgent):
         """重置 Agent 状态，为下次复用做准备"""
         self.work_history = []
         self._model_override = ""
-        self._cached_file_paths = set()  # V2-C4 fix: 只清自己的 per-agent 缓存
-        # 不再调 clear_project_file_cache()，那会清全局 set 影响池中其他 agent
+        self._cached_file_paths = set()
+        try:
+            from core.multi_agent_v2.tools.cache import clear_project_file_cache
+            clear_project_file_cache()
+        except Exception:
+            pass
         self.reset_temp_memory()
         self.personality = ""
         self.role = ""
@@ -265,9 +268,9 @@ class WorkAgent(BaseAgent):
 
         print(f"    \033[1;36m📂 项目分析：CodeGraph 扫描 + 文件头部读取\033[0m")
 
-        # 1. 提取路径（支持中文/全角字符，V2-C8 fix）
+        # 1. 提取路径
         path = None
-        for pat in [r'(~[^\s，,]+/[\w\u4e00-\u9fff./-]+)', r'(/[\w\u4e00-\u9fff./-]+)', r'(\.\.[\w\u4e00-\u9fff./-]+)']:
+        for pat in [r'(~[^\s，,]+/[a-zA-Z0-9_./-]+)', r'(/[a-zA-Z0-9_./-]+)', r'(\.\.[a-zA-Z0-9_./-]+)']:
             m = re.search(pat, desc)
             if m:
                 c = os.path.expanduser(m.group(1))
@@ -342,8 +345,10 @@ class WorkAgent(BaseAgent):
 
         # 5. 逐个目录分析
         analysis_sections = []
+        _read_paths: set = set()  # ponytail: 已读文件路径，注册到 cache 防止重复读取
         # 先读根目录的 README 和关键配置
-        doc_candidates = ["README.md", "README", "Readme.md", "CLAUDE.md", "AGENTS.md"]
+        doc_candidates = ["README.md", "README", "Readme.md", "CLAUDE.md", "AGENTS.md",
+                              "ARCHITECTURE.md", "CONTRIBUTING.md", "CHANGELOG.md", "docs/README.md"]
         config_candidates = ["pyproject.toml", "package.json", "Cargo.toml", "go.mod",
                              "Makefile", "Dockerfile", "docker-compose.yml", "docker-compose.yaml",
                              ".env.example", "config.yaml", "config.json", "app_config.json"]
@@ -357,14 +362,18 @@ class WorkAgent(BaseAgent):
         if root_targets:
             analysis_sections.append("===== 项目根目录 =====")
             for rf in root_targets:
-                head = read_file_head(rf)
+                is_doc = rf in root_readmes
+                head = read_file_head(rf, 200 if is_doc else 30)
+                _read_paths.add(rf)  # ponytail: 注册已读文件
                 lc = count_lines(rf)
                 if head:
-                    # 提取第一行作为简短描述
                     first_line = head.split("\n")[0][:100] if head else ""
                     analysis_sections.append(f"📄 {rf}  ({lc}行)")
                     analysis_sections.append(f"   首行: {first_line}")
-                    analysis_sections.append(f"   内容概要: {head[:300]}")
+                    if is_doc:
+                        analysis_sections.append(f"   内容概要: {head}")
+                    else:
+                        analysis_sections.append(f"   内容概要: {head[:300]}")
                     analysis_sections.append("")
 
         # 按目录分组
@@ -401,12 +410,13 @@ class WorkAgent(BaseAgent):
             dir_readme = [f for f in files_in_dir
                           if os.path.basename(f).lower() in ("readme.md", "readme")]
             if dir_readme:
-                rh = read_file_head(dir_readme[0], 20)
+                rh = read_file_head(dir_readme[0], 100)
                 if rh:
-                    analysis_sections.append(f"  📖 README: {rh[:200]}")
+                    analysis_sections.append(f"  📖 README: {rh}")
 
             for f_rel in to_read:
                 head = read_file_head(f_rel)
+                _read_paths.add(f_rel)  # ponytail: 注册已读文件
                 lc = count_lines(f_rel)
                 if not head:
                     continue
@@ -475,29 +485,23 @@ class WorkAgent(BaseAgent):
 
         analysis_text = "\n".join(analysis_sections)
 
+        # 注册已读文件到项目分析缓存，防止 LLM 重复读取
+        try:
+            from core.multi_agent_v2.tools.cache import cache_files
+            cache_files(_read_paths, base_dir=path)
+        except Exception:
+            pass
+
         # 6. 组装最终数据
         elapsed = time.time() - start
         print(f"    \033[1;32m📂 分析完成 ({elapsed:.1f}s): {len(analysis_text)} 字符分析数据\033[0m")
         print(f"    \033[2m📋 覆盖 {len(top_dirs)} 个目录, {len(analysis_sections)} 条分析记录\033[0m")
 
         return (
-            f"【项目分析数据已就绪 — LLM 仅做 HTML 包装】\n\n"
-            f"下方是一个项目经过程序化扫描后的完整分析数据。\n"
-            f"⚠️ IMPORTANT: 你只有 3 轮输出机会。不要调用 read_file 或任何其他工具——"
-            f"所有数据已在此。你的唯一任务：将这些数据格式化输出为美观的 HTML，"
-            f"用 write_file 写入桌面文件。\n\n"
-            f"规则：\n"
-            f"- 第 1 轮：直接生成 HTML 代码（<!DOCTYPE html> 完整文档）\n"
-            f"- 第 2 轮：用 write_file 写入 ~/Desktop/xxx-analysis.html\n"
-            f"- 第 3 轮：输出完成消息\n"
-            f"- 不需要读任何文件，分析数据已经在上面\n\n"
-            f"格式要求：\n"
-            f"- 完整 <!DOCTYPE html>，内嵌 CSS 样式\n"
-            f"- 每层目录用 📁 标题，每个文件用 📄 子项\n"
-            f"- 包含：项目路径、文件数、目录数、技术栈\n"
-            f"- 包含：每个目录的职责概括 + 每个文件的功能说明\n"
-            f"- 包含：调用链关系（如果有）\n"
-            f"- 样式美观，背景白色/浅灰，字体优雅，适合阅读\n\n"
+            f"【项目分析数据已就绪 — 作为探索上下文使用】\n\n"
+            f"下方是程序化扫描的初步结构数据（文件树、核心代码头部、调用链）。\n"
+            f"请在此基础上使用 read_file 深入读 README、CLAUDE.md 等总结性文件，"
+            f"结合上下文产出深度分析报告。\n\n"
             f"路径：{path}\n"
             f"分析耗时：{elapsed:.1f}s\n\n"
             f"{analysis_text}"
