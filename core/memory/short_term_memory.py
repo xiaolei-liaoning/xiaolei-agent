@@ -90,7 +90,7 @@ def _next_seq(user_dir: Path) -> int:
 
 
 def _frontmatter(type_: str, role: str = "", tokens: int = 0,
-                 description: str = "") -> str:
+                 description: str = "", artifact_path: str = "") -> str:
     lines = ["---", f"type: {type_}"]
     if role:
         lines.append(f"role: {role}")
@@ -99,6 +99,8 @@ def _frontmatter(type_: str, role: str = "", tokens: int = 0,
         lines.append(f"tokens: {tokens}")
     if description:
         lines.append(f"description: {description}")
+    if artifact_path:
+        lines.append(f"artifact_path: {artifact_path}")
     lines.append("---")
     return "\n".join(lines)
 
@@ -188,30 +190,22 @@ async def _llm_summarize_async(text: str, instruction: str = "") -> Optional[str
 
 
 def _llm_summarize(text: str, instruction: str = "") -> Optional[str]:
-    """LLM 总结（同步），失败返回 None"""
+    """LLM 总结（同步安全），失败返回 None"""
     if not text.strip():
         return None
     try:
-        from ..engine.llm_backend import get_llm_router
-        router = get_llm_router()
-        if router and hasattr(router, 'is_available') and router.is_available():
-            import asyncio
-            prompt = f"{instruction}\n\n---\n{text}\n---\n\n总结："
-            try:
-                loop = asyncio.get_running_loop()
-                result = loop.run_until_complete(router.simple_chat(
-                    user_message=prompt,
-                    system_prompt="你是一个精炼的总结助手，用简洁的中文总结对话要点。",
-                    temperature=0.2,
-                ))
-            except RuntimeError:
-                result = asyncio.run(router.simple_chat(
-                    user_message=prompt,
-                    system_prompt="你是一个精炼的总结助手，用简洁的中文总结对话要点。",
-                    temperature=0.2,
-                ))
-            if result:
-                return result.strip() if isinstance(result, str) else str(result).strip()
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            # ponytail: 已在 async 上下文，在独立线程新建 loop 运行
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _pool:
+                _fut = _pool.submit(
+                    lambda: asyncio.run(_llm_summarize_async(text, instruction))
+                )
+                return _fut.result(timeout=60)
+        return loop.run_until_complete(_llm_summarize_async(text, instruction))
+    except RuntimeError:
+        return asyncio.run(_llm_summarize_async(text, instruction))
     except Exception as e:
         logger.debug(f"LLM 总结不可用: {e}")
     return None
@@ -260,26 +254,34 @@ class ShortTermMemoryManager:
     # ══════════════════════════════════════════════════════════════════════
 
     def add(self, user_id: str, role: str, content: str) -> None:
-        """添加一条消息 + 触发压缩链"""
-        self.add_message(user_id, role, content)
+        """添加一条消息 + 触发压缩链（同步）"""
+        self._write_and_compact(user_id, role, content)
+
+    async def add_async(self, user_id: str, role: str, content: str) -> None:
+        """添加一条消息 + 触发 async 压缩链"""
+        self._write_message(user_id, role, content)
+        await self._check_and_compact_async(user_id)
 
     def add_message(self, user_id: str, role: str, content: str) -> None:
-        """添加消息，触发压缩链"""
+        """同 add()，兼容旧接口"""
+        self._write_and_compact(user_id, role, content)
+
+    def _write_message(self, user_id: str, role: str, content: str) -> None:
+        """纯写入，不触发压缩"""
         user_dir = _user_dir(user_id)
         user_dir.mkdir(parents=True, exist_ok=True)
-
         tokens = _estimate_tokens(content)
         seq = _next_seq(user_dir)
         desc = content[:60].replace("\n", " ")
-
         front = _frontmatter("raw", role=role, tokens=tokens, description=desc)
         file_path = user_dir / f"{seq:04d}_raw.md"
         file_path.write_text(f"{front}\n\n{content}", encoding="utf-8")
-
         self._stats["files_written"] += 1
         _update_index(user_id)
 
-        # 触发多层压缩链
+    def _write_and_compact(self, user_id: str, role: str, content: str) -> None:
+        """写入 + 同步压缩（ThreadPoolExecutor fallback）"""
+        self._write_message(user_id, role, content)
         self._check_and_compact(user_id)
 
     def add_context(self, user_id: str, content: str, context_type: str = "conversation") -> None:
@@ -459,6 +461,97 @@ class ShortTermMemoryManager:
         elif total > self.soft_limit:
             # Layer 2: 快速截断
             self._quick_truncate(user_id, raw_files)
+
+    async def _check_and_compact_async(self, user_id: str):
+        """async 压缩链：同 _check_and_compact，但 LLM 压缩用 await 而非线程池"""
+        if self.soft_limit <= 0:
+            return
+        files = _load_files(user_id)
+        total = _total_tokens(files)
+        if total <= self.soft_limit:
+            return
+        raw_files = [f for f in files if f["type"] == "raw"]
+        if total > self.hard_limit and not self._is_circuit_open(user_id):
+            success = await self._llm_compress_async(user_id, raw_files)
+            if not success:
+                self._record_failure(user_id)
+                self._quick_truncate(user_id, raw_files)
+            else:
+                self._reset_failures(user_id)
+                remaining = _load_files(user_id)
+                summary_files = [f for f in remaining if f["type"] == "summary"]
+                if len(summary_files) >= MAX_SUMMARIES_BEFORE_META:
+                    await self._compress_to_meta_async(user_id)
+            self._run_post_cleanup(user_id)
+        elif total > self.soft_limit:
+            self._quick_truncate(user_id, raw_files)
+
+    async def _llm_compress_async(self, user_id: str, raw_files: list) -> bool:
+        """LLM 压缩（async 版本，直接 await LLM 调用）"""
+        total_before = _total_tokens(raw_files)
+        if len(raw_files) <= self.keep_raw:
+            return True
+        compressible = raw_files[:-self.keep_raw]
+        if not compressible:
+            return True
+        combined = "\n".join(
+            f"[{f['meta'].get('role','?')}] {f['body']}" for f in compressible
+        )
+        if not combined.strip():
+            return True
+        summary_text = await _llm_summarize_async(
+            combined,
+            instruction="请将以下对话压缩为一段2-3句话的摘要，保留关键问题和答案的核心信息",
+        )
+        if not summary_text:
+            return False
+        self._stats["compressions"] += 1
+        user_dir = _user_dir(user_id)
+        seq = _next_seq(user_dir)
+        desc = summary_text[:60].replace("\n", " ")
+        summary_tokens = _estimate_tokens(summary_text)
+        front = _frontmatter("summary", tokens=summary_tokens, description=desc)
+        summary_path = user_dir / f"{seq:04d}_summary.md"
+        summary_path.write_text(f"{front}\n\n{summary_text}", encoding="utf-8")
+        for f in compressible:
+            try:
+                f["path"].unlink()
+            except OSError:
+                pass
+        _update_index(user_id)
+        after = _total_tokens(_load_files(user_id))
+        logger.info(f"llm-compress(async): user={user_id}, {total_before}→{after} tokens")
+        return True
+
+    async def _compress_to_meta_async(self, user_id: str):
+        """元压缩（async 版本）"""
+        files = _load_files(user_id)
+        summary_files = [f for f in files if f["type"] == "summary"]
+        if len(summary_files) < MAX_SUMMARIES_BEFORE_META:
+            return
+        # 保留最近 2 个，合并其余的
+        older = summary_files[:-2]
+        combined = "\n".join(f['body'][:500] for f in older)
+        if not combined.strip():
+            return
+        meta = await _llm_summarize_async(
+            combined,
+            instruction="将以下多个摘要合并为一个连贯的全局摘要，保留所有重要信息",
+        )
+        if not meta:
+            return
+        self._stats["meta_compressions"] += 1
+        meta_path = _meta_path(user_id)
+        meta_tokens = _estimate_tokens(meta)
+        front = _frontmatter("meta", tokens=meta_tokens, description="全局元摘要")
+        meta_path.write_text(f"{front}\n\n{meta}", encoding="utf-8")
+        for f in older:
+            try:
+                f["path"].unlink()
+            except OSError:
+                pass
+        _update_index(user_id)
+        logger.info(f"meta-compress(async): user={user_id}, {len(older)} summaries merged")
 
     # ══════════════════════════════════════════════════════════════════════
     #  Layer 1: Micro-compact

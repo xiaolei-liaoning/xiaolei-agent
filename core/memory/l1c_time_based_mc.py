@@ -1,5 +1,12 @@
 """L1c: Time-based microcompact — clears old results when cache expires.
 
+V1→V2: V1 压缩层 L1c。由 ContextCompactor 编排，在 V1 pipeline 中作为第四层运行。
+  基于时间间隔清除旧工具结果（>60min 仅保留最近 5 条）。V2 ContextBudgetManager
+  通过 ContextCompactor 间接调用此层。
+
+保留原因: ContextCompactor 8-layer pipeline 的组成部分。防止长时间会话中
+  上下文因旧结果堆积而膨胀。V2 的 entry-level 压缩不处理时间维度。
+
 Based on Claude Code's timeBasedMCConfig.ts:
 - Triggers content-clearing when gap since last assistant message > threshold
 - Server-side prompt cache has ~1h TTL, so full prefix will be rewritten

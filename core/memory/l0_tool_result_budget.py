@@ -1,5 +1,12 @@
 """L0: ToolResultBudget — per-message char limit enforcement.
 
+V1→V2: V1 压缩层 L0。由 ContextCompactor (context_compactor.py) 统一编排，
+  在 async_check_and_compact() 的 V1 pipeline 中作为第一层运行。V2
+  ContextBudgetManager 通过 ContextCompactor 间接调用此层。
+
+保留原因: ContextCompactor 8-layer pipeline 的组成部分。删除会导致超大工具
+  结果无法溢出到磁盘，撑爆上下文窗口。
+
 When a tool result exceeds the per-message limit, write the full result to
 disk and replace inline content with a file reference. Prevents any single
 tool result from blowing up the context window.

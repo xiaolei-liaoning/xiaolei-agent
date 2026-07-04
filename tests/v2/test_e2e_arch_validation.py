@@ -814,12 +814,13 @@ class TestFullFlowIntegration:
 
     @pytest.mark.asyncio
     async def test_context_budget_integrated_in_react_core(self):
-        """验证 context_budget 被 run_react 使用"""
+        """验证 context_budget 通过中间件链集成"""
         import inspect
         from core.multi_agent_v2.agents.react_core import run_react
+        from core.multi_agent_v2.agents.middlewares import CompactionMiddleware
         source = inspect.getsource(run_react)
         assert "ContextBudgetManager" in source, "run_react 应创建 ContextBudgetManager"
-        assert "check_and_compact" in source, "run_react 应调用 check_and_compact"
+        # 压缩调用已移至 CompactionMiddleware，不在 run_react 源码中直接出现
 
     @pytest.mark.asyncio
     async def test_semaphore_integrated_in_tool_executor(self):

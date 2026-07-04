@@ -59,9 +59,8 @@ class WorkflowEngineWrapper:
         if mode == "collaborate":
             return await self._execute_collaborate(user_request, engine)
 
-        # ── single 模式：直接跑 ──────────────────────────────────
         # 显示请求
-        print(f"\n    \033[1;36m⚡ {user_request[:80]}\033[0m")
+        print(f"\n  \033[1;37m◇\033[0m \033[1m{user_request[:80]}\033[0m")
 
         # ── 直接执行 ──
         from core.multi_agent_v2.agents.react_core import run_react
@@ -79,14 +78,14 @@ class WorkflowEngineWrapper:
             for tr in tool_results:
                 tc = tr.get("tool_call", {})
                 name = tc.get("name", "")
-                ok = tr.get("success", False)
-                icon = "✅" if ok else "⚠️"
-                if name:
-                    chain_names.append(f"{icon}{name}")
+                if name and name != "task":
+                    chain_names.append(name)
             if chain_names:
-                print(f"    \033[2m工具链: {' → '.join(chain_names[:10])}\033[0m")
+                unique = list(dict.fromkeys(chain_names))[:8]
+                print(f"  \033[2m{' → '.join(unique)}\033[0m")
 
-        print(f"    \033[1;32m{'✅' if success else '❌'} {iterations}轮 · {elapsed:.1f}s\033[0m")
+        status_icon = "\033[32m✓\033[0m" if success else "\033[31m✗\033[0m"
+        print(f"  {status_icon}  {iterations} rounds  ·  {elapsed:.1f}s")
         log_info(f"Agent 执行完成: success={success}, 迭代={iterations}轮, 耗时={elapsed:.1f}s")
 
         return {
@@ -281,10 +280,9 @@ class WorkflowEngineWrapper:
 
 
 async def display_workflow_result(result: Dict[str, Any]) -> None:
-    """显示工作流执行结果 - Claude Code风格"""
+    """显示工作流执行结果"""
     if not result.get("success"):
         print_error(result.get("error", "Execution failed"))
-        log_error(result.get("error", "执行失败"))
         return
 
     greeting_message = result.get("greeting_message")
@@ -294,44 +292,10 @@ async def display_workflow_result(result: Dict[str, Any]) -> None:
         print()
         return
 
-    print_success("Workflow completed")
-    log_success("工作流执行完成")
-
-    print(f"  Name: {result.get('workflow_name', 'unnamed')}")
-    print(f"  Duration: {result.get('total_time', 0):.2f}s")
-    print(f"  Status: {result.get('success_count', 0)}/{result.get('failed_count', 0)}")
+    print(f"\n  \033[2m{result.get('total_time', 0):.1f}s · {result.get('success_count', 0)}/{result.get('failed_count', 0)} steps\033[0m")
 
     if result.get("report_path"):
-        print(f"  Report: {result['report_path']}")
-        log_info(f"报告路径: {result['report_path']}")
-
-    results = result.get("results", [])
-    if results:
-        print()
-        print_color("Steps:", CliColors.BOLD)
-        for step_result in results:
-            step_num = step_result.get("step", "?")
-            step_type = step_result.get("type", "")
-            duration = step_result.get("duration", 0)
-            success = step_result.get("success", False)
-
-            status = "OK" if success else "FAIL"
-            status_color = CliColors.GREEN if success else CliColors.RED
-
-            print_color(f"  [{step_num}] {step_type} - {status}", status_color)
-
-            if duration:
-                print(f"      Duration: {duration:.2f}s")
-
-            preview = step_result.get("preview", "")
-            if preview:
-                for line in preview.split('\n')[:3]:
-                    print(f"      {line}")
-
-            if step_result.get("csv_path"):
-                print(f"      CSV: {step_result['csv_path']}")
-            if step_result.get("chart_path"):
-                print(f"      Chart: {step_result['chart_path']}")
+        print(f"  \033[2mReport: {result['report_path']}\033[0m")
 
 
 class _ChainCollector:

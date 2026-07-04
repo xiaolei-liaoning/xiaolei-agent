@@ -30,13 +30,14 @@ def _make_router(replies):
         return LLMResponse(content=text, tool_calls=None)
     router.chat_structured_stream = AsyncMock(side_effect=_chat_stream)
     router.chat = AsyncMock(side_effect=lambda msgs, **kw: next(it, "done"))
+    router.chat_structured = AsyncMock(side_effect=lambda msgs, **kw: LLMResponse(content=next(it, "done"), truncated=False))
     router.simple_chat = AsyncMock(return_value="0,0,0,0,0,0,0,0")
     return router
 
 
 def _make_reg(tools=None):
     """Minimal ToolRegistry with read_file + write_file"""
-    from core.multi_agent_v2.tools.tool_registry import ToolRegistry
+    from core.multi_agent_v2.tools.tool_registry import ToolRegistry, ToolDefinition
     reg = ToolRegistry()
     default_tools = [
         ("read_file", AsyncMock(return_value={"ok": True, "data": "content"}),
@@ -45,9 +46,10 @@ def _make_reg(tools=None):
          {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}),
     ]
     for name, handler, params in (tools or default_tools):
-        m = MagicMock(name=name, tool_name=name, server="__builtin__",
-                      description=f"Tool {name}", parameters=params)
-        m.handler = handler
+        m = ToolDefinition(
+            name=name, tool_name=name, server="__builtin__",
+            description=f"Tool {name}", parameters=params, handler=handler,
+        )
         reg._tools[name] = m
     reg.get_handler = lambda n: reg._tools[n].handler if n in reg._tools else None
     reg.validate_arguments = MagicMock(return_value=(True, ""))
@@ -205,3 +207,66 @@ async def test_llm_unavailable():
     _lb.get_llm_router.return_value = r
     result = await run_react("test")
     assert result["success"] is False
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Scenario 7: Dedup identical tool calls in same round
+# ═══════════════════════════════════════════════════════════════════
+
+@pytest.mark.asyncio
+async def test_dedup_identical_tool_calls():
+    """同轮相同参数去重：2 个 read_file('t.txt') → 只执行 1 次"""
+    import core.multi_agent_v2.agents.react_core as _rc
+    import core.engine.llm_backend as _lb
+    import core.multi_agent_v2.tools.tool_registry as _tr
+    from core.multi_agent_v2.agents.tool_cache import get_tool_cache
+
+    _call_count = 0
+    async def _count_handler(args):
+        nonlocal _call_count
+        _call_count += 1
+        return {"ok": True, "data": "content"}
+
+    reg = _make_reg([
+        ("read_file", AsyncMock(side_effect=_count_handler),
+         {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}),
+    ])
+    _rc.ReActCoreMiddleware.on_start.side_effect = lambda ctx: setattr(
+        ctx, '_tool_cache', list(reg._tools.values())
+    ) or None
+    _lb.get_llm_router.return_value = _make_router([
+        "分析", "步骤|读取文件|read_file",
+        '[{"type":"function","function":{"name":"read_file","arguments":{"path":"t.txt"}}},'
+        '{"type":"function","function":{"name":"read_file","arguments":{"path":"t.txt"}}}]',
+    ])
+    await get_tool_cache().clear()
+    with patch.object(_tr, "get_tool_registry", return_value=reg):
+        result = await run_react("dedup test")
+    assert _call_count == 1, f"Expected 1 execution, got {_call_count}"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Scenario 8: Step consolidation for task/orchestrate
+# ═══════════════════════════════════════════════════════════════════
+
+@pytest.mark.asyncio
+async def test_step_consolidation_task_orchestrate():
+    """orchestrate 完成后后续 task 步骤自动 done"""
+    from core.multi_agent_v2.agents.plan_manager import update_step_status
+    from core.multi_agent_v2.agents.middleware import PlanStep, RunContext
+
+    ctx = RunContext("test")
+    ctx.plan = [
+        PlanStep(index=1, description="探索项目", tool_names=["codegraph_explore"]),
+        PlanStep(index=2, description="子代理分析", tool_names=["orchestrate"]),
+        PlanStep(index=3, description="子代理详情", tool_names=["task"]),
+    ]
+    ctx.plan[0].status = "done"
+
+    ctx.tool_results = [
+        {"tool_call": {"name": "orchestrate", "arguments": {"task1": "..."}},
+         "success": True,
+         "result": {"output": "探索结果"}},
+    ]
+    update_step_status(ctx)
+    assert ctx.plan[2].status == "done", "task 步骤应被 orchestrate 覆盖"

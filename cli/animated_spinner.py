@@ -590,3 +590,64 @@ TOOL_ICONS = {
 def get_tool_icon(tool_name: str) -> str:
     """获取工具对应的图标"""
     return TOOL_ICONS.get(tool_name, "⚙️")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 等待动画 — Codex 风格 "Working (3.2s · esc to interrupt)"
+# ═══════════════════════════════════════════════════════════════════
+
+# ponytail: 8 帧旋转器，纯 Unicode，不依赖 Rich
+_SPIN_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"]
+
+
+def shimmer_spinner(message: str, color: str = CLAUDE, fps: float = 8):
+    """Codex 风格等待动画 — 单行旋转器 + 计时器
+
+    格式: ⠋ Working  3.2s  ·  esc to interrupt
+
+    用法:
+        async with shimmer_spinner("Thinking…"):
+            result = await llm_call()
+    """
+    import sys as _sys
+    import time as _time
+
+    class _Shimmer:
+        def __init__(self):
+            self._running = True
+            self._message = message
+            self._start = _time.time()
+            self._idx = 0
+
+        async def _spin(self):
+            out = _sys.stdout
+            while self._running:
+                frame = _SPIN_FRAMES[self._idx % len(_SPIN_FRAMES)]
+                elapsed = _time.time() - self._start
+                # ponytail: raw sys.stdout.write 绕开 Rich 对 ANSI 的重组
+                out.write(
+                    f"\r\033[2m  {frame} {self._message}  {elapsed:.1f}s  ·  esc to interrupt\033[0m"
+                )
+                out.flush()
+                self._idx += 1
+                await asyncio.sleep(1.0 / fps)
+            # 清除动画行
+            out.write("\r" + " " * 80 + "\r")
+            out.flush()
+
+        async def __aenter__(self):
+            self._spin_task = asyncio.create_task(self._spin())
+            return self
+
+        async def __aexit__(self, *args):
+            self._running = False
+            self._spin_task.cancel()
+            try:
+                await self._spin_task
+            except asyncio.CancelledError:
+                pass
+
+        async def update(self, new_message: str):
+            self._message = new_message
+
+    return _Shimmer()

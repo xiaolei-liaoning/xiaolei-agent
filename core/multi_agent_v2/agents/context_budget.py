@@ -94,6 +94,7 @@ class ContextBudgetManager:
         min_rounds_before_compact: int = 4,
         history_token_budget: int = 6000,
         use_llm_compaction: bool = True,
+        use_v1_compaction: bool = True,
     ):
         self.max_context_chars = max_context_chars
         self.safety_margin = safety_margin
@@ -102,6 +103,7 @@ class ContextBudgetManager:
         self.min_rounds_before_compact = min_rounds_before_compact
         self.history_token_budget = history_token_budget
         self.use_llm_compaction = use_llm_compaction
+        self.use_v1_compaction = use_v1_compaction
 
         self._total_compactions = 0
         self._session_id: str = ""
@@ -109,6 +111,7 @@ class ContextBudgetManager:
         self._cached_total_chars = -1
         self._cached_ctx_task = ""
         self._cached_ctx_depth = -1
+        self._v1_compactor: Any = None  # lazy init
 
     # ────────────────────────────────────────────────
     # Token 估算
@@ -286,9 +289,9 @@ class ContextBudgetManager:
             if not router or not router.is_available():
                 return self.generate_compaction_summary(entries)
 
-            # 构造历史文本
-            history_lines = [f"## User Task\n{task_description}\n"]
-            for i, e in enumerate(entries):
+            # 构造历史文本（限制每条目 300 字，防超长 prompt 导致 LLM 截断）
+            history_lines = [f"## User Task\n{task_description[:500]}\n"]
+            for i, e in enumerate(entries[-20:]):  # ponytail: 最多取最近 20 条
                 tc = e.get("tool_call", {})
                 name = tc.get("name", "?")
                 ok = "SUCCESS" if e.get("success") else "FAILED"
@@ -296,8 +299,8 @@ class ContextBudgetManager:
                 result = e.get("result", {})
                 history_lines.append(
                     f"### Call {i+1}: {name} ({ok})\n"
-                    f"Arguments: {json.dumps(args, ensure_ascii=False, default=str)[:500]}\n"
-                    f"Result: {json.dumps(result, ensure_ascii=False, default=str)[:1000]}\n"
+                    f"Args: {json.dumps(args, ensure_ascii=False, default=str)[:200]}\n"
+                    f"Result: {json.dumps(result, ensure_ascii=False, default=str)[:300]}\n"
                 )
 
             history_text = "\n".join(history_lines)
@@ -309,7 +312,7 @@ class ContextBudgetManager:
 
             import asyncio
             response = await asyncio.wait_for(
-                router.chat(messages, temperature=0.3, max_tokens=1024),
+                router.chat(messages, temperature=0.3, max_tokens=2048),
                 timeout=60,
             )
             text = str(response) if response else ""
@@ -392,15 +395,21 @@ class ContextBudgetManager:
     # ────────────────────────────────────────────────
 
     def _set_replay_instructions(self, ctx: RunContext, summary: str):
-        """压缩后设置重放指令（对标 Opencode replay）
-
-        告诉 LLM 继续完成任务，提供摘要作为已完成工作的参考。
-        """
+        """压缩后设置重放指令 + 同步 STM"""
         ctx.forced_instructions = (
             f"[上下文已压缩] 之前的 {len(ctx.tool_results)} 轮交互已被压缩为以下摘要，"
             f"请基于此继续完成任务：\n\n{summary}\n\n"
             f"不要再重复已经完成的工作，直接继续下一步。"
         )
+
+        # 同步 STM：将 ContextBudget 的摘要也写入 STM，保持两层压缩一致
+        try:
+            from core.memory.short_term_memory import get_memory_manager
+            stm = get_memory_manager()
+            stm.add("cli_user", "assistant",
+                    f"[上下文压缩摘要] {summary[:500]}")
+        except Exception:
+            pass
 
     # ────────────────────────────────────────────────
     # 持久化
@@ -434,21 +443,50 @@ class ContextBudgetManager:
 
         对标 Opencode 的 compaction.process()：
 
-        1. 检查溢出
-        2. 选择旧条目
-        3. LLM 摘要
-        4. 重建上下文（重排 + 历史重建）
-        5. 设置重放指令
-        6. 持久化
+        1. V1 8-layer: L0-L4 + SessionMem + CircuitBreaker (新增)
+        2. 检查溢出
+        3. 选择旧条目
+        4. LLM 摘要
+        5. 重建上下文（重排 + 历史重建）
+        6. 设置重放指令
+        7. 持久化
 
         Returns:
             True 表示执行了压缩
         """
-        if not ctx.tool_results:
-            return False
         total_chars = self.get_total_chars(ctx)
         excess = self._get_overflow_excess(ctx, total_chars=total_chars)
         if excess <= 0:
+            return False
+
+        # ── V1 8-layer compression on _conversation_history ──
+        if self.use_v1_compaction and getattr(ctx, '_conversation_history', None):
+            try:
+                if self._v1_compactor is None:
+                    from core.memory.context_compactor import ContextCompactor
+                    self._v1_compactor = ContextCompactor(
+                        model_limit=int(self.history_token_budget * 0.85),
+                        compact_threshold=0.85,
+                    )
+                old_tokens = estimate_tokens(str(ctx._conversation_history))
+                v1_msgs = self._v1_compactor.compact(ctx._conversation_history)
+                new_tokens = estimate_tokens(str(v1_msgs))
+                if new_tokens < old_tokens:
+                    ctx._conversation_history = v1_msgs
+                    self._invalidate_cache()
+                    saved = old_tokens - new_tokens
+                    logger.info(f"V1 8-layer压缩: {old_tokens}→{new_tokens} tokens, saved {saved}")
+                    _budget_stats.record(0, saved)
+                    self._total_compactions += 1
+                    # Re-check overflow — V1 might have freed enough
+                    total_chars = self.get_total_chars(ctx)
+                    excess = self._get_overflow_excess(ctx, total_chars=total_chars)
+                    if excess <= 0:
+                        return True
+            except Exception as e:
+                logger.debug(f"V1 8-layer压缩跳过: {e}")
+
+        if not ctx.tool_results:
             return False
 
         compacted_count = self._select_entries_to_compact(ctx, excess=excess)

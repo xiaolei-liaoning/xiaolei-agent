@@ -117,15 +117,25 @@ class MemoryMiddleware:
                 from .vector_memory import VectorMemoryStore
                 vm = VectorMemoryStore()
                 if vm.wait_for_collection(timeout=3.0):
+                    # 获取当前 session_id 用于交叉引用
+                    _session_id = ""
+                    try:
+                        from .session_manager import get_session_manager
+                        _session_id = get_session_manager().current_session_id
+                    except Exception:
+                        pass
                     for fact in facts:
                         content = fact.get("content", "")
                         ftype = fact.get("type", "fact")
                         if content:
+                            _meta = {"source": "auto_extract", "type": ftype}
+                            if _session_id:
+                                _meta["session_id"] = _session_id
                             vm.add_memory(
                                 user_id=user_id,
                                 content=content,
                                 category=ftype if ftype != "name" else "fact",
-                                metadata={"source": "auto_extract", "type": ftype},
+                                metadata=_meta,
                             )
             except Exception as e:
                 logger.debug("向量记忆写入失败: %s", e)

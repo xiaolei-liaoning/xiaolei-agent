@@ -1,5 +1,14 @@
 """L4: Post-Compact Rebuild — buildPostCompactMessages with all attachment types.
 
+V1→V2: V1 压缩层 L4（最终重建层）。由 ContextCompactor 编排，在 V1 pipeline 中
+  作为最后一层运行。接收 L3 的 CompactionResult，重建完整消息列表并注入附件
+  （文件/技能/计划/Agent/MCP 等）。V2 ContextBudgetManager 通过 ContextCompactor
+  间接调用此层。
+
+保留原因: 8-layer pipeline 的最后输出层。V2 的 _rebuild_after_compaction 只做
+  tool_results 重排和历史重建，不做附件注入。V1 L4 补上了文件恢复、技能重新注入、
+  MCP 指令等 V2 未覆盖的功能。
+
 Mirrors Claude Code's post-compact reconstruction from compact.ts:
 - File attachments: up to 5 files, 50K token budget
 - Plan attachment: if plan file exists

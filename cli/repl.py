@@ -31,6 +31,7 @@ class REPL:
         self.cli.print_welcome()
 
         while self.cli.running:
+            user_input = ""
             try:
                 user_input = get_styled_input(self.cli)
 

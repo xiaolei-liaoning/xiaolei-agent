@@ -16,6 +16,8 @@ import asyncio
 import hashlib
 import json
 import logging
+
+from core.multi_agent_v2.tools.json_util import safe_parse_json
 import os
 import time
 from typing import Any, Callable, Dict, List, Optional
@@ -418,7 +420,9 @@ class LoopDetectionMiddleware(BaseMiddleware):
             name = tc.get("function", {}).get("name", "")
             args_str = tc.get("function", {}).get("arguments", "{}")
             try:
-                args = json.loads(args_str) if isinstance(args_str, str) else args_str
+                args = safe_parse_json(args_str) if isinstance(args_str, str) else args_str
+
+
             except (json.JSONDecodeError, TypeError):
                 args = {}
 
@@ -486,8 +490,8 @@ class LoopDetectionMiddleware(BaseMiddleware):
                     name = tc.get("function", {}).get("name", "")
                     args_str = tc.get("function", {}).get("arguments", "{}")
                     try:
-                        args = json.loads(args_str) if isinstance(args_str, str) else args_str
-                    except:
+                        args = safe_parse_json(args_str) if isinstance(args_str, str) else args_str
+                    except (json.JSONDecodeError, TypeError):
                         args = {}
                     _path = args.get("path", "")
                     if name == "write_file" and _path:
@@ -553,6 +557,7 @@ class LoopDetectionMiddleware(BaseMiddleware):
             _warn, _hard = self._get_tool_limits(name)
             if self._tool_freq[name] >= _hard:
                 ctx.interrupted = True
+                ctx.needs_user_intervention = True
                 ctx.interrupted_reason = (
                     f"循环检测：工具 {name} 已调用 "
                     f"{self._tool_freq[name]} 次（阈值={_hard}），强制停止"
@@ -616,7 +621,9 @@ class LoopDetectionMiddleware(BaseMiddleware):
                 continue
             args_str = tc.get("function", {}).get("arguments", "{}")
             try:
-                args = json.loads(args_str) if isinstance(args_str, str) else args_str
+                args = safe_parse_json(args_str) if isinstance(args_str, str) else args_str
+
+
             except (json.JSONDecodeError, TypeError):
                 args = {}
             path = args.get("path", args.get("filepath", ""))
@@ -718,7 +725,7 @@ class ReasoningMiddleware(BaseMiddleware):
         m = re.search(r'<thinking>(.*?)</thinking>', reply, re.DOTALL)
         if m:
             txt = m.group(1).strip()[:200]
-            print(f"    \033[1;36m🤔 推理: {txt}\033[0m")
+            print(f"    \033[2mThought: {txt}\033[0m")
         return None
 
 
@@ -800,41 +807,20 @@ class TruncationMiddleware(BaseMiddleware):
 # ════════════════════════════════════════════════════════════════
 
 class CompactionMiddleware(BaseMiddleware):
-    """智能上下文压缩中间件 — 委托给 ContextBudgetManager
-
-    所有压缩逻辑已合并到 context_budget.ContextBudgetManager，
-    此中间件仅做适配桥接，去除重复的 LLM 调用和上下文重建逻辑。
-    """
+    """智能上下文压缩中间件 — 复用 ctx.context_budget，不覆盖"""
     HOOKS = ("on_llm_invoke",)
-
-    def __init__(
-        self,
-        max_context_chars: int = 80000,
-        safety_margin: int = 20000,
-        protected_recent_turns: int = 3,
-        min_rounds_before_compact: int = 4,
-        use_llm_compaction: bool = True,
-    ):
-        from .context_budget import ContextBudgetManager
-        self.budget = ContextBudgetManager(
-            max_context_chars=max_context_chars,
-            safety_margin=safety_margin,
-            protected_recent_turns=protected_recent_turns,
-            min_rounds_before_compact=min_rounds_before_compact,
-            use_llm_compaction=use_llm_compaction,
-        )
-        self._compacted_rounds: set = set()
-
-    def reset_task_state(self):
-        self._compacted_rounds.clear()
 
     async def on_llm_invoke(self, ctx: RunContext) -> None:
         """LLM 调用前检查上下文是否溢出，必要时压缩"""
-        # 委托给 ContextBudgetManager
-        ctx.context_budget = self.budget
-        compacted = await self.budget.async_check_and_compact(ctx)
-        if compacted:
-            self._compacted_rounds.add(ctx.react_depth)
+        budget = getattr(ctx, 'context_budget', None)
+        if budget is None:
+            from .context_budget import ContextBudgetManager
+            budget = ContextBudgetManager()
+            ctx.context_budget = budget
+        try:
+            await budget.async_check_and_compact(ctx)
+        except Exception:
+            budget.check_and_compact(ctx)
 
 
 # ════════════════════════════════════════════════════════════════

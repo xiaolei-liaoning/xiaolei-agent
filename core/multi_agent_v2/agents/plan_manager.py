@@ -16,6 +16,42 @@ from .middleware import PlanStep, RunContext
 logger = logging.getLogger(__name__)
 
 
+def _consolidate_subagent_steps(ctx: RunContext, current_step: PlanStep) -> None:
+    """当前步骤是 task/orchestrate → 后续同类型 pending 步骤自动 done"""
+    _subagent_tools = {"task", "orchestrate"}
+    if current_step.tool_names and set(current_step.tool_names) & _subagent_tools:
+        for _s in ctx.plan:
+            if _s.status == "pending" and _s.tool_names and set(_s.tool_names) & _subagent_tools:
+                _s.status = "done"
+                logger.debug(f"步骤 {_s.index} 被步骤 {current_step.index} 覆盖，自动完成")
+
+
+def _parse_plan_steps(text: str) -> List[PlanStep]:
+    """从文本中解析计划步骤，支持 步骤|描述|工具 格式"""
+    template_blacklist = {"步骤描述", "具体描述", "任务描述", "描述", "步骤一", "步骤二"}
+    steps = []
+    for line in text.split("\n"):
+        line = line.strip()
+        if not line.startswith("步骤|"):
+            continue
+        parts = line.split("|")
+        desc = parts[1].strip() if len(parts) > 1 else ""
+        tools_str = parts[2].strip() if len(parts) > 2 else ""
+        if "直接回答" in desc:
+            return []
+        if desc in template_blacklist or len(desc) < 3:
+            continue
+        tools = (
+            [t.strip() for t in tools_str.split(",") if t.strip()]
+            if tools_str
+            else []
+        )
+        steps.append(
+            PlanStep(index=len(steps) + 1, description=desc, tool_names=tools)
+        )
+    return steps
+
+
 async def generate_plan(
     task_description: str, ctx: RunContext, retry_context: str = ""
 ) -> List[PlanStep]:
@@ -58,48 +94,64 @@ async def generate_plan(
 
     # ── 第二步：根据理解 + 工具信息，生成结构化计划 ──
     # 动态工具列表，与 _SANDBOX_TOOL_DEFS 保持一致
+    _plan_tool_lines = []
     try:
         from core.multi_agent_v2.tools.tool_registry import _SANDBOX_TOOL_DEFS
-        _plan_tool_lines = [
-            f"  {t.name} — {t.description.split(chr(10))[0].rstrip('.')}"
-            for t in _SANDBOX_TOOL_DEFS
-            if t.server == "__builtin__" and t.name not in ("git", "search_files")
-        ]
-        _plan_tools_text = "\n".join(_plan_tool_lines)
+        for t in _SANDBOX_TOOL_DEFS:
+            if t.server == "__builtin__" and t.name not in ("git", "search_files", "arbor_viz", "write_todos"):
+                _plan_tool_lines.append(
+                    f"  {t.name} — {t.description.split(chr(10))[0].rstrip('.')}"
+                )
     except Exception:
-        _plan_tools_text = (
-            "  write_file — 写入文件到指定路径\n"
-            "  edit_file — 精确替换文件内容\n"
-            "  read_file — 读取文件内容\n"
-            "  execute_python — 执行Python代码\n"
-            "  web_search — 网页搜索\n"
-            "  fetch_url — HTTP GET获取网页/API数据"
-        )
+        pass
+
+    # 补充 MCP 工具（codegraph 等）
+    try:
+        from core.multi_agent_v2.tools.tool_registry import get_tool_registry
+        _reg = get_tool_registry()
+        await _reg.discover_all()
+        for _t in _reg._tools.values():
+            if _t.server and _t.server != "__builtin__" and _t.server != "":
+                _plan_tool_lines.append(
+                    f"  {_t.name} — {_t.description.split(chr(10))[0].rstrip('.')}"
+                )
+    except Exception:
+        pass
+
+    _plan_tools_text = "\n".join(_plan_tool_lines) if _plan_tool_lines else (
+        "  write_file — 写入文件\n  read_file — 读取文件\n  web_search — 搜索\n"
+    )
+
+    # 角色说明（如果有）
+    _personality_hint = ""
+    if ctx and ctx.personality_prompt:
+        _first_lines = [l for l in ctx.personality_prompt.split("\n") if l.strip()][:3]
+        if _first_lines:
+            _personality_hint = f"\n【角色说明】\n" + "\n".join(_first_lines) + "\n"
 
     plan_prompt = (
-        "根据任务理解和可用工具，将任务拆解为1-2个执行步骤。\n\n"
+        "根据任务理解和可用工具，将任务拆解为执行步骤。\n"
+        "简单任务（如搜索、问答、单文件）：1-3 步\n"
+        "复杂任务（如分析项目、多文件开发）：3-7 步\n\n"
         "【任务理解】\n"
-        f"{understanding if understanding else task_description[:200]}\n\n"
+        f"{understanding if understanding else task_description[:200]}\n"
+        f"{_personality_hint}"
         "【⚡核心规则】\n"
-        "- 每个步骤做一件事（例如创建 notes.md 就是一件事），"
-        "不需要拆成创建+写入两个步骤\n"
-        "- 创建单文件项目（游戏/工具）— 1 步就够了\n"
-        "  - HTML 游戏：所有 CSS 和 JS 全部内嵌在单一 .html 文件中\n"
-        "  - Python 脚本：全部代码写入一个 .py 文件\n"
-        "- 如果要创建多个独立文件 — 每个文件一个步骤\n"
-        "- ⚠️ 创建文件（游戏/HTML/脚本）必须用 write_file，不要用 execute_python！\n"
-        "- 抓取网页数据（热搜/新闻/搜索结果）→ 用 web_search 或 fetch_url\n"
-        "- ⚠️ 请直接输出你的计划，不要输出模板文字\n\n"
+        "- 每个步骤做一件事，创建单文件项目只需 1 步\n"
+        "- 创建文件用 write_file，抓取网页用 web_search/fetch_url\n"
+        "- 分析代码项目：用 codegraph_explore 看结构，替代逐文件 read_file\n"
+        "- 需要深入探索/分析/开发的子任务用 task 启动子代理\n"
+        "- 多个无关子任务用 orchestrate 并行执行\n"
+        "- 直接输出，不要模板文字\n\n"
         "【可用工具】\n"
         f"{_plan_tools_text}\n\n"
-        "【输出格式】每行一个步骤，格式：步骤|具体描述|工具名\n"
-        "⚠️ 「具体描述」必须包含具体文件路径，不要写泛泛的描述\n\n"
-        "示例（参考格式，不要照抄内容）：\n"
-        "任务: 搜索百度热搜 → 步骤|搜索百度热搜获取数据|web_search\n"
-        "任务: 写八数码游戏到桌面 → 步骤|用 write_file 在 ~/Desktop 创建 eight_puzzle.html（完整游戏代码）|write_file\n"
-        "任务: 打开QQ → 步骤|打开QQ应用|open_app\n"
-        "任务: 修改文件里的文字 → 步骤|把文件中的 hello 改为 world|edit_file\n\n"
-        "如果不需要工具：步骤|直接回答\n"
+        "【输出格式】每行：步骤|具体描述|工具名\n\n"
+        "示例：\n"
+        "步骤|搜索百度热搜|web_search\n"
+        "步骤|用 write_file 在 ~/Desktop 创建 index.html|write_file\n"
+        "步骤|用 codegraph_explore 看项目结构|codegraph_explore\n"
+        "步骤|用 task 子代理分析核心模块|task\n"
+        "步骤|直接回答\n\n"
         "开始："
     )
     try:
@@ -113,60 +165,71 @@ async def generate_plan(
         )
         text = str(resp).strip() if resp else ""
         if not text or "[LLM_MOCK]" in text:
-            return []
+            text = ""
 
         steps: List[PlanStep] = []
-        # 模板文本黑名单 - LLM 可能照抄模板
-        template_blacklist = {"步骤描述", "具体描述", "任务描述", "描述", "步骤一", "步骤二"}
-        for line in text.split("\n"):
-            line = line.strip()
-            if not line.startswith("步骤|"):
-                continue
-            parts = line.split("|")
-            desc = parts[1].strip() if len(parts) > 1 else ""
-            tools_str = parts[2].strip() if len(parts) > 2 else ""
-            if "直接回答" in desc:
-                return []
-            # 跳过模板文本（LLM 照抄了示例格式）
-            if desc in template_blacklist or len(desc) < 3:
-                continue
-            tools = (
-                [t.strip() for t in tools_str.split(",") if t.strip()]
-                if tools_str
-                else []
-            )
-            steps.append(
-                PlanStep(index=len(steps) + 1, description=desc, tool_names=tools)
-            )
+        if text:
+            steps = _parse_plan_steps(text)
 
-        return steps[:5]
+        if steps:
+            return steps[:5]
+
+        # ponytail: 首次失败 → 极简降级 prompt，更大概率成功
+        logger.info("plan_generation 首次尝试无结果，降级极简 prompt")
+        fallback_prompt = (
+            "将任务拆为步骤。每行：步骤|描述|工具\n"
+            f"任务：{task_description[:200]}\n"
+            "开始："
+        )
+        resp2 = await asyncio.wait_for(
+            router.chat(
+                [{"role": "user", "content": fallback_prompt}],
+                temperature=0.2,
+                max_tokens=500,
+            ),
+            timeout=15.0,
+        )
+        text2 = str(resp2).strip() if resp2 else ""
+        if text2 and "[LLM_MOCK]" not in text2:
+            return _parse_plan_steps(text2)[:5]
+        return []
     except Exception:
         return []
 
 
 def display_plan(
-    ctx: RunContext, header: str = "📋 执行计划", prefix: str = ""
+    ctx: RunContext, header: str = "Plan", prefix: str = ""
 ) -> None:
-    """显示计划进度条"""
+    """显示计划进度 — 精致样式"""
     if not ctx.plan:
         return
     done = sum(1 for s in ctx.plan if s.status == "done")
     total = len(ctx.plan)
-    color = "\033[1;34m"
-    reset = "\033[0m"
 
-    lines = [f"{prefix}    {color}{header}（{done}/{total}）:{reset}"]
+    bar_segments = []
     for step in ctx.plan:
         if step.status == "done":
-            icon = "✅"
+            bar_segments.append("\033[32m▇\033[0m")
         elif step.status == "running":
-            icon = "➡️"
+            bar_segments.append("\033[1;37m▇\033[0m")
         elif step.status == "failed":
-            icon = "❌"
+            bar_segments.append("\033[31m▇\033[0m")
         else:
-            icon = "  "
-        desc = step.description.replace("\n", " ")[:60]
-        lines.append(f"{prefix}      {icon} {desc}")
+            bar_segments.append("\033[2m▇\033[0m")
+    bar = "".join(bar_segments)
+
+    lines = [f"{prefix}    \033[1m{header}\033[0m  {bar}  \033[2m{done}/{total}\033[0m"]
+    for step in ctx.plan:
+        if step.status == "done":
+            icon, color = "✓", "\033[32m"
+        elif step.status == "running":
+            icon, color = "▶", "\033[1;37m"
+        elif step.status == "failed":
+            icon, color = "✗", "\033[31m"
+        else:
+            icon, color = "·", "\033[2m"
+        desc = step.description.replace("\n", " ")[:55]
+        lines.append(f"{prefix}      {color}{icon}\033[0m \033[2m{desc}\033[0m")
     print("\n".join(lines))
 
 
@@ -230,6 +293,21 @@ def update_step_status(ctx: RunContext, prefix: str = "") -> None:
         if step_tools & _search_tools:
             if succeeded.keys() & _search_tools:
                 current_step.status = "done"
+                _consolidate_subagent_steps(ctx, current_step)
+                return
+        # ponytail: task/orchestrate 互认等价
+        _subagent_tools = {"task", "orchestrate"}
+        if step_tools & _subagent_tools:
+            if succeeded.keys() & _subagent_tools:
+                current_step.status = "done"
+                _consolidate_subagent_steps(ctx, current_step)
+                return
+        # ponytail: 探索类工具互换
+        _explore_tools = {"codegraph_explore", "codegraph_files", "search_files", "execute_shell", "read_file"}
+        if step_tools & _explore_tools:
+            if succeeded.keys() & _explore_tools:
+                current_step.status = "done"
+                _consolidate_subagent_steps(ctx, current_step)
                 return
         if step_tools & set(succeeded.keys()):
             current_step.status = "done"
@@ -248,7 +326,7 @@ def update_step_status(ctx: RunContext, prefix: str = "") -> None:
             ctx._step_retries[current_step.index] = (
                 ctx._step_retries.get(current_step.index, 0) + 1
             )
-            print(f"{prefix}    \033[1;31m❌ 步骤 {current_step.index} 执行失败，将触发重规划\033[0m")
+            print(f"{prefix}    \033[2mStep {current_step.index} failed\033[0m")
         return
 
     # ── 结果感知：write_file 成功但内容短 → 提示补充（不标记步骤完成）
@@ -299,7 +377,7 @@ def update_step_status(ctx: RunContext, prefix: str = "") -> None:
             succeeded_counts.get(t, 0) > snapshot.get(t, 0) for t in step_tools
         )
 
-        _search_tools = {"web_search", "fetch_url", "fetch_json", "search_news"}
+        _search_tools = {"web_search", "fetch_url", "fetch_json", "hot_search"}
         if not all_tools_done and step_tools & _search_tools:
             if any(succeeded_counts.get(t, 0) > snapshot.get(t, 0) for t in _search_tools):
                 all_tools_done = True
@@ -313,6 +391,7 @@ def update_step_status(ctx: RunContext, prefix: str = "") -> None:
 
         if all_tools_done:
             current_step.status = "done"
+            _consolidate_subagent_steps(ctx, current_step)
             logger.debug(f"步骤 {current_step.index} 完成");
             _pending_after_tool = [s for s in ctx.plan if s.status == "pending"]
             if _pending_after_tool and not ctx.forced_instructions:
@@ -328,6 +407,7 @@ def update_step_status(ctx: RunContext, prefix: str = "") -> None:
         _total_ok = sum(1 for r in ctx.tool_results if r.get("success"))
         if _total_ok >= done_count + 1:
             current_step.status = "done"
+            _consolidate_subagent_steps(ctx, current_step)
             _pending_after_no = [s for s in ctx.plan if s.status == "pending"]
             if _pending_after_no and not ctx.forced_instructions:
                 _n = _pending_after_no[0]
@@ -343,7 +423,7 @@ def update_step_status(ctx: RunContext, prefix: str = "") -> None:
             if not r.get("success"):
                 continue
             name = r.get("tool_call", {}).get("name", "")
-            if name in ("write_file", "web_search", "fetch_url", "fetch_json", "search_news", "execute_shell", "read_file"):
+            if name in ("write_file", "web_search", "fetch_url", "fetch_json", "hot_search", "execute_shell", "read_file"):
                 _has_substance = True
                 break
             if name == "execute_python":
@@ -393,13 +473,22 @@ async def replan_failed(ctx: RunContext) -> bool:
         if not last.get("success"):
             error_context += f"\n工具执行错误: {last.get('error', '') or last.get('result', {}).get('error', '')}"
 
+    _replan_hint = ""
+    if ctx and ctx.personality_prompt:
+        _first_lines = [l for l in ctx.personality_prompt.split("\n") if l.strip()][:2]
+        if _first_lines:
+            _replan_hint = "\n角色: " + " ".join(_first_lines)
+
     retry_prompt = (
         "任务需要重新规划后面的步骤。\n\n"
         f"已完成: {', '.join(done_descs) if done_descs else '无'}\n"
         f"失败的步骤: {', '.join(failed_descs) if failed_descs else '需要继续'}"
-        f"{error_context}\n\n"
-        "请重新规划未完成的步骤，忽略已完成的。\n"
-        "输出格式：步骤|步骤描述|预计使用的工具名(逗号分隔,可省略)\n"
+        f"{error_context}"
+        f"{_replan_hint}\n\n"
+        "注意：\n"
+        "- 分析类子任务用 task 或 orchestrate 启动子代理，别自己读文件\n"
+        "- 探索代码用 codegraph_explore 替代 read_file 遍历\n"
+        "- 输出格式：步骤|步骤描述|预计使用的工具名(逗号分隔,可省略)\n"
         "开始："
     )
 

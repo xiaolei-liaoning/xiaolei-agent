@@ -1,5 +1,12 @@
 """L2: CachedMicrocompact — generate cache edit instructions, do NOT modify messages.
 
+V1→V2: V1 压缩层 L2。由 ContextCompactor 编排，在 V1 pipeline 中作为第五层运行。
+  仅生成缓存断点元数据，不修改消息内容。当前后端不支持 server-side caching，
+  此层实际为 no-op。V2 ContextBudgetManager 通过 ContextCompactor 间接调用此层。
+
+保留原因: ContextCompactor 8-layer pipeline 的组成部分。若未来 LLM 后端支持
+  cache_control breakpoints，可直接启用。
+
 In Claude Code, CachedMicrocompact (cache_compact_20250129) scans messages to
 find optimal cache breakpoints and generates pendingCacheEdits for the API layer.
 It does NOT modify local messages — the edits are sent alongside the next API

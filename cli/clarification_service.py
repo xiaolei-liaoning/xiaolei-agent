@@ -366,9 +366,8 @@ class ClarificationService:
         4. 结合反思机制的结果
         """
         try:
-            from core.memory.short_term_memory import ShortTermMemoryManager
-            
-            memory_manager = ShortTermMemoryManager()
+            from core.memory.short_term_memory import get_memory_manager
+            memory_manager = get_memory_manager()
             
             # 获取最近5条对话记录
             recent_messages = []
@@ -478,9 +477,8 @@ class ClarificationService:
             用户偏好字典
         """
         try:
-            from core.memory.short_term_memory import ShortTermMemoryManager
-            
-            memory_manager = ShortTermMemoryManager()
+            from core.memory.short_term_memory import get_memory_manager
+            memory_manager = get_memory_manager()
             prefs = memory_manager.get_context("default_user:preferences", depth=1, limit=1)
             if prefs:
                 return {"preferences": prefs}
@@ -496,9 +494,8 @@ class ClarificationService:
             执行历史列表
         """
         try:
-            from core.memory.short_term_memory import ShortTermMemoryManager
-            
-            memory_manager = ShortTermMemoryManager()
+            from core.memory.short_term_memory import get_memory_manager
+            memory_manager = get_memory_manager()
             history = memory_manager.get_context("default_user:execution", depth=3, limit=3)
             if history:
                 return [{"content": h} for h in history if isinstance(h, dict)]

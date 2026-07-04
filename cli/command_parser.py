@@ -56,6 +56,10 @@ class CommandType(Enum):
     PLUGIN = "plugin"
     SMART = "smart"
     ORCHESTRATE = "orchestrate"
+    TASK_AGENT = "task_agent"       # 用子代理执行 task
+    EXPLORE_AGENT = "explore_agent" # 用子代理(explore角色)探索
+    ANALYZE_AGENT = "analyze_agent" # 用子代理(analyze角色)分析
+    BUILD_AGENT = "build_agent"     # 用子代理(build角色)构建
     RESET = "reset"
     TEST = "test"
     TOOLS = "tools"
@@ -109,6 +113,10 @@ class CommandParser:
         "/plugin": CommandType.PLUGIN,
         "/smart": CommandType.SMART,
         "/orchestrate": CommandType.ORCHESTRATE,
+        "/task": CommandType.TASK_AGENT,
+        "/explore": CommandType.EXPLORE_AGENT,
+        "/analyze": CommandType.ANALYZE_AGENT,
+        "/build": CommandType.BUILD_AGENT,
         "/tools": CommandType.TOOLS,
         "/show": CommandType.SHOW,
         "/reset": CommandType.RESET,
@@ -141,6 +149,10 @@ class CommandParser:
         "/plugin": "插件工具，如: /plugin list, /plugin create name",
         "/smart": '智能多Agent协作，如: /smart "任务", /smart demo, /smart status, /smart <模式> <任务> (模式: pipeline/master/review/auction/hybrid)',
         "/orchestrate": '多Agent编排，如: /orchestrate "任务", /orchestrate demo, /orchestrate list',
+        "/task": '用子代理执行任务，如: /task "分析项目结构"',
+        "/explore": '用 explore 子代理探索，如: /explore "分析src目录"',
+        "/analyze": '用 analyze 子代理深度分析，如: /analyze "代码库审查"',
+        "/build": '用 build 子代理构建开发，如: /build "创建HTML游戏"',
         "/agents": '多Agent协作（/orchestrate 别名），如: /agents "写一个百度热搜报告在桌面"',
         "/reset": "重置会话，如: /reset (清空历史) 或 /reset all (清空历史和记忆)",
         "/tools": "查看所有可用工具及其状态（按类型分组）",

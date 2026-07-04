@@ -1,5 +1,12 @@
 """L1b: CollapseReadSearch — UI-only display metadata tracker.
 
+V1→V2: V1 压缩层 L1b。由 ContextCompactor 编排，在 V1 pipeline 中作为第三层运行。
+  纯消息透传（不修改内容），跟踪 UI 折叠元数据。V2 无 UI 层，此层实际无操作，
+  保留以保持 pipeline 完整。
+
+保留原因: ContextCompactor 8-layer pipeline 的组成部分。当前为 no-op，但若
+  未来 V2 需要折叠元数据追踪（如日志/遥测），可直接启用。
+
 In Claude Code this is a rendering concern: consecutive Read/Grep/Search
 tool_use blocks are collapsed into a summary group for the UI. The message
 array sent to the API is NEVER modified.

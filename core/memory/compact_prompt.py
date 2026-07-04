@@ -1,5 +1,12 @@
 """Compaction prompt templates — mirror of prompt.ts.
 
+V1→V2: V1 压缩提示词模板。由 L3LLMCompaction (l3_llm_compaction.py) 使用，
+  通过 ContextCompactor → ContextBudgetManager 间接被 V2 调用。
+  包含 9-section analysis + summary 格式的完整 prompt 结构。
+
+保留原因: L3 层必需。V2 的 _COMPACTION_SYSTEM_PROMPT 是独立于 V1 的一套简化
+  prompt（仅用于 tool_results 摘要），不覆盖 L3 的 9-section 格式。
+
 Ponytail: 1:1 translation from prompt.ts, no simplification (this is the exact
 prompt structure Claude Code uses, changing it risks summary quality drift).
 """

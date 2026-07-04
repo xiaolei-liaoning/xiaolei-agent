@@ -1,5 +1,13 @@
 """Circuit breaker for compaction — MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES = 3.
 
+V1→V2: V1 熔断器。由 ContextCompactor._circuit_breaker 持有，在 compact()
+  每次调用时检查 is_tripped()，成功后 record_success()，失败后 record_failure()。
+  V2 的 ContextBudgetManager 通过 ContextCompactor 间接使用此熔断器。
+
+保留原因: 防止上下文超限不可恢复时不断进行压缩尝试。V2 的 entry-level 压缩
+  (tool_results 选择+摘要) 没有自己的熔断器，依赖 V1 的此熔断器来保护
+  message-level 压缩不陷入死循环。
+
 Prevents hammering the API with doomed compaction attempts when context
 is irrecoverably over the limit. Resets on success.
 

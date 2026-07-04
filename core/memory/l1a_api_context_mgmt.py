@@ -1,5 +1,12 @@
 """L1a: API-Level Context Management — simulates Claude Code's server-side clearing.
 
+V1→V2: V1 压缩层 L1a。由 ContextCompactor (context_compactor.py) 统一编排，
+  在 async_check_and_compact() 的 V1 pipeline 中作为第二层运行。清除旧的工具
+  调用结果和 thinking 块。V2 ContextBudgetManager 通过 ContextCompactor 间接调用此层。
+
+保留原因: ContextCompactor 8-layer pipeline 的组成部分。删除会导致历史消息中
+  大量冗余的工具结果和推理块残留，加速上下文膨胀。
+
 Based on Claude Code's apiMicrocompact.ts:
 - clear_tool_uses_20250919: Clear tool results for shell/glob/grep/read/web_fetch/web_search
 - clear_thinking_20251015: Clear thinking blocks (keep last N turns)

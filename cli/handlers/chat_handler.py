@@ -89,6 +89,67 @@ class ChatHandler:
     # /orchestrate
     # ──────────────────────────────────────────────
 
+    # ──────────────────────────────────────────────
+    # /task /explore /analyze /build — 子代理快捷命令
+    # ──────────────────────────────────────────────
+
+    async def handle_task_subagent(self, parsed_cmd: ParsedCommand):
+        """用 task 子代理执行（通用）"""
+        request = parsed_cmd.action or parsed_cmd.remaining or ""
+        if not request:
+            print_error("请提供任务描述")
+            return
+        await self._run_with_subagent(request, "general")
+
+    async def handle_explore_subagent(self, parsed_cmd: ParsedCommand):
+        """用 explore 子代理探索"""
+        request = parsed_cmd.action or parsed_cmd.remaining or ""
+        if not request:
+            print_error("请提供任务描述")
+            return
+        await self._run_with_subagent(request, "explore")
+
+    async def handle_analyze_subagent(self, parsed_cmd: ParsedCommand):
+        """用 analyze 子代理深度分析"""
+        request = parsed_cmd.action or parsed_cmd.remaining or ""
+        if not request:
+            print_error("请提供任务描述")
+            return
+        await self._run_with_subagent(request, "analyze")
+
+    async def handle_build_subagent(self, parsed_cmd: ParsedCommand):
+        """用 build 子代理开发构建"""
+        request = parsed_cmd.action or parsed_cmd.remaining or ""
+        if not request:
+            print_error("请提供任务描述")
+            return
+        await self._run_with_subagent(request, "build")
+
+    async def _run_with_subagent(self, request: str, agent_type: str):
+        """强制使用子代理执行任务"""
+        from cli.base import WorkflowEngineWrapper
+
+        # 直接调子代理
+        try:
+            from core.multi_agent_v2.agents.subagent.spawn import task
+            result = await task(description=request, agent=agent_type)
+        except Exception as e:
+            # fallback: 通过 WorkAgent
+            log_warning(f"子代理执行失败，降级到 WorkAgent: {e}")
+            wrapper = WorkflowEngineWrapper()
+            result = await wrapper.create_and_execute(
+                f"[使用子代理 {agent_type} 模式] {request}"
+            )
+
+        success = result.get("success", False)
+        output = result.get("output", result.get("answer", ""))
+        if success and output:
+            print_success(f"✅ {output[:500]}")
+        else:
+            error = result.get("error", "无输出")
+            print_error(f"❌ {error}")
+        log_info(f"子代理执行完成: agent={agent_type}, success={success}")
+
     async def handle_orchestrate(self, parsed_cmd: ParsedCommand):
         """多Agent编排 — 真正的多Agent并发协作"""
         action = parsed_cmd.action or ""
@@ -140,7 +201,7 @@ class ChatHandler:
         from cli.animated_spinner import print_section
         from cli.colors import CLAUDE, log_status, print_error as pe
 
-        print_section("🤖 多Agent 自动编排 (JS Workflow)")
+        print_section("Multi-Agent Orchestration")
 
         script = ""
 
@@ -193,14 +254,11 @@ export default async function() {{
             wr = await run_claude_workflow(script)
 
             if wr.success and wr.output:
-                print_section("📋 最终结果")
                 text = str(wr.output)
-                print(text[:1000] if len(text) > 1000 else text)
+                print(f"\n  \033[1;37m◇ \033[0m\033[1mResult\033[0m")
+                print(f"  {text[:1000] if len(text) > 1000 else text}")
                 if wr.phases:
-                    print(
-                        f"    \033[2;37m阶段: {' → '.join(p.title for p in wr.phases)}"
-                        f" | {wr.elapsed:.1f}s\033[0m"
-                    )
+                    print(f"\n  \033[2mPhases: {' → '.join(p.title for p in wr.phases)}  ·  {wr.elapsed:.1f}s\033[0m")
                 if wr.agent_graph and (wr.agent_graph.get('nodes') or wr.agent_graph.get('edges')):
                     g = wr.agent_graph
                     phases_data = [{"title": p.title, "detail": p.detail} for p in wr.phases] if wr.phases else []
@@ -631,15 +689,25 @@ export default async function() {{
         if result.success:
             answer = str(result.output)
             if answer:
-                print_chat_bubble(answer[:500], is_user=False)
-                self.cli.chat_history.append({"role": "assistant", "content": answer[:500]})
+                # ponytail: 智能截断——找到最后一个自然断点（段落/句子/列表项）
+                _display = answer
+                if len(answer) > 2000:
+                    _truncated = answer[:2000]
+                    _break = max(_truncated.rfind('\n\n'), _truncated.rfind('\n-'), _truncated.rfind('。\n'), _truncated.rfind('。'))
+                    if _break > 500:
+                        _display = answer[:_break + 1]
+                    else:
+                        _display = _truncated
+                    _display += "\n\n...(完整结果已保存到桌面 v2_result.txt)"
+                print_chat_bubble(_display, is_user=False)
+                self.cli.chat_history.append({"role": "assistant", "content": answer})
 
             # ponytail: 对话结束后提取事实，失败静默
             try:
                 from core.memory.memory_middleware import get_memory_middleware
                 mw = get_memory_middleware()
                 uid = str(getattr(self.cli, 'user_id', 'cli_user'))
-                asyncio.ensure_future(mw.process_turn(uid, initial_message, str(answer)[:500]))
+                asyncio.ensure_future(mw.process_turn(uid, initial_message, str(answer)[:2000]))
             except Exception:
                 pass
 

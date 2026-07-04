@@ -1,5 +1,13 @@
 """Session Memory Compaction — experimental LLM-free compaction path.
 
+V1→V2: V1 无 LLM 回退压缩层。由 ContextCompactor.compact() 在 L3+L4 失败后
+  作为 fallback 调用。基于启发式模式匹配提取关键上下文（用户请求/文件路径/
+  错误信息/待办事项），不依赖 LLM。V2 通过 ContextCompactor 间接使用此层。
+
+保留原因: ContextCompactor 的最终 fallback 路径。当 LLM 压缩因 API 不可用/
+  超时/断路而失败时，此层提供无 LLM 的降级摘要。V2 的模板摘要
+  (generate_compaction_summary) 只覆盖 tool_results，此层覆盖整段历史。
+
 Heuristic-based compaction for when LLM compaction is unavailable or
 when the session is too large to fit even the compaction prompt. Uses
 pattern matching to identify and preserve key context: user requests,

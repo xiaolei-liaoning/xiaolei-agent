@@ -109,19 +109,7 @@ def search_context_by_keywords(user_id: str, keywords: List[str], top_k: int = 5
     Returns:
         相关上下文节点列表
     """
-    try:
-        queue_nodes = []
-        for node_id in list(short_term_memory.queue):
-            if node_id in short_term_memory.nodes:
-                queue_nodes.append(short_term_memory.nodes[node_id])
-        
-        context_queue = deque(queue_nodes)
-        results = bfs_processor.extract_context_by_keywords(context_queue, keywords, top_k)
-        
-        logger.info("上下文关键词检索完成 - 用户: %s, 找到: %d 个相关节点", 
-                   user_id, len(results))
-        
-        return results
-    except Exception as e:
-        logger.error("上下文关键词检索失败: %s", e, exc_info=True)
-        return []
+    # ponytail: 旧版 BFS 关键词检索已替换为 VectorMemoryStore.search_memories
+    # 保留函数签名兼容，直接返回空
+    logger.debug("search_context_by_keywords 已弃用，返回空（请用向量检索）")
+    return []

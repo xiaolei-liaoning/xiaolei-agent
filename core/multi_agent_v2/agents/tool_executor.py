@@ -26,6 +26,8 @@ TOOL_TIMEOUTS = {
     "edit_file": 8,
     "search_files": 10,
     "git": 15,
+    "task": 600,          # 子代理可能跑很久
+    "orchestrate": 900,   # 编排多个子代理更长
 }
 DEFAULT_TIMEOUT = 30
 
@@ -56,25 +58,8 @@ async def execute_tool_call(
         - quality: "success" | "partial_success" | "fail" | "timeout" | "retry_success"
     """
     tool_name = tc.get("function", {}).get("name", "")
-    # 容错解析 arguments JSON（长代码内容可能含特殊字符或被截断）
-    try:
-        arguments = json.loads(tc.get("function", {}).get("arguments", "{}"))
-    except (json.JSONDecodeError, TypeError):
-        # 截断修复：write_file 的 content 字段过长时被截断，正则抢救
-        raw = tc.get("function", {}).get("arguments", "")
-        if tool_name == "write_file" and raw and "{" in raw:
-            path_m = re.search(r'"path"\s*:\s*"((?:[^"\\]|\\.)*)"', raw)
-            content_m = re.search(r'"content"\s*:\s*"((?:[^"\\]|\\.)*)', raw)
-            if path_m:
-                content = content_m.group(1) if content_m else raw
-                arguments = {"path": path_m.group(1), "content": content}
-                logger.info(f"正则修复截断的 write_file 参数，path={path_m.group(1)[:60]}")
-            else:
-                arguments = {}
-                logger.warning(f"工具 {tool_name} 参数 JSON 解析失败且无法修复")
-        else:
-            arguments = {}
-            logger.warning(f"工具 {tool_name} 的 arguments JSON 解析失败，使用空参数")
+    from core.multi_agent_v2.tools.json_util import safe_parse_json
+    arguments = safe_parse_json(tc.get("function", {}).get("arguments", ""))
     
     tool_args = {
         "name": tool_name,

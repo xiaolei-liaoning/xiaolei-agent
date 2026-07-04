@@ -1,5 +1,12 @@
 """L2b: SnipCompact — independent snip of oversized tool results.
 
+V1→V2: V1 压缩层 L2b。由 ContextCompactor 编排，在 V1 pipeline 中作为第六层运行。
+  对过大的旧工具结果进行截断（前半部分 + 后四分之一）。V2 ContextBudgetManager
+  通过 ContextCompactor 间接调用此层。
+
+保留原因: ContextCompactor 8-layer pipeline 的组成部分。与 V2 entry-level 压缩
+  互补：V1 在此层做消息级别截断，V2 做条目级别摘要。
+
 Runs BEFORE CachedMicrocompact (they don't conflict). Snips old tool results
 exceeding max_chars by keeping first half + last quarter. This is the original
 snip_old_tool_results from clawspring/compaction.py.

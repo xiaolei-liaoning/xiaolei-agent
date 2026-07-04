@@ -26,10 +26,9 @@ def test_parse_choices_format():
     result = parse_tool_calls(text)
     assert len(result) == 1
     assert result[0]["function"]["name"] == "write_file"
-    # arguments 应该是 JSON 字符串
-    assert isinstance(result[0]["function"]["arguments"], str)
-    args = json.loads(result[0]["function"]["arguments"])
-    assert args["path"] == "/tmp/a.txt"
+    # arguments 应该是 dict（内部格式）
+    assert isinstance(result[0]["function"]["arguments"], dict)
+    assert result[0]["function"]["arguments"]["path"] == "/tmp/a.txt"
 
 
 def test_parse_direct_tool_calls_field():
@@ -84,25 +83,26 @@ def test_parse_name_arguments_fallback():
     assert result[0]["function"]["name"] == "fetch_url"
 
 
-def test_normalize_dict_arguments_to_string():
-    """_normalize_tool_calls 把 dict arguments 转 JSON 字符串"""
+def test_normalize_keeps_dict_arguments():
+    """_normalize_tool_calls 保持 dict arguments 不变"""
     calls = [{
         "type": "function",
         "function": {"name": "test", "arguments": {"key": "value"}}
     }]
     result = _normalize_tool_calls(calls)
-    assert isinstance(result[0]["function"]["arguments"], str)
-    assert json.loads(result[0]["function"]["arguments"]) == {"key": "value"}
+    assert isinstance(result[0]["function"]["arguments"], dict)
+    assert result[0]["function"]["arguments"] == {"key": "value"}
 
 
-def test_normalize_keeps_string_arguments():
-    """_normalize_tool_calls 保留已经是字符串的 arguments"""
+def test_normalize_parses_string_arguments():
+    """_normalize_tool_calls 把字符串 arguments 解析为 dict"""
     calls = [{
         "type": "function",
         "function": {"name": "test", "arguments": '{"a": 1}'}
     }]
     result = _normalize_tool_calls(calls)
-    assert result[0]["function"]["arguments"] == '{"a": 1}'
+    assert isinstance(result[0]["function"]["arguments"], dict)
+    assert result[0]["function"]["arguments"] == {"a": 1}
 
 
 def test_parse_no_tools_in_plain_text():

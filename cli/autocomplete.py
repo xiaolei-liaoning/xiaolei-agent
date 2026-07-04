@@ -59,7 +59,7 @@ class Completer:
         # 加载历史文件
         try:
             readline.read_history_file(HISTORY_FILE)
-        except (FileNotFoundError, PermissionError):
+        except (FileNotFoundError, PermissionError, OSError):
             pass
 
         # 绑定补全显示钩子（Tab 时打印候选项）

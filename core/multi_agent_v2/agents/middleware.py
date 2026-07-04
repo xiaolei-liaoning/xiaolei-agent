@@ -10,6 +10,8 @@ import asyncio
 import json
 import logging
 import time
+
+from core.multi_agent_v2.tools.json_util import safe_parse_json
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Callable
 
@@ -99,6 +101,9 @@ class RunContext:
 
     # ── 对话历史累积（LLM 在后续轮次能看到之前的工具结果）──
     _conversation_history: List[Dict] = field(default_factory=list)
+
+    # 子代理标记（由 spawn.py 设置，用于区分主/子代理）
+    _is_subagent: bool = False
 
     # MiddlewareChain 引用（由 run_react 设置）
     _chain: Optional[Any] = None
@@ -311,10 +316,7 @@ class MiddlewareChain:
         # arguments 可能是 JSON 字符串，需要解析
         raw_args = tool_args.get("arguments", {})
         if isinstance(raw_args, str):
-            try:
-                raw_args = json.loads(raw_args)
-            except (json.JSONDecodeError, TypeError):
-                raw_args = {}
+            raw_args = safe_parse_json(raw_args)
         ctx._current_tool_arguments = raw_args
 
         async def _run_chain(index: int) -> Dict:

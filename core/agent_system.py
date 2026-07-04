@@ -1,5 +1,20 @@
 #!/usr/bin/env python3
-"""智能多Agent系统 - V1 架构（队长-队员模式）+ V2 ToolRegistry 集成
+"""V1 架构（队长-队员模式）— 已废弃，代码保留作参考
+
+V1→V2: 此文件是 V1 队长-队员 Agent 架构的核心实现（1716 行）。V2 中对应的
+  替代实现在 core/multi_agent_v2/agents/unified/ 下：
+    - leader.py       → 替代 V1 LeaderAgent
+    - worker.py       → 替代 V1 WorkerAgent
+    - skill_router.py → 替代 V1 V1SkillRouter
+    - context_memory.py → 替代 V1 记忆上下文管理
+    - prompts.py      → 替代 V1 提示词模板
+  V2 的 run_unified(mode="leader") 提供与 V1 等效的队长-队员协作模式。
+
+保留原因: 参考。V1 的测试用例 (tests/test_v1_e2e_integration.py) 仍依赖此文件。
+  V1 中部分未迁移到 V2 的功能（如部分 skill 路由逻辑）可能需要从此文件提取。
+  注意: V1LeaderPool 的按 skill_id 管理 Worker 池的模式在 V2 中尚未完全复现。
+
+智能多Agent系统 - V1 架构（队长-队员模式）+ V2 ToolRegistry 集成
 
 V1 角色分工型多 Agent：
 - 1 个 LeaderAgent（队长）+ N 个 WorkerAgent（队员）

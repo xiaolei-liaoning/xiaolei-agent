@@ -310,7 +310,7 @@ async def _handle_with_multi_agent(
     execution_plan_info: Optional[Dict[str, Any]],
     agents_used: Optional[List[str]]
 ) -> ChatResponse:
-    """通过 V1 队长-队员模式（LeaderAgent + LLMAgent）处理 Web 聊天请求"""
+    """通过 V2 统一Agent（LeaderAgent + Worker + SubAgent）处理 Web 聊天请求"""
     try:
         logger.info("🚀 V1 多Agent 开始处理: %s...", message[:60])
 
@@ -331,49 +331,10 @@ async def _handle_with_multi_agent(
                 message = f"{message}\n\n{ocr_text}"
                 logger.info(f"已将OCR结果附加到消息，追加字符数: {len(ocr_text)}")
 
-        # ========== V1 队长-队员模式执行 ==========
-        from core.agent_system import V1LeaderPool, V1SkillRouter
+        # ========== V2 统一 Agent 模式执行（V1 LeaderAgent + SubAgent）==========
+        from core.multi_agent_v2.agents.unified_agent import run_unified
 
-        # 使用全局池（Worker可复用）
-        if not hasattr(_handle_with_multi_agent, '_pool'):
-            _handle_with_multi_agent._pool = V1LeaderPool()
-        pool = _handle_with_multi_agent._pool
-        await pool._ensure_tool_registry()
-
-        # skill 匹配
-        skill_router = V1SkillRouter()
-        skill_id = await skill_router.match(message)
-        logger.info(f"🎯 V1 skill 匹配: {skill_id}")
-
-        # 从池中获取Worker
-        workers = []
-        for _ in range(3):
-            w = await pool.get_worker(skill_id=skill_id)
-            if w:
-                workers.append(w)
-
-        if not workers:
-            # 降级：创建临时队伍
-            leader, workers = await pool.create_team(worker_count=3, max_workers=3)
-            is_temp_team = True
-        else:
-            # 创建临时Leader
-            from core.agent_system import LeaderAgent
-            leader = LeaderAgent(
-                name=f"leader_{int(time.time())}",
-                max_workers=len(workers),
-                tool_registry=pool._tool_registry,
-            )
-            leader._pool = pool  # 供 _react_think() 读取 skill 列表
-            is_temp_team = False
-
-        # A: 对话记忆 — 设置 user_id 到所有 Agent
         uid = str(request.user_id)
-        leader.user_id = uid
-        for w in workers:
-            w.user_id = uid
-
-        logger.info(f"👥 V1 队伍已创建: 队长={leader.name}, {len(workers)} 个 Worker")
 
         # ===== 用户记忆：统一中间件 =====
         user_context_str = ""
@@ -384,7 +345,6 @@ async def _handle_with_multi_agent(
         except Exception as e:
             logger.debug("用户记忆获取失败: %s", e)
 
-        # 注入用户上下文到任务描述
         task_with_context = message
         if user_context_str:
             task_with_context = (
@@ -394,15 +354,17 @@ async def _handle_with_multi_agent(
 
         try:
             result = await asyncio.wait_for(
-                leader.supervise_task(task_with_context, workers, active_count=len(workers), max_rounds=3, skill_id=skill_id),
+                run_unified(
+                    task_with_context,
+                    max_rounds=3,
+                    mode="react",
+                    user_id=uid,
+                ),
                 timeout=120,
             )
         except asyncio.TimeoutError:
-            logger.warning("V1 多Agent 超时")
+            logger.warning("V2 统一 Agent 超时")
             result = {"success": False, "error": "执行超时", "results": [], "rounds": 0, "total_subtasks": 0}
-
-        # 清理队伍（Worker放回池中，Leader注销）
-        await pool.discard([leader] + workers)
 
         # ========== 格式化回复 ==========
         success = result.get("success", False)
@@ -413,9 +375,9 @@ async def _handle_with_multi_agent(
         # 构建回复文本
         reply_parts = []
         if success:
-            reply_parts.append(f"✅ V1 多Agent 任务完成！共 {total_rounds} 轮，{total_subtasks} 个子任务。\n")
+            reply_parts.append(f"✅ 统一Agent 任务完成！共 {total_rounds} 轮，{total_subtasks} 个子任务。\n")
         else:
-            reply_parts.append(f"❌ V1 多Agent 任务未完全完成（{result.get('error', '未知错误')}）\n")
+            reply_parts.append(f"❌ 统一Agent 任务未完全完成（{result.get('error', '未知错误')}）\n")
 
         # ponytail: 只显示最后一个结果（避免 batch_delegate 中间结果重复显示）
         if all_results:
@@ -485,15 +447,15 @@ async def _handle_with_multi_agent(
         reply_text = "\n".join(reply_parts)
 
         elapsed = time.time() - start_time
-        logger.info("V1 多Agent 处理完成，耗时: %.2fs, 成功: %s", elapsed, success)
+        logger.info("V2 统一Agent 处理完成，耗时: %.2fs, 成功: %s", elapsed, success)
 
         # 构建 multi_agents_used 列表
-        team_names = [leader.name] + [w.name for w in workers]
+        team_names = ["V2 Unified Agent (Leader+Worker)"]
 
         # 保存聊天历史
         save_chat_history(request.user_id, request.agent_id, "user", message)
         save_chat_history(request.user_id, request.agent_id, "assistant", reply_text, {
-            "skill": "v1_multi_agent",
+            "skill": "v2_unified_agent",
             "elapsed": elapsed,
             "agents_used": team_names,
             "rounds": total_rounds,
@@ -849,7 +811,7 @@ async def clear_context(request: ContextRequest):
         # 清除内存中的上下文（如果有）
         try:
             from core.handlers import short_term_memory
-            short_term_memory.clear_for_user(request.user_id)
+            short_term_memory.clear(request.user_id)
         except Exception as e:
             logger.warning("清除短期记忆失败: %s", e)
 

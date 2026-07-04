@@ -107,28 +107,10 @@ async def get_short_term_memory(
     # 获取上下文内容（支持四层深度）
     context_messages = short_term_memory.get_context(user_id, depth=depth)
     
-    # 获取队列节点详情
-    queue_nodes = []
-    for node_id in list(short_term_memory.queue):
-        if node_id in short_term_memory.nodes:
-            node = short_term_memory.nodes[node_id]
-            queue_nodes.append({
-                "node_id": node_id,
-                "node_type": node.node_type,
-                "content": node.content[:200],
-                "summary": node.summary[:100] if node.summary else None,
-                "children_count": len(node.children)
-            })
-    
-    # 获取完整的树结构（包含所有层级）
-    tree_structure = _build_tree_structure(user_id, depth)
-    
     return {
         "success": True,
         "stats": stats,
         "context_messages": context_messages,
-        "queue_nodes": queue_nodes,
-        "tree_structure": tree_structure
     }
 
 

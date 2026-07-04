@@ -7,6 +7,7 @@
     → Layer 3: 加载 SKILL.md 执行指南
     → 返回: {personality, tool_pref, guidance}
 """
+import json
 import logging
 import os
 from dataclasses import dataclass, field
@@ -16,7 +17,6 @@ from typing import Dict, List, Optional, Tuple
 import yaml
 
 logger = logging.getLogger(__name__)
-BASE_CONFIG = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "config", "agents.yml")
 EXPERT_CONFIG = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "core", "skills", "agency_agents", "agents_config.yaml")
 AGENCY_AGENTS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "agency-agents-zh")
 
@@ -102,17 +102,37 @@ class SkillSystem:
         self._load_guidance()
 
     def _load_base(self):
-        if not os.path.exists(BASE_CONFIG): return
-        with open(BASE_CONFIG) as f:
-            agents = yaml.safe_load(f).get("agents", {})
-        for aid, ac in agents.items():
-            self.base_skills[aid] = BaseSkill(
-                id=aid, name=ac.get("name", aid),
-                role_prompt=ac.get("role_prompt", ""),
-                tools=ac.get("tools", []),
-                priority=ac.get("priority", 1),
-            )
-        logger.info(f"✅ SkillSystem: {len(self.base_skills)} 个 BaseSkill")
+        # Primary: ~/.xiaolei/roles/*.md
+        roles_dir = os.path.expanduser("~/.xiaolei/roles")
+        loaded = set()
+        if os.path.isdir(roles_dir):
+            for fname in os.listdir(roles_dir):
+                if not fname.endswith(".md"):
+                    continue
+                rid = fname[:-3]
+                path = os.path.join(roles_dir, fname)
+                try:
+                    with open(path, encoding="utf-8") as f:
+                        text = f.read()
+                except Exception:
+                    continue
+                tools = []
+                import re
+                tm = re.search(r"^## tools_available\s*$(.+?)(?=^##\s|\Z)", text, re.MULTILINE | re.DOTALL)
+                if tm:
+                    tools = [m.group(1) for m in re.finditer(r"-\s*(\w+)", tm.group(1))]
+                role_m = re.search(r"^#\s*role:\s*(.+)", text, re.MULTILINE)
+                name = role_m.group(1).strip()[:80] if role_m else rid
+                desc_m = re.search(r"^## description\s*$(.+?)(?=^##\s|\Z)", text, re.MULTILINE | re.DOTALL)
+                self.base_skills[rid] = BaseSkill(
+                    id=rid, name=name,
+                    role_prompt=text,  # full .md as personality
+                    tools=tools,
+                    priority=5,        # .md files take priority
+                )
+                loaded.add(rid)
+            logger.info(f"✅ SkillSystem: {len(loaded)} 个 BaseSkill (来自 ~/.xiaolei/roles/)")
+        logger.info(f"✅ SkillSystem 总计: {len(self.base_skills)} 个 BaseSkill")
 
     def _load_experts(self):
         if not os.path.exists(EXPERT_CONFIG): return
@@ -206,10 +226,22 @@ class SkillSystem:
         from core.engine.llm_backend import get_llm_router
         router = get_llm_router()
         if router and router.is_available():
-            lines = [f"  {s.id}: {s.role_prompt[:80]}" + (f"  [{', '.join(s.tools[:3])}]" if s.tools else "") for s in sorted(self.base_skills.values(), key=lambda x: -x.priority)]
+            lines = [f"  {s.id}: {s.name}" + (f"  [{', '.join(s.tools[:3])}]" if s.tools else "") for s in sorted(self.base_skills.values(), key=lambda x: -x.priority)]
             prompt = f"任务：{task}\n\n选最匹配的 1 个角色：\n" + "\n".join(lines) + "\n\n只输出角色 ID。如果不确定，选 general。"
-            resp = (await router.simple_chat(prompt, temperature=0.2, max_tokens=30) or "").strip().lower()
-            for sid in self.base_skills:
+            resp = (await router.simple_chat(prompt, temperature=0.2, max_tokens=64) or "").strip()
+            # ponytail: DeepSeek 常把输出放 reasoning_content，提取 content+reasoning
+            if resp.startswith("{"):
+                try:
+                    _parsed = json.loads(resp)
+                    _msg = _parsed.get("choices", [{}])[0].get("message", {})
+                    _c = (_msg.get("content") or "").strip()
+                    _r = (_msg.get("reasoning_content") or "").strip()
+                    resp = _c or _r or resp
+                except (json.JSONDecodeError, IndexError, KeyError):
+                    pass
+            resp = resp.lower()
+            # ponytail: 按 ID 长度降序匹配（"project_analyzer" 优先于 "analyze"）
+            for sid in sorted(self.base_skills, key=lambda x: -len(x)):
                 if sid in resp:
                     return self.base_skills[sid]
         return self.base_skills.get("general")

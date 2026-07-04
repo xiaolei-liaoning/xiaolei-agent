@@ -73,6 +73,34 @@ async def test_loop_detection_hard_limit():
     assert ctx.interrupted, "11 次相同调用应 interrupt"
 
 
+@pytest.mark.asyncio
+async def test_loop_detection_sets_user_intervention():
+    """循环检测 hard-limit 应设置 needs_user_intervention 标志"""
+    ctx = RunContext(task_description="test", max_iterations=20)
+    ctx.plan = [PlanStep(index=1, description="step1", status="pending", tool_names=[])]
+    ctx.tool_results = []
+    mw = LoopDetectionMiddleware()
+    await mw.on_start(ctx)
+
+    for i in range(9):
+        ctx._pending_tool_calls = [
+            {"function": {"name": "web_search", "arguments": '{"query": "same"}'}}
+        ]
+        ctx.iteration = i + 1
+        hr = await mw.on_plan_check(ctx)
+        ctx.tool_results.append({
+            "tool_call": {"name": "web_search", "arguments": {"query": "same"}},
+            "success": True, "result": "ok",
+        })
+        ctx._pending_tool_calls = None
+        if hr and hr.jump_to == "end":
+            break
+
+    assert ctx.interrupted, "应 interrupt"
+    assert ctx.needs_user_intervention, "应设置 needs_user_intervention"
+    assert "循环检测" in ctx.last_error, "错误信息应包含循环检测"
+
+
 # ── TruncationMiddleware ──────────────────────────────────────────────────
 
 @pytest.mark.asyncio

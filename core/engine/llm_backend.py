@@ -76,6 +76,8 @@ class LLMResponse:
     """结构化 LLM 响应，含文本内容和原生 tool_calls"""
     content: str = ""
     tool_calls: List[Dict] = field(default_factory=list)
+    truncated: bool = False   # finish_reason=length，输出被截断
+    reasoning_content: str = ""  # DeepSeek thinking 模式
 
     def has_tools(self) -> bool:
         return bool(self.tool_calls)
@@ -151,7 +153,8 @@ class GLMBackend:
         self.client = None
         self.deepseek_client = None
         self.openrouter_client = None
-        self.deepseek_model = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
+        self.deepseek_model = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+        self.openrouter_model = os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-v4-flash")
         self._token_stats = TokenStats()
         self._rate_limiter = RateLimiter(RATE_LIMIT_RPM)
         self._model_lock = threading.Lock()
@@ -266,7 +269,20 @@ class GLMBackend:
         # 0. DeepSeek (OpenAI 兼容) — 优先
         if self.deepseek_client:
             try:
-                payload = dict(model=self.deepseek_model, messages=messages,
+                # ponytail: DeepSeek thinking 模式要求保留 tool_calls + reasoning_content
+                _ds_msgs = []
+                for m in messages:
+                    md = {"role": m["role"], "content": m.get("content", "")}
+                    if m.get("tool_calls") and m["role"] == "assistant":
+                        md["tool_calls"] = m["tool_calls"]
+                    if m.get("reasoning_content") and m["role"] == "assistant":
+                        md["reasoning_content"] = m["reasoning_content"]
+                    if m["role"] == "tool":
+                        md["tool_call_id"] = m.get("tool_call_id", "")
+                    if m.get("name"):
+                        md["name"] = m["name"]
+                    _ds_msgs.append(md)
+                payload = dict(model=self.deepseek_model, messages=_ds_msgs,
                                temperature=temperature, max_tokens=max_tokens)
                 if tools:
                     payload["tools"] = tools
@@ -286,18 +302,19 @@ class GLMBackend:
                     finish_reason = getattr(response.choices[0], 'finish_reason', None)
                     is_truncated = finish_reason == 'length'
                     if is_truncated and max_tokens > 100:
-                        logger.warning(f"⚠️ LLM输出被截断! finish_reason=length, content_len={len(content)}")
+                        logger.debug(f"LLM output truncated, finish_reason=length, content_len={len(content)}")
 
                     logger.info("LLM DeepSeek返回: content_len=%d tool_calls=%s truncated=%s", len(content), bool(tc), is_truncated)
                     self._consecutive_failures = 0  # 成功，重置失败计数
+                    _reasoning = getattr(message, 'reasoning_content', None) or ""
                     if tc:
                         tc_list = [{"id": getattr(t, 'id', ''),
                                     "type": getattr(t, 'type', 'function'),
                                     "function": {"name": t.function.name,
                                                  "arguments": t.function.arguments}}
                                    for t in tc]
-                        return LLMResponse(content=content, tool_calls=tc_list)
-                    return LLMResponse(content=content or "")
+                        return LLMResponse(content=content, tool_calls=tc_list, reasoning_content=_reasoning)
+                    return LLMResponse(content=content or "", reasoning_content=_reasoning)
                 else:
                     logger.warning("DeepSeek 返回空响应")
             except asyncio.TimeoutError:
@@ -308,13 +325,13 @@ class GLMBackend:
         # 1. OpenRouter (OpenAI 兼容) — fallback
         if self.openrouter_client:
             try:
-                payload = dict(model=self.deepseek_model, messages=messages,
+                payload = dict(model=self.openrouter_model, messages=messages,
                                temperature=temperature, max_tokens=max_tokens)
                 if tools:
                     payload["tools"] = tools
                     payload["tool_choice"] = "auto"
 
-                logger.info("LLM → OpenRouter (model=%s, tools=%s)", self.deepseek_model, bool(tools))
+                logger.info("LLM → OpenRouter (model=%s, tools=%s)", self.openrouter_model, bool(tools))
                 response = await asyncio.wait_for(
                     self.openrouter_client.chat.completions.create(**payload),
                     timeout=180,
@@ -382,10 +399,13 @@ class GLMBackend:
         """向后兼容包装器：返回字符串，支持 tool_calls 的 JSON 序列化"""
         resp = await self._chat_impl(messages, temperature=temperature,
                                      max_tokens=max_tokens, model=model, tools=tools)
-        if resp.tool_calls:
-            return json.dumps({"choices": [{"message": {"role": "assistant",
-                            "content": resp.content, "tool_calls": resp.tool_calls}}]},
-                              ensure_ascii=False)
+        if resp.tool_calls or resp.reasoning_content:
+            d = {"role": "assistant", "content": resp.content}
+            if resp.tool_calls:
+                d["tool_calls"] = resp.tool_calls
+            if resp.reasoning_content:
+                d["reasoning_content"] = resp.reasoning_content
+            return json.dumps({"choices": [{"message": d}]}, ensure_ascii=False)
         return resp.content
 
     async def chat_structured(self, messages, temperature=0.7, max_tokens=4096,
@@ -430,8 +450,8 @@ class GLMBackend:
 
         if self.openrouter_client:
             try:
-                response = await self.deepseek_client.chat.completions.create(
-                    model=self.deepseek_model, messages=messages,
+                response = await self.openrouter_client.chat.completions.create(
+                    model=self.openrouter_model, messages=messages,
                     temperature=temperature, max_tokens=max_tokens,
                     stream=True)
                 async for chunk in response:

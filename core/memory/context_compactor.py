@@ -1,5 +1,14 @@
 """7-layer context compaction engine — mirrors Claude Code's compact architecture.
 
+V1→V2: 此文件是 V1 压缩系统的核心编排器。V2 (core/multi_agent_v2/agents/context_budget.py)
+  的 async_check_and_compact() 在 entry-level 压缩前主动调用 ContextCompactor.compact()
+  对 _conversation_history 跑完整 8-layer pipeline。ReactCompact 分支也在 V2 的
+  react_core.py LLM 413 异常处理中通过 handle_api_error() 接入。
+
+保留原因: V2 ContextBudgetManager 直接依赖此编排器作为 message-level 压缩引擎。
+  V1 压缩代码与 V2 压缩代码是互补关系（V1 管消息列表压缩，V2 管工具条目压缩），
+  删除此文件会导致 V2 的 8-layer 压缩能力丢失。
+
 Layer order (matching Claude Code source):
   L0  ToolResultBudget       — per-message char limit, spill oversized to disk
   L1a API-Level Context Mgmt  — clear_tool_uses_20250919 + clear_thinking_20251015

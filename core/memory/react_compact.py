@@ -1,5 +1,13 @@
 """React compact — 413 fallback for prompt-too-long errors.
 
+V1→V2: V1 反应式压缩层。由 ContextCompactor.handle_api_error() 调用。
+  V2 的 react_core.py on_llm_invoke() 在捕获 API 413/PromptTooLong 异常时，
+  通过 get_compactor().handle_api_error() 触发此层的即时压缩。
+  Circuit breaker 内置防止重复失败。
+
+保留原因: V2 目前只在 Exception handler 中捕获 413 后触发此层。若删除，
+  413 错误将直接导致 LLM 调用失败中断，无法自动恢复。
+
 Based on Claude Code's reactiveCompact:
 - When API returns 413/PromptTooLong, trigger immediate compaction
 - More aggressive than auto-compact (smaller token budget)

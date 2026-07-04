@@ -59,6 +59,18 @@ def _pre_init_logger():
     warnings.filterwarnings("ignore", message="Number of requested results")
     os.environ["CHROMADB_TELEMETRY_DISABLED"] = "1"
     logging.getLogger("jieba").setLevel(logging.ERROR)
+    # ponytail: suppress jieba's sys.stderr model-building messages
+    import os as _os
+    import io as _io
+    _jieba_stderr = sys.stderr
+    sys.stderr = _io.StringIO()
+    try:
+        import jieba
+        jieba.setLogLevel(60)  # suppress all jieba logging
+    except Exception:
+        pass
+    finally:
+        sys.stderr = _jieba_stderr
     logging.getLogger("chromadb").setLevel(logging.ERROR)
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("core.search.keyword_extractor").setLevel(logging.ERROR)
@@ -142,32 +154,26 @@ FORKED_AGENT_SERVICE = None
 
 
 def _import_core_services():
-    """延迟导入核心服务"""
+    """延迟导入核心服务 — 静默导入，不输出到终端"""
     global CLARIFICATION_SERVICE, PERMISSION_SERVICE, FORKED_AGENT_SERVICE
 
     try:
         from cli.clarification_service import get_clarification_service
-
         CLARIFICATION_SERVICE = get_clarification_service()
-        log_success("✅ 反问服务导入成功")
     except Exception as e:
-        log_error(f"❌ 反问服务导入失败: {e}")
+        log_error(f"反问服务导入失败: {e}")
 
     try:
         from cli.permission_service import get_permission_service
-
         PERMISSION_SERVICE = get_permission_service()
-        log_success("✅ 权限服务导入成功")
     except Exception as e:
-        log_error(f"❌ 权限服务导入失败: {e}")
+        log_error(f"权限服务导入失败: {e}")
 
     try:
         from cli.forked_agent_service import get_forked_agent_service
-
         FORKED_AGENT_SERVICE = get_forked_agent_service()
-        log_success("✅ Forked Agent服务导入成功")
     except Exception as e:
-        log_error(f"❌ Forked Agent服务导入失败: {e}")
+        log_error(f"Forked Agent服务导入失败: {e}")
 
 
 class EnhancedCLI:
@@ -263,6 +269,10 @@ class EnhancedCLI:
             CommandType.CHAT:      lambda: self.chat_handler.handle_chat(parsed_cmd),
             CommandType.SMART:     lambda: self.chat_handler.handle_smart(parsed_cmd),
             CommandType.ORCHESTRATE: lambda: self.chat_handler.handle_orchestrate(parsed_cmd),
+            CommandType.TASK_AGENT:      lambda: self.chat_handler.handle_task_subagent(parsed_cmd),
+            CommandType.EXPLORE_AGENT:   lambda: self.chat_handler.handle_explore_subagent(parsed_cmd),
+            CommandType.ANALYZE_AGENT:   lambda: self.chat_handler.handle_analyze_subagent(parsed_cmd),
+            CommandType.BUILD_AGENT:     lambda: self.chat_handler.handle_build_subagent(parsed_cmd),
             CommandType.WORKFLOWS: lambda: self.chat_handler.handle_workflows(parsed_cmd),
 
             CommandType.MCP:       lambda: self.mcp_handler.handle_mcp(parsed_cmd),
@@ -287,90 +297,95 @@ class EnhancedCLI:
     # ──────────────────────────────────────────────
 
     def print_welcome(self):
-        """打印欢迎界面"""
         print("\033c", end="")
-        brand = "rgb(215,119,87)"
-        dim = "rgb(80,80,80)"
+        brand = "rgb(245,140,100)"    # 亮橙 (更亮)
+        accent = "rgb(210,180,140)"  # 浅金
+        dim = "rgb(130,130,130)"     # 更浅灰
+        gold = "rgb(230,190,100)"    # 亮金
 
-        from rich.console import Console as RichConsole
+        from rich.console import Console as RC
         from rich.panel import Panel
         from rich.table import Table
+        from rich.text import Text
+        from rich.align import Align
 
-        rc = RichConsole()
-        rc.print()
+        rc = RC()
 
-        rc.print(
-            Panel(
-                "[bold rgb(215,119,87)]🦞  xiaolei AI Agent[/bold rgb(215,119,87)]\n"
-                f"[{dim}]session: {self.session_id or 'initializing'}  ·  "
-                f"version: 3.4.0[/{dim}]",
-                border_style=brand,
-                padding=(1, 2),
-            )
-        )
+        # ═══════ Card ═══════
+        logo = Text()
+        logo.append("__  _____   _   ___  _    ___ ___ \n", style=f"bold {brand}")
+        logo.append("\\ \\/ /_ _| /_\\ / _ \\| |  | __|_ _|\n", style=f"bold {brand}")
+        logo.append(" >  < | | / _ \\ (_) | |__| _| | | \n", style=f"bold {brand}")
+        logo.append("/_/\\_\\___/_/ \\_\\___/|____|___|___|\n", style=f"bold {brand}")
+        logo.append("━" * 36 + "\n\n", style=f"rgb(80,80,80)")
+        logo.append("Multi-Agent CLI\n", style=f"italic {accent}")
+        logo.append("\n")
+        logo.append("session ", style=dim)
+        logo.append(self.session_id or "...", style="white")
 
-        tool_total = 0
-        mcp_count = 0
+        # Stats row
+        agent_count = tool_total = mcp_count = 0
         try:
             from core.multi_agent_v2.tools.tool_registry import get_tool_registry
-
-            reg = get_tool_registry()
-            summary = reg.get_available_tools_summary()
-            tool_total = summary.get("total", 0)
-            mcp_count = summary.get("mcp_connected", 0)
+            s = get_tool_registry().get_available_tools_summary()
+            tool_total = s.get("total", 0)
+            mcp_count = s.get("mcp_connected", 0)
         except Exception:
             pass
-
-        if tool_total > 0:
-            rc.print(
-                f"  [{dim}]●[/]  [bold]Tools: {tool_total}[/]"
-                f"  [{dim}]·[/]  [bold]MCP: {mcp_count}[/] connected"
-                f"  [{dim}]·[/]  [{brand}]/tools[/] for details"
-            )
-        else:
-            rc.print(f"  [{dim}]●[/]  tools initializing…")
-
-        # ── 内置角色列表 ──
         try:
             import yaml
             cfg = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config", "agents.yml")
             with open(cfg) as f:
-                agents_data = yaml.safe_load(f).get("agents", {})
-            role_names = list(agents_data.keys())
-            rc.print(
-                f"  [{dim}]●[/]  [bold]Agents: {len(role_names)}[/]"
-            )
-            for name in role_names[:4]:
-                info = agents_data[name]
-                prompt = info.get("role_prompt", "")
-                tools = info.get("tools", [])
-                rc.print(f"    [{dim}]·[/] [{brand}]{name}[/{brand}]  ({len(prompt)} chars, {len(tools)} tools)")
-            if len(role_names) > 4:
-                rc.print(f"    [{dim}]·[/]  ... 另有 {len(role_names) - 4} 个（/agents 查看全部）[/{dim}]")
+                agent_count = len(yaml.safe_load(f).get("agents", {}))
         except Exception:
             pass
 
+        stats = Text("\n")
+        if agent_count:
+            stats.append("⬤ ", style=gold)
+            stats.append(f"{agent_count} agents", style="white")
+        if tool_total:
+            stats.append("  ⬤ ", style=dim)
+            stats.append(f"{tool_total} tools", style="white")
+        elif not tool_total:
+            stats.append("  ◌ ", style=dim)
+            stats.append("tools...", style=dim)
+        if mcp_count:
+            stats.append("  ⬤ ", style=dim)
+            stats.append(f"{mcp_count} mcp", style="white")
+        elif not mcp_count:
+            stats.append("  ◌ ", style=dim)
+            stats.append("mcp...", style=dim)
+        logo.append(stats)
+
+        rc.print(Align.center(
+            Panel(logo, border_style=brand, padding=(0, 4, 0, 4), _allow_box=True),
+            vertical="middle"
+        ))
         rc.print()
 
-        cmd_table = Table(show_header=False, box=None, padding=(0, 3, 0, 0))
-        cmd_table.add_column("Command", style=f"bold {brand}", no_wrap=True)
-        cmd_table.add_column("What it does", style="white")
+        # ═══════ Commands ═══════
+        rc.print(Align.center(Text("─  Commands  ─", style=f"bold {accent}")))
+        rc.print()
+
+        cmd_table = Table(show_header=False, box=None, padding=(0, 4, 0, 0))
+        cmd_table.add_column("cmd", style=f"bold {brand}", no_wrap=True, width=15)
+        cmd_table.add_column("desc", style="white")
         cmd_table.add_row('/run "task"', "Execute a workflow")
-        cmd_table.add_row("/chat", "Conversation mode")
+        cmd_table.add_row("/chat", "Start conversation mode")
         cmd_table.add_row('/smart "task"', "Multi-agent collaboration")
-        cmd_table.add_row("/help", "Full command reference")
-        rc.print(cmd_table)
+        cmd_table.add_row("/help", "Show all commands")
+        rc.print(Align.center(cmd_table))
 
         import random
-
         tips = [
-            "Type /help search <term> to search commands",
-            "Natural language requests work without / prefix",
-            "Use /mcp agency to connect MCP servers",
-            "Type /clear to clean up the terminal",
-            "Use /orchestrate to manage multi-agent workflows",
+            "Try /mcp agency to connect MCP servers",
+            "Natural language works without any / prefix",
+            "Use /orchestrate for multi-agent workflows",
+            "/clear to clean up, /tools to browse tools",
         ]
-        rc.print(f"\n  [{dim}]💡 {random.choice(tips)}[/{dim}]")
+        rc.print()
+        rc.print(Align.center(Text(random.choice(tips), style=dim)))
         rc.print()
 
     # ──────────────────────────────────────────────
@@ -492,7 +507,7 @@ class EnhancedCLI:
         _console.print()
 
     def _display_workflow_result(self, result: Dict[str, Any]):
-        """显示工作流结果"""
+        """显示工作流结果 — 简洁风格"""
         from cli.colors import _console
 
         if not result.get("success"):
@@ -506,52 +521,15 @@ class EnhancedCLI:
             print()
             return
 
-        print()
-        print_color("────────────────────────────────────────────────────────", CliColors.PURPLE)
-        print_success("✅ 任务完成！")
-        print_color("────────────────────────────────────────────────────────", CliColors.PURPLE)
-        print()
-
-        if result.get("workflow_name"):
-            print(f"  📋 名称: {result.get('workflow_name')}")
-        if result.get("total_time"):
-            print(f"  ⏱️  耗时: {result.get('total_time', 0):.2f}秒")
-
         final_result = result.get("result", "")
         if final_result and len(str(final_result)) > 10:
-            answer_text = str(final_result)[:500]
-            print("\n  📝 最终回答:")
-            print(f"    {answer_text}")
-
-        results = result.get("results", [])
-        if results:
-            print("\n  📊 步骤详情:")
-            for step_result in results:
-                status = "✅" if step_result.get("success") else "❌"
-                step_num = step_result.get("step", "?")
-                step_type = step_result.get("type", "")
-                action = step_result.get("action", "")
-                print(f"\n    {status} 步骤{step_num}")
-                print(f"       类型: {step_type}")
-                if action:
-                    print(f"       操作: {action}")
-                if step_result.get("message"):
-                    print(f"       消息: {step_result['message']}")
-                if step_result.get("data_preview"):
-                    print(f"       结果: {step_result['data_preview']}")
-                if step_result.get("csv_path"):
-                    print(f"       CSV文件: {step_result['csv_path']}")
-                if step_result.get("chart_path"):
-                    print(f"       图表文件: {step_result['chart_path']}")
-                if step_result.get("duration"):
-                    print(f"       耗时: {step_result['duration']:.2f}秒")
-
-        if result.get("report_path"):
-            print(f"\n  📄 报告文件: {result['report_path']}")
-
-        print()
-        print_color("────────────────────────────────────────────────────────", CliColors.PURPLE)
-        print()
+            answer_text = str(final_result)[:800]
+            elapsed = result.get("total_time", 0)
+            header = "Result"
+            if elapsed:
+                header += f"  \033[2m·  {elapsed:.1f}s\033[0m"
+            print(f"\n  \033[1;37m◇ \033[0m\033[1m{header}\033[0m")
+            print(f"  {answer_text}")
 
     # ──────────────────────────────────────────────
     # 主循环

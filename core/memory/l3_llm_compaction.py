@@ -1,5 +1,14 @@
 """L3: LLM Compaction — compactConversation() summary generation.
 
+V1→V2: V1 压缩层 L3（核心 LLM 压缩层）。由 ContextCompactor 编排，在 V1 pipeline
+  中作为第七层运行（L0-L2b 释放不足时触发）。调用 LLM 对整段对话生成 9-section
+  结构化摘要。V2 ContextBudgetManager 通过 ContextCompactor.compact() 间接调用此层。
+  L1c 也有独立的 LLM 摘要路径 (_llm_summarize)，但仅作用于 tool_results 条目，
+  与 V1 L3 的消息级别 LLM 摘要互补。
+
+保留原因: 整个 8-layer pipeline 的核心。V2 的 entry-level LLM 摘要只覆盖
+  tool_results，不覆盖 assistant/tool 消息。V1 L3 补全了这个缺口。
+
 Mirrors Claude Code's compactConversation() core (~1308 lines):
 1. Pre-compact hooks (custom instructions merge)
 2. Fork agent / direct LLM call with NO_TOOLS_PREAMBLE + 9-section prompt

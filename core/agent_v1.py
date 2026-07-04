@@ -1,5 +1,11 @@
 """向后兼容 shim：把 core.agent_v1.* 路由到 core.agent_system.*
 
+V1→V2: V1 兼容层。仅做 import 重定向到 agent_system.py。
+  V2 的 unified_agent.run_unified(mode="leader") 是此文件的替代方案。
+
+保留原因: 测试依赖 (tests/test_v1_e2e_integration.py 的 14 处 import)。
+  删除前需确保所有 from core.agent_v1 import * 已迁移到 V2 路径。
+
 修复 tests/test_v1_e2e_integration.py 的 14 处 broken import。
 """
 from core.agent_system import (

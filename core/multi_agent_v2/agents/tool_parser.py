@@ -9,18 +9,20 @@ import re
 import logging
 from typing import List, Dict
 
+from core.multi_agent_v2.tools.json_util import safe_parse_json
+
 logger = logging.getLogger(__name__)
 
 
 def _normalize_tool_calls(calls: list) -> list:
-    """统一 arguments 字段为 JSON 字符串"""
+    """统一 arguments 字段为 dict（内部格式）"""
     for tc in calls:
         fn = tc.get("function", {})
         args = fn.get("arguments", "{}")
-        if isinstance(args, dict):
-            fn["arguments"] = json.dumps(args, ensure_ascii=False)
-        elif not isinstance(args, str):
-            fn["arguments"] = json.dumps(args, ensure_ascii=False) if args else "{}"
+        if isinstance(args, str):
+            fn["arguments"] = safe_parse_json(args)
+        elif not isinstance(args, dict):
+            fn["arguments"] = {}
     return calls
 
 
@@ -34,8 +36,8 @@ def parse_tool_calls(text: str) -> List[Dict]:
 
     # 尝试1: 整段是 JSON — 处理 chat() 返回的 choices 格式
     if text.startswith("{") or text.startswith("["):
-        try:
-            obj = json.loads(text)
+        obj = safe_parse_json(text)
+        if obj:
             # chat() 格式: {"choices": [{"message": {"tool_calls": [...]}}]}
             if isinstance(obj, dict) and "choices" in obj:
                 for choice in obj["choices"]:
@@ -54,41 +56,32 @@ def parse_tool_calls(text: str) -> List[Dict]:
             # 列表
             if isinstance(obj, list):
                 return _normalize_tool_calls(obj)
-        except json.JSONDecodeError:
-            pass
 
     # 尝试2: 从 ```json ... ``` 代码块提取
     code_blocks = re.findall(r'```(?:json)?\s*(\{.*?\}|\[.*?])\s*```', text, re.DOTALL)
     for block in code_blocks:
-        try:
-            obj = json.loads(block)
-            if isinstance(obj, dict) and "choices" in obj:
-                for choice in obj["choices"]:
-                    msg = choice.get("message", {})
-                    calls.extend(msg.get("tool_calls", []))
-            elif isinstance(obj, dict) and "tool_calls" in obj:
-                calls.extend(obj["tool_calls"])
-            elif isinstance(obj, dict) and "function" in obj:
-                calls.append(obj)
-            elif isinstance(obj, list):
-                calls.extend(obj)
-        except json.JSONDecodeError:
-            continue
+        obj = safe_parse_json(block)
+        if isinstance(obj, dict) and "choices" in obj:
+            for choice in obj["choices"]:
+                msg = choice.get("message", {})
+                calls.extend(msg.get("tool_calls", []))
+        elif isinstance(obj, dict) and "tool_calls" in obj:
+            calls.extend(obj["tool_calls"])
+        elif isinstance(obj, dict) and "function" in obj:
+            calls.append(obj)
+        elif isinstance(obj, list):
+            calls.extend(obj)
 
     if calls:
         return _normalize_tool_calls(calls)
 
     # 尝试3: 找所有 {"type": "function", "function": {"name": ..., "arguments": ...}} 模式
-    # 用非贪婪匹配支持嵌套 arguments JSON
     pattern = r'\{"type"\s*:\s*"function"\s*,\s*"function"\s*:\s*\{[^{}]*"name"\s*:\s*"[^"]*"[^{}]*\}\s*\}'
     matches = re.finditer(pattern, text, re.DOTALL)
     for m in matches:
-        try:
-            obj = json.loads(m.group())
-            if "function" in obj:
-                calls.append(obj)
-        except json.JSONDecodeError:
-            continue
+        obj = safe_parse_json(m.group())
+        if isinstance(obj, dict) and "function" in obj:
+            calls.append(obj)
 
     # 尝试4: 找 "name": "xxx", "arguments": "xxx" 的简单模式
     if not calls:
@@ -97,15 +90,12 @@ def parse_tool_calls(text: str) -> List[Dict]:
         if name_match:
             fn_name = name_match.group(1)
             args_str = args_match.group(1) if args_match else "{}"
-            try:
-                args = json.loads(args_str)
-            except json.JSONDecodeError:
-                args = args_str
+            args = safe_parse_json(args_str)
             calls.append({
                 "type": "function",
                 "function": {
                     "name": fn_name,
-                    "arguments": json.dumps(args, ensure_ascii=False) if isinstance(args, dict) else str(args)
+                    "arguments": args,
                 }
             })
 

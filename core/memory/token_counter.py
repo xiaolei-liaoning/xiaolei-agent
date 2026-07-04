@@ -1,5 +1,12 @@
 """Unified token counter for context compression.
 
+V1→V2: V1 token 估算工具。被 V1 所有压缩层（L0-L4、SessionMem、ReactCompact）
+  以及 V2 的 ContextBudgetManager (estimate_tokens) 同时使用。
+  当前是 V1 和 V2 共享的 token 估算实现。
+
+保留原因: V1 和 V2 都依赖此工具做上下文大小估算。删除后两个系统都需要
+  各自重新实现。如需精确 token 计数，可升级到 tiktoken。
+
 Provides CJK-aware token estimation without external dependencies.
 Ratios are approximate; good enough for compression thresholds.
 """
