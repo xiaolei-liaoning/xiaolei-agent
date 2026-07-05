@@ -99,6 +99,63 @@
 
 ---
 
+## CLI 指令系统
+
+所有命令以 `/` 开头，在 REPL 或 `python cli.py` 直接传入。
+
+### 常用指令
+
+| 命令 | 用途 | 示例 |
+|------|------|------|
+| `/run` | 执行智能工作流 | `/run "爬取微博热搜并分析"` |
+| `/smart` | 多 Agent 协作（自动拆分维度并行） | `/smart "分析项目结构并生成报告"` |
+| `/orchestrate` | 多 Agent 编排（/smart 别名） | `/orchestrate "分析项目结构"` |
+| `/agents` | 多 Agent 协作（/orchestrate 别名） | `/agents "写报告在桌面"` |
+| `/task` | 用子代理执行任务（general 角色） | `/task "分析项目结构"` |
+| `/explore` | 用 explore 子代理探索代码 | `/explore "分析src目录"` |
+| `/analyze` | 用 analyze 子代理深度分析 | `/analyze "代码库审查"` |
+| `/build` | 用 build 子代理构建开发 | `/build "创建HTML游戏"` |
+| `/chat` | 进入聊天模式 | `/chat` 或 `/chat deep` |
+| `/automate` | GUI 自动化 | `/automate open_app --app Safari` |
+| `/scrape` | 数据爬取 | `/scrape 微博 --action 热搜top10` |
+| `/wechat` | 微信消息 | `/wechat send --friend 张三 --message 你好` |
+| `/mcp` | MCP 工具管理 | `/mcp list, /mcp connect` |
+| `/review` | 代码审查 | `/review code main.py` |
+| `/workflows` | 工作流进度 | `/workflows list` |
+| `/tools` | 查看所有可用工具 | `/tools` |
+| `/debug` | 切换调试模式 | `/debug` |
+| `/think` | 切换思考模式 | `/think` |
+| `/game` | 小游戏 | `/game guess` |
+| `/fun` | 趣味工具 | `/fun joke` |
+| `/reset` | 重置会话 | `/reset` 或 `/reset all` |
+| `/status` | 系统状态 | `/status` |
+
+### 两种运行方式
+
+```bash
+# REPL 模式 — 交互式
+python cli.py
+> /run "分析这个项目"
+
+# 直传模式 — 一次性
+python cli.py /run "搜索百度热搜"
+python cli.py /automate open_app --app Safari
+python cli.py /smart "分析项目结构"
+```
+
+### 子代理快捷指令
+
+`/task`、`/explore`、`/analyze`、`/build` 对应四种子代理角色，内部调用 `task` 工具，走同一套 ReActCore + MiddlewareChain，只是角色 prompt 不同：
+
+| 指令 | 角色 | 适用场景 |
+|------|------|---------|
+| `/task` | general | 通用任务执行 |
+| `/explore` | explore | 代码探索、文件分析 |
+| `/analyze` | analyze | 深度分析、报告生成 |
+| `/build` | build | 代码生成、项目构建 |
+
+---
+
 ## ReAct 循环 — 核心执行引擎
 
 ### 一回合流程
@@ -361,6 +418,72 @@ get_all_tools() 触发 MCP 连接 (一次性):
 
 ---
 
+## 多 Agent 协作
+
+### 三种协作路径
+
+```
+单 Agent 内部 → task/orchestrate 工具
+  └─ 主 Agent 的 LLM 判定需要子代理时，在工具列表中选 "task" 或 "orchestrate"
+  └─ 子代理启动后跑同一套 ReActCore，只是角色 prompt 不同
+
+CLI 快捷指令 → /smart /orchestrate /agents
+  └─ 自动将任务拆解为多个维度（搜索/分析/生成/采集/代码/翻译），最多 5 个
+  └─ asyncio.gather 并行执行各维度 → 结果汇总
+  └─ 降级路径: orchestrator 不可用时回退到分步执行 (handle_task_with_steps)
+
+JS Workflow → bridge.mjs
+  └─ Node.js 脚本通过 IPC 调用 Python Agent
+  └─ 见「JS 编排引擎」章节
+```
+
+### 跨 Agent 通信
+
+**SharedBus（KEPA 闭环）：**
+```
+KEPAMiddleware 在每轮 on_tool_end 从工具结果提取知识：
+  → 存入 SharedBus（键值存储，按 tag 分类: search/code/analysis/file/kepa）
+  → 下轮 on_llm_invoke 查询 SharedBus 获取相关 tag 的新知识
+  → 注入到 knowledge_context 供 LLM 参考
+
+特点: 主 Agent 和子 Agent 共享同一个 SharedBus 实例
+      知识带 source 标签 + summary，避免重复注入
+```
+
+**Parent Context 注入：**
+```
+子代理启动时，父 Agent 通过 spawn.py 注入:
+  - task_description（原始任务）
+  - personality_prompt（角色定义，前 3 行注入计划 prompt）
+  - work_rules（所有子代理共享的工作规则）
+  - parent_context（父级执行上下文摘要）
+  - _is_subagent=True（标记为子代理，影响某些中间件行为: 
+    如 MemoryMiddleware 跳过记忆写入）
+```
+
+**Workflow Context（JS 编排）：**
+```
+JS bridge 自动为每个 agent() 调用注入：
+  - globalTask — 工作流全局任务描述
+  - currentPhase — 当前阶段名称（由 phase() 设置）
+  - previousPhaseResults — 上一阶段的结果
+  - agentIndex — Agent 序号（用于去重和追踪）
+
+这些上下文注入到 prompt 开头的 <workflow_context> 块中。
+```
+
+### 子代理共享资源
+
+| 资源 | 共享方式 | 用途 |
+|------|---------|------|
+| ToolRegistry | 全局单例 | 所有 Agent（主/子/MCP）共享同一组工具 |
+| SharedBus | 全局单例 | 跨 Agent 知识沉淀和检索 |
+| LLMRouter | 全局单例 | 统一多模型路由（DeepSeek/GLM/OpenRouter） |
+| AgentPool | 8 预热 WorkAgent | acquire/release 模式，即用即还 |
+| Session 存储 | SQLite | 对话日志和 artifact 持久化 |
+
+---
+
 ## Prompt 架构 — PromptBuilder
 
 **34 个 `.txt` 文件替代 Python 硬编码字符串。** 所有系统提示、工具描述、子代理角色都从文件加载。
@@ -574,13 +697,13 @@ await budget.report(500, "claude-sonnet")      // 汇报 token 消耗
                              │
         ┌────────────────────┼────────────────────┐
         ↓                    ↓                    ↓
-   ┌──────────┐      ┌──────────────┐      ┌──────────┐
-   │ 单 Agent  │      │ 子代理工具    │      │ JS 编排  │
-   │ CLI 直调  │      │ task/        │      │ bridge   │
-   │          │      │ orchestrate  │      │ .mjs     │
-   └──────────┘      └──────────────┘      └──────────┘
-        │                    │                    │
-        └────────────────────┼────────────────────┘
+   ┌──────────┐      ┌──────────────┐      ┌──────────┐      ┌─────────────┐
+   │ 单 Agent  │      │ CLI 编排     │      │ 子代理工具 │      │ JS 编排     │
+   │ CLI 直调  │      │ /smart       │      │ task/      │      │ bridge      │
+   │          │      │ /orchestrate │      │ orchestrate│      │ .mjs        │
+   └──────────┘      └──────────────┘      └──────────┘      └─────────────┘
+        │                    │                    │                    │
+        └────────────────────┼────────────────────┼────────────────────┘
                              ▼
                     ┌──────────────────┐
                     │  Unified Agent   │
@@ -591,9 +714,10 @@ await budget.report(500, "claude-sonnet")      // 汇报 token 消耗
                     └──────────────────┘
 ```
 
-三种模式共用**同一套**执行引擎，只是入口不同：
+四类入口共用**同一套**执行引擎：
 - **单 Agent** — CLI 直接传入任务描述 → ReAct → Plan → Tools → FinalAnswer
-- **子代理** — `task`/`orchestrate` 工具 → 启动新 Agent（同引擎，不同角色 prompt）
+- **CLI 编排** — `/smart`/`/orchestrate` 自动拆维并行（关键词匹配 → 最多 5 维度 → asyncio.gather → 汇总）
+- **子代理工具** — 主 Agent 在 ReAct 循环中调用 `task`/`orchestrate` 工具 → 启动子 Agent（同引擎，不同角色 prompt）
 - **JS 编排** — Node.js 脚本通过 IPC 桥调用 Python Agent
 
 ---
