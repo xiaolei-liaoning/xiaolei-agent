@@ -298,6 +298,19 @@ def update_step_status(ctx: RunContext, prefix: str = "") -> None:
                 current_step.status = "done"
                 _consolidate_subagent_steps(ctx, current_step)
                 return
+        # ponytail: 写文件/编辑步骤可被探索工具推进（LLM 写代码前先 ls/mkdir 探路）
+        _write_tools = {"write_file", "edit_file"}
+        if step_tools & _write_tools:
+            if succeeded.keys() & _explore_tools:
+                current_step.status = "done"
+                _consolidate_subagent_steps(ctx, current_step)
+                return
+        # ponytail: 探索步骤也可被写文件工具推进（LLM 跳过探索直接写）
+        if step_tools & _explore_tools:
+            if succeeded.keys() & _write_tools:
+                current_step.status = "done"
+                _consolidate_subagent_steps(ctx, current_step)
+                return
         if step_tools & set(succeeded.keys()):
             current_step.status = "done"
             return

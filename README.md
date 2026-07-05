@@ -252,13 +252,34 @@ update_step_status(ctx) — 每次 on_tool_end 自动调用:
 
 ### 重规划
 
+触发点：`react_core.py:1041` — 主循环每轮末尾扫描 `failed_steps`，对重试次数 `<2` 的步骤调用 `replan_failed`。
+
 ```
-replan_failed(ctx):
-  - 从失败步骤截断计划
-  - 清除 _step_tool_snapshots
-  - 注入 forced_instructions 要求重试
-  - plan_generation += 1（版本号递增）
+replan_failed(ctx):                                ← plan_manager.py:467
+  ① 收集已完成步骤 (done) + 失败/待定步骤 (failed/pending)
+  
+  ② 构建 retry_prompt:
+     - 已完成: "第1步: xxx, 第2步: yyy"
+     - 失败:   "第3步: zzz"
+     - 错误上下文 (last_error + 最后一次工具 error)
+     - 角色 hint (personality_prompt 前 2 行)
+  
+  ③ 调用 generate_plan(task_description, ctx, retry_context=retry_prompt)
+     └─ 空计划 → return False（重规划失败）
+  
+  ④ 保留 done steps，用新步骤替换 failed/pending（重新编号）
+     kept = [s for s in ctx.plan if s.status == "done"]
+     for i, s in enumerate(new_steps):
+         s.index = offset + i + 1
+         s.status = "pending"
+     ctx.plan = kept + new_steps
+  
+  ⑤ ctx.plan_generation += 1
+  ⑥ ctx._step_tool_snapshots.clear()   防止新步骤读到旧快照
+  ⑦ return True
 ```
+
+关键设计：保留已完成步骤不动，只重规划失败/待定部分，进度不丢失。最多重规划 2 次。
 
 ---
 

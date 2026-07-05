@@ -321,7 +321,7 @@ class LoopDetectionMiddleware(BaseMiddleware):
     # 工具级频率阈值覆盖（参考 deerflow 的 per-tool config）
     TOOL_FREQ_LIMITS = {
         "read_file": {"warn": 20, "hard": 999},  # ponytail: 不设硬上限，读文件不应触发循环检测
-        "execute_shell": {"warn": 6, "hard": 12},
+        "execute_shell": {"warn": 12, "hard": 25},
         "execute_python": {"warn": 6, "hard": 12},
         "web_search": {"warn": 4, "hard": 8},
         "fetch_url": {"warn": 4, "hard": 8},
