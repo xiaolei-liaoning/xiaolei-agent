@@ -63,8 +63,8 @@ class WorkflowEngineWrapper:
         print(f"\n  \033[1;37m◇\033[0m \033[1m{user_request[:80]}\033[0m")
 
         # ── 直接执行 ──
-        from core.multi_agent_v2.agents.react_core import run_react
-        result = await run_react(user_request, max_rounds=0)
+        from core.multi_agent_v2.agents.unified_agent import run_unified
+        result = await run_unified(user_request, max_rounds=0)
 
         elapsed = time.time() - start_time
         success = result.get("success", False)

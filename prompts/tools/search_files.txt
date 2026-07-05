@@ -1,0 +1,3 @@
+Search for files. Two modes, choose ONE:
+- glob mode: filename wildcard search (e.g. src/**/*.py).
+- grep mode: file content regex search (e.g. class\s+\w+).

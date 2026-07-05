@@ -1,0 +1,5 @@
+## Parent Agent Context (you do NOT need to re-acquire this)
+- Main agent's original task: {task}
+- Main agent's completed work: {conversation}
+- Key information already known: {tool_results}
+- Discovered artifacts: {artifacts}

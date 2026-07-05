@@ -1,0 +1,4 @@
+Git version control operations.
+- Before commit, check git status, git diff, git log.
+- Do not modify git config, do not force-push, do not create empty commits.
+- Use gh command for GitHub PR/issues/releases.

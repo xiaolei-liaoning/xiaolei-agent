@@ -1,0 +1,7 @@
+<game_quality_requirements>
+1. MUST listen for interaction events (keydown / click / touchstart)
+2. MUST have a render/update function, called after state changes
+3. MUST have game state variables
+4. No static display — user must be able to interact, and the UI must update after interaction
+5. Self-check after generation: Event listeners? Render function? State variables? Interactable? UI updates?
+</game_quality_requirements>

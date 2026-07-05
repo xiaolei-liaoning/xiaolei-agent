@@ -1,0 +1,6 @@
+Safely execute Python code.
+- Suitable for running scripts, testing algorithms, pip installations, operating desktop files.
+- mode=sandbox (default): sandbox isolation, no desktop/network access.
+- mode=local: real environment, can write to ~/Desktop, can access network.
+- Running system commands (ls/pwd/git) → use execute_shell.
+- Fetching web/API data → use fetch_url.

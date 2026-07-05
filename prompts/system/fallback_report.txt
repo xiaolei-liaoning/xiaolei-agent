@@ -1,0 +1,3 @@
+Based on the following search result data, generate a complete HTML report using write_file.
+Do not fabricate data — only use data that appears in the search results.
+{context}

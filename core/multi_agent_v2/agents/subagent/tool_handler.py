@@ -7,6 +7,8 @@
 
 import asyncio
 import logging
+from core.multi_agent_v2.prompts import get_builder
+_builder = get_builder()
 from typing import Any, Dict, List
 
 logger = logging.getLogger(__name__)
@@ -95,66 +97,13 @@ async def _handle_orchestrate(args: Dict[str, Any]) -> Dict[str, Any]:
 # 可用代理类型列表（注入到 task/orchestrate 工具描述中）
 # ════════════════════════════════════════════════════════════════
 
-_AGENT_TYPE_DESCRIPTIONS = {
-    "explore": "代码库探索专家 — 用 glob/grep/read_file 快速查找和读取文件。只读，不修改任何文件。调用时指定彻底程度：quick（快速定位）/ medium（适度深入）/ very thorough（全面覆盖）。",
-    "build": "构建型代理 — 读写文件、执行代码、运行测试。适合 bug 修复、功能实现、重构。工作流：读→改→验证。",
-    "general": "通用代理 — 执行复杂多步骤任务。可使用所有工具。适合需要研究和执行混合的场景。",
-    "analyze": "分析型代理 — 深度阅读、搜索和分析。可读文件和搜索代码，不能编辑或创建文件。按重要性排序呈现结构化结论。",
-}
-
-_AGENT_TYPES_LIST = "\n".join(
-    f"- {name}: {desc}"
-    for name, desc in _AGENT_TYPE_DESCRIPTIONS.items()
-)
 
 
-def _build_task_description() -> str:
-    """构建 task 工具描述，注入可用代理类型列表"""
-    return f"""启动一个专门的子代理来处理复杂的多步骤任务。子代理自主运行并返回一条完整结果消息。
-
-使用 Task 工具时，必须指定 subagent_type 参数来选择代理类型。
-
-**何时不要用 Task 工具：**
-- 如果要读取已知路径的具体文件，直接用 Read 工具更快
-- 如果要搜索类定义如 "class Foo"，直接用 Grep 工具更快
-- 如果要搜索 2-3 个特定文件内的代码，直接用 Read 工具更快
-- 如果没有合适的代理类型匹配任务，直接用其他工具
-
-**使用指南：**
-1. 尽量并发启动多个代理，一次消息里调用多次 tool
-2. 一旦委托了任务，不要重复做同样的工作。等结果或继续做不重叠的任务
-3. 代理完成后会返回一条消息给你。这个结果不会直接展示给用户——你需要用文字消息总结后回复用户
-4. 可通过 task_id 参数恢复已有子代理继续对话
-5. 每次调用都从干净上下文开始（除非提供 task_id），你的 prompt 应包含代理需要的全部信息，以及明确告诉它要返回什么
-6. 子代理的输出一般应该信任
-7. 明确告诉代理它是写代码还是做研究（因为它不知道用户意图）。如果涉及代码，告诉它用哪个测试命令验证
-8. 如果代理类型描述中提到应主动使用，积极使用
-
-**可用代理类型及其拥有的工具：**
-{_AGENT_TYPES_LIST}
-"""
 
 
-def _build_orchestrate_description() -> str:
-    """构建 orchestrate 工具描述"""
-    return f"""使用多个子代理并行或按依赖关系执行多个任务。支持 DAG 依赖。
 
-无依赖的任务同时并行运行。有依赖的任务等待前置任务完成。
-每个任务有自己的子代理会话，有适当的权限。
-前置任务的结果自动作为上下文传递给依赖任务。
 
-**何时使用：**
-- 多个独立研究任务（如"探索代码库" + "搜索网页" + "阅读文档"）
-- 流水线任务，每步依赖前一步（如"读取文件" → "分析" → "总结"）
-- 混合并行 + 顺序工作流
 
-**何时不要用：**
-- 单个简单任务（用普通 task 工具即可）
-- 需要共享可变状态的任务（每个子代理独立，不能互访）
-
-**可用代理类型：**
-{_AGENT_TYPES_LIST}
-"""
 
 
 # ════════════════════════════════════════════════════════════════
@@ -169,7 +118,7 @@ def get_task_tool_def():
         name="task",
         server=SERVER_BUILTIN,
         tags=["agent", "subagent", "delegation"],
-        description=_build_task_description(),
+        description=_builder.get_tool_desc("task"),
         parameters={
             "type": "object",
             "properties": {
@@ -215,7 +164,7 @@ def get_orchestrate_tool_def():
         name="orchestrate",
         server=SERVER_BUILTIN,
         tags=["agent", "orchestrate", "parallel"],
-        description=_build_orchestrate_description(),
+        description=_builder.get_tool_desc("orchestrate"),
         parameters={
             "type": "object",
             "properties": {

@@ -1,0 +1,1 @@
+Deep text analysis (LLM-based). Analyze document content, extract key information, generate summaries.

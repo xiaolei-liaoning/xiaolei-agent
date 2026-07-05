@@ -1,0 +1,24 @@
+@requires: agents/explore, agents/build, agents/analyze, agents/general
+
+Run multiple tasks in parallel or with dependencies using sub-agents.
+
+Use this tool when you need to execute multiple independent or related tasks efficiently.
+Tasks without dependencies run simultaneously. Tasks with dependencies wait for their prerequisites to complete before starting.
+
+Each task gets its own sub-agent session with appropriate permissions.
+Results from dependency tasks are automatically passed as context to dependent tasks.
+
+When to use:
+- Multiple independent research tasks (e.g., "explore codebase" + "search web" + "read docs")
+- Pipeline tasks where each step depends on the previous (e.g., "read file" → "analyze" → "summarize")
+- Mixed parallel + sequential workflows
+
+When NOT to use:
+- Single simple tasks (use the regular Task tool instead)
+- Tasks that need to share mutable state (they can't — each has its own session)
+
+Available agent types:
+{{agents/explore}}
+{{agents/build}}
+{{agents/analyze}}
+{{agents/general}}

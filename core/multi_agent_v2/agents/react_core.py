@@ -28,6 +28,7 @@ import sys
 from typing import Any, Dict, List, Optional
 
 from core.multi_agent_v2.tools.json_util import safe_parse_json
+from core.multi_agent_v2.prompts import get_builder
 
 from .context_budget import ContextBudgetManager
 from .middleware import BaseMiddleware, MiddlewareChain, PlanStep, RunContext
@@ -56,87 +57,8 @@ logger = logging.getLogger(__name__)
 _MAX_ROUNDS = 10
 
 # ═══════════════════════════════════════════════════════════════════
-# 提示词模块 — 按任务类型按需组装
+# 提示词模块 — 按任务类型按需组装（从 prompts/ .txt 文件加载）
 # ═══════════════════════════════════════════════════════════════════
-
-_BASE_PROMPT = (
-    "先思考再行动：\n"
-    "1. 任务目标是什么？当前进度在哪里？\n"
-    "2. 需要工具就调用，有数据就回答，信息不够继续追问\n"
-    "3. 在调用工具前用 <thinking>标签输出推理\n\n"
-    "关键规则：\n"
-    "- 每轮必须输出工具调用或最终答案，禁止空转\n"
-    "- 如果任务明确，直接执行，不要描述'我将...'\n"
-    "- 创建文件用 write_file 一次性写入完整代码\n"
-    "- 修改代码用 edit_file（精确字符串替换）\n"
-    "- 禁止输出被截断/不完整的代码\n"
-    "- 需要深入探索代码库来收集上下文，或回答非单个文件/类/函数的查询时，优先用 task 工具分配子代理而非直接搜索，以减少上下文占用\n"
-    "- 有多个独立信息需求时，一次消息里并发调用多个 task 工具\n"
-    "- 一旦委托任务给子代理，不要重复做同样的工作，等结果或继续做不重叠的任务\n"
-    "- 子代理的结果对用户不可见，你需要用文字消息总结后回复用户"
-)
-
-_TASK_GUIDANCE_PROMPT = (
-    "<subagent_delegation>\n"
-    "你有 task 工具可以启动专门的子代理。当任务匹配子代理的描述时应主动使用。\n\n"
-    "推荐使用 task 的场景：\n"
-    "- 需要探索代码库收集上下文（非单个文件/类/函数查询）→ 用 task explore\n"
-    "- 需要修复 bug、实现功能、重构代码 → 用 task build\n"
-    "- 需要深度分析代码/数据但不需要编辑 → 用 task analyze\n"
-    "- 通用多步骤复杂任务 → 用 task general\n\n"
-    "不推荐使用 task 的场景：\n"
-    "- 要读已知路径的具体文件 → 直接用 read_file\n"
-    "- 要搜索特定的类/函数定义 → 直接用 grep\n"
-    "- 要搜索已知目录下的文件 → 直接用 glob\n"
-    "- 要读写 2-3 个已知文件 → 直接操作\n\n"
-    "使用要点：\n"
-    "- 子代理每次从干净上下文开始，prompt 要包含全部需要的信息\n"
-    "- 明确告诉子代理：是写代码还是只做研究；期望它返回什么具体信息\n"
-    "- 如果涉及代码，告诉子代理用什么测试命令验证\n"
-    "- 子代理的输出一般应该信任\n"
-    "- 尽量并发启动多个无关子代理，一次消息里调用多次 tool\n"
-    "</subagent_delegation>"
-)
-
-_CODE_GEN_PROMPT = (
-    "<code_generation_workflow>\n"
-    "首次创建：用 write_file 一次性写入完整可运行的代码。\n"
-    "修改/修复顺序：先 read_file 确认当前内容 → "
-    "再用 edit_file(old_string, new_string) 精确替换（old_string 需提供足够上下文确保唯一匹配）\n"
-    "质量要求：功能完整、无占位符/TODO、无语法错误。\n"
-    "错误恢复：内容被截断 → 重新完整写入，不要留 '需要自行添加'。\n"
-    "</code_generation_workflow>"
-)
-
-_GAME_DEV_PROMPT = (
-    "<game_quality_requirements>\n"
-    "1. 必须监听交互事件（keydown / click / touchstart）\n"
-    "2. 必须有渲染/更新函数，状态变化后调用\n"
-    "3. 必须有游戏状态变量\n"
-    "4. 禁止静态展示 — 用户必须能操作，操作后界面更新\n"
-    "5. 生成后自检：事件监听? 渲染函数? 状态变量? 可操作? 界面更新?\n"
-    "</game_quality_requirements>"
-)
-
-_REPORT_PROMPT = (
-    "<report_workflow>\n"
-    "1. 先用 web_search/fetch_url 获取真实数据，禁止编造\n"
-    "2. 用 write_file 生成 HTML 报告，嵌入真实数据\n"
-    "3. 样式要求：渐变背景、卡片布局、响应式设计\n"
-    "</report_workflow>"
-)
-
-_PLAN_PROMPT = (
-    "【计划执行】严格按照计划顺序执行。不要重复已完成步骤，不要跳过当前步骤。"
-)
-
-_DEBUG_PROMPT = (
-    "【错误恢复】内容不完整/被截断 → 重新完整写入。工具失败 → 换替代方式。"
-    "不要留'需要自行添加'给用户。"
-)
-
-
-
 
 def _extract_text_from_json(s: str) -> str:
     """从带 tool_calls 的 JSON 回复中提取 content 文本"""
@@ -313,30 +235,28 @@ class ReActCoreMiddleware(BaseMiddleware):
                              if t.get("function", {}).get("name") != "execute_python"]
 
         # ── 按任务类型组装提示词模块 ──
-        # ponytail: 角色 .md 定义优先于 _BASE_PROMPT
+        builder = get_builder()
+
+        # ponytail: 角色 .md 定义优先于系统 base
         if getattr(ctx, 'personality_prompt'):
             modules = []
             if _task_flags.get("code"):
-                modules.append(_CODE_GEN_PROMPT)
+                modules.append("code_gen")
                 if _task_flags.get("game"):
-                    modules.append(_GAME_DEV_PROMPT)
+                    modules.append("game_dev")
             if _task_flags.get("report"):
-                modules.append(_REPORT_PROMPT)
+                modules.append("report")
         else:
-            modules = [_BASE_PROMPT]
+            modules = ["base"]
             if _task_flags.get("code"):
-                modules.append(_CODE_GEN_PROMPT)
+                modules.append("code_gen")
                 if _task_flags.get("game"):
-                    modules.append(_GAME_DEV_PROMPT)
+                    modules.append("game_dev")
             if _task_flags.get("report"):
-                modules.append(_REPORT_PROMPT)
+                modules.append("report")
 
-        # 子代理工具可用 → 注入使用指南
-        if ctx.tool_defs:
-            _tool_names = {t.get("function", {}).get("name", "")
-                           for t in ctx.tool_defs}
-            if "task" in _tool_names:
-                modules.append(_TASK_GUIDANCE_PROMPT)
+        # ponytail: task guidance now lives in tools/task.txt LLM gets it via tool definition
+        # (no need to inject into system prompt separately)
 
         # ponytail: 工具连续失败 → 从 tool_defs 中移除，强制 LLM 换方案
         if ctx.tool_defs:
@@ -350,7 +270,7 @@ class ReActCoreMiddleware(BaseMiddleware):
             _dead_tools = {tn for tn, c in _consecutive_fails.items() if c >= 2}
             if _dead_tools:
                 ctx.tool_defs = [t for t in ctx.tool_defs
-                                 if t.get("function", {}).get("name") not in _dead_tools]
+                                  if t.get("function", {}).get("name") not in _dead_tools]
                 logger.info(f"工具连续失败，已隐藏: {_dead_tools}")
 
         # ── 项目分析任务：更多轮次 ──
@@ -358,11 +278,14 @@ class ReActCoreMiddleware(BaseMiddleware):
             ctx.max_iterations = max(ctx.max_iterations, 15)
 
         if ctx.plan:
-            modules.append(_PLAN_PROMPT)
+            modules.append("plan")
         if ctx.forced_instructions or ctx.warnings:
-            modules.append(_DEBUG_PROMPT)
+            modules.append("debug")
 
-        system_content = "\n\n".join(modules)
+        system_content = builder.assemble_system(modules)
+
+        # ponytail: system architecture awareness block
+        system_content += "\n\n" + builder.load("blocks/architecture")
 
         # 注入强制指令（如：文件写入失败需要重试）
         if ctx.forced_instructions:
@@ -576,6 +499,14 @@ class ReActCoreMiddleware(BaseMiddleware):
                     _extracted = _extract_text_from_json(_plain)
                     if _extracted:
                         _plain = _extracted
+
+                # ponytail: 已有工具结果 + LLM 输出实质内容 → 直接接受为 final answer
+                # 解决 CodeGraph 扫描后 LLM 合成报告被误判为空转的 bug
+                _has_successful_results = bool(ctx.tool_results and any(r.get("success") for r in ctx.tool_results))
+                if _has_successful_results and _plain and len(_plain) > 100 and ctx.consecutive_idle_rounds >= 1:
+                    ctx.final_answer = _plain
+                    ctx.interrupted = True
+                    break
                 if ctx.consecutive_idle_rounds >= 6:
                     logger.debug(f"连续 {ctx.consecutive_idle_rounds} 轮空转，强制结束")
                     ctx.last_error = f"连续 {ctx.consecutive_idle_rounds} 轮空转无工具调用"
@@ -590,7 +521,11 @@ class ReActCoreMiddleware(BaseMiddleware):
                     break
                 # ponytail: 空跑重试 — 根据可用工具动态建议，不硬编码
                 _avail = [t.get("function", {}).get("name", "") for t in (ctx.tool_defs or [])]
-                _suggest = next((t for t in ["read_file", "web_search", "execute_python"] if t in _avail), "read_file")
+                # ponytail: 有工具结果时建议 write_file（写报告），而非 read_file
+                if _has_successful_results:
+                    _suggest = next((t for t in ["write_file", "web_search", "execute_python"] if t in _avail), "write_file")
+                else:
+                    _suggest = next((t for t in ["read_file", "web_search", "execute_python"] if t in _avail), "read_file")
                 ctx.forced_instructions = (
                     f"你刚输出了思考但没调工具。请立即调用 {_suggest}，不要空转。"
                 )
@@ -1015,7 +950,8 @@ async def run_react(
     ctx.plan = await generate_plan(task_description, ctx)
     if ctx.plan:
         display_plan(ctx, prefix=prefix)
-    # ponytail: 无显式计划时不打印任何内容，直接进入循环
+    else:
+        print(f"{prefix}    \033[2m◇ No plan generated\033[0m")
 
     while not ctx.interrupted and ctx.react_depth < ctx.max_iterations:
         round_idx = ctx.react_depth + 1
@@ -1041,6 +977,11 @@ async def run_react(
                 print(f"{prefix}    \033[32m◇ All steps complete\033[0m")
                 ctx.interrupted = True
                 break
+
+        # ponytail: 多轮无进展且有实质内容 → 中间退出，不浪费轮次
+        if ctx.react_depth >= 3 and getattr(ctx, 'final_answer', None):
+            ctx.interrupted = True
+            break
 
         if ctx.react_depth >= 3 and ctx.plan:
             done_count = sum(1 for s in ctx.plan if s.status == "done")
@@ -1232,8 +1173,8 @@ async def run_react(
                 except Exception as _e:
                     logger.debug(f"自动生成报告失败: {_e}")
 
-    # 兜底：无 final_answer 时从最近回复提取
-    if not ctx.final_answer and not ctx.tool_results:
+    # 兜底：无 final_answer 时从最近回复提取（不限 tool_results 有无）
+    if not ctx.final_answer:
         _last_reply = getattr(ctx, '_pending_reply', '') or ''
         if _last_reply.startswith('{'):
             extracted = _extract_text_from_json(_last_reply)
@@ -1287,6 +1228,7 @@ async def run_react(
                     ctx.final_answer = text
             except Exception:
                 pass
+        # 兜底：纯文本提取最后的成功工具结果
         if not ctx.final_answer:
             from core.multi_agent_v2.tools.tool_result import from_handler as _fmt_result2
             for last in reversed(ctx.tool_results):

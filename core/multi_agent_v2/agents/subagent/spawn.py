@@ -6,6 +6,7 @@ import logging
 import time
 from typing import Any, Dict, List, Optional
 
+from core.multi_agent_v2.prompts import get_builder
 from .types import (
     AgentProfile, PROFILE_PERMISSIONS,
     SubagentSession, OrchestrationTask, OrchestrationResult,
@@ -61,36 +62,15 @@ def set_parent_state(
 
 
 def _build_parent_context() -> str:
-    """构建父代理上下文块 — 注入到子代理任务中"""
+    """构建父代理上下文块 — 从 prompts/blocks/parent_context.txt 加载模板"""
     ctx = _parent_state
     if not ctx or not any(ctx.values()):
         return ""
-
-    parts = []
-    if ctx.get("task"):
-        parts.append(f"主代理的原始任务: {ctx['task'][:500]}")
-    if ctx.get("conversation"):
-        parts.append(f"主代理已完成的工作: {ctx['conversation'][:1000]}")
-    if ctx.get("tool_results"):
-        parts.append(f"主代理已知的关键信息: {ctx['tool_results'][:2000]}")
-
-    # 父代理 artifact 路径 — 子代理可直接 read_file
-    ad = ctx.get("artifacts_dir", "")
-    if ad:
-        parts.append(
-            f"## 父代理已发现的 artifact（直接 read_file 获取完整内容）\n"
-            f"主代理的关键发现已保存到文件，你不需要重新获取：\n"
-            f"  📄 {ad}/\n"
-            f"读取这些文件获取完整信息，而非依赖上方截断的摘要。\n"
-            f"注意：子代理禁止修改这些文件，只读。"
-        )
-
-    if not parts:
-        return ""
-
-    return (
-        "\n\n## 父代理上下文（你不需要重新获取这些信息）\n"
-        + "\n\n".join(parts)
+    return get_builder().get_block("parent_context",
+        task=(ctx.get("task") or "")[:500],
+        conversation=(ctx.get("conversation") or "")[:1000],
+        tool_results=(ctx.get("tool_results") or "")[:2000],
+        artifacts=ctx.get("artifacts_dir", ""),
     )
 
 
@@ -155,30 +135,15 @@ async def spawn_subagent(
     if allowed:
         full_task += (
             "\n\n## 可用工具\n"
-            f"你可以使用以下工具：{', '.join(sorted(allowed))}。\n"
-            "不在列表中的工具不可用。"
+            f"You may use：{', '.join(sorted(allowed))}。\n"
+            ""
         )
     if disallowed:
         full_task += (
-            f"\n以下工具明确禁止使用：{', '.join(sorted(disallowed))}。\n"
+            f"\nDisallowed：{', '.join(sorted(disallowed))}。\n"
         )
 
-    # 注入父代理上下文（主代理已有的知识，子代理不需要重新获取）
-    parent_ctx = _build_parent_context()
-    if parent_ctx:
-        full_task += parent_ctx
-
-    full_task += (
-        "\n\n## 工作要求\n"
-        "1. 你只返回一条最终消息给主代理。在这条消息中，给出你发现的完整详情。\n"
-        "2. 不要分多条消息回复，不要问后续问题。\n"
-        "3. 不要重复获取父代理上下文中已有信息——那些已经是主代理已知的关键信息。\n"
-        "4. 直接开始工作，执行完需要的工具调用后，用最后一条消息返回你的最终结论。\n"
-        "5. 如果任务涉及写代码，完成后自己运行测试验证。\n"
-        "6. 如果遇到明确的障碍（如 API 不可用、权限不足），在最终消息中说明，不要死循环重试。\n"
-        "7. 你的输出将直接嵌入主代理的上下文中，因此信息需完整准确，供主代理使用。"
-    )
-    full_task += f"\n\n---\n## 主代理分配给你的任务\n\n{task_description}"
+    full_task += f"\n\n---\n## Task from Main Agent\n\n{task_description}"
 
     logger.info(f"Subagent [{session.session_id}] ({profile.value}) 启动: {task_description[:80]}")
 
@@ -186,6 +151,11 @@ async def spawn_subagent(
     session.start_time = time.time()
 
     try:
+        # ponytail: 移进 try 块 — _build_parent_context 的 .format() 遇到值里的 {/} 会抛异常
+        parent_ctx = _build_parent_context()
+        if parent_ctx:
+            full_task += parent_ctx
+
         from core.multi_agent_v2.agents.react_core import run_react
         from core.multi_agent_v2.tools.tool_registry import get_tool_registry
 
@@ -204,7 +174,14 @@ async def spawn_subagent(
                 timeout=300,  # 5 分钟超时
             )
         finally:
-            _captured = _pop_stdout()
+            # ponytail: try/except 防止栈损坏遮盖原始异常（"During handling..." 来源）
+            try:
+                _captured = _pop_stdout()
+            except IndexError:
+                _captured = ""
+                logger.warning("子代理 stdout 栈损坏，跳过恢复")
+            except Exception:
+                _captured = ""
         if _captured.strip():
             _tag = f"子代理 {profile.value}"
             _lines = _captured.splitlines()

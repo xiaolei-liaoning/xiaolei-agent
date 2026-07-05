@@ -1,0 +1,2 @@
+<current_date>{date}</current_date>
+<execution_status>Executed {total} rounds: {success} succeeded/{fail} failed, tools: {tools}</execution_status>

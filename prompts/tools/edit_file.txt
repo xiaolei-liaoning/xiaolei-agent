@@ -1,0 +1,5 @@
+Precise string replacement to modify specific content in a file.
+- oldString must exactly match file content (including indentation/whitespace).
+- oldString must provide enough surrounding context to ensure unique match.
+- Supports replaceAll parameter for batch replacement.
+- Creating new file → use write_file.

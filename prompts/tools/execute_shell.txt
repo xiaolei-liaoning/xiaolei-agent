@@ -1,0 +1,5 @@
+Execute shell system commands.
+- Suitable for file operations (cp/mv/mkdir), running scripts, package management (npm/pip/git).
+- Commands run in subprocess, auto-terminated on timeout (default 120s).
+- Executing Python code → use execute_python.
+- Dangerous commands (rm -rf /) are blocked.

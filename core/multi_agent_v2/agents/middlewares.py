@@ -327,6 +327,9 @@ class LoopDetectionMiddleware(BaseMiddleware):
         "fetch_url": {"warn": 4, "hard": 8},
         "write_file": {"warn": 5, "hard": 10},
         "edit_file": {"warn": 5, "hard": 10},
+        "search_files": {"warn": 15, "hard": 30},
+        "codegraph_explore": {"warn": 10, "hard": 25},
+        "codegraph_files": {"warn": 8, "hard": 20},
     }
 
     def __init__(

@@ -1,0 +1,4 @@
+Create a new file and write complete content.
+- Suitable for creating scripts, HTML games, reports and other new files.
+- content is the COMPLETE content of the file, must not be truncated or use placeholders.
+- Editing only a few lines of an existing file → use edit_file, do not rewrite the entire file.

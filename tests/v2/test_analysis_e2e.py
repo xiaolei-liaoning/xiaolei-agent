@@ -38,7 +38,7 @@ async def test_profile_hint_from_role():
 
     hint = PROFILE_PERMISSIONS[AgentProfile.EXPLORE]["system_hint"]
     assert hint and len(hint) > 50
-    assert "<role:explore>" in hint or "explore" in hint.lower()
+    assert "<role:explore>" in hint or "exploring" in hint.lower() or "explore" in hint.lower()
 
 
 @pytest.mark.asyncio

@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
+from core.multi_agent_v2.prompts import get_builder
+_builder = get_builder()
 
 
 class AgentProfile(str, Enum):
@@ -21,51 +23,34 @@ class AgentProfile(str, Enum):
 #   - 优势: 具体工具使用场景
 #   - 行为准则: 清晰的可做/不可做
 #   - 输出预期: 主代理期望的格式
-def _load_profile_hint(profile: AgentProfile) -> str:
-    """从 ~/.xiaolei/roles/{profile}.md 加载 system_hint"""
-    try:
-        from core.multi_agent_v2.agents.role_loader import get
-        role = get(profile.value)
-        if role:
-            parts = [f"<role:{profile.value}>"]
-            if role.description:
-                parts.append(role.description)
-            if role.rules:
-                parts.append(f"行为准则：\n{role.rules}")
-            if role.output_spec:
-                parts.append(f"输出规范：\n{role.output_spec}")
-            parts.append(f"</role:{profile.value}>")
-            return "\n\n".join(parts)
-    except Exception:
-        pass
-    return ""
+
 
 
 PROFILE_PERMISSIONS = {
     AgentProfile.EXPLORE: {
         "allowed": ["read_file", "search_files", "glob", "fetch_url", "web_search", "grep", "bash"],
         "disallowed": ["write_file", "edit_file", "execute_python", "execute_shell", "task", "orchestrate"],
-        "system_hint": _load_profile_hint(AgentProfile.EXPLORE),
+        "system_hint": _builder.get_agent_prompt("explore"),
     },
     AgentProfile.BUILD: {
         "allowed": None,
         "disallowed": None,
-        "system_hint": _load_profile_hint(AgentProfile.BUILD),
+        "system_hint": _builder.get_agent_prompt("build"),
     },
     AgentProfile.GENERAL: {
         "allowed": None,
         "disallowed": None,
-        "system_hint": _load_profile_hint(AgentProfile.GENERAL),
+        "system_hint": _builder.get_agent_prompt("general"),
     },
     AgentProfile.ANALYZE: {
         "allowed": None,
         "disallowed": ["write_file", "edit_file", "execute_shell"],
-        "system_hint": _load_profile_hint(AgentProfile.ANALYZE),
+        "system_hint": _builder.get_agent_prompt("analyze"),
     },
     AgentProfile.ORCHESTRATOR: {
         "allowed": ["read_file", "write_file", "task", "orchestrate"],
         "disallowed": ["execute_shell", "execute_python", "edit_file"],
-        "system_hint": _load_profile_hint(AgentProfile.ORCHESTRATOR),
+        "system_hint": _builder.get_agent_prompt("orchestrator"),
     },
 }
 

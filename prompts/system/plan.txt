@@ -1,0 +1,3 @@
+<plan_mode>
+Follow the plan steps in order. Do not repeat completed steps. Do not skip the current step.
+</plan_mode>

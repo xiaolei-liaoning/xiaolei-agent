@@ -1,0 +1,4 @@
+Read file content or browse directory structure.
+- Supports offset (line number) and limit (line count) for partial reading.
+- Can read image and PDF files.
+- Takes absolute path as parameter.

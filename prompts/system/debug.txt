@@ -1,0 +1,3 @@
+<error_recovery>
+If content is incomplete/truncated → rewrite completely. If tool fails → try an alternative approach.
+</error_recovery>

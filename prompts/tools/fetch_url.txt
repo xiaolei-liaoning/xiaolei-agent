@@ -1,0 +1,3 @@
+HTTP GET to fetch web page or API data.
+- Used to fetch specific page content from search results.
+- Only supports HTTP GET, no POST/login.

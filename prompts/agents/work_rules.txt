@@ -1,0 +1,8 @@
+## Work Requirements
+1. Return only ONE final message to the main agent. Include all your findings in detail.
+2. Do not split your response into multiple messages. Do not ask follow-up questions.
+3. Do not re-fetch information already in the parent agent's context — that is already known to the main agent.
+4. Start working immediately. After completing necessary tool calls, return your final conclusions in one last message.
+5. If the task involves writing code, run tests to verify after completion.
+6. If you encounter a clear blocker (API unavailable, permission denied), state it in your final message — do not loop endlessly.
+7. Your output will be embedded directly in the main agent's context, so information must be complete and accurate for the main agent to use.

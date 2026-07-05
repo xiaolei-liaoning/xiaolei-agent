@@ -314,14 +314,21 @@ export default async function() {
 }
 ```
 
-| 函数 | 作用 |
-|------|------|
-| `agent(prompt, opts?)` | 启动子 Agent 执行子任务 |
-| `parallel([thunks])` | 并行执行 → 屏障等待 |
-| `pipeline(items, ...stages)` | 流水线逐阶段传递 |
-| `phase(title)` | 标记当前阶段 |
-| `log(msg)` | 输出进度消息 |
-| `budget` | Token 预算追踪 |
+> ⚠️ **不稳定声明：** JS Workflow + V2 Agent 桥接层目前尚不稳定。`bridge.mjs` IPC 通信在复杂并行场景下可能出现超时或状态不同步，建议仅用于探索性编排。
+
+| 函数 | 作用 | 关键参数 |
+|------|------|----------|
+| `agent(prompt, opts?)` | 启动子 Agent | `schema` 结构化输出, `model` 多模型路由, `fullResult` 完整元数据, `label` 标签 |
+| `parallel([thunks])` | 屏障并行 (Promise.allSettled) | — |
+| `batchAgents(specs, timeout)` | 批量并行（一次 IPC） | `timeout` 超时秒数 |
+| `pipeline(items, ...stages)` | 无屏障流水线 | 每 item 逐阶段通过 |
+| `$dag(nodes)` | 声明式 DAG 图编排 | 拓扑排序 + 依赖等待 + 上游失败自动 skip |
+| `workflow(name, args)` | 嵌套子 Workflow | 按名称或路径引用 |
+| `phase(title)` / `log(msg)` | 阶段标记 / 日志 | IPC 通知 Python 端 |
+| `budget` | Token 预算追踪 | `.spent()` `.remaining()` `.report(amt, model)` |
+
+完整 10 场景编排评估报告（含真实 LLM 生成的 workflow 脚本和评分）：
+👉 [编排能力深度评估](docs/reports/orchestration-eval-report.html)
 
 ---
 

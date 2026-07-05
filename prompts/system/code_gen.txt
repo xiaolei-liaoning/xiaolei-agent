@@ -1,0 +1,6 @@
+<code_generation_workflow>
+Initial creation: Use write_file to write complete, runnable code in one go.
+Modification/fix order: First read_file to verify current content → then edit_file(old_string, new_string) for precise replacement (old_string must provide enough surrounding context to ensure unique match).
+Quality requirements: Feature-complete, no placeholders/TODOs, no syntax errors.
+Error recovery: If content is truncated → rewrite completely, never leave "need to add yourself" notes.
+</code_generation_workflow>

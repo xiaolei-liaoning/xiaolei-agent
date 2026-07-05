@@ -1,0 +1,4 @@
+<failed_approaches>
+The following approaches have already failed. Do NOT retry them:
+{approaches}
+</failed_approaches>

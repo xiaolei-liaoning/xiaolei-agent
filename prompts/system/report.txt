@@ -1,0 +1,5 @@
+<report_workflow>
+1. First use web_search/fetch_url to get real data — never fabricate.
+2. Use write_file to generate HTML report, embedding real data.
+3. Style requirements: gradient background, card layout, responsive design.
+</report_workflow>

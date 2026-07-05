@@ -9,8 +9,10 @@
 
 import asyncio
 import logging
+import re
 from typing import Any, List, Optional
 
+from core.multi_agent_v2.prompts import get_builder
 from .middleware import PlanStep, RunContext
 
 logger = logging.getLogger(__name__)
@@ -32,9 +34,14 @@ def _parse_plan_steps(text: str) -> List[PlanStep]:
     steps = []
     for line in text.split("\n"):
         line = line.strip()
-        if not line.startswith("步骤|"):
+        if not line:
             continue
-        parts = line.split("|")
+        if line.startswith("步骤|"):
+            parts = line.split("|")
+        elif re.match(r'^\d+\|', line):
+            parts = line.split("|")
+        else:
+            continue
         desc = parts[1].strip() if len(parts) > 1 else ""
         tools_str = parts[2].strip() if len(parts) > 2 else ""
         if "直接回答" in desc:
@@ -64,6 +71,7 @@ async def generate_plan(
 
     router = get_llm_router()
     if not router or not router.is_available():
+        logger.debug("plan_generation: router not available")
         return []
 
     retry_hint = f"\n【重试背景】{retry_context}\n" if retry_context else ""
@@ -89,7 +97,8 @@ async def generate_plan(
             timeout=10.0,
         )
         understanding = str(understand_resp).strip() if understand_resp else ""
-    except Exception:
+    except Exception as _e:
+        logger.debug(f"plan_generation understanding step failed: {_e}")
         understanding = ""
 
     # ── 第二步：根据理解 + 工具信息，生成结构化计划 ──
@@ -98,7 +107,7 @@ async def generate_plan(
     try:
         from core.multi_agent_v2.tools.tool_registry import _SANDBOX_TOOL_DEFS
         for t in _SANDBOX_TOOL_DEFS:
-            if t.server == "__builtin__" and t.name not in ("git", "search_files", "arbor_viz", "write_todos"):
+            if t.server == "__builtin__" and t.name not in ("git", "arbor_viz", "write_todos"):
                 _plan_tool_lines.append(
                     f"  {t.name} — {t.description.split(chr(10))[0].rstrip('.')}"
                 )
@@ -129,31 +138,10 @@ async def generate_plan(
         if _first_lines:
             _personality_hint = f"\n【角色说明】\n" + "\n".join(_first_lines) + "\n"
 
-    plan_prompt = (
-        "根据任务理解和可用工具，将任务拆解为执行步骤。\n"
-        "简单任务（如搜索、问答、单文件）：1-3 步\n"
-        "复杂任务（如分析项目、多文件开发）：3-7 步\n\n"
-        "【任务理解】\n"
-        f"{understanding if understanding else task_description[:200]}\n"
-        f"{_personality_hint}"
-        "【⚡核心规则】\n"
-        "- 每个步骤做一件事，创建单文件项目只需 1 步\n"
-        "- 创建文件用 write_file，抓取网页用 web_search/fetch_url\n"
-        "- 分析代码项目：用 codegraph_explore 看结构，替代逐文件 read_file\n"
-        "- 需要深入探索/分析/开发的子任务用 task 启动子代理\n"
-        "- 多个无关子任务用 orchestrate 并行执行\n"
-        "- 直接输出，不要模板文字\n\n"
-        "【可用工具】\n"
-        f"{_plan_tools_text}\n\n"
-        "【输出格式】每行：步骤|具体描述|工具名\n\n"
-        "示例：\n"
-        "步骤|搜索百度热搜|web_search\n"
-        "步骤|用 write_file 在 ~/Desktop 创建 index.html|write_file\n"
-        "步骤|用 codegraph_explore 看项目结构|codegraph_explore\n"
-        "步骤|用 task 子代理分析核心模块|task\n"
-        "步骤|直接回答\n\n"
-        "开始："
-    )
+    _plan_template = get_builder().load("system/plan_generation")
+    _plan_desc = understanding if understanding else task_description[:200]
+    _plan_role = _personality_hint if _personality_hint else ""
+    plan_prompt = _plan_template.replace("{task_description}", _plan_desc).replace("{tool_list}", _plan_tools_text).replace("{role_description}", _plan_role)
     try:
         resp = await asyncio.wait_for(
             router.chat(
@@ -193,7 +181,8 @@ async def generate_plan(
         if text2 and "[LLM_MOCK]" not in text2:
             return _parse_plan_steps(text2)[:5]
         return []
-    except Exception:
+    except Exception as _e:
+        logger.warning(f"plan_generation step failed: {_e}")
         return []
 
 

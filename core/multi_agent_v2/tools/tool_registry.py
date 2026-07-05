@@ -22,6 +22,9 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
+from core.multi_agent_v2.prompts import get_builder
+_builder = get_builder()
+
 
 # ── 沙盒管理器（由 run_react 设置，用于 write_file 路径重定向）──
 _active_sandbox_manager = None
@@ -1427,58 +1430,6 @@ async def _handle_text_analyzer(args: Dict) -> Dict:
 # ═══════════════════════════════════════════════════════════════════
 
 
-async def _handle_task(args: Dict) -> Dict:
-    """子代理任务工具 handler"""
-    from core.multi_agent_v2.agents.subagent.spawn import task as _spawn_task
-    from core.multi_agent_v2.tools.tool_result import ok as _ok, err as _err
-
-    description = args.get("description", "")
-    agent = args.get("agent", "general")
-    if not description:
-        return _err("需要 description 参数")
-
-    try:
-        result = await _spawn_task(description=description, agent=agent)
-        if result.get("success"):
-            return _ok(result.get("output", ""))
-        return _err(result.get("output", result.get("error", "子代理执行失败")))
-    except Exception as e:
-        return _err(f"子代理异常: {e}")
-
-
-async def _handle_orchestrate(args: Dict) -> Dict:
-    """DAG 编排工具 handler — 支持简单和完整两种传参方式"""
-    from core.multi_agent_v2.agents.subagent.spawn import orchestrate as _orchestrate_subagents
-    from core.multi_agent_v2.tools.tool_result import ok as _ok, err as _err
-
-    tasks = args.get("tasks", [])
-    if not tasks:
-        simple_tasks = []
-        for i in range(1, 6):
-            desc = args.get(f"task{i}", "")
-            if desc:
-                agent = args.get("agent", "explore")
-                simple_tasks.append({
-                    "id": f"t{i}",
-                    "description": desc[:60],
-                    "prompt": desc,
-                    "agent": agent,
-                    "depends_on": [],
-                })
-        if simple_tasks:
-            tasks = simple_tasks
-
-    if not tasks:
-        return _err("请提供 task1/task2/task3 参数指定子任务")
-
-    try:
-        max_concurrent = args.get("max_concurrent", 5)
-        result = await _orchestrate_subagents(tasks=tasks, max_concurrent=max_concurrent)
-        if result.get("success"):
-            return _ok(result.get("output", ""))
-        return _err(result.get("output", result.get("error", "编排失败")))
-    except Exception as e:
-        return _err(f"编排异常: {e}")
 
 
 _SANDBOX_TOOL_DEFS = [
@@ -1486,7 +1437,7 @@ _SANDBOX_TOOL_DEFS = [
         name="write_todos",
         server=SERVER_BUILTIN,
         tags=["task", "tracking"],
-        description="【自动跟踪】任务进度由系统自动管理，无需手动调用此工具。",
+        description=_builder.get_tool_desc("write_todos"),
         parameters={
             "type": "object",
             "properties": {
@@ -1508,55 +1459,10 @@ _SANDBOX_TOOL_DEFS = [
         handler=_handle_write_todos,
     ),
     ToolDefinition(
-        name="task",
-        server=SERVER_BUILTIN,
-        tags=["task", "subagent"],
-        description="【子代理】启动专门的子代理执行独立任务。\n- **分析代码项目时，模块深读必须用 task 而非自己 read_file**\n- 子代理从干净上下文开始，专一处理一件事\n- 返回 XML <task> 格式的结果\n\n推荐场景：\n- 探索代码库收集上下文 → agent=explore\n- 修复 bug / 实现功能 / 重构 → agent=build\n- 深度分析代码/数据 → agent=analyze\n- 通用复杂任务 → agent=general\n\n使用示例：task(description='分析 src/core 模块的架构', agent='analyze')",
-        parameters={
-            "type": "object",
-            "properties": {
-                "description": {"type": "string", "description": "3-5 词简短任务描述"},
-                "agent": {
-                    "type": "string",
-                    "enum": ["general", "explore", "build", "analyze"],
-                    "description": "代理类型：general(通用) | explore(探索) | build(开发) | analyze(分析)",
-                },
-            },
-            "required": ["description", "agent"],
-        },
-        handler=_handle_task,
-    ),
-    ToolDefinition(
-        name="orchestrate",
-        server=SERVER_BUILTIN,
-        tags=["task", "subagent", "orchestration"],
-        description="【并行编排】同时启动多个子代理并行执行。\n\n"
-                    "传参方式：task1 + task2 + task3 + ...（每个参数一个简单字符串描述）\n"
-                    "  orchestrate(task1='分析前端', task2='分析后端', task3='分析存储', agent='explore')\n\n"
-                    "常用场景：并行启动3个 explore 子代理分别探索不同模块",
-        parameters={
-            "type": "object",
-            "properties": {
-                "task1": {"type": "string", "description": "子任务1描述"},
-                "task2": {"type": "string", "description": "子任务2描述"},
-                "task3": {"type": "string", "description": "子任务3描述"},
-                "task4": {"type": "string", "description": "子任务4描述"},
-                "task5": {"type": "string", "description": "子任务5描述"},
-                "agent": {
-                    "type": "string",
-                    "enum": ["general", "explore", "build", "analyze"],
-                    "description": "代理类型，默认 explore",
-                },
-                "max_concurrent": {"type": "integer", "description": "最大并发数（默认5）"},
-            },
-        },
-        handler=_handle_orchestrate,
-    ),
-    ToolDefinition(
         name="write_file",
         server=SERVER_BUILTIN,
         tags=["file", "write"],
-        description="新建文件并写入完整内容。\n- 适用于创建脚本、HTML 游戏、报告等新文件\n- content 是文件的**完整**内容，不可截断或留占位符\n- ⚠️ 只需修改文件某几行 → 用 edit_file，不要全文重写",
+        description=_builder.get_tool_desc("write_file"),
         parameters={
             "type": "object",
             "properties": {
@@ -1571,7 +1477,7 @@ _SANDBOX_TOOL_DEFS = [
         name="execute_python",
         server=SERVER_BUILTIN,
         tags=["code", "sandbox"],
-        description="安全执行 Python 代码。\n- 适用于运行脚本、测试算法、pip 安装包、操作桌面文件\n- mode=sandbox（默认）：沙盒隔离，无法访问桌面/网络\n- mode=local：真实环境，可写 ~/Desktop，可访问网络\n- ⚠️ 需运行系统命令(ls/pwd/git) → 用 execute_shell\n- ⚠️ 抓取网页/API 数据 → 用 fetch_url（execute_python 不是爬虫工具）",
+        description=_builder.get_tool_desc("execute_python"),
         parameters={
             "type": "object",
             "properties": {
@@ -1598,7 +1504,7 @@ _SANDBOX_TOOL_DEFS = [
         name="execute_shell",
         server=SERVER_BUILTIN,
         tags=["code", "shell"],
-        description="执行 Shell 系统命令。\n- 适用于文件操作(ls/mkdir/cp)、包管理(pip/npm)、Git、curl 等\n- mode=sandbox（默认）：沙盒隔离\n- mode=local：用户真实终端执行\n- ⚠️ 需运行 Python 代码 → 用 execute_python",
+        description=_builder.get_tool_desc("execute_shell"),
         parameters={
             "type": "object",
             "properties": {
@@ -1621,7 +1527,7 @@ _SANDBOX_TOOL_DEFS = [
         name="git",
         server=SERVER_BUILTIN,
         tags=["git", "code"],
-        description="Git 版本控制操作。\n- 支持：status / add / commit / log / diff / branch / pull\n- 在当前项目目录执行\n- 典型工作流：status → diff → add → commit",
+        description=_builder.get_tool_desc("git"),
         parameters={
             "type": "object",
             "properties": {
@@ -1656,7 +1562,7 @@ _SANDBOX_TOOL_DEFS = [
         name="fetch_url",
         server=SERVER_BUILTIN,
         tags=["web", "fetch"],
-        description="HTTP GET 获取网页或 API 数据。\n- 适用于抓取网页 HTML 内容、调用 REST API\n- URL 会自动升级 HTTP → HTTPS\n- 结果可能被截断（可设 max_length 控制）\n- ⚠️ 需要搜索信息 → 用 web_search",
+        description=_builder.get_tool_desc("fetch_url"),
         parameters={
             "type": "object",
             "properties": {
@@ -1671,7 +1577,7 @@ _SANDBOX_TOOL_DEFS = [
         name="web_search",
         server=SERVER_BUILTIN,
         tags=["web", "search"],
-        description="联网搜索获取实时信息。\n- 适用于查资料、新闻、数据收集\n- 三种搜索类型：auto(默认,均衡)、fast(快速)、deep(深度搜索)\n- ⚠️ 需要抓取特定 URL 内容 → 用 fetch_url",
+        description=_builder.get_tool_desc("web_search"),
         parameters={
             "type": "object",
             "properties": {
@@ -1687,7 +1593,7 @@ _SANDBOX_TOOL_DEFS = [
         name="read_file",
         server=SERVER_BUILTIN,
         tags=["file", "read"],
-        description="读取文件内容或浏览目录结构。\n- 适用于读取已知路径的特定文件\n- ⚠️ 项目分析任务：先用 codegraph_explore 了解结构，不要逐文件遍历\n- 支持分页读取：offset(起始行号,从1开始) / limit(行数限制)\n- 目录会列出所有条目（目录带 / 后缀）\n- 长行超过2000字符会被截断\n- 支持读取图片和 PDF（返回附件）",
+        description=_builder.get_tool_desc("read_file"),
         parameters={
             "type": "object",
             "properties": {
@@ -1703,7 +1609,7 @@ _SANDBOX_TOOL_DEFS = [
         name="edit_file",
         server=SERVER_BUILTIN,
         tags=["file", "edit", "write"],
-        description="精确字符串替换，修改文件中特定内容。\n- 正确流程：先 read_file 确认 → old_string 提供足够上下文确保唯一匹配 → 替换为新内容\n- 适用于修复 bug、增删函数、修改样式等局部改动\n- 支持 replace_all 替换所有匹配项\n- ⚠️ 编辑前必须先 read_file 读取文件\n- ⚠️ 大范围改动 → 用 write_file 重写",
+        description=_builder.get_tool_desc("edit_file"),
         parameters={
             "type": "object",
             "properties": {
@@ -1720,7 +1626,7 @@ _SANDBOX_TOOL_DEFS = [
         name="search_files",
         server=SERVER_BUILTIN,
         tags=["search", "file"],
-        description="搜索文件。两种模式**二选一，不可同时使用**：\n- 模式① pattern：按文件名 glob 搜索（如 **/*.py、src/**）\n- 模式② content_pattern：按文件内容正则搜索（如 def foo）\n- ⚠️ open-ended 搜索需要多轮 glob + grep → 用 Task agent",
+        description=_builder.get_tool_desc("search_files"),
         parameters={
             "type": "object",
             "properties": {
@@ -1737,7 +1643,7 @@ _SANDBOX_TOOL_DEFS = [
         name="arbor_viz",
         server=SERVER_BUILTIN,
         tags=["viz", "tree"],
-        description="【ARBOR 假设树可视化】生成交互式 HTML 树形图，展示假设树的预测/选择/实施过程。节点颜色表示状态(implemented/selected/predicted/pruned)，箭头颜色匹配子节点。适用于展示决策树、假设推理、预测链路。",
+        description=_builder.get_tool_desc("arbor_viz"),
         parameters={
             "type": "object",
             "properties": {
@@ -1766,7 +1672,7 @@ _SANDBOX_TOOL_DEFS = [
         name="text_analyzer",
         server=SERVER_BUILTIN,
         tags=["text", "analysis"],
-        description="深度文本分析（基于 LLM）。\n- 分析文本主题、关键信息、情感倾向\n- 生成摘要和要点提取\n- 适用于文章分析、报告解读、内容理解\n- ⚠️ 只需统计字数/关键词 → 用 MCP text-analyzer",
+        description=_builder.get_tool_desc("text_analyzer"),
         parameters={
             "type": "object",
             "properties": {
