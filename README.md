@@ -1,15 +1,15 @@
 <div align="center">
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 800 180'%3E%3Cdefs%3E%3ClinearGradient id='bg' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0%25' stop-color='%230F172A'/%3E%3Cstop offset='100%25' stop-color='%231E1B4B'/%3E%3C/linearGradient%3E%3ClinearGradient id='accent' x1='0' y1='0' x2='1' y2='0'%3E%3Cstop offset='0%25' stop-color='%238B5CF6'/%3E%3Cstop offset='100%25' stop-color='%2310B981'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='800' height='180' rx='20' fill='url(%23bg)'/%3E%3Ctext x='400' y='60' text-anchor='middle' fill='white' font-size='28' font-weight='800' font-family='system-ui'%3E小雷版小龙虾 AI Agent%3C/text%3E%3Ctext x='400' y='90' text-anchor='middle' fill='%2394A3B8' font-size='14' font-family='system-ui'%3Ev3.4 — CLI (V2) · Web (V1) · 双架构智能引擎%3C/text%3E%3Crect x='180' y='110' width='440' height='40' rx='20' fill='url(%23accent)' opacity='0.9'/%3E%3Ctext x='400' y='136' text-anchor='middle' fill='white' font-size='15' font-weight='700' font-family='system-ui'%3ECLI 走 V2 统一工具型 · Web 走 V1 队长-队员型%3C/text%3E%3C/svg%3E">
-  <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 800 180'%3E%3Cdefs%3E%3ClinearGradient id='bg' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0%25' stop-color='%23F8FAFC'/%3E%3Cstop offset='100%25' stop-color='%23EDE9FE'/%3E%3C/linearGradient%3E%3ClinearGradient id='accent' x1='0' y1='0' x2='1' y2='0'%3E%3Cstop offset='0%25' stop-color='%238B5CF6'/%3E%3Cstop offset='100%25' stop-color='%2310B981'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='800' height='180' rx='20' fill='url(%23bg)' stroke='%23E2E8F0' stroke-width='1'/%3E%3Ctext x='400' y='60' text-anchor='middle' fill='%231E293B' font-size='28' font-weight='800' font-family='system-ui'%3E小雷版小龙虾 AI Agent%3C/text%3E%3Ctext x='400' y='90' text-anchor='middle' fill='%2364748B' font-size='14' font-family='system-ui'%3Ev3.4 — CLI (V2) · Web (V1) · 双架构智能引擎%3C/text%3E%3Crect x='180' y='110' width='440' height='40' rx='20' fill='url(%23accent)' opacity='0.9'/%3E%3Ctext x='400' y='136' text-anchor='middle' fill='white' font-size='15' font-weight='700' font-family='system-ui'%3ECLI 走 V2 统一工具型 · Web 走 V1 队长-队员型%3C/text%3E%3C/svg%3E">
+  <source media="(prefers-color-scheme: dark)" srcset="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 800 180'%3E%3Cdefs%3E%3ClinearGradient id='bg' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0%25' stop-color='%230F172A'/%3E%3Cstop offset='100%25' stop-color='%231E1B4B'/%3E%3C/linearGradient%3E%3ClinearGradient id='accent' x1='0' y1='0' x2='1' y2='0'%3E%3Cstop offset='0%25' stop-color='%238B5CF6'/%3E%3Cstop offset='100%25' stop-color='%2310B981'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='800' height='180' rx='20' fill='url(%23bg)'/%3E%3Ctext x='400' y='60' text-anchor='middle' fill='white' font-size='28' font-weight='800' font-family='system-ui'%3E小雷版 AI Agent%3C/text%3E%3Ctext x='400' y='90' text-anchor='middle' fill='%2394A3B8' font-size='14' font-family='system-ui'%3EReAct + 中间件管线 · 子代理即工具 · JS 编排%3C/text%3E%3Crect x='180' y='110' width='440' height='40' rx='20' fill='url(%23accent)' opacity='0.9'/%3E%3Ctext x='400' y='136' text-anchor='middle' fill='white' font-size='15' font-weight='700' font-family='system-ui'%3E35+ 工具 · 804 项测试 · Unified Agent 引擎%3C/text%3E%3C/svg%3E">
+  <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 800 180'%3E%3Cdefs%3E%3ClinearGradient id='bg' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0%25' stop-color='%23F8FAFC'/%3E%3Cstop offset='100%25' stop-color='%23EDE9FE'/%3E%3C/linearGradient%3E%3ClinearGradient id='accent' x1='0' y1='0' x2='1' y2='0'%3E%3Cstop offset='0%25' stop-color='%238B5CF6'/%3E%3Cstop offset='100%25' stop-color='%2310B981'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='800' height='180' rx='20' fill='url(%23bg)' stroke='%23E2E8F0' stroke-width='1'/%3E%3Ctext x='400' y='60' text-anchor='middle' fill='%231E293B' font-size='28' font-weight='800' font-family='system-ui'%3E小雷版 AI Agent%3C/text%3E%3Ctext x='400' y='90' text-anchor='middle' fill='%2364748B' font-size='14' font-family='system-ui'%3EReAct + 中间件管线 · 子代理即工具 · JS 编排%3C/text%3E%3Crect x='180' y='110' width='440' height='40' rx='20' fill='url(%23accent)' opacity='0.9'/%3E%3Ctext x='400' y='136' text-anchor='middle' fill='white' font-size='15' font-weight='700' font-family='system-ui'%3E35+ 工具 · 804 项测试 · Unified Agent 引擎%3C/text%3E%3C/svg%3E">
 </picture>
 
 <br>
 
 <img alt="Python" src="https://img.shields.io/badge/Python_3.13-3776AB?style=flat-square&logo=python&logoColor=white">
-<img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-009688?style=flat-square&logo=fastapi&logoColor=white">
-<img alt="DeepSeek|GLM" src="https://img.shields.io/badge/DeepSeek%20%7C%20GLM-FF6B6B?style=flat-square">
+<img alt="OpenRouter" src="https://img.shields.io/badge/OpenRouter-FF6B6B?style=flat-square">
+<img alt="DeepSeek" src="https://img.shields.io/badge/DeepSeek-FF6B6B?style=flat-square">
 <img alt="35+ Tools" src="https://img.shields.io/badge/35%2B%20Tools-845EF7?style=flat-square">
 <img alt="ChromaDB" src="https://img.shields.io/badge/ChromaDB-FF6B35?style=flat-square">
 <img alt="77 Tests" src="https://img.shields.io/badge/77%20Tests%20Passing-10B981?style=flat-square">
@@ -18,53 +18,24 @@
 
 ---
 
-## 选择入口
+## 快速开始
 
-<div align="center">
+```bash
+# 安装依赖
+pip install -r requirements.txt
 
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 260" width="100%" style="max-width:800px;">
-  <defs>
-    <linearGradient id="c_web" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#7C3AED"/><stop offset="100%" stop-color="#5B21B6"/></linearGradient>
-    <linearGradient id="c_cli" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#059669"/><stop offset="100%" stop-color="#047857"/></linearGradient>
-  </defs>
+# 配置 API Key
+cp .env.example .env
+# 编辑 .env 填入你的 API Key
 
-  <rect x="10" y="0" width="380" height="260" rx="14" fill="url(#c_web)"/>
-  <rect x="125" y="16" width="150" height="28" rx="14" fill="rgba(255,255,255,0.15)"/>
-  <text x="200" y="35" text-anchor="middle" fill="white" font-size="12" font-weight="700" font-family="system-ui">V1 队长-队员型</text>
-  <text x="200" y="70" text-anchor="middle" fill="white" font-size="22" font-weight="800" font-family="system-ui">Web UI</text>
-  <text x="200" y="94" text-anchor="middle" fill="#C4B5FD" font-size="13" font-family="monospace">python main.py</text>
-  <text x="200" y="118" text-anchor="middle" fill="#A78BFA" font-size="12" font-family="system-ui">浏览器访问 :8001</text>
-  <line x1="30" y1="138" x2="370" y2="138" stroke="#A78BFA" stroke-width="0.5"/>
-  <text x="200" y="160" text-anchor="middle" fill="#DDD6FE" font-size="12" font-family="system-ui">LeaderAgent 决策分解</text>
-  <text x="200" y="180" text-anchor="middle" fill="#DDD6FE" font-size="12" font-family="system-ui">WorkerAgent 池并行执行</text>
-  <text x="200" y="200" text-anchor="middle" fill="#DDD6FE" font-size="12" font-family="system-ui">多层记忆 + RAG 增强</text>
-  <text x="200" y="225" text-anchor="middle" fill="#A78BFA" font-size="11" font-family="system-ui">适合：多步骤复杂任务，可视化界面</text>
+# CLI — 启动 REPL
+python cli.py
 
-  <rect x="410" y="0" width="380" height="260" rx="14" fill="url(#c_cli)"/>
-  <rect x="525" y="16" width="150" height="28" rx="14" fill="rgba(255,255,255,0.15)"/>
-  <text x="600" y="35" text-anchor="middle" fill="white" font-size="12" font-weight="700" font-family="system-ui">V2 统一工具型</text>
-  <text x="600" y="70" text-anchor="middle" fill="white" font-size="22" font-weight="800" font-family="system-ui">CLI Terminal</text>
-  <text x="600" y="94" text-anchor="middle" fill="#A7F3D0" font-size="13" font-family="monospace">python cli.py</text>
-  <text x="600" y="118" text-anchor="middle" fill="#6EE7B7" font-size="12" font-family="system-ui">TUI REPL 交互</text>
-  <line x1="430" y1="138" x2="770" y2="138" stroke="#6EE7B7" stroke-width="0.5"/>
-
-  <rect x="430" y="150" width="165" height="100" rx="10" fill="rgba(255,255,255,0.08)"/>
-  <text x="512" y="174" text-anchor="middle" fill="white" font-size="14" font-weight="700" font-family="system-ui">单 Agent</text>
-  <text x="512" y="196" text-anchor="middle" fill="#D1FAE5" font-size="11" font-family="system-ui">ReActCore 4 层中间件</text>
-  <text x="512" y="214" text-anchor="middle" fill="#D1FAE5" font-size="11" font-family="system-ui">AgentPool 8 预热</text>
-  <text x="512" y="232" text-anchor="middle" fill="#D1FAE5" font-size="11" font-family="system-ui">全量工具箱直通</text>
-
-  <rect x="605" y="150" width="165" height="100" rx="10" fill="rgba(255,255,255,0.08)"/>
-  <text x="687" y="174" text-anchor="middle" fill="white" font-size="13" font-weight="700" font-family="system-ui">多 Agent</text>
-  <text x="687" y="196" text-anchor="middle" fill="#D1FAE5" font-size="11" font-family="system-ui">JS 工作流编排</text>
-  <text x="687" y="214" text-anchor="middle" fill="#D1FAE5" font-size="11" font-family="system-ui">Schema 验证 · Budget</text>
-  <text x="687" y="232" text-anchor="middle" fill="#D1FAE5" font-size="11" font-family="system-ui">parallel / pipeline</text>
-</svg>
-
-</div>
-
-> **Web 开箱即用** — 浏览器访问，适合可视化、轻量使用<br>
-> **CLI 全功能** — 终端操作，适合开发、数据分析、GUI 自动化、多 Agent 编排
+# 或直接执行
+python cli.py "分析这个项目"
+python cli.py /run "搜索百度热搜"
+python cli.py /automate open_app --app Safari
+```
 
 ---
 
@@ -118,7 +89,7 @@
 | `/chat` | 进入聊天模式 | `/chat` 或 `/chat deep` |
 | `/automate` | GUI 自动化 | `/automate open_app --app Safari` |
 | `/scrape` | 数据爬取 | `/scrape 微博 --action 热搜top10` |
-| `/wechat` | 微信消息 | `/wechat send --friend 张三 --message 你好` |
+| `/wechat` | 微信消息 (弃用) | `/wechat send --friend 张三 --message 你好` |
 | `/mcp` | MCP 工具管理 | `/mcp list, /mcp connect` |
 | `/review` | 代码审查 | `/review code main.py` |
 | `/workflows` | 工作流进度 | `/workflows list` |
@@ -218,7 +189,7 @@ build_default_chain():
 
  ① ReActCoreMiddleware        on_plan_check     核心循环调度、计划推进
  ② TodoMiddleware             on_start          防止过早退出
- ③ MemoryMiddleware           on_llm_invoke     V1+LTM+RAG → knowledge_context
+  ③ MemoryMiddleware           on_llm_invoke     记忆注入 → knowledge_context
  ④ CompactionMiddleware       on_tool_end       LLM 摘要压缩 tool_results
  ⑤ TruncationMiddleware       on_tool_end       兜底截断（保留最近 5 轮）
  ⑥ LoopDetectionMiddleware    on_llm_invoke     哈希+频率循环检测
@@ -478,7 +449,7 @@ JS bridge 自动为每个 agent() 调用注入：
 |------|---------|------|
 | ToolRegistry | 全局单例 | 所有 Agent（主/子/MCP）共享同一组工具 |
 | SharedBus | 全局单例 | 跨 Agent 知识沉淀和检索 |
-| LLMRouter | 全局单例 | 统一多模型路由（DeepSeek/GLM/OpenRouter） |
+| LLMRouter | 全局单例 | 统一多模型路由（OpenAI/Anthropic/DeepSeek/OpenRouter） |
 | AgentPool | 8 预热 WorkAgent | acquire/release 模式，即用即还 |
 | Session 存储 | SQLite | 对话日志和 artifact 持久化 |
 
@@ -595,7 +566,7 @@ ContextCompactor.compact() — 消息级压缩
 ### V2 补充（ContextBudgetManager）
 
 ```
-在 V1 消息级压缩后，额外对 tool_results 做 entry-level 压缩:
+在消息级压缩后，额外对 tool_results 做 entry-level 压缩:
   1. 保护最近 N 轮的 tool_results 不动
   2. 对旧 tool_results 调用 LLM 生成摘要 (Goal / Progress / Key Findings / Next Steps)
   3. 重排为 [summary, tail, new]
@@ -722,45 +693,19 @@ await budget.report(500, "claude-sonnet")      // 汇报 token 消耗
 
 ---
 
-## 快速开始
-
-```bash
-# 安装依赖
-pip install -r requirements.txt
-
-# 配置 API Key
-cp .env.example .env
-# 编辑 .env 填入: DEEPSEEK_API_KEY 或 ZHIPUAI_API_KEY
-
-# Web (V1) — 浏览器访问 http://127.0.0.1:8001
-python main.py
-
-# CLI (V2) — 终端 REPL
-python cli.py
-
-# CLI 直接执行
-python cli.py 分析这个项目
-python cli.py /run 搜索百度热搜
-python cli.py /automate open_app --app Safari
-```
-
----
-
 ## 技术栈
 
 ```
-Web 框架      FastAPI · Uvicorn · Jinja2
-LLM 后端      DeepSeek · GLM (ZhipuAI) · OpenRouter
-向量数据库    ChromaDB · sentence-transformers
-存储          SQLite · Redis · MySQL
-搜索          DuckDuckGo · BeautifulSoup · 自定义 RAG
+LLM 路由      OpenAI · Anthropic · DeepSeek · OpenRouter
+执行引擎      ReActCore · MiddlewareChain · PlanManager
+工具系统      ToolRegistry · 12 内置 + 25+ MCP
+记忆          ContextCompactor L0-L4 · ChromaDB · SQLite
+搜索          Web Search · RAG
 GUI 自动化    PyAutoGUI · pyobjc (macOS)
 浏览器        Playwright
-数据分析      Pandas · Matplotlib · scikit-learn
-MCP 协议      自定义框架 · 25+ 工具服务器
-前端          Tailwind CSS · Marked.js (CDN)
-部署          Docker · Uvicorn · Gunicorn
-测试          pytest · pytest-asyncio · 77+ 用例
+数据分析      Pandas · Matplotlib
+编排          JS bridge.mjs · IPC 协议 · DAG 调度
+测试          pytest · pytest-asyncio
 ```
 
 ---
@@ -769,8 +714,7 @@ MCP 协议      自定义框架 · 25+ 工具服务器
 
 ```
 小雷版agent/
-├── cli.py               CLI 入口 (V2 统一工具型)
-├── main.py              Web 入口 (V1 队长-队员型)
+├── cli.py               CLI 终端入口
 │
 ├── cli/                  CLI 交互层 (42 文件)
 │   ├── enhanced_cli.py   Enhanced REPL · 状态栏
@@ -778,19 +722,14 @@ MCP 协议      自定义框架 · 25+ 工具服务器
 │   ├── smart_agent_v2.py V2 Agent 交互
 │   └── handlers/         4 组处理器
 │
-├── api/                  Web API 层
-│   ├── pages.py          HTML 页面路由
-│   └── routes/           chat.py · WebSocket
-│
-├── core/                 引擎核心 ⭐
+├── core/                 执行引擎 ⭐
 │   ├── engine/           LLM 路由 · 技能调度
-│   ├── multi_agent_v2/   V2 架构 (Agent · Tools · Workflow · Prompts)
-│   ├── memory/           ContextCompactor L0-L4 + SessionManager
-│   ├── search/           RAG 搜索
+│   ├── multi_agent_v2/   核心 (ReActCore · Middleware · Tools · Workflow · Prompts)
+│   ├── memory/           ContextCompactor + SessionManager
+│   ├── workflow/         JS 编排引擎
 │   └── mcp/              MCP 客户端
 │
 ├── mcp/                  25+ MCP 服务器
-├── static/               Web 前端
 ├── config/               配置
 ├── tests/                77+ 测试
 └── agency-agents-zh/     216 专家角色
@@ -800,5 +739,5 @@ MCP 协议      自定义框架 · 25+ 工具服务器
 
 <div align="center">
   <br>
-  <b>小雷版小龙虾 AI Agent</b> · 一套代码双架构 · CLI 走 V2 · Web 走 V1 · 35+ 工具 · 77 项测试
+  <b>小雷版 AI Agent</b> · ReAct + 中间件管线 · 子代理即工具 · 35+ 工具 · 804 项测试
 </div>
