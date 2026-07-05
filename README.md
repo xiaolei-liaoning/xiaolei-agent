@@ -68,303 +68,512 @@
 
 ---
 
-## 全链路执行
+## 架构总览
 
-<div align="center">
+小雷版 AI Agent 的核心执行单元是 **Unified Agent** —— 一个基于 ReAct 循环 + 中间件管线的执行引擎。所有能力（文件操作、搜索、代码执行、甚至子代理）都通过 **ToolRegistry** 暴露为工具。
 
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600" width="100%" style="max-width:800px;">
-  <defs>
-    <linearGradient id="g_user" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#475569"/><stop offset="100%" stop-color="#334155"/></linearGradient>
-    <linearGradient id="g_core" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#1E293B"/><stop offset="100%" stop-color="#0F172A"/></linearGradient>
-    <linearGradient id="g_web"  x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#8B5CF6"/><stop offset="100%" stop-color="#6D28D9"/></linearGradient>
-    <linearGradient id="g_cli"  x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#10B981"/><stop offset="100%" stop-color="#059669"/></linearGradient>
-    <linearGradient id="g_v1"   x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#7C3AED"/><stop offset="100%" stop-color="#5B21B6"/></linearGradient>
-    <linearGradient id="g_v2"   x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#059669"/><stop offset="100%" stop-color="#047857"/></linearGradient>
-  </defs>
-
-  <rect x="0" y="0" width="800" height="600" rx="16" fill="#F8FAFC" stroke="#E2E8F0" stroke-width="1"/>
-  <text x="400" y="32" text-anchor="middle" fill="#1E293B" font-size="16" font-weight="700" font-family="system-ui">全链路执行流程</text>
-
-  <!-- User Input -->
-  <rect x="320" y="48" width="160" height="36" rx="18" fill="url(#g_user)"/>
-  <text x="400" y="71" text-anchor="middle" fill="white" font-size="14" font-weight="700" font-family="system-ui">用户输入</text>
-
-  <!-- Shared Core on TOP -->
-  <line x1="400" y1="84" x2="400" y2="104" stroke="#94A3B8" stroke-width="1.5"/>
-  <polygon points="400,108 394,108 400,116 406,108" fill="#94A3B8"/>
-
-  <rect x="100" y="114" width="600" height="96" rx="12" fill="url(#g_core)"/>
-  <text x="400" y="138" text-anchor="middle" fill="#94A3B8" font-size="12" font-weight="600" font-family="system-ui">共享核心引擎</text>
-
-  <rect x="120" y="150" width="170" height="46" rx="8" fill="#334155"/>
-  <text x="205" y="172" text-anchor="middle" fill="#E2E8F0" font-size="13" font-weight="600" font-family="system-ui">LLM Router</text>
-  <text x="205" y="188" text-anchor="middle" fill="#94A3B8" font-size="11" font-family="system-ui">DeepSeek · GLM · 4 策略</text>
-
-  <rect x="310" y="150" width="170" height="46" rx="8" fill="#334155"/>
-  <text x="395" y="172" text-anchor="middle" fill="#E2E8F0" font-size="13" font-weight="600" font-family="system-ui">ToolRegistry</text>
-  <text x="395" y="188" text-anchor="middle" fill="#94A3B8" font-size="11" font-family="system-ui">10 内置 + 25+ MCP</text>
-
-  <rect x="500" y="150" width="170" height="46" rx="8" fill="#334155"/>
-  <text x="585" y="172" text-anchor="middle" fill="#E2E8F0" font-size="13" font-weight="600" font-family="system-ui">Memory</text>
-  <text x="585" y="188" text-anchor="middle" fill="#94A3B8" font-size="11" font-family="system-ui">STM · Vector · RAG</text>
-
-  <!-- Fork -->
-  <line x1="400" y1="210" x2="400" y2="228" stroke="#94A3B8" stroke-width="1.5"/>
-  <line x1="400" y1="228" x2="210" y2="256" stroke="#94A3B8" stroke-width="1.5"/>
-  <line x1="400" y1="228" x2="590" y2="256" stroke="#94A3B8" stroke-width="1.5"/>
-  <polygon points="210,260 204,252 216,252" fill="#8B5CF6"/>
-  <polygon points="590,260 584,252 596,252" fill="#10B981"/>
-  <text x="210" y="250" text-anchor="middle" fill="#7C3AED" font-size="11" font-weight="700" font-family="system-ui">Web</text>
-  <text x="590" y="250" text-anchor="middle" fill="#059669" font-size="11" font-weight="700" font-family="system-ui">CLI</text>
-
-  <!-- Web V1 Path -->
-  <rect x="80" y="264" width="260" height="38" rx="8" fill="url(#g_web)"/>
-  <text x="210" y="286" text-anchor="middle" fill="white" font-size="13" font-weight="700" font-family="system-ui">FastAPI · HTML/JS · WebSocket</text>
-  <line x1="210" y1="302" x2="210" y2="316" stroke="#8B5CF6" stroke-width="1.5"/>
-  <polygon points="210,320 204,320 210,328 216,320" fill="#8B5CF6"/>
-  <rect x="80" y="324" width="260" height="38" rx="8" fill="#EDE9FE"/>
-  <text x="210" y="346" text-anchor="middle" fill="#6D28D9" font-size="12" font-weight="600" font-family="system-ui">SkillDispatcher · 技能匹配</text>
-  <line x1="210" y1="362" x2="210" y2="376" stroke="#8B5CF6" stroke-width="1.5"/>
-  <polygon points="210,380 204,380 210,388 216,380" fill="#8B5CF6"/>
-  <rect x="60" y="384" width="300" height="52" rx="10" fill="url(#g_v1)"/>
-  <text x="210" y="408" text-anchor="middle" fill="white" font-size="14" font-weight="700" font-family="system-ui">V1 LeaderAgent</text>
-  <text x="210" y="426" text-anchor="middle" fill="#C4B5FD" font-size="11" font-family="system-ui">ReAct 循环 · batch_delegate · KEPA 反思 ≤3</text>
-  <line x1="210" y1="436" x2="210" y2="454" stroke="#8B5CF6" stroke-width="1.5"/>
-  <polygon points="210,458 204,458 210,466 216,458" fill="#8B5CF6"/>
-  <rect x="60" y="462" width="300" height="36" rx="8" fill="#DDD6FE"/>
-  <text x="210" y="480" text-anchor="middle" fill="#5B21B6" font-size="12" font-weight="600" font-family="system-ui">WorkerAgent 池 (3-5 并行)</text>
-  <text x="210" y="494" text-anchor="middle" fill="#6D28D9" font-size="10" font-family="system-ui">LLMAgent · 工具调用 · 结果组装</text>
-
-  <!-- CLI V2 Path -->
-  <rect x="460" y="264" width="260" height="38" rx="8" fill="url(#g_cli)"/>
-  <text x="590" y="286" text-anchor="middle" fill="white" font-size="13" font-weight="700" font-family="system-ui">EnhancedCLI · REPL · 命令路由</text>
-  <line x1="590" y1="302" x2="590" y2="316" stroke="#10B981" stroke-width="1.5"/>
-  <polygon points="590,320 584,320 590,328 596,320" fill="#10B981"/>
-  <rect x="460" y="324" width="260" height="38" rx="8" fill="#D1FAE5"/>
-  <text x="590" y="346" text-anchor="middle" fill="#047857" font-size="12" font-weight="600" font-family="system-ui">CommandParser · 4 组处理器</text>
-  <line x1="590" y1="362" x2="590" y2="376" stroke="#10B981" stroke-width="1.5"/>
-  <polygon points="590,380 584,380 590,388 596,380" fill="#10B981"/>
-  <rect x="460" y="384" width="260" height="52" rx="10" fill="url(#g_v2)"/>
-  <text x="590" y="408" text-anchor="middle" fill="white" font-size="14" font-weight="700" font-family="system-ui">V2 WorkAgent 池 (8 预热)</text>
-  <text x="590" y="426" text-anchor="middle" fill="#A7F3D0" font-size="11" font-family="system-ui">ReActCore · 4 层中间件 · acquire/release</text>
-  <line x1="590" y1="436" x2="590" y2="454" stroke="#10B981" stroke-width="1.5"/>
-  <polygon points="590,458 584,458 590,466 596,458" fill="#10B981"/>
-  <rect x="460" y="462" width="260" height="36" rx="8" fill="#D1FAE5"/>
-  <text x="590" y="480" text-anchor="middle" fill="#047857" font-size="12" font-weight="600" font-family="system-ui">Depth → ReActCore ★ → Reflection → KEPA</text>
-
-  <!-- Merge -->
-  <line x1="210" y1="498" x2="210" y2="530" stroke="#94A3B8" stroke-width="1.5"/>
-  <line x1="590" y1="498" x2="590" y2="530" stroke="#94A3B8" stroke-width="1.5"/>
-  <line x1="210" y1="530" x2="590" y2="530" stroke="#94A3B8" stroke-width="1.5"/>
-  <line x1="400" y1="530" x2="400" y2="548" stroke="#94A3B8" stroke-width="1.5"/>
-  <polygon points="400,552 394,552 400,560 406,552" fill="#94A3B8"/>
-  <rect x="300" y="555" width="200" height="30" rx="15" fill="#475569"/>
-  <text x="400" y="575" text-anchor="middle" fill="white" font-size="12" font-weight="700" font-family="system-ui">输出结果</text>
-</svg>
-
-</div>
+```
+                    ┌──────────────────┐
+                    │    CLI/REPL      │
+                    │  EnhancedCLI     │
+                    └────────┬─────────┘
+                             │ task_description
+                             ▼
+                    ┌──────────────────┐
+                    │  MiddlewareChain │   12 层中间件，5 个 Hook 点
+                    │  (on_start →     │   on_llm_invoke → on_plan_check
+                    │   on_tool_invoke │   → on_tool_end → on_finish
+                    │   → on_wrap_*)   │
+                    └────────┬─────────┘
+                             ▼
+                    ┌──────────────────┐
+                    │  PlanManager     │   两步法计划生成 + 进度追踪
+                    └────────┬─────────┘
+                             ▼
+                    ┌──────────────────┐
+                    │  ToolRegistry    │   12 内置 + 25+ MCP + task/orchestrate
+                    │  (SERVER_BUILTIN │   所有能力都是工具
+                    │   + SERVER_MCP)  │
+                    └──────────────────┘
+```
 
 ---
 
-## V1 架构：队长-队员分工型（Web 入口）
+## ReAct 循环 — 核心执行引擎
 
-### 核心：多轮混合编排
-
-Leader 在 ReAct 循环中可跨轮次混合调度模式——**先并行搜、再串行分析、再并行写**，根据上一步结果动态决策下一步。
+### 一回合流程
 
 ```
-第 1 轮  batch_delegate ──┬── Worker A: 搜索百度热搜       } 并行
-                          └── Worker B: 搜索微博热搜       }
+1. LLM Invoke — 系统提示 + 对话历史 + 工具列表 → LLM 回复
+   ├─ 正常: 有 tool_calls → 进入 parse
+   └─ 空跑: 无 tool_calls →
+      ├─ 计划已完成 (all done) → final_answer, exit
+      ├─ 空转 ≥6 轮 → final_answer + interrupted, exit
+      └─ <6 轮 → inject forced_instructions + rebuild messages + retry (≤2次)
 
-第 2 轮  delegate ────────→ Worker C: 对比分析两平台数据    串行
+2. on_plan_check — LLM 回复解析后，工具执行前
+   └─ ReActCoreMiddleware: 检查计划步骤是否应自动推进
 
-第 3 轮  batch_delegate ──┬── Worker D: 生成报告到桌面     } 并行
-                          └── Worker E: 生成摘要到剪贴板   }
+3. Tools Execute — 通过 MiddlewareChain.on_wrap_tool_call
+   ├─ PermissionMiddleware (洋葱最外层): 权限检查
+   ├─ ToolCache: 缓存命中直接返回
+   ├─ validate_arguments: 参数合法性校验
+   └─ handler: 实际执行 + bound_result 统一截断
+
+4. on_tool_end — 工具结果处理
+   ├─ update_step_status: 计划进度自动推进（工具名匹配→done）
+   ├─ 步骤失败 → mark failed + retry counter
+   └─ HookMiddleware: KEPA 重试决策 → jump_to="retry"
+
+5. 回到步骤 1，直到满足退出条件
 ```
 
+### FinalAnswer 5 层兜底（post-loop）
+
 ```
-          ┌─────────────────────────────────────────────────────────┐
-          │                   LeaderAgent                           │
-          │              (ReAct 决策循环 · 多轮混合编排)             │
-          │                                                         │
-          │   ┌──────────────────────────────────────────────────┐  │
-          │   │ 第 1 轮: 分析任务 → 拆解子任务                   │  │
-          │   │          动作: batch_delegate → 分派 3 个 Worker  │  │
-          │   │          等待 → 收集结果 → KEPA 反思             │  │
-          │   ├──────────────────────────────────────────────────┤  │
-          │   │ 第 2 轮: 根据上一步结果，决定下一步               │  │
-          │   │          动作: delegate → 委派 1 个 Worker 分析   │  │
-          │   │          等待 → 收集结果 → KEPA 反思             │  │
-          │   ├──────────────────────────────────────────────────┤  │
-          │   │ 第 3 轮: 动作: batch_delegate → 再次并行         │  │
-          │   │          或 tool → 直接调工具收尾                │  │
-          │   │          完成 ✅                                  │  │
-          │   └──────────────────────────────────────────────────┘  │
-          │                                                         │
-          │   动作类型:                                              │
-          │     delegate (串行) : 单任务 → 单 Worker               │
-          │     batch_delegate (并发) : 多任务 → 多 Worker 并行     │
-          │     tool : 直接调用工具                                 │
-          │     process_results : KEPA 反思 (失败重试 ≤3 次)        │
-          └──────────────────────┬──────────────────────────────────┘
-                                 │
-                    ┌────────────┼────────────┐
-                    │            │            │
-                    ▼            ▼            ▼
-          ┌────────────┐ ┌────────────┐ ┌────────────┐
-          │ WorkerAgent│ │ WorkerAgent│ │ WorkerAgent│
-          │  执行子任务  │ │  执行子任务  │ │  执行子任务  │
-          │  调用工具    │ │  调用工具    │ │  调用工具    │
-          │  LLMAgent   │ │  LLMAgent   │ │  LLMAgent   │
-          └──────┬─────┘ └──────┬─────┘ └──────┬─────┘
-                 │              │              │
-                 ├──────────────┼──────────────┤
-                 │   返回结果到 LeaderAgent     │
-                 └──────────────┼──────────────┘
-                               │
-                    ┌──────────▼──────────┐
-                    │   KEPA 自我反思      │
-                    │  结果评估 · 是否重试  │
-                    └──────────┬──────────┘
-                              │
-                    ┌─────────▼──────────┐
-                    │      重试？         │
-                    └──┬──────────────┬──┘
-                       │              │
-                       ▼              ▼
-              ┌────────────┐    ┌──────────────────┐
-              │ WorkerAgent│    │  进入下一轮 ReAct  │
-              │ 重新执行    │    │  或 完成 ✅       │
-              └──────┬─────┘    └──────────────────┘
-                     │
-                     ▼
-              ┌──────────────────┐
-              │  返回 LeaderAgent │
-              └──────────────────┘
+1. 主路径:   计划完成 或 空转 ≥6 轮 → 用最后一次回复 → final_answer
+2. 搜索报告: 有搜索数据但无 write_file → LLM 生成 HTML 报告 → 写入桌面
+3. 纯文本:   无 tool_results → 从 _pending_reply 提取 (>20 chars)
+4. LLM 总结: 有 tool_results → LLM 总结 (max_tokens=32768, 子代理结果优先, 取 8 条)
+5. 原始结果: 取最后成功工具结果的纯文本
 ```
 
-**核心特性：**
-- 多轮混合编排 — 每轮 ReAct 可独立选择并发/串行，跨轮次自由组合
-- 角色分离 — 队长只决策不执行，队员只执行不决策
-- 动态拆解 — Leader 根据上一步结果决定下一步的拆分策略
-- KEPA 反思 — 结果自我评估，失败则重试 (≤3 次)
-- 多元记忆 — ContextMemory (20轮) + RAG + STM + 向量库 + 经验进化
+### 保护机制
+
+| 机制 | 触发条件 | 行为 |
+|------|---------|------|
+| 空转退出 | consecutive_idle_rounds ≥ 6 | interrupted + final_answer |
+| 回合内重试 | 空跑 <6 轮 | inject forced_instructions, rebuild messages, retry LLM |
+| LLM 超时 | 60s 无响应 | interrupted |
+| 重试上限 | 同一 LLM 回复最多 2 次空跑 | 用最后一次回复兜底 |
+| 最终轮次 | react_depth > max_iterations | forced_instructions 标记最终轮 |
 
 ---
 
-## V2 架构：统一工具型（CLI 入口）
+## 中间件管线 — 12 层
+
+所有中间件按注册顺序依次执行。每个 HookResult 可控制流程：`jump_to: "continue" | "end" | "retry"`。
+
+### 注册顺序
 
 ```
-┌──────────────────────────────────────────────────────┐
-│               AgentPool (8 预热)                      │
-│     acquire() → WorkAgent.execute(task) → release()   │
-└──────────────────────┬───────────────────────────────┘
-                       │
-┌──────────────────────▼───────────────────────────────┐
-│                  ReActCore.run_react()                │
-│                                                      │
-│  ┌──────────────────────────────────────────────────┐│
-│  │ [Layer 1] ReActDepth                              ││
-│  │  深度控制 · max_rounds=10 · 防无限循环            ││
-│  ├──────────────────────────────────────────────────┤│
-│  │ [Layer 2] ReActCore ★                             ││
-│  │  主循环: LLM → 思考 → 动作 → 观察 → 循环         ││
-│  ├──────────────────────────────────────────────────┤│
-│  │ [Layer 3] Reflection                              ││
-│  │  质量评估 · 结果完整性检查                        ││
-│  ├──────────────────────────────────────────────────┤│
-│  │ [Layer 4] KEPA                                    ││
-│  │  重试决策 / 失败决策                              ││
-│  └──────────────────────────────────────────────────┘│
-│                     │                                 │
-│              ┌──────▼──────┐                          │
-│              │ LLM Router  │                          │
-│              └──────┬──────┘                          │
-│                     │                                 │
-│     ┌───────────────┼───────────────┐                 │
-│     ▼               ▼               ▼                 │
-│  内置工具(10)    MCP工具(25+)     第三方插件           │
-└───────────────────────────────────────────────────────┘
+build_default_chain():
+
+ ① ReActCoreMiddleware        on_plan_check     核心循环调度、计划推进
+ ② TodoMiddleware             on_start          防止过早退出
+ ③ MemoryMiddleware           on_llm_invoke     V1+LTM+RAG → knowledge_context
+ ④ CompactionMiddleware       on_tool_end       LLM 摘要压缩 tool_results
+ ⑤ TruncationMiddleware       on_tool_end       兜底截断（保留最近 5 轮）
+ ⑥ LoopDetectionMiddleware    on_llm_invoke     哈希+频率循环检测
+ ⑦ ClarificationMiddleware    on_llm_invoke     拦截 LLM 反问→等待用户确认
+ ⑧ ReasoningMiddleware        on_llm_invoke     推理优化
+ ⑨ PermissionMiddleware       on_wrap_tool_call 三级权限+Shell 安全（洋葱模式）
+ ⑩ HookMiddleware             on_tool_end       KEPA 重试决策→jump_to="retry"
+ ⑪ ReActDepthMiddleware       on_llm_invoke+    深度控制 (max 30) + 连续失败检测
+                               on_tool_end
+ ⑫ KEPAMiddleware             on_llm_invoke+    知识沉淀+跨 Agent 共享 SharedBus
+                               on_tool_end
+ ⑬ ReflectionMiddleware       on_tool_end       每 3 轮反思执行质量
 ```
 
-**核心特性：**
-- 4 层中间件 — 深度控制 → ReActCore → Reflection → KEPA
-- AgentPool — 8 个预热 Agent 即用即还
-- ToolRegistry — 统一注册、Schema 验证、缓存、Hook
-- 沙箱隔离 — Python/Shell 在沙箱中执行
+### 执行顺序（一回合）
 
-### V2 多Agent（JS Workflow 编排）
+```
+发起 LLM 调用:
+  KEPAMiddleware.on_llm_invoke      — 注入 SharedBus 共享知识
+  ReActDepthMiddleware.on_llm_invoke — 深度 ≥30 → interrupted
+  LoopDetectionMiddleware            — 同内容重复 → 告警
+  ClarificationMiddleware            — 检测反问 → 中断等待用户
+  MemoryMiddleware                   — 记忆注入
 
-JS Workflow 在 V2 单 Agent 引擎之上叠加编排层，继承全部能力。
+工具执行:
+  PermissionMiddleware.on_wrap_tool_call (洋葱最外层)
+    └─ ToolCache → validate_arguments → handler → bound_result
+
+工具结束:
+  HookMiddleware.on_tool_end          — 工具失败 → jump_to="retry"
+  ReActDepthMiddleware.on_tool_end    — 更新失败计数
+  CompactionMiddleware                — LLM 压缩
+  TruncationMiddleware                — 兜底截断
+  ReflectionMiddleware                — 每 3 轮反思
+  KEPAMiddleware.on_tool_end          — 提取知识 → SharedBus
+```
+
+---
+
+## 计划系统 — PlanManager
+
+### 两步生成
+
+```
+generate_plan(ctx):
+  ① 理解 (10s timeout)
+     prompt: "分析任务并输出自然语言拆解"
+     注入: {role_description} ←  personality_prompt 前 3 行
+     注入: {available_tools} ← 动态工具列表
+   
+  ② 结构化 (15s timeout)
+     prompt: plan_generation.txt
+     格式: "步骤|描述|工具名" (支持 "步骤|" 和 "\d+|" 两种格式)
+     注入: {role_description}
+     注意: 使用 .replace() 而非 .format()，防止 MCP 工具描述中的 {} 导致静默崩溃
+     降级: 首次失败 → 极简中文 prompt 重试
+   
+  ③ 解析 _parse_plan_steps(text)
+     正则匹配 → 映射到实际 ToolDefinition
+     失败 → logger.warning + 可见终端输出 "◇ No plan generated"
+```
+
+### 进度追踪
+
+```
+update_step_status(ctx) — 每次 on_tool_end 自动调用:
+
+  1. 获取当前 step = ctx.plan[done_count] (第一个 non-done)
+  
+  2. 自动推进 (工具成功匹配 → done):
+     ├─ 搜索等价:   {web_search, fetch_url, fetch_json, hot_search} 互换
+     ├─ 子代理等价: {task, orchestrate} 互换
+     ├─ 探索等价:   {codegraph_explore, codegraph_files, search_files, execute_shell, read_file} 互换
+     └─ 精确匹配:   step.tool_names & succeeded_keys 有交集
+     
+  3. 无 tool_names 的步骤:
+     └─ total_success_count >= done_count + 1 → done
+  
+  4. 卡死检测 (react_depth ≥ 6):
+     └─ 从未完成过任何 step 但有实质结果 → force-mark done
+  
+  5. read_file 循环破解 (react_depth ≥ 2):
+     └─ 连续 3 次 read_file + 任务暗示编辑 → 禁止 read_file
+  
+  6. 工具失败:
+     └─ mark current_step failed + ctx._step_retries[step.index] += 1
+```
+
+### 重规划
+
+```
+replan_failed(ctx):
+  - 从失败步骤截断计划
+  - 清除 _step_tool_snapshots
+  - 注入 forced_instructions 要求重试
+  - plan_generation += 1（版本号递增）
+```
+
+---
+
+## 工具系统 — ToolRegistry
+
+**所有能力都是工具。** 内置工具和 MCP 工具统一注册在全局单例 `ToolRegistry` 中。
+
+### 注册模型
+
+```
+ToolRegistry (全局单例)
+├── SERVER_BUILTIN ("__builtin__") — 12 个内置工具
+│   ├─ read_file / write_file / edit_file      文件操作
+│   ├─ execute_python / execute_shell           沙箱执行
+│   ├─ web_search / fetch_url                   网络
+│   ├─ search_files / git / write_todos         辅助
+│   ├─ task — 子代理（单 Agent）                  ← 不是独立层！
+│   └─ orchestrate — 子代理（DAG 编排）           ← 不是独立层！
+│
+└── SERVER_MCP (动态发现)
+    ├─ CodeGraph (explore/files/callers/callees/impact)
+    ├─ Playwright (浏览器自动化)
+    ├─ DeepWiki / Context7 (代码知识)
+    ├─ MemSearch / EverMem (跨会话记忆)
+    └─ ... 25+ MCP 工具
+```
+
+### 子代理不是独立层
+
+```
+LLM 决定调用 "task" 工具
+  → ToolRegistry.get_handler("task") 
+    → spawn.task(prompt, opts)
+      → run_unified(prompt, profile="explore|build|analyze|general")
+        → 同一套 ReActCore + MiddlewareChain
+          → 只是角色 prompt 不同 + _is_subagent=True
+```
+
+子代理是 **ToolRegistry 里注册的一个工具的产物**，不是架构分层。主 Agent 调用 `task` 就像调用 `read_file` 一样——这个工具的 handler 恰好是启动一个新 Agent 进程。
+
+### MCP 自动发现
+
+```
+get_all_tools() 触发 MCP 连接 (一次性):
+
+  1. _discover_mcp_configs()
+     ├─ mcp_client.list_servers()       — 已注册的 MCP 服务器
+     ├─ mcp/*_mcp_server.py             — 本地脚本自动发现
+     └─ .mcp.json                       — 项目级 MCP 配置
+     
+  2. _connect_mcp_servers_parallel()
+     ├─ asyncio.gather(每个 server 的 _list_mcp_tools)
+     ├─ 单 server 超时 5s, 总超时 12s
+     ├─ 去重: 同名工具自动加 {server}_ 前缀
+     └─ handler 闭包: 代理到 mcp_client.call_tool(srv, tname, args)
+```
+
+### 工具执行流程 (on_wrap_tool_call)
+
+```
+1. PermissionMiddleware.check(tool_name, arguments)
+   ├─ allowed  + need_ask  → 返回确认消息，等待用户允许/拒绝
+   ├─ allowed  + !need_ask → 放行
+   └─ !allowed             → 硬拒绝
+   
+2. execute_shell → ShellGuard.scan(command)
+   ├─ High risk (rm -rf /, dd, mkfs)       → 硬拒绝 + 风险描述
+   └─ Medium risk (sudo, chmod, curl|bash) → 警告 + 继续
+
+3. ToolCache.get(name, args) → 命中? 返回缓存
+
+4. validate_arguments(name, args) → 参数合法性
+   └─ 失败 → forced_instructions + _validation_error=True → LLM 下轮修正
+
+5. handler(args) → result → bound_result 统一截断
+
+6. ToolCache.set(name, args, response)
+```
+
+---
+
+## Prompt 架构 — PromptBuilder
+
+**34 个 `.txt` 文件替代 Python 硬编码字符串。** 所有系统提示、工具描述、子代理角色都从文件加载。
+
+```
+prompts/
+├── system/                系统级提示 (9)
+│   ├─ core.txt            核心系统提示（角色定义+行为规则）
+│   ├─ plan_generation.txt 计划生成指令
+│   ├─ code_gen.txt        代码生成任务
+│   └─ ...
+│
+├── tools/                 工具描述 (14)
+│   ├─ task.txt            子代理 task 工具描述
+│   ├─ orchestrate.txt     子代理 orchestrate 工具描述
+│   └─ ...每个工具一个 .txt
+│
+├── agents/                子代理角色 (5)
+│   ├─ explore.txt         探索型（代码分析）
+│   ├─ build.txt           构建型（代码生成）
+│   ├─ analyze.txt         分析型（数据分析/报告）
+│   ├─ general.txt         通用型
+│   └─ work_rules.txt      所有子代理共享的工作规则
+│
+└── blocks/                可复用块 (5)
+    ├─ architecture.txt    系统架构说明
+    ├─ parent_context.txt  父上下文注入
+    └─ ...
+```
+
+### PromptBuilder API
+
+```
+get_builder() → 全局单例
+
+assemble_system(["core", "code_gen"])  — 拼接 system/core.txt + code_gen.txt
+get_tool_desc("task")                  — 加载 prompts/tools/task.txt
+get_agent_prompt("explore")            — 加载 explore.txt + work_rules.txt
+get_block("output_format", ...vars)    — 加载 + .format(**vars)
+```
+
+### @requires 依赖系统
+
+```
+文件首行:    @requires: system/core, blocks/output_format
+
+加载流程:
+  ① 扫描 @requires: → [system/core, blocks/output_format]
+  ② 为每个 dep 生成路径 + "{{dep_path}}" 占位符
+  ③ 递归加载依赖内容
+  ④ 替换占位符 → 缓存到 _cache
+  ⑤ 循环依赖检测: 访问栈追踪 → raise CircularDependencyError
+```
+
+---
+
+## 记忆系统
+
+### 短期（会话内）
+
+```
+层            | 位置                      | 生命周期
+──────────────┼──────────────────────────┼──────────────
+tool_results  | RunContext.tool_results   | 当前 ReAct 轮次
+conversation  | RunContext._conversation  | 整个会话
+_history      | _history                  |
+forced_       | RunContext.forced_        | 当前轮次
+instructions  | _instructions             |
+knowledge_    | RunContext.knowledge_     | 每轮增量注入
+context       | context                   |
+```
+
+### 压缩管线（8 层 L0–L4）
+
+```
+ContextCompactor.compact() — 消息级压缩
+
+  L0  ToolResultBudget
+      单条消息 >100K chars → 写到磁盘文件 + [Tool result saved to disk] 引用
+
+  L1a API-Level Context Mgmt
+      清除旧 tool_use 块的 thinking 字段
+
+  L1b CollapseReadSearch
+      UI 折叠追踪（Python 后端 no-op，消息透传）
+
+  L1c Time-Based MC
+      gap >60 分钟无活动 → 只保留最近 5 条可清除的工具结果
+
+  L2  CachedMicrocompact
+      生成缓存断点 metadata（不修改消息体）
+
+  L2b SnipCompact
+      截断旧工具结果: 前一半 + 后四分之一保留，中间 "...[snip]..."
+
+  L3  LLM Compaction
+      调用 LLM 生成 9-section 结构化摘要
+      9 sections: Goal / Search Results / Code Analysis / Data Files / Decisions /
+                  Next Steps / Issues / Summary / Config
+      PTL 重试循环: 不满足长度/格式 → 最多重试 3 次
+
+  L4  Post-Compact Rebuild
+      重建消息列表 + 注入附件: Files / Skills / Plans / Agents / MCP / Tools / Compact Summary
+
+  Circuit Breaker: 连续 3 次失败 → 跳过压缩
+  SessionMemoryCompact: L3+L4 失败时的启发式回退（无 LLM）
+```
+
+### V2 补充（ContextBudgetManager）
+
+```
+在 V1 消息级压缩后，额外对 tool_results 做 entry-level 压缩:
+  1. 保护最近 N 轮的 tool_results 不动
+  2. 对旧 tool_results 调用 LLM 生成摘要 (Goal / Progress / Key Findings / Next Steps)
+  3. 重排为 [summary, tail, new]
+  4. 注入 forced_instructions 重放指令
+  5. SQLite 持久化对话记录
+```
+
+### 长期（跨会话）
+
+```
+VectorDB   ChromaDB + sentence-transformers     语义搜索/RAG
+MemSearch  MCP 插件                              跨会话记忆搜索
+EverMem    MCP 插件                              永久记忆存储
+Session    SQLite + session_manager              对话日志 + artifact 归档
+```
+
+---
+
+## JS 编排引擎 — GS Workflow
+
+Node.js ↔ Python IPC 桥接，JS 脚本通过 `bridge.mjs` 调用 Python Agent。
+
+### IPC 协议
+
+```
+JS → Python: stdout 写入 __IPC__:{"id":1,"type":"agent","data":{...}}\n
+Python → JS: stdin 写入 __IPC__:{"id":1,"result":{...}}\n
+并行控制: _ipc_semaphore = 16（限制同时 agent 调用数）
+```
+
+### 7 种编排原语
 
 ```javascript
-// workflow.js
-export default async function() {
-  phase("搜索")
-  const [baidu, weibo] = await parallel([
-    agent("百度热搜 TOP 20", { label: "百度" }),
-    agent("微博热搜 TOP 20", { label: "微博" })
-  ])
+// ① agent — 单 Agent 调用
+let result = await agent("分析项目", {
+  schema: { type: "object", properties: { summary: {} } },  // 结构化输出
+  model: "claude-sonnet",                                     // 多模型路由
+  label: "代码分析",                                          // 标签
+  fullResult: true,                                           // 完整元数据
+})
 
-  phase("分析")
-  const report = await agent(`对比分析:\n百度: ${baidu}\n微博: ${weibo}`, {
-    schema: { type: "object", properties: { summary: { type: "string" } } }
-  })
-  return report
-}
+// ② parallel — 屏障并行 (Promise.allSettled)
+let [a, b, c] = await parallel([
+  () => agent("任务A"),
+  () => agent("任务B"),
+  () => agent("任务C"),
+])
+
+// ③ batchAgents — 批量并行（一次 IPC）
+let results = await batchAgents([
+  { prompt: "扫描", label: "扫描" },
+  { prompt: "分析", label: "分析" },
+], 120)
+
+// ④ pipeline — 无屏障流水线（逐阶段传递）
+let results = await pipeline(
+  ["f1.py", "f2.py", "f3.py"],
+  (f) => agent(`分析: ${f}`),
+  (analysis) => agent(`总结: ${analysis}`)
+)
+
+// ⑤ $dag — 声明式 DAG 图编排
+let results = await $dag({
+  scan: () => agent("扫描"),
+  analyze: { depends: "scan", task: (ctx) => agent(`分析: ${ctx.scan}`) },
+  report:  { depends: ["scan", "analyze"], task: (ctx) => agent("报告") },
+})
+// 拓扑排序 + 并行执行无依赖节点 + 上游失败自动 skip
+
+// ⑥ workflow — 嵌套子 Workflow
+let result = await workflow("分析项目", { path: "./src" })
+
+// ⑦ phase / log / budget — 辅助原语
+await phase("代码扫描")
+await log("发现 3 个问题")
+console.log(budget.spent())                    // 已消耗
+await budget.report(500, "claude-sonnet")      // 汇报 token 消耗
 ```
 
 > ⚠️ **不稳定声明：** JS Workflow + V2 Agent 桥接层目前尚不稳定。`bridge.mjs` IPC 通信在复杂并行场景下可能出现超时或状态不同步，建议仅用于探索性编排。
-
-| 函数 | 作用 | 关键参数 |
-|------|------|----------|
-| `agent(prompt, opts?)` | 启动子 Agent | `schema` 结构化输出, `model` 多模型路由, `fullResult` 完整元数据, `label` 标签 |
-| `parallel([thunks])` | 屏障并行 (Promise.allSettled) | — |
-| `batchAgents(specs, timeout)` | 批量并行（一次 IPC） | `timeout` 超时秒数 |
-| `pipeline(items, ...stages)` | 无屏障流水线 | 每 item 逐阶段通过 |
-| `$dag(nodes)` | 声明式 DAG 图编排 | 拓扑排序 + 依赖等待 + 上游失败自动 skip |
-| `workflow(name, args)` | 嵌套子 Workflow | 按名称或路径引用 |
-| `phase(title)` / `log(msg)` | 阶段标记 / 日志 | IPC 通知 Python 端 |
-| `budget` | Token 预算追踪 | `.spent()` `.remaining()` `.report(amt, model)` |
 
 完整 10 场景编排评估报告（含真实 LLM 生成的 workflow 脚本和评分）：
 👉 [编排能力深度评估](docs/reports/orchestration-eval-report.html)
 
 ---
 
-## 工具系统
+## 三种执行模式 — 统一入口
 
-| 类别 | 清单 |
-|------|------|
-| **内置 (10)** | `web_search` · `fetch_url` · `read_file` · `write_file` · `edit_file` · `search_files` · `execute_python 🛡️` · `execute_shell 🛡️` · `git` · `write_todos` |
-| **MCP (25+)** | Playwright · Weather · Translator · DataAnalysis · GUI Automation · Web Scraper · Search Engine · System Toolbox · Sandbox Tools · CodeGraph · DeepWiki · Game · Fun · Art · Project Analyzer · OpenClaw · Text Processing · 更多自动发现 |
+```
+                    ┌──────────────────┐
+                    │    CLI/REPL      │
+                    └────────┬─────────┘
+                             │ task_description
+                             ▼
+                    ┌──────────────────┐
+                    │   SkillRouter    │
+                    │ 意图识别+技能匹配│
+                    └────────┬─────────┘
+                             │
+        ┌────────────────────┼────────────────────┐
+        ↓                    ↓                    ↓
+   ┌──────────┐      ┌──────────────┐      ┌──────────┐
+   │ 单 Agent  │      │ 子代理工具    │      │ JS 编排  │
+   │ CLI 直调  │      │ task/        │      │ bridge   │
+   │          │      │ orchestrate  │      │ .mjs     │
+   └──────────┘      └──────────────┘      └──────────┘
+        │                    │                    │
+        └────────────────────┼────────────────────┘
+                             ▼
+                    ┌──────────────────┐
+                    │  Unified Agent   │
+                    │  (ReActCore +    │
+                    │   MiddlewareChain)│
+                    │  + PlanManager   │
+                    │  + ToolRegistry  │
+                    └──────────────────┘
+```
 
-> MCP 工具自动扫描 `mcp/` 目录和 `.mcp.json` 配置，运行时即插即用，5s 超时并行连接。
-
----
-
-## 能力总览
-
-> V2 多Agent 继承 V2 单Agent 全部能力，叠加编排层特性。
-
-| 能力 | V1 (Web) | V2 单Agent (CLI) | V2 多Agent (Workflow) |
-|------|:--------:|:----------------:|:---------------------:|
-| 联网搜索 | ✅ | ✅ | ⊃ |
-| 文件读写 | ✅ | ✅ | ⊃ |
-| 代码执行 (沙箱) | ✅ | ✅ | ⊃ |
-| 网页抓取 | ✅ | ✅ | ⊃ |
-| Git 操作 | ✅ | ✅ | ⊃ |
-| 数据分析 | ✅ | ✅ | ⊃ |
-| GUI 自动化 (macOS) | — | ✅ | ⊃ |
-| 翻译 / 天气 / 计算 | ✅ | ✅ | ⊃ |
-| 项目分析 | — | ✅ | ⊃ |
-| 游戏 / 趣味工具 | — | ✅ | ⊃ |
-| 实时 WebSocket | ✅ | ✅ | ⊃ |
-| 记忆系统 | ✅ 多层 | ✅ 精简 | ⊃ |
-| JS 编排 | — | — | **+✅** |
-| Schema 验证 | — | — | **+✅** |
-| 进度追踪 | — | — | **+✅** |
-| Budget 上限 | — | — | **+✅** |
+三种模式共用**同一套**执行引擎，只是入口不同：
+- **单 Agent** — CLI 直接传入任务描述 → ReAct → Plan → Tools → FinalAnswer
+- **子代理** — `task`/`orchestrate` 工具 → 启动新 Agent（同引擎，不同角色 prompt）
+- **JS 编排** — Node.js 脚本通过 IPC 桥调用 Python Agent
 
 ---
 
@@ -429,10 +638,9 @@ MCP 协议      自定义框架 · 25+ 工具服务器
 │   └── routes/           chat.py · WebSocket
 │
 ├── core/                 引擎核心 ⭐
-│   ├── agent_system.py   V1 架构 (Leader + Worker)
 │   ├── engine/           LLM 路由 · 技能调度
-│   ├── multi_agent_v2/   V2 架构 (Agent · Tools · Workflow)
-│   ├── memory/           三层记忆
+│   ├── multi_agent_v2/   V2 架构 (Agent · Tools · Workflow · Prompts)
+│   ├── memory/           ContextCompactor L0-L4 + SessionManager
 │   ├── search/           RAG 搜索
 │   └── mcp/              MCP 客户端
 │

@@ -404,9 +404,8 @@ def update_step_status(ctx: RunContext, prefix: str = "") -> None:
                 ctx.forced_instructions = f"立即执行下一步：{_n.description}{_t}"
             return
 
-    # 兜底：步骤卡住多轮且全无进展（无一完成）→ 推进
-    _any_done_backup = any(s.status == "done" for s in ctx.plan)
-    if current_step.status != "done" and not _any_done_backup and ctx.react_depth >= 6:
+    # ponytail: 步骤卡住多轮 → 检查是否有实质进展（工具产生了有效输出），有则推进
+    if current_step.status != "done" and ctx.react_depth >= 4:
         _has_substance = False
         for r in ctx.tool_results:
             if not r.get("success"):
@@ -423,6 +422,12 @@ def update_step_status(ctx: RunContext, prefix: str = "") -> None:
         if _has_substance:
             logger.info(f"步骤 {current_step.index} 多轮未推进且有实质进展，兜底标记为 done")
             current_step.status = "done"
+            _consolidate_subagent_steps(ctx, current_step)
+            _pending_after_fallback = [s for s in ctx.plan if s.status == "pending"]
+            if _pending_after_fallback and not ctx.forced_instructions:
+                _nxt_f = _pending_after_fallback[0]
+                _tf = f" → {_nxt_f.tool_names[0]}" if _nxt_f.tool_names else ""
+                ctx.forced_instructions = f"立即执行下一步：{_nxt_f.description}{_tf}"
 
     # 编辑任务卡住检测：步骤 pending 且一直只调 read_file → 禁用 read_file 逼它换工具
     if current_step.status not in ("done", "failed") and ctx.react_depth >= 2:
