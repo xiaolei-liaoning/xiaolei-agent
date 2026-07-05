@@ -555,7 +555,7 @@ await budget.report(500, "claude-sonnet")      // 汇报 token 消耗
 > ⚠️ **不稳定声明：** JS Workflow + V2 Agent 桥接层目前尚不稳定。`bridge.mjs` IPC 通信在复杂并行场景下可能出现超时或状态不同步，建议仅用于探索性编排。
 
 完整 10 场景编排评估报告（含真实 LLM 生成的 workflow 脚本和评分）：
-👉 [编排能力深度评估](docs/reports/orchestration-eval-report.html)
+👉 [编排能力深度评估](workflow-templates.html)
 
 ---
 
