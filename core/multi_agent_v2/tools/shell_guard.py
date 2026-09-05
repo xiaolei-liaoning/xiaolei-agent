@@ -107,11 +107,12 @@ SENSITIVE_PATHS = [
 
 
 # ── 注入模式 ──
+# ponytail: rm 只拦递归删除（rm -r/-rf），普通 `rm 临时文件` 是合法清理，放行
 INJECTION_PATTERNS = [
-    # 命令拼接
-    (r';\s*rm\s+', "命令拼接删除", "high"),
-    (r'&&\s*rm\s+', "命令拼接删除", "high"),
-    (r'\|\s*rm\s+', "管道拼接删除", "high"),
+    # 命令拼接（递归删除）
+    (r';\s*rm\s+-[a-zA-Z]*r[a-zA-Z]*\s+', "命令拼接递归删除", "high"),
+    (r'&&\s*rm\s+-[a-zA-Z]*r[a-zA-Z]*\s+', "命令拼接递归删除", "high"),
+    (r'\|\s*rm\s+-[a-zA-Z]*r[a-zA-Z]*\s+', "管道拼接递归删除", "high"),
     (r';\s*chmod\s+', "命令拼接权限修改", "medium"),
     (r'&&\s*chmod\s+', "命令拼接权限修改", "medium"),
 
@@ -119,11 +120,11 @@ INJECTION_PATTERNS = [
     (r'\$\{.*\}', "Shell 变量展开", "low"),
     (r'`.*`', "反引号命令替换", "medium"),
 
-    # 引号逃逸
-    (r'"\s*;\s*rm', "引号逃逸删除", "high"),
-    (r"'\s*;\s*rm", "引号逃逸删除", "high"),
-    (r'"\s*&&\s*rm', "引号逃逸删除", "high"),
-    (r"'\s*&&\s*rm", "引号逃逸删除", "high"),
+    # 引号逃逸（递归删除）
+    (r'"\s*;\s*rm\s+-[a-zA-Z]*r[a-zA-Z]*', "引号逃逸递归删除", "high"),
+    (r"'\s*;\s*rm\s+-[a-zA-Z]*r[a-zA-Z]*", "引号逃逸递归删除", "high"),
+    (r'"\s*&&\s*rm\s+-[a-zA-Z]*r[a-zA-Z]*', "引号逃逸递归删除", "high"),
+    (r"'\s*&&\s*rm\s+-[a-zA-Z]*r[a-zA-Z]*", "引号逃逸递归删除", "high"),
 ]
 
 

@@ -80,8 +80,15 @@ def _check_syntax(path: str, content: str) -> tuple:
 
 
 def _is_truncated(content: str) -> bool:
-    """检测内容是否被截断"""
+    """检测内容是否被截断。
+
+    ponytail: 含 <!-- SECTION: 占位标记的是模板分段填充中的骨架，
+    属于故意未完成的中间态，不算截断（配合 report.txt 分段工作流）。
+    """
     if not content or len(content) < 5:
+        return False
+    # 模板分段填充的骨架 → 不是截断
+    if "<!-- section:" in content.lower():
         return False
     # 常见截断特征：HTML/XML 标签未闭合
     open_tags = re.findall(r'<(\w+)[^>]*>', content)

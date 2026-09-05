@@ -30,6 +30,14 @@ def _make_router(replies):
         return LLMResponse(content=text, tool_calls=None)
     router.chat_structured_stream = AsyncMock(side_effect=_chat_stream)
     router.chat = AsyncMock(side_effect=lambda msgs, **kw: next(it, "done"))
+
+    async def _stream_compat(messages, **kwargs):
+        text = next(it, "done")
+        reply = _StreamReply(text)
+        reply.truncated = False
+        return reply
+    from core.engine.llm_backend import _StreamReply
+    router.chat_stream_compat = AsyncMock(side_effect=_stream_compat)
     router.chat_structured = AsyncMock(side_effect=lambda msgs, **kw: LLMResponse(content=next(it, "done"), truncated=False))
     router.simple_chat = AsyncMock(return_value="0,0,0,0,0,0,0,0")
     return router

@@ -83,6 +83,11 @@ class LLMResponse:
         return bool(self.tool_calls)
 
 
+class _StreamReply(str):
+    """str 子类，携带 truncated 标记（chat_stream_compat 专用）"""
+    truncated: bool = False
+
+
 class TokenStats:
     def __init__(self, max_history: int = 500):
         self._history: List[TokenUsage] = []
@@ -537,7 +542,8 @@ class GLMBackend:
 
                 logger.info("LLM DeepSeek(stream)返回: content_len=%d tool_calls=%s finish=%s",
                             len(full_content), bool(tool_calls), finish_reason)
-                return LLMResponse(content=full_content, tool_calls=tool_calls if tool_calls else None)
+                return LLMResponse(content=full_content, tool_calls=tool_calls if tool_calls else None,
+                                   truncated=(finish_reason == 'length'))
 
             except asyncio.CancelledError:
                 raise
@@ -875,6 +881,29 @@ class LLMRouter:
                    model=None, tools=None) -> str:
         return await self.backend.chat(messages, temperature=temperature,
                                        max_tokens=max_tokens, model=model, tools=tools)
+
+    async def chat_stream_compat(self, messages, temperature=0.7, max_tokens=4096,
+                                 model=None, tools=None, on_text=None) -> str:
+        """流式调用但返回与 chat() 完全相同的字符串格式（drop-in 替换）。
+
+        ponytail: 流式下 token 逐个流出、连接持续活跃，长内容生成不会被
+        请求级超时中途杀死（对齐 deepseek-harness：无请求级 timeout）。
+        """
+        resp = await self.chat_structured_stream(
+            messages, temperature=temperature, max_tokens=max_tokens,
+            model=model, tools=tools, on_text=on_text,
+        )
+        if resp.tool_calls or resp.reasoning_content:
+            d = {"role": "assistant", "content": resp.content}
+            if resp.tool_calls:
+                d["tool_calls"] = resp.tool_calls
+            if resp.reasoning_content:
+                d["reasoning_content"] = resp.reasoning_content
+            out = _StreamReply(json.dumps({"choices": [{"message": d}]}, ensure_ascii=False))
+        else:
+            out = _StreamReply(resp.content or "")
+        out.truncated = resp.truncated
+        return out
 
     async def chat_structured(self, messages, temperature=0.7, max_tokens=4096,
                               model=None, tools=None) -> LLMResponse:

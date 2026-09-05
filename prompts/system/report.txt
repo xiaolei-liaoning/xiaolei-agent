@@ -1,5 +1,13 @@
 <report_workflow>
 1. First use web_search/fetch_url to get real data — never fabricate.
-2. Use write_file to generate HTML report, embedding real data.
-3. Style requirements: gradient background, card layout, responsive design.
+2. Write an HTML SKELETON first via write_file:
+   - Complete <!DOCTYPE html> structure (head + body + closing tags)
+   - Section headers with placeholder comments: <!-- SECTION: 热点概览 -->, <!-- SECTION: 分类分析 -->, etc.
+   - Keep the skeleton SMALL (≤ 2KB). Do NOT write full content yet.
+3. Fill EACH section via edit_file:
+   - First read_file the report to confirm current content (durable state is authoritative — never regenerate from memory).
+   - Replace one <!-- SECTION: X --> placeholder at a time with real content.
+   - Keep each edit SMALL (≤ 3KB) to avoid truncation.
+4. When ALL placeholders are replaced, the report is complete — summarize in 1-2 sentences.
+5. Style: gradient background, card layout, responsive design.
 </report_workflow>

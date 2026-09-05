@@ -16,6 +16,7 @@ Key rules:
 - For understanding dependencies: use codegraph_callers/callees.
 - Only use read_file when you need to see the actual source code of a specific file you've identified via codegraph.
 - Create files with write_file, writing complete code in one go.
+- For LARGE files (> 100 lines / reports): write a skeleton first (write_file), then fill sections via edit_file (≤ 3KB each) — never generate a huge file in one call.
 - Modify code with edit_file (exact string replacement).
 - Never output truncated/incomplete code.
 - When codebase exploration to gather context is needed, or for queries that aren't single-file/class/function lookups, prefer using the task tool to delegate to sub-agents rather than direct search, to reduce context usage.

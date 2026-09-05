@@ -528,7 +528,7 @@ class ReActCoreMiddleware(BaseMiddleware):
         _has_successful_results = bool(ctx.tool_results and any(r.get("success") for r in ctx.tool_results))
         for _attempt in range(2):
             try:
-                task = asyncio.create_task(router.chat(
+                task = asyncio.create_task(router.chat_stream_compat(
                     messages,
                     temperature=0.7,
                     max_tokens=32768,
@@ -537,10 +537,10 @@ class ReActCoreMiddleware(BaseMiddleware):
                 try:
                     from cli.animated_spinner import shimmer_spinner
                     async with shimmer_spinner("Thinking…") as _shimmer:
-                        # 动态超时：正常 60s，卡住时逐步收紧
-                        _stuck = getattr(getattr(ctx, 'task_progress', None), 'stuck_counter', 0)
-                        _timeout = 30 if _stuck >= 5 else (45 if _stuck >= 3 else 60)
-                        reply = await asyncio.wait_for(task, timeout=_timeout)
+                        # ponytail: 流式调用（token 逐个流出、连接持续活跃），
+                        # 无动态超时收缩（deepseek-harness 原则：慢≠被杀）。
+                        # 仅保留 300s 兜底防空连接挂死。
+                        reply = await asyncio.wait_for(task, timeout=300)
                 except asyncio.TimeoutError:
                     task.cancel()
                     try:
@@ -665,6 +665,42 @@ class ReActCoreMiddleware(BaseMiddleware):
         if _round_idle:
             ctx.consecutive_idle_rounds = getattr(ctx, 'consecutive_idle_rounds', 0) + 1
             ctx._pending_reply = _last_reply
+
+            # ponytail: 空转但数据已够 + 产出型任务 → 立即硬引导产出
+            # （底部 produce-push 依赖 update()，空转轮会被 continue 跳过，这里是兜底）
+            _tr = ctx.tool_results or []
+            _has_data = sum(
+                1 for r in _tr
+                if r.get("success") and r.get("tool_call", {}).get("name")
+                in ("web_search", "fetch_url", "fetch_json", "hot_search",
+                    "read_file", "execute_python", "execute_shell", "text_analyzer")
+            ) >= 2
+            _has_file = any(
+                r.get("tool_call", {}).get("name") in ("write_file", "edit_file") and r.get("success")
+                for r in _tr
+            )
+            if _has_data and not _has_file and not getattr(ctx, '_produce_limit_on', False):
+                ctx._produce_limit_on = True
+                ctx._allow_restore = getattr(ctx, '_allow_restore', None) or ctx.allowed_tools
+                ctx.allowed_tools = ["write_file", "edit_file", "read_file"]
+                ctx._filtered_tools = None
+                ctx.forced_instructions = (
+                    "⚠️ 数据已收集足够，不要只输出文本！"
+                    "立即调用 write_file 生成完整交付物（大文件先写骨架再分段填充）。"
+                )
+                logger.info("Idle round with sufficient data: produce push + tool hard-limit")
+
+            # ponytail: agent 已把大型 HTML 交付物当文本输出 → 结束循环，
+            # 由兜底链把该回复落盘（避免烧完剩余轮次重复生成）
+            _lr = (_last_reply or "").lstrip()
+            if (
+                _has_data and not _has_file
+                and len(_lr) > 2000
+                and ("<html" in _lr.lower() or "<!doctype" in _lr.lower())
+            ):
+                ctx.exit_reason = "idle_large_output"
+                ctx.interrupted = True
+                logger.info(f"Idle round produced large HTML output ({len(_lr)} chars) → finalize via fallback save")
             if ctx.consecutive_idle_rounds >= 4 and not ctx.forced_instructions:
                 _step_name = ""
                 if ctx.plan:
@@ -876,8 +912,15 @@ class ReActCoreMiddleware(BaseMiddleware):
                         # ── 系统自动 observe：回读验证交付物，结果喂回 LLM ──
                         # 解决"写完交付物立即结束、无验证、observe 结果没回传"的问题
                         if actual is not None:
-                            ctx._deliverable_verified = qa_passed
-                            if qa_passed:
+                            # 模板分段填充中的骨架（含 SECTION 占位）不算完成
+                            _has_pending_sections = "<!-- section:" in actual.lower()
+                            ctx._deliverable_verified = qa_passed and not _has_pending_sections
+                            if _has_pending_sections:
+                                _obs_note = (
+                                    f"【系统观察】骨架已写入 {expanded_path}，"
+                                    f"还有未填充的 SECTION 占位。请逐节 edit_file 填充（先 read_file 确认现状）。"
+                                )
+                            elif qa_passed:
                                 _obs_note = (
                                     f"【系统观察】已回读验证交付物 {expanded_path}："
                                     f"文件存在，共 {len(actual)} 字节，结构/语法有效。"
@@ -1328,6 +1371,14 @@ async def run_react(
                             f"立即调用 write_file 生成完整交付物：{_last.description[:50]}。"
                             "不要再运行代码/读取/搜索了，直接写出完整内容！"
                         )
+                        # ponytail: 硬限制工具 — 产出阶段只允许写/读文件，杜绝继续搜索/分析空转
+                        _saved = getattr(ctx, '_allow_restore', ctx.allowed_tools)
+                        if not getattr(ctx, '_produce_limit_on', False):
+                            ctx._produce_limit_on = True
+                            ctx._allow_restore = _saved
+                        ctx.allowed_tools = ["write_file", "edit_file", "read_file"]
+                        ctx._filtered_tools = None
+                        logger.info("Produce stage: tools limited to write/edit/read_file")
 
             # ponytail: 自适应重规划 — 卡住 5 轮后才重规划 (先让 forced_instructions 在 stuck>=4 有机会生效)
             if ctx.task_progress.stuck_counter >= 5 and ctx.plan:
@@ -1367,11 +1418,22 @@ async def run_react(
                         ctx.allowed_tools = list(_need)
                         ctx._filtered_tools = None
                         logger.info(f"Stuck {ctx.task_progress.stuck_counter} rounds, tools limited to {_need}")
-            elif hasattr(ctx, '_allow_restore'):
+            elif hasattr(ctx, '_allow_restore') and not getattr(ctx, '_produce_limit_on', False):
                 # stuck resolved → restore toolset
                 ctx.allowed_tools = ctx._allow_restore
                 ctx._allow_restore = None
                 ctx._filtered_tools = None
+
+            # ponytail: 产出限制解除 — 交付物已写出（或含占位的骨架已写）→ 恢复完整工具集
+            if getattr(ctx, '_produce_limit_on', False) and any(
+                c.kind == "file_written" for c in _tp.completed_capabilities
+            ):
+                if getattr(ctx, '_allow_restore', None):
+                    ctx.allowed_tools = ctx._allow_restore
+                    ctx._allow_restore = None
+                ctx._produce_limit_on = False
+                ctx._filtered_tools = None
+                logger.info("Produce stage done: toolset restored")
         elif ctx.plan:
             # fallback: 没有 task_progress 时用旧版 update_step_status
             update_step_status(ctx, prefix)
@@ -1507,6 +1569,22 @@ async def run_react(
 
     # ── 搜索报告自动生成兜底 ──
     _save_history()
+    # ponytail: blocker 语义 — 轮次耗尽时收尾必须可诊断（对齐 goal-round-driver 的 round-limit）
+    _round_limit_hit = (
+        not ctx.interrupted
+        and ctx.react_depth >= ctx.max_iterations
+        and not getattr(ctx, 'exit_reason', '')
+    )
+    if _round_limit_hit:
+        ctx.exit_reason = "round_limit"
+        _done_steps = sum(1 for s in ctx.plan if s.status == "done") if ctx.plan else 0
+        _total_steps = len(ctx.plan) if ctx.plan else 0
+        _last_pending = next((s.description[:50] for s in ctx.plan if s.status == "pending"), "") if ctx.plan else ""
+        ctx.warnings.append(
+            f"[round-limit] 已达轮次上限（{ctx.max_iterations}轮）。"
+            f"进度：{_done_steps}/{_total_steps} 步。"
+            f"未完成：{_last_pending or '最终收尾'}。"
+        )
     if not ctx.final_answer:
         _has_search_data = any(
             r.get("tool_call", {}).get("name") in ("web_search", "fetch_url", "fetch_json")
@@ -1519,6 +1597,31 @@ async def run_react(
         )
         if _has_search_data and not _has_report_file:
             from core.multi_agent_v2.tools.tool_result import from_handler as _fmt_search
+
+            # ponytail: agent 已把完整 HTML 报告当文本输出 → 直接落盘，不重新生成
+            _agent_html = (getattr(ctx, '_pending_reply', '') or '').lstrip()
+            if _agent_html.startswith('{'):
+                _extracted = _extract_text_from_json(_agent_html)
+                if _extracted:
+                    _agent_html = _extracted.lstrip()
+            if _agent_html.startswith(('<!DOCTYPE', '<!doctype', '<html')):
+                # 剥离可能的 markdown 代码栏
+                if "```html" in _agent_html:
+                    _agent_html = _agent_html.split("```html")[1].split("```")[0]
+                elif "```" in _agent_html:
+                    _agent_html = _agent_html.split("```")[1].split("```")[0]
+                if len(_agent_html) > 1000 and ("</html>" in _agent_html.lower()):
+                    from core.multi_agent_v2.tools.tool_registry import get_tool_registry
+                    _reg = get_tool_registry()
+                    _wf_handler = _reg.get_handler("write_file")
+                    if _wf_handler:
+                        _task_hint = (ctx.task_description or "")[:60]
+                        _safe_name = "".join(c if c.isalnum() or c in "-_ " else "_" for c in _task_hint).strip().replace(" ", "_")[:40] or "report"
+                        _report_path = os.path.expanduser(f"~/Desktop/{_safe_name}.html")
+                        await _wf_handler({"path": _report_path, "content": _agent_html})
+                        print(f"{prefix}    \033[32m◇ \033[0m\033[2mSaved agent output: \033[0m{_report_path}")
+                        ctx.final_answer = f"✅ 分析报告已生成在桌面: {_safe_name}.html"
+
             _search_outputs = []
             for tr in ctx.tool_results:
                 tc = tr.get("tool_call", {})
@@ -1537,6 +1640,7 @@ async def run_react(
                     "- 包含标题、发布日期、数据分类、趋势分析、总结\n"
                     "- 样式美观，背景用渐变色，字体优雅\n"
                     "- 所有内容用中文，数据逐条列出（禁止省略或截断）\n"
+                    "- 保持精炼：总长度控制在 6KB 以内，避免冗余装饰\n"
                     f"数据：\n{chr(10).join(_search_outputs[:3])}\n\n"
                     "直接输出完整的 HTML 代码，不要输出其他内容。"
                 )
@@ -1550,9 +1654,9 @@ async def run_react(
                                 _router.chat(
                                     [{"role": "user", "content": _report_prompt}],
                                     temperature=0.3,
-                                    max_tokens=32768,
+                                    max_tokens=8000,
                                 ),
-                                timeout=60,
+                                timeout=90,
                             )
                         _html_text = str(_html_resp) if _html_resp else ""
                         if "```html" in _html_text:
@@ -1688,6 +1792,12 @@ async def run_react(
 
     # ponytail: on_finish 必须在兜底之后调用，确保 final_answer 非空时写入记忆
     await chain.on_finish(ctx)
+
+    # ponytail: round_limit → final_answer 附带 blocker 说明，可诊断而非静默
+    if _round_limit_hit:
+        _blocker = next((w for w in ctx.warnings if w.startswith("[round-limit]")), "")
+        if _blocker and ctx.final_answer and _blocker not in ctx.final_answer:
+            ctx.final_answer = f"{ctx.final_answer}\n\n{_blocker}"
 
     return {
         "success": bool(ctx.final_answer),
