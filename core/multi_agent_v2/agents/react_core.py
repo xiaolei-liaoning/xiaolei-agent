@@ -113,6 +113,29 @@ async def _ai_quality_check(content: str) -> str:
         return ""
 
 
+def _check_deliverable_verified(ctx: RunContext, written_path: str) -> bool:
+    """检测 agent 是否已观察/验证交付物（read_file 回读或执行它）。
+
+    用于「observe 环节」：写完交付物后不能立即结束，必须先观察验证。
+    """
+    if not written_path:
+        return True
+    _exp = os.path.abspath(os.path.expanduser(written_path))
+    for r in getattr(ctx, 'tool_results', []):
+        tc = r.get("tool_call", {})
+        name = tc.get("name", "")
+        args = tc.get("arguments", {}) or {}
+        if name == "read_file":
+            p = args.get("path", args.get("filepath", ""))
+            if p and os.path.abspath(os.path.expanduser(p)) == _exp:
+                return True
+        if name in ("execute_python", "execute_shell"):
+            cmd = str(args.get("command", args.get("code", "")))
+            if os.path.basename(_exp) in cmd or os.path.abspath(os.path.expanduser(cmd)) == _exp:
+                return True
+    return False
+
+
 def _check_postcondition_exit_guard(ctx: RunContext) -> bool:
     """Plan 未完成时拦截退出，强制 LLM 执行剩余步骤
 
@@ -850,6 +873,27 @@ class ReActCoreMiddleware(BaseMiddleware):
                         warnings = validate_file_content(path, content, actual, ctx, agent=None)
                         qa_passed = not warnings  # 无警告 = 通过
 
+                        # ── 系统自动 observe：回读验证交付物，结果喂回 LLM ──
+                        # 解决"写完交付物立即结束、无验证、observe 结果没回传"的问题
+                        if actual is not None:
+                            ctx._deliverable_verified = qa_passed
+                            if qa_passed:
+                                _obs_note = (
+                                    f"【系统观察】已回读验证交付物 {expanded_path}："
+                                    f"文件存在，共 {len(actual)} 字节，结构/语法有效。"
+                                )
+                            else:
+                                _obs_note = (
+                                    f"【系统观察】回读 {expanded_path} 发现警告："
+                                    f"{'; '.join(warnings)[:150]}。请修复后再完成。"
+                                )
+                            ctx._conversation_history.append({
+                                "role": "tool",
+                                "tool_call_id": f"observe:{path}",
+                                "content": _obs_note,
+                                "name": "observe",
+                            })
+
                         # ── 迭代式质量改进：Write → Review → Improve ──
                         if qa_passed and not getattr(ctx, '_fi_consumed', False):
                             _iter_key = f"write_iter:{path}"
@@ -1168,6 +1212,25 @@ async def run_react(
                     f"请立即 write_file 完成最终产出：{_last.description[:60]}"
                 )
             else:
+                # 写完交付物但还没 observe 验证 → 强制验证，不立即结束
+                _written_path = next(
+                    (c.metadata.get("path") for c in (ctx.task_progress.completed_capabilities if hasattr(ctx, 'task_progress') else [])
+                     if c.kind == "file_written" and c.metadata.get("path")),
+                    ""
+                )
+                if _has_output and not (getattr(ctx, '_deliverable_verified', False) or _check_deliverable_verified(ctx, _written_path)) and _written_path:
+                    _v_attempts = getattr(ctx, '_deliverable_verify_attempts', 0) + 1
+                    ctx._deliverable_verify_attempts = _v_attempts
+                    if _v_attempts <= 3:
+                        ctx.forced_instructions = (
+                            f"⚠️ 交付物已写入：{_written_path}，但尚未验证。"
+                            "请先 observe 验证再结束：\n"
+                            f"1. read_file 读取 {_written_path} 检查内容完整性\n"
+                            "2. 可运行的程序/游戏用 execute_python/execute_shell 运行验证\n"
+                            "3. 确认无误后输出最终结果；有 bug 则用 edit_file 修复"
+                        )
+                        continue  # 继续循环让 agent 验证，不结束
+                # 已验证 或 多次催验仍不验（≥3 次）→ 放行完成
                 ctx.forced_instructions = ""
                 print(f"{prefix}    \033[32m◇ All steps complete\033[0m")
                 ctx.interrupted = True
@@ -1339,9 +1402,8 @@ async def run_react(
                         print(f"{prefix}    \033[33m◇ \033[0m\033[2mStep {step.index} failed, replanning\033[0m")
                         break
 
-        # ponytail: 交付物完成检测 — 核心产出已创建且后续步骤无需再产出时，直接完成
-        # 解决"agent 写完交付物后空转跑满 max_iterations"的问题
-        # 只用 file_written 判定真实交付物（code_executed 可能是 ls/探索，不算产出）
+        # ponytail: 交付物观察/验证 — 写完交付物后不能立即结束，必须先 observe 验证
+        # 解决"agent 写完文件就跳过验证"的问题；observe 结果会回传 LLM 供自我修正
         if ctx.plan and not ctx.interrupted:
             _tp = getattr(ctx, 'task_progress', None)
             _has_output = any(
@@ -1359,21 +1421,35 @@ async def run_react(
                 "write", "create", "generate", "save", "output", "report",
             ])
             if _has_output and _is_production and not _remaining_need_output:
-                if not getattr(ctx, 'final_answer', None):
-                    # 从 file_written 能力提取路径，让完成消息更具体
-                    _path = next(
-                        (c.metadata.get("path") for c in (_tp.completed_capabilities if _tp else [])
-                         if c.kind == "file_written" and c.metadata.get("path")),
-                        ""
-                    )
-                    ctx.final_answer = (
-                        f"✅ 任务已完成，产出已写入：{os.path.expanduser(_path)}"
-                        if _path else "✅ 任务已完成。"
-                    )
-                print(f"{prefix}    \033[32m◇ \033[0m\033[2mDeliverable complete, finalizing\033[0m")
-                ctx.interrupted = True
-                ctx.exit_reason = "deliverable_complete"
-                break
+                _written_path = next(
+                    (c.metadata.get("path") for c in (_tp.completed_capabilities if _tp else [])
+                     if c.kind == "file_written" and c.metadata.get("path")),
+                    ""
+                )
+                # 已验证 = 系统回读确认(_deliverable_verified) 或 agent 主动 read_file/运行
+                if getattr(ctx, '_deliverable_verified', False) or _check_deliverable_verified(ctx, _written_path):
+                    # 已验证 → 允许完成
+                    if not getattr(ctx, 'final_answer', None):
+                        ctx.final_answer = (
+                            f"✅ 任务已完成，产出已写入：{os.path.expanduser(_written_path)}"
+                            if _written_path else "✅ 任务已完成。"
+                        )
+                    print(f"{prefix}    \033[32m◇ \033[0m\033[2mDeliverable verified, finalizing\033[0m")
+                    ctx.interrupted = True
+                    ctx.exit_reason = "deliverable_complete"
+                    break
+                else:
+                    # 未验证 → 触发观察指令（不立即结束），并回传观察结果给 LLM
+                    if _written_path:
+                        ctx._deliverable_verify_attempts = getattr(ctx, '_deliverable_verify_attempts', 0) + 1
+                        if ctx._deliverable_verify_attempts <= 3:
+                            ctx.forced_instructions = (
+                                f"⚠️ 你已写入交付物：{_written_path}。"
+                                "请先观察/验证它，不要立即结束：\n"
+                                f"1. 立即 read_file 读取 {_written_path}，检查内容是否完整正确\n"
+                                "2. 若为可运行的程序/游戏，用 execute_python/execute_shell 运行它验证\n"
+                                "3. 确认无误后输出最终结果；若发现 bug，用 edit_file 修复后再输出"
+                            )
 
         hr_tool = await chain.on_tool_end(ctx)
         if hr_tool and hr_tool.jump_to == "end":
