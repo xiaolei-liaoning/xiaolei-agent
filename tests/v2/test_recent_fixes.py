@@ -130,3 +130,48 @@ def test_llm_summarize_sync_context_no_warning():
     with patch("core.engine.llm_backend.get_llm_router", return_value=None):
         result = _llm_summarize("hello world", "test")
         assert result is None
+
+
+# ═════════════════════════════════════════════════════════════
+# 测试: Plan 解析 — Markdown 表格 + 前言清理
+# ═════════════════════════════════════════════════════════════
+
+class TestPlanParsingMarkdown:
+    """LLM 输出 markdown 表格/前言时，应解析出干净的步骤"""
+
+    def test_parse_markdown_table_skips_preamble(self):
+        """markdown 表格 + 前言 → 只解析表格行，跳过前言/表头"""
+        text = (
+            '好的，我将为你拆解"发现这个项目"的任务步骤。由于"发现"是一个探索性动作，我将其定义为初步了解项目结构。\n'
+            '以下是拆解步骤：\n'
+            '| 步骤 | 描述 | 工具 |\n'
+            '| :--- | :--- | :--- |\n'
+            '| 1 | 确认路径存在与基本属性，检查目录是否存在 | `终端` |\n'
+            '| 2 | 读取README或项目说明文档 | `文件读取` |\n'
+        )
+        steps = _parse_plan_steps(text)
+        assert len(steps) == 2, f"应解析 2 步, got {len(steps)}"
+        assert steps[0].description == "确认路径存在与基本属性，检查目录是否存在"
+        assert steps[0].tool_names == ["execute_shell"]  # 终端 → execute_shell
+        assert steps[1].description == "读取README或项目说明文档"
+        assert steps[1].tool_names == ["read_file"]  # 文件读取 → read_file
+
+    def test_parse_preamble_lines_skipped(self):
+        """纯文本格式：前言行（好的/以下是）应跳过，保留真实步骤"""
+        text = (
+            '好的，我将为你把任务拆解为可执行的步骤。\n'
+            '以下是拆解步骤，每行格式为：步骤|描述|工具\n'
+            '定位项目根目录并查看顶层文件结构\n'
+            '读取README或项目说明文档\n'
+            '识别项目技术栈\n'
+        )
+        steps = _parse_plan_steps(text)
+        assert len(steps) == 3, f"应解析 3 步, got {len(steps)}"
+        assert steps[0].description == "定位项目根目录并查看顶层文件结构"
+        assert steps[2].description == "识别项目技术栈"
+
+    def test_clean_md_keeps_underscore_tool_names(self):
+        """_clean_md 不应剥离 write_file 中的下划线"""
+        from core.multi_agent_v2.agents.plan_manager import _clean_md
+        assert _clean_md("**写入** `write_file`") == "写入 write_file"
+        assert "write_file" in _clean_md("write_file")

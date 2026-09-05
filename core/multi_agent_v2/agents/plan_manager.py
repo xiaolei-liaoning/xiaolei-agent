@@ -103,18 +103,117 @@ def _infer_postconditions(step: PlanStep, task_description: str) -> List[str]:
     return conds
 
 
-def _parse_plan_steps(text: str) -> List[PlanStep]:
-    """从文本中解析计划步骤。支持两种格式：
-    - 旧 步骤|描述|工具
-    - 新 每行一段描述（OpenCode 风格，无工具绑定）
+def _clean_md(text: str) -> str:
+    """清理步骤描述中的 markdown 格式（**、`、<br>、[链接]等），保留下划线（工具名）"""
+    import re as _re
+    text = _re.sub(r'<br\s*/?>', ' ', text)
+    text = _re.sub(r'[`*~]', '', text)
+    text = _re.sub(r'\[([^\]]+)\]\([^)]*\)', r'\1', text)
+    text = text.replace('**', '').replace('|', ' ').strip()
+    return text
+
+
+def _parse_tools_cell(cell: str) -> List[str]:
+    """从 markdown 表格的工具列提取工具名。
+    兼容 'write_file'、'终端'、'文件读取'、'write_file, execute_shell' 等。
+    未知工具名 → 返回 []（不强制 write_file，靠 _can_advance 推进）。
     """
+    cell = _clean_md(cell)
+    # 已知真实工具名
+    _known = {"write_file", "edit_file", "read_file", "web_search", "fetch_url",
+              "fetch_json", "hot_search", "execute_python", "execute_shell",
+              "codegraph_explore", "codegraph_search", "codegraph_files",
+              "search_files", "glob", "task", "orchestrate", "text_analyzer"}
+    # 中文/缩写工具名映射
+    _map = {
+        "终端": "execute_shell", "命令行": "execute_shell", "shell": "execute_shell",
+        "文件读取": "read_file", "读取": "read_file", "读文件": "read_file",
+        "文本编辑器": "read_file", "编辑器": "read_file", "cat命令": "execute_shell",
+        "文件系统": "execute_shell", "目录": "execute_shell", "浏览": "execute_shell",
+        "搜索": "web_search", "网络": "web_search", "网页": "fetch_url",
+        "写入": "write_file", "写文件": "write_file", "生成": "write_file", "输出": "write_file",
+        "代码分析": "codegraph_explore", "静态分析": "codegraph_explore",
+    }
+    found = []
+    for tok in cell.replace(',', ' ').replace('、', ' ').split():
+        tok = tok.strip()
+        if tok in _known:
+            found.append(tok)
+        elif tok in _map:
+            found.append(_map[tok])
+    # 中文关键字包含匹配（处理 '终端（ls, find）' 等带括号/说明的写法）
+    if not found:
+        for kw, tool in sorted(_map.items(), key=lambda x: -len(x[0])):
+            if kw in cell:
+                found.append(tool)
+                break
+    return found
+
+
+def _is_preamble(line: str) -> bool:
+    """识别 LLM 输出的前言/说明文字（非步骤）。
+
+    规则：
+    - 以冒号结尾 → 标题/前言
+    - 以明显前言词开头（好的/我将/以下是/下面/首先/这里/注意/说明等）→ 前言
+    - 含格式指令（每行格式/格式为/输出格式）→ 前言
+    """
+    stripped = line.lstrip("：:，,。 ")
+    if stripped.rstrip().endswith(("：", ":")):
+        return True
+    _start_markers = ("好的", "我将", "我会", "让我", "下面", "以下",
+                      "为了", "你好", "这里", "我们", "可以", "总结", "备注",
+                      "注意", "说明", "这个", "那么")
+    if stripped.startswith(_start_markers):
+        return True
+    _fmt_markers = ("每行格式", "格式为", "输出格式", "格式如下", "步骤格式",
+                    "拆解步骤", "如下", "任务步骤", "的步骤", "步骤为")
+    if any(m in stripped for m in _fmt_markers) and len(stripped) > 20:
+        return True
+    return False
+
+
+def _parse_plan_steps(text: str) -> List[PlanStep]:
+    """从文本中解析计划步骤。支持三种格式：
+    - 旧 步骤|描述|工具 或 1|描述|工具
+    - 新 每行一段描述（OpenCode 风格，无工具绑定）
+    - Markdown 表格 | 步骤 | 描述 | 工具 |（LLM 常见输出，需跳过 preamble）
+    """
+    import re as _re
     template_blacklist = {"步骤描述", "具体描述", "任务描述", "描述", "步骤一", "步骤二"}
-    steps = []
     lines = [l.strip() for l in text.split("\n") if l.strip()]
 
+    # ── 检测 Markdown 表格格式 ──
+    table_rows = [l for l in lines if l.startswith("|") and l.count("|") >= 3]
+    is_md_table = len(table_rows) >= 2 and any(
+        "步骤" in row or "描述" in row for row in table_rows[:2]
+    )
+
+    if is_md_table:
+        steps = []
+        for row in table_rows:
+            cells = [c.strip() for c in row.strip("|").split("|")]
+            if len(cells) < 2:
+                continue
+            # 表头/分隔行（步骤/描述 或 ---/---）
+            _c0 = _clean_md(cells[0])
+            if _c0 in ("步骤", "序号", "#", "") or _re.match(r'^:?-+$', _c0):
+                continue
+            if _c0 == "描述" or _c0 == "工具":
+                continue
+            desc = _clean_md(cells[1]) if len(cells) > 1 else ""
+            tools_str = cells[2] if len(cells) > 2 else ""
+            if len(desc) < 3 or desc in template_blacklist:
+                continue
+            tools = _parse_tools_cell(tools_str)
+            steps.append(PlanStep(index=len(steps) + 1, description=desc, tool_names=tools))
+        return steps
+
+    # ── 非表格格式：逐行解析，跳过 preamble ──
+    steps = []
     for line in lines:
         # 旧格式：步骤|描述|工具 或 1|描述|工具
-        if line.startswith("步骤|") or re.match(r'^\d+\|', line):
+        if line.startswith("步骤|") or _re.match(r'^\d+\|', line):
             parts = line.split("|")
             desc = parts[1].strip() if len(parts) > 1 else ""
             tools_str = parts[2].strip() if len(parts) > 2 else ""
@@ -125,10 +224,13 @@ def _parse_plan_steps(text: str) -> List[PlanStep]:
             continue
 
         # 跳过编号、前缀、示例标记
-        if re.match(r'^(步骤\s*[一二三四五六七八九十\d]|[一二三四五六七八九十\d]+[\.\、\)）]|[-*•]|#)', line):
+        if _re.match(r'^(步骤\s*[一二三四五六七八九十\d]|[一二三四五六七八九十\d]+[\.\、\)）]|[-*•]|#)', line):
             continue
         # 跳过太短的行
         if len(line) < 4:
+            continue
+        # 跳过前言/说明文字
+        if _is_preamble(line):
             continue
 
         # 纯文本行 → 新格式步骤
