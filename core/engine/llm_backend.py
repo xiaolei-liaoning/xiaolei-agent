@@ -602,7 +602,8 @@ class GLMBackend:
 
                 logger.info("LLM OpenRouter(stream)返回: content_len=%d tool_calls=%s finish=%s",
                             len(full_content), bool(tool_calls), finish_reason)
-                return LLMResponse(content=full_content, tool_calls=tool_calls if tool_calls else None)
+                return LLMResponse(content=full_content, tool_calls=tool_calls if tool_calls else None,
+                                   truncated=(finish_reason == 'length'))
 
             except asyncio.CancelledError:
                 raise

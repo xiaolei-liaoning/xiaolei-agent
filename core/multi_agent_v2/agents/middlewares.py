@@ -557,6 +557,28 @@ class LoopDetectionMiddleware(BaseMiddleware):
                 continue
             self._tool_freq[name] = self._tool_freq.get(name, 0) + 1
 
+            # ponytail: 同 URL 去重 — 同一页面反复抓取 >2 次直接拦截
+            # （数据已拿过，继续抓只是烧轮次；引导产出而非硬杀整个任务）
+            if name in ("fetch_url", "fetch_json"):
+                _args_str = tc.get("function", {}).get("arguments", "{}")
+                try:
+                    _a = safe_parse_json(_args_str) if isinstance(_args_str, str) else _args_str
+                except Exception:
+                    _a = {}
+                _url = str(_a.get("url", ""))[:200]
+                if _url:
+                    _key = f"url:{_url}"
+                    self._tool_freq[_key] = self._tool_freq.get(_key, 0) + 1
+                    if self._tool_freq[_key] > 2:
+                        ctx.warnings.append(
+                            f"[重复抓取] URL 已抓取 {self._tool_freq[_key]} 次：{_url[:100]}。"
+                            "数据已足够，请立即 write_file 输出结果。"
+                        )
+                        ctx.forced_instructions = (
+                            f"⚠️ {_url[:80]} 已抓取 {self._tool_freq[_key]} 次，数据已足够。"
+                            "请立即调用 write_file 输出结果，不要再抓取。"
+                        )
+
             _warn, _hard = self._get_tool_limits(name)
             if self._tool_freq[name] >= _hard:
                 ctx.interrupted = True

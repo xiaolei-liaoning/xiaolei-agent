@@ -381,6 +381,9 @@ class ReActCoreMiddleware(BaseMiddleware):
         # ── 项目分析任务：更多轮次 ──
         if _task_flags.get("project_analysis"):
             ctx.max_iterations = max(ctx.max_iterations, 15)
+        # ponytail: 报告任务 — 骨架+分段填充需要更多轮次（deepseek-harness: maxGoalRounds 属于 goal 定义）
+        if _task_flags.get("report"):
+            ctx.max_iterations = max(ctx.max_iterations, 10)
 
         if ctx.plan:
             modules.append("plan")
@@ -763,7 +766,7 @@ class ReActCoreMiddleware(BaseMiddleware):
                         ctx._failed_approaches = ctx._failed_approaches[-50:]
 
                 # ponytail: 成功获取数据后标记，防止重复搜索
-                if ok and tool_name in ("fetch_url", "web_search", "hot_search"):
+                if ok and tool_name in ("fetch_url", "web_search", "hot_search", "fetch_json"):
                     _raw = str(result.get("result", {}))
                     # 中文热搜 + 英文 trending/搜索结果均可触发
                     _data_keywords = (
@@ -773,6 +776,13 @@ class ReActCoreMiddleware(BaseMiddleware):
                     )
                     if any(kw in _raw.lower() for kw in _data_keywords):
                         ctx._data_fetched = True
+                    else:
+                        # ponytail: 关键词不命中（反爬页/格式变化）→ 按成功次数兜底：
+                        # ≥2 次成功搜索（结果实质内容 ≥300 字符）即视为数据阶段完成
+                        ctx._search_success_count = getattr(ctx, '_search_success_count', 0) + 1
+                        if ctx._search_success_count >= 2 and len(_raw) >= 300:
+                            ctx._data_fetched = True
+                    if getattr(ctx, '_data_fetched', False):
                         logger.info("数据已获取，后续将隐藏搜索工具防止重复")
                         # ponytail: 数据已就绪 → 强制 write_file 输出，防 LLM 画蛇添足调 execute_python
                         if not ctx.forced_instructions:
@@ -1243,7 +1253,7 @@ async def run_react(
                     "完成声明需要证据支持。\n"
                     if _claimed else ""
                 )
-                ctx.forced_instructions = (
+                _goal_round_text = (
                     f"<goal_round>\n"
                     f"Objective: {_task[:200]}\n"
                     f"Round: {ctx.react_depth + 1}/{ctx.max_iterations}\n\n"
@@ -1259,7 +1269,14 @@ async def run_react(
                     f"（大文件先写骨架再逐节 edit_file 填充）。完成后输出简短总结即可结束。\n"
                     f"</goal_round>"
                 )
-                logger.info(f"Goal-round continuation: deliverable missing, round {ctx.react_depth + 1}/{ctx.max_iterations}")
+                # ponytail: 对齐 deepseek-harness — 续轮以 user 消息进入历史
+                # （强信号："该你了"；system 注入是弱信号，模型会继续自说自话）
+                ctx._conversation_history.append({
+                    "role": "user",
+                    "content": _goal_round_text,
+                })
+                ctx.forced_instructions = ""
+                logger.info(f"Goal-round continuation (user message): deliverable missing, round {ctx.react_depth + 1}/{ctx.max_iterations}")
             else:
                 # 目标已达成 或 非产出型任务 → 文本即最终回答（no tool calls = completed）
                 if _reply_text and _reply_text.strip():
