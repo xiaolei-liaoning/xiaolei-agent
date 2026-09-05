@@ -359,7 +359,16 @@ class MiddlewareChain:
                             "_validation_error": True,  # 标记校验错误，on_tool_invoke 据此跳过历史记录
                         }
                     try:
-                        result = await handler(args)
+                        # ponytail: 需要 ctx 的 handler（如 write_todos 同步计划）按签名传 ctx
+                        import inspect as _inspect
+                        try:
+                            _accepts_ctx = 'ctx' in _inspect.signature(handler).parameters
+                        except (ValueError, TypeError):
+                            _accepts_ctx = False
+                        if _accepts_ctx:
+                            result = await handler(args, ctx=ctx)
+                        else:
+                            result = await handler(args)
                         # 注册表层统一输出截断（对标 opencode boundOutput）
                         from core.multi_agent_v2.tools.tool_result import bound_result
                         result = bound_result(name, result)

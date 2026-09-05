@@ -1231,12 +1231,18 @@ async def run_react(
             )
             if _is_production and not _deliverable_ok:
                 # 目标未达成 → 续轮指令（goal-round 风格，durable state 为权威）
+                _claimed = getattr(ctx, '_agent_claims_complete', False)
                 _files = [
                     c.metadata.get("path") for c in (_tp.completed_capabilities if _tp else [])
                     if c.kind == "file_written" and c.metadata.get("path")
                 ]
                 _ndata = len(_tp.completed_capabilities) if _tp else 0
                 _next_step = next((s.description[:60] for s in ctx.plan if s.status == "pending"), "") if ctx.plan else ""
+                _claim_note = (
+                    "⚠️ 你刚声明所有 todos 已完成，但系统中没有交付物写入记录——"
+                    "完成声明需要证据支持。\n"
+                    if _claimed else ""
+                )
                 ctx.forced_instructions = (
                     f"<goal_round>\n"
                     f"Objective: {_task[:200]}\n"
@@ -1248,6 +1254,7 @@ async def run_react(
                     f"- 已收集数据: {_ndata} 项\n"
                     f"- 交付物尚未完成写入。\n"
                     + (f"- 当前步骤: {_next_step}\n" if _next_step else "")
+                    + _claim_note
                     + f"Make concrete progress and verify the result: 用 write_file 把交付物写入磁盘"
                     f"（大文件先写骨架再逐节 edit_file 填充）。完成后输出简短总结即可结束。\n"
                     f"</goal_round>"

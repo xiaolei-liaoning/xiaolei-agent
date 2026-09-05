@@ -951,12 +951,47 @@ def _find_similar_files(path: str, desktop: str) -> List[str]:
     return similar_files[:10]  # 最多返回10个
 
 
-async def _handle_write_todos(args: Dict) -> Dict:
-    """任务清单 — 实际追踪由 plan_manager 负责，此 handler 仅返回成功避免 Agent 报错"""
+async def _handle_write_todos(args: Dict, ctx=None) -> Dict:
+    """write_todos — agent 自主声明计划与进度（deepseek-harness update_goal 等价物）。
+
+    接线语义：
+    - todos 按 content 模糊匹配 ctx.plan 步骤，同步状态（completed→done, in_progress→running）
+    - 全部 completed → 记录 agent 完成声明（产出型任务仍需交付物证据门控）
+    - 无 ctx（测试/无计划上下文）时退化为纯确认
+    """
     from core.multi_agent_v2.tools.tool_result import ok
     todos = args.get("todos", [])
+    if not todos:
+        return ok("todos 为空")
+
     done = sum(1 for t in todos if t.get("status") == "completed")
-    return ok(f"✅ 任务清单已更新 ({done}/{len(todos)} 完成)")
+
+    # ── 同步到计划步骤（模糊匹配 content）──
+    _synced = 0
+    if ctx is not None and getattr(ctx, 'plan', None):
+        for t in todos:
+            content = (t.get("content") or "").strip()
+            status = t.get("status") or "pending"
+            if len(content) < 4:
+                continue
+            for step in ctx.plan:
+                d = (step.description or "")
+                if content[:12] in d or d[:12] in content:
+                    if status == "completed" and step.status != "done":
+                        step.status = "done"
+                        _synced += 1
+                    elif status == "in_progress" and step.status == "pending":
+                        step.status = "running"
+                    break
+
+    # ── agent 完成声明（evidence gate 在主循环：产出型任务仍需交付物验证）──
+    all_completed = done == len(todos) and len(todos) > 0
+    if ctx is not None and all_completed:
+        ctx._agent_claims_complete = True
+        logger.info("write_todos: agent claims all todos completed")
+
+    _plan_note = f"，已同步 {_synced} 个计划步骤" if _synced else ""
+    return ok(f"✅ 任务清单已更新 ({done}/{len(todos)} 完成){_plan_note}")
 
 
 async def _handle_write_file(args: Dict) -> Dict:

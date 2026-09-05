@@ -1,1 +1,5 @@
-[Auto-tracked] Task progress is automatically managed by the system. No need to manually call this tool.
+Maintain your task plan here. For long multi-step tasks:
+1. Early on, call write_todos to declare your step plan (content + status).
+2. After completing each step, call write_todos again to mark it completed and set the next step in_progress.
+3. When ALL steps are done, mark every todo completed — this declares the objective achieved.
+Statuses: pending / in_progress / completed. Keep contents stable across calls so steps can be matched.
