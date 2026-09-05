@@ -100,6 +100,15 @@ def _detect_from_result(r: Dict[str, Any]) -> List[Capability]:
             "stdout_len": len(result_text) if result_text != "None" else 0,
             "has_html_parse": "BeautifulSoup" in code or "lxml" in code or "html.parser" in code,
         }))
+        # ponytail: execute_python 写文件 → 也产生 file_written（agent 可能用代码写交付物）
+        _writes = any(p in code for p in ("write_text", "write_bytes", "to_file", "savefig")) or (
+            "open(" in code and (".write(" in code or "writelines" in code)
+        )
+        if _writes:
+            caps.append(Capability(kind="file_written", metadata={
+                "path": "", "via": "execute_python",
+                "size_bytes": 0,
+            }))
 
     # Shell 执行
     if name == "execute_shell":
@@ -108,6 +117,15 @@ def _detect_from_result(r: Dict[str, Any]) -> List[Capability]:
             "code_snippet": command[:200],
             "stdout_len": len(result_text) if result_text != "None" else 0,
         }))
+        # ponytail: execute_shell 写文件（echo/cat/tee > file）→ 也产生 file_written
+        _shell_writes = any(p in command for p in ("cat > ", "echo ", "tee ", "> ", ">> ")) and (
+            any(p in command for p in (".py", ".html", ".js", ".css", ".json", ".md", ".txt", ".html"))
+        )
+        if _shell_writes:
+            caps.append(Capability(kind="file_written", metadata={
+                "path": "", "via": "execute_shell",
+                "size_bytes": 0,
+            }))
 
     # 文件读取
     if name == "read_file":

@@ -1156,9 +1156,8 @@ async def run_react(
                 "生成", "创建", "写", "保存", "输出", "报告", "文件",
                 "create", "write", "generate", "save", "output", "report",
             ])
-            # ponytail: code_executed (execute_python/shell) 也可能创建文件/产出 → 算作有产出
             _has_output = any(
-                c.kind in ("file_written", "code_executed")
+                c.kind == "file_written"
                 for c in getattr(ctx, 'task_progress', None) and ctx.task_progress.completed_capabilities or []
             )
             if _need_output and not _has_output:
@@ -1244,6 +1243,29 @@ async def run_react(
         if _tp is not None:
             ctx.task_progress.update()
 
+            # ponytail: 产出催促 — 数据已收集足够但仍未写交付物 → 强制 write_file
+            # 防止 agent 在"分析+报告"任务上反复跑代码/读文件却从不产出
+            if ctx.plan:
+                _pending = [s for s in ctx.plan if s.status == "pending"]
+                if _pending:
+                    _last = _pending[-1]
+                    _is_produce = any(
+                        kw in (_last.description or "").lower() for kw in
+                        ["写", "报告", "文件", "生成", "输出", "产出", "编写",
+                         "write", "report", "generate", "output", "save"]
+                    )
+                    _data_collected = sum(
+                        1 for c in _tp.completed_capabilities
+                        if c.kind in ("file_read", "web_search", "url_fetched", "code_executed", "tool_called")
+                    )
+                    _has_output = any(c.kind == "file_written" for c in _tp.completed_capabilities)
+                    if _is_produce and _data_collected >= 3 and not _has_output:
+                        ctx.forced_instructions = (
+                            f"⚠️ 数据已收集足够（{_data_collected}项）。"
+                            f"立即调用 write_file 生成完整交付物：{_last.description[:50]}。"
+                            "不要再运行代码/读取/搜索了，直接写出完整内容！"
+                        )
+
             # ponytail: 自适应重规划 — 卡住 5 轮后才重规划 (先让 forced_instructions 在 stuck>=4 有机会生效)
             if ctx.task_progress.stuck_counter >= 5 and ctx.plan:
                 _pending = [s for s in ctx.plan if s.status == "pending"]
@@ -1319,15 +1341,16 @@ async def run_react(
 
         # ponytail: 交付物完成检测 — 核心产出已创建且后续步骤无需再产出时，直接完成
         # 解决"agent 写完交付物后空转跑满 max_iterations"的问题
+        # 只用 file_written 判定真实交付物（code_executed 可能是 ls/探索，不算产出）
         if ctx.plan and not ctx.interrupted:
             _tp = getattr(ctx, 'task_progress', None)
             _has_output = any(
-                c.kind in ("file_written", "code_executed")
+                c.kind == "file_written"
                 for c in (_tp.completed_capabilities if _tp else [])
             )
             _pending = [s for s in ctx.plan if s.status == "pending"]
             _remaining_need_output = any(
-                s.tool_names and set(s.tool_names) & {"write_file", "execute_python", "execute_shell", "edit_file"}
+                s.tool_names and set(s.tool_names) & {"write_file", "edit_file"}
                 for s in _pending
             ) if _pending else False
             _task = ctx.task_description or ""

@@ -99,7 +99,8 @@ def _infer_postconditions(step: PlanStep, task_description: str) -> List[str]:
             conds.append("capability:file_read")
         elif tool in ("codegraph_explore", "codegraph_search", "codegraph_files", "search_files"):
             conds.append("capability:file_read")
-    return conds if conds else ["capability:file_written"]
+    # 未知/假工具名（如"文件系统操作"）→ 不设后置条件，靠 _can_advance 推进，避免误卡
+    return conds
 
 
 def _parse_plan_steps(text: str) -> List[PlanStep]:
@@ -169,6 +170,41 @@ def _insert_explore_before_write(steps: List[PlanStep]) -> List[PlanStep]:
     for idx, s in enumerate(new_steps):
         s.index = idx + 1
     return new_steps
+
+
+def _ensure_deliverable_step(steps: List[PlanStep], task_description: str) -> List[PlanStep]:
+    """确保产出型任务的计划以「写交付物」步骤结尾。
+
+    根因：LLM 规划"分析项目+写报告"时，常只列出分析步骤而遗漏产出步骤，
+    导致 agent 分析到底却从不写交付物（跑满 max_rounds 无输出）。
+    若任务为产出型且计划无 write/edit 步骤，追加一个 write_file 步骤。
+    """
+    _prod_kw = [
+        "写", "创建", "生成", "报告", "文件", "保存", "输出", "产出",
+        "write", "create", "generate", "save", "output", "report", "build",
+    ]
+    if not any(kw in task_description.lower() for kw in _prod_kw):
+        return steps
+    # 用「写」相关关键词识别步骤是否已在产出交付物（不依赖 tool_names，
+    # 因为 LLM 可能填假工具名如 终端/文本编辑器）
+    _write_kw = ["写", "生成", "输出", "创建", "产出", "编写", "保存",
+                 "write", "generate", "save", "output", "create", "report"]
+    _has_write = any(
+        (s.tool_names and set(s.tool_names) & {"write_file", "edit_file"})
+        or any(kw in s.description.lower() for kw in _write_kw)
+        for s in steps
+    )
+    if _has_write:
+        return steps
+    deliverable = PlanStep(
+        index=len(steps) + 1,
+        description="编写并输出最终交付物文件",
+        tool_names=["write_file"],
+        postconditions=["capability:file_written"],
+    )
+    steps.append(deliverable)
+    return steps
+
 
 
 async def generate_plan(
@@ -276,6 +312,8 @@ async def generate_plan(
 
         if steps:
             steps = _insert_explore_before_write(steps[:5])
+            # ponytail: 确保产出型任务以写交付物结尾，防止只分析不产出
+            steps = _ensure_deliverable_step(steps, task_description)
             for s in steps:
                 # ponytail: only skip inference for explicitly marked warmup steps
                 if hasattr(s, '_is_warmup') and s._is_warmup:
@@ -302,6 +340,7 @@ async def generate_plan(
         text2 = str(resp2).strip() if resp2 else ""
         if text2 and "[LLM_MOCK]" not in text2:
             fb_steps = _insert_explore_before_write(_parse_plan_steps(text2)[:5])
+            fb_steps = _ensure_deliverable_step(fb_steps, task_description)
             for s in fb_steps:
                 if hasattr(s, '_is_warmup') and s._is_warmup:
                     s.postconditions = []
