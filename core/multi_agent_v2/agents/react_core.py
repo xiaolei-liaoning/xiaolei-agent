@@ -612,7 +612,8 @@ class ReActCoreMiddleware(BaseMiddleware):
                     _round_idle = False
                     break  # 有工具调用 → 跳出重试循环
 
-                # 没有工具调用
+                # 没有工具调用 = 一次完成的轮次（deepseek-harness: no tool calls → completed）
+                # 不强制重试；是否续轮由主循环的 goal-round 逻辑决策
                 _last_reply = reply
                 # ponytail: 从 JSON 响应中提取纯文本
                 _plain = reply
@@ -627,28 +628,9 @@ class ReActCoreMiddleware(BaseMiddleware):
                     ctx.interrupted = True
                     ctx.exit_reason = "plan_completed"
                     break
-                # ponytail: 思考文本存入历史，LLM 下轮/重试时能看到
+                # ponytail: 思考文本存入历史，续轮/兜底时可见（durable record）
                 if _plain and len(_plain) > 20:
                     ctx._conversation_history.append({"role": "assistant", "content": _plain[:2000]})
-                # ponytail: 空跑重试 — 根据可用工具动态建议，不硬编码
-                _avail = [t.get("function", {}).get("name", "") for t in (ctx.tool_defs or [])]
-                # ponytail: 有工具结果时建议 write_file（写报告），而非 read_file
-                if _has_successful_results:
-                    _suggest = next((t for t in ["write_file", "web_search", "execute_python"] if t in _avail), "write_file")
-                else:
-                    _suggest = next((t for t in ["read_file", "web_search", "execute_python"] if t in _avail), "read_file")
-                ctx.forced_instructions = (
-                    f"你刚输出了思考但没调工具。请立即调用 {_suggest}，不要空转。"
-                )
-                # 重建消息（注入强制指令重试）
-                _retry_sys = ctx._pending_messages[0]["content"]
-                _retry_sys += f"\n\n<forced_instructions>\n{ctx.forced_instructions}\n</forced_instructions>"
-                messages = [{"role": "system", "content": _retry_sys},
-                            {"role": "user", "content": ctx.task_description}]
-                if ctx._conversation_history:
-                    messages.extend(ctx._conversation_history)
-                ctx.forced_instructions = ""  # 已内联，清除防重复
-                logger.debug(f"第{ctx.react_depth}轮空转，回合内重试 LLM...")
             except asyncio.TimeoutError:
                 logger.debug("LLM 调用超时 (60s)")
                 ctx.last_error = "LLM 调用超时"
@@ -661,63 +643,11 @@ class ReActCoreMiddleware(BaseMiddleware):
                 ctx.exit_reason = "llm_error"
                 ctx.interrupted = True
                 break
-        # ponytail: per-round idle counting (was per-attempt before)
+        # ponytail: 文本轮次记账（deepseek-harness: 无工具调用=完成的轮次，
+        # 是否续轮由主循环 goal-round 逻辑决策，这里只做记录，不强制不限制）
         if _round_idle:
             ctx.consecutive_idle_rounds = getattr(ctx, 'consecutive_idle_rounds', 0) + 1
             ctx._pending_reply = _last_reply
-
-            # ponytail: 空转但数据已够 + 产出型任务 → 立即硬引导产出
-            # （底部 produce-push 依赖 update()，空转轮会被 continue 跳过，这里是兜底）
-            _tr = ctx.tool_results or []
-            _has_data = sum(
-                1 for r in _tr
-                if r.get("success") and r.get("tool_call", {}).get("name")
-                in ("web_search", "fetch_url", "fetch_json", "hot_search",
-                    "read_file", "execute_python", "execute_shell", "text_analyzer")
-            ) >= 2
-            _has_file = any(
-                r.get("tool_call", {}).get("name") in ("write_file", "edit_file") and r.get("success")
-                for r in _tr
-            )
-            if _has_data and not _has_file and not getattr(ctx, '_produce_limit_on', False):
-                ctx._produce_limit_on = True
-                ctx._allow_restore = getattr(ctx, '_allow_restore', None) or ctx.allowed_tools
-                ctx.allowed_tools = ["write_file", "edit_file", "read_file"]
-                ctx._filtered_tools = None
-                ctx.forced_instructions = (
-                    "⚠️ 数据已收集足够，不要只输出文本！"
-                    "立即调用 write_file 生成完整交付物（大文件先写骨架再分段填充）。"
-                )
-                logger.info("Idle round with sufficient data: produce push + tool hard-limit")
-
-            # ponytail: agent 已把大型 HTML 交付物当文本输出 → 结束循环，
-            # 由兜底链把该回复落盘（避免烧完剩余轮次重复生成）
-            _lr = (_last_reply or "").lstrip()
-            if (
-                _has_data and not _has_file
-                and len(_lr) > 2000
-                and ("<html" in _lr.lower() or "<!doctype" in _lr.lower())
-            ):
-                ctx.exit_reason = "idle_large_output"
-                ctx.interrupted = True
-                logger.info(f"Idle round produced large HTML output ({len(_lr)} chars) → finalize via fallback save")
-            if ctx.consecutive_idle_rounds >= 4 and not ctx.forced_instructions:
-                _step_name = ""
-                if ctx.plan:
-                    _pending = [s for s in ctx.plan if s.status == "pending"]
-                    if _pending and _pending[0].tool_names:
-                        _step_name = _pending[0].tool_names[0]
-                _hint = f"请立即调用 {_step_name}" if _step_name else "请调用可用工具"
-                ctx.forced_instructions = (
-                    f"⚠️ 已经连续 {ctx.consecutive_idle_rounds} 轮没有调用工具！{_hint} 完成任务，不要只输出文本。"
-                )
-            if ctx.consecutive_idle_rounds >= 6:
-                logger.debug(f"连续 {ctx.consecutive_idle_rounds} 轮空转，强制结束")
-                ctx.last_error = f"连续 {ctx.consecutive_idle_rounds} 轮空转无工具调用"
-                ctx.exit_reason = "empty_run_6_rounds"
-                ctx.interrupted = True
-                if _last_reply and len(_last_reply) > 20:
-                    ctx.final_answer = _last_reply
                 
     async def on_tool_invoke(self, ctx: RunContext) -> None:
         """执行工具调用"""
@@ -1280,6 +1210,57 @@ async def run_react(
                 ctx.exit_reason = "plan_completed"
                 break
 
+        # ponytail: goal-round 续轮（deepseek-harness 原则1+2 的对齐实现）—
+        # 上一轮是文本回复（无工具调用 = 完成的轮次）：
+        #   目标已达成 → 该文本就是最终回答；目标未达成 → 注入续轮指令（inspect durable state），
+        #   不强制、不硬限工具，agent 保持主动权；到 cap 由 round_limit blocker 收尾。
+        if getattr(ctx, 'consecutive_idle_rounds', 0) > 0 and not getattr(ctx, 'final_answer', None):
+            _reply_text = getattr(ctx, '_pending_reply', '') or ''
+            if _reply_text.startswith('{'):
+                _x = _extract_text_from_json(_reply_text)
+                if _x:
+                    _reply_text = _x
+            _task = ctx.task_description or ""
+            _is_production = any(kw in _task for kw in [
+                "写", "创建", "生成", "报告", "文件", "保存", "输出",
+                "write", "create", "generate", "save", "output", "report",
+            ])
+            _tp = getattr(ctx, 'task_progress', None)
+            _deliverable_ok = getattr(ctx, '_deliverable_verified', False) or (
+                _tp and any(c.kind == "file_written" for c in _tp.completed_capabilities)
+            )
+            if _is_production and not _deliverable_ok:
+                # 目标未达成 → 续轮指令（goal-round 风格，durable state 为权威）
+                _files = [
+                    c.metadata.get("path") for c in (_tp.completed_capabilities if _tp else [])
+                    if c.kind == "file_written" and c.metadata.get("path")
+                ]
+                _ndata = len(_tp.completed_capabilities) if _tp else 0
+                _next_step = next((s.description[:60] for s in ctx.plan if s.status == "pending"), "") if ctx.plan else ""
+                ctx.forced_instructions = (
+                    f"<goal_round>\n"
+                    f"Objective: {_task[:200]}\n"
+                    f"Round: {ctx.react_depth + 1}/{ctx.max_iterations}\n\n"
+                    f"Continue working toward the objective in this same session. Treat the current "
+                    f"workspace, tool results, and durable session state as authoritative; inspect them "
+                    f"instead of assuming earlier narration is still current. Current state:\n"
+                    f"- 已写入文件: {', '.join(_files[:3]) or '无'}\n"
+                    f"- 已收集数据: {_ndata} 项\n"
+                    f"- 交付物尚未完成写入。\n"
+                    + (f"- 当前步骤: {_next_step}\n" if _next_step else "")
+                    + f"Make concrete progress and verify the result: 用 write_file 把交付物写入磁盘"
+                    f"（大文件先写骨架再逐节 edit_file 填充）。完成后输出简短总结即可结束。\n"
+                    f"</goal_round>"
+                )
+                logger.info(f"Goal-round continuation: deliverable missing, round {ctx.react_depth + 1}/{ctx.max_iterations}")
+            else:
+                # 目标已达成 或 非产出型任务 → 文本即最终回答（no tool calls = completed）
+                if _reply_text and _reply_text.strip():
+                    ctx.final_answer = _reply_text.strip()
+                ctx.interrupted = True
+                ctx.exit_reason = "completed_with_answer"
+                break
+
         # ponytail: AI 质检 — 有 final_answer 且即将退出时，先审查质量
         _exiting_with_answer = (
             ctx.react_depth >= 3
@@ -1366,19 +1347,12 @@ async def run_react(
                     )
                     _has_output = any(c.kind == "file_written" for c in _tp.completed_capabilities)
                     if _is_produce and _data_collected >= 3 and not _has_output:
+                        # ponytail: 协作式提示（不硬限工具 — deepseek-harness 保持 agent 主动权）
                         ctx.forced_instructions = (
                             f"⚠️ 数据已收集足够（{_data_collected}项）。"
                             f"立即调用 write_file 生成完整交付物：{_last.description[:50]}。"
                             "不要再运行代码/读取/搜索了，直接写出完整内容！"
                         )
-                        # ponytail: 硬限制工具 — 产出阶段只允许写/读文件，杜绝继续搜索/分析空转
-                        _saved = getattr(ctx, '_allow_restore', ctx.allowed_tools)
-                        if not getattr(ctx, '_produce_limit_on', False):
-                            ctx._produce_limit_on = True
-                            ctx._allow_restore = _saved
-                        ctx.allowed_tools = ["write_file", "edit_file", "read_file"]
-                        ctx._filtered_tools = None
-                        logger.info("Produce stage: tools limited to write/edit/read_file")
 
             # ponytail: 自适应重规划 — 卡住 5 轮后才重规划 (先让 forced_instructions 在 stuck>=4 有机会生效)
             if ctx.task_progress.stuck_counter >= 5 and ctx.plan:
@@ -1418,22 +1392,11 @@ async def run_react(
                         ctx.allowed_tools = list(_need)
                         ctx._filtered_tools = None
                         logger.info(f"Stuck {ctx.task_progress.stuck_counter} rounds, tools limited to {_need}")
-            elif hasattr(ctx, '_allow_restore') and not getattr(ctx, '_produce_limit_on', False):
+            elif hasattr(ctx, '_allow_restore'):
                 # stuck resolved → restore toolset
                 ctx.allowed_tools = ctx._allow_restore
                 ctx._allow_restore = None
                 ctx._filtered_tools = None
-
-            # ponytail: 产出限制解除 — 交付物已写出（或含占位的骨架已写）→ 恢复完整工具集
-            if getattr(ctx, '_produce_limit_on', False) and any(
-                c.kind == "file_written" for c in _tp.completed_capabilities
-            ):
-                if getattr(ctx, '_allow_restore', None):
-                    ctx.allowed_tools = ctx._allow_restore
-                    ctx._allow_restore = None
-                ctx._produce_limit_on = False
-                ctx._filtered_tools = None
-                logger.info("Produce stage done: toolset restored")
         elif ctx.plan:
             # fallback: 没有 task_progress 时用旧版 update_step_status
             update_step_status(ctx, prefix)

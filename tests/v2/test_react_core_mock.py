@@ -166,14 +166,18 @@ async def test_empty_run_retry():
 
 @pytest.mark.asyncio
 async def test_consecutive_idle_exit():
-    """Fix 6: 连续 idle 达 3 → 强制结束"""
+    """deepseek-harness 对齐: 文本回复(无工具调用)=完成的轮次；
+    非产出型任务 → 文本即最终回答 (no tool calls = completed)"""
     _set_replies([
         "分析", "步骤|测|read_file",  # plan
         "思考中", "还在想",           # round1 (2 idle → counter=2)
-        "没想好",                      # round2 (1 idle → counter=3 → exit)
+        "没想好",                      # round2 → 文本轮次 → 最终回答
     ])
     result = await run_react("idle task")
-    assert result.get("error") and "空转" in result["error"]
+    # 非产出型任务（无写/生成关键词）→ 文本回复直接作为最终回答
+    assert result.get("exit_reason") == "completed_with_answer", \
+        f"exit={result.get('exit_reason')}"
+    assert result.get("answer"), "文本回复应成为最终回答"
 
 
 # ═══════════════════════════════════════════════════════════════════
