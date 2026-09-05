@@ -26,8 +26,8 @@ TOOL_TIMEOUTS = {
     "edit_file": 8,
     "search_files": 10,
     "git": 15,
-    "task": 600,          # 子代理可能跑很久
-    "orchestrate": 900,   # 编排多个子代理更长
+    "task": 900,          # ponytail: LLM 慢，600→900
+    "orchestrate": 1200,   # ponytail: 编排多 agent，900→1200
 }
 DEFAULT_TIMEOUT = 30
 

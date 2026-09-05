@@ -3,6 +3,8 @@
 import asyncio
 import json
 import logging
+import os
+import re
 import time
 from typing import Any, Dict, List, Optional
 
@@ -15,12 +17,36 @@ from .types import (
 
 logger = logging.getLogger(__name__)
 
-_MAX_SUBAGENT_ROUNDS = 10  # 子代理最大执行轮次
+_MAX_SUBAGENT_ROUNDS = 15  # 子代理最大执行轮次（ponytail: 10→15, 5-step plan + 探索需要更多轮次）
+
+
+def _extract_expected_files(text: str) -> List[str]:
+    paths = set()
+    _q = "['\"]"
+    _nq = "[^'\"]"
+    for m in re.finditer(
+        "write_file" + _nq + "*?path\\s*[=:]\\s*" + _q + "(" + _nq + "+)" + _q,
+        text, re.IGNORECASE
+    ):
+        paths.add(os.path.expanduser(m.group(1).strip()))
+    for m in re.finditer(
+        r"write_file[^。\n]{0,80}(?:写入|创建|生成|到)\s*['\"]?((?:~\/|\/)[^\s'\"\)\]\}]+\.\w+)",
+        text, re.IGNORECASE
+    ):
+        paths.add(os.path.expanduser(m.group(1).strip()))
+    # ponytail: bare filenames or full paths after "写入/创建/生成/到"
+    for m in re.finditer(
+        r"(?:写入|创建|生成|到)\s+([\w~/\-]+\.\w{2,6})",
+        text, re.IGNORECASE
+    ):
+        paths.add(m.group(1))
+    return list(paths)
 _MAX_ORCH_CONCURRENCY = 5  # 编排最大并发数
 
-# ponytail: stdout 重定向堆栈，支持并发子代理嵌套
+# ponytail: stdout 重定向 + 有序打印队列，支持并发子代理嵌套
 import io, sys
 _stdout_stack: list = []
+_stdout_print_queue: asyncio.Queue = asyncio.Queue()
 
 def _push_stdout():
     _stdout_stack.append(sys.stdout)
@@ -30,6 +56,21 @@ def _pop_stdout() -> str:
     buf = sys.stdout
     sys.stdout = _stdout_stack.pop()
     return buf.getvalue()
+
+async def _drain_print_queue() -> None:
+    """按 FIFO 顺序打印队列中的所有子代理输出"""
+    while not _stdout_print_queue.empty():
+        captured = _stdout_print_queue.get_nowait()
+        if captured.strip():
+            _tag = "子代理"
+            _lines = captured.splitlines()
+            if len(_lines) <= 3:
+                for _line in _lines:
+                    print(f"  \033[2m[{_tag}]\033[0m {_line}")
+            else:
+                print(f"  \033[2m[{_tag}]\033[0m {_lines[0]}")
+                print(f"  \033[2m[{_tag}]\033[0m \033[2m... {len(_lines)-2} lines omitted\033[0m")
+                print(f"  \033[2m[{_tag}]\033[0m {_lines[-1]}")
 
 
 # ════════════════════════════════════════════════════════════════
@@ -183,16 +224,8 @@ async def spawn_subagent(
             except Exception:
                 _captured = ""
         if _captured.strip():
-            _tag = f"子代理 {profile.value}"
-            _lines = _captured.splitlines()
-            # ponytail: 只显示首尾摘要，避免大量子代理输出污染主终端
-            if len(_lines) <= 3:
-                for _line in _lines:
-                    print(f"  \033[2m[{_tag}]\033[0m {_line}")
-            else:
-                print(f"  \033[2m[{_tag}]\033[0m {_lines[0]}")
-                print(f"  \033[2m[{_tag}]\033[0m \033[2m... {len(_lines)-2} lines omitted\033[0m")
-                print(f"  \033[2m[{_tag}]\033[0m {_lines[-1]}")
+            # ponytail: 入队而非即时打印，保证并行 agent 输出顺序
+            _stdout_print_queue.put_nowait(_captured)
 
         output = result.get("answer", "")
         success = result.get("success", False)
@@ -201,7 +234,18 @@ async def spawn_subagent(
         if success and output:
             session.state = "completed"
             session.result = output
-            logger.info(f"Subagent [{session.session_id}] 完成: {len(output)} 字符")
+            # ponytail: verify expected output files exist (catches write_file steps that advanced without writing)
+            _expected = _extract_expected_files(task_description)
+            if _expected:
+                _missing = [p for p in _expected if not os.path.exists(os.path.expanduser(p))]
+                if _missing:
+                    logger.warning(f"Subagent [{session.session_id}] 任务成功但产出文件缺失: {_missing}")
+                    success = False
+                    error = f"预期产出文件未创建: {', '.join(_missing)}"
+                    session.state = "error"
+                    session.error = error
+            if success:
+                logger.info(f"Subagent [{session.session_id}] 完成: {len(output)} 字符")
         else:
             session.state = "error"
             session.error = error or "子代理未返回有效结果"
@@ -426,6 +470,9 @@ async def orchestrate_subagents(
                 )
             else:
                 all_results[tid] = r
+
+    # ponytail: 所有并行 agent 完成后统一出队打印，保证顺序
+    await _drain_print_queue()
 
     results = list(all_results.values())
     completed = sum(1 for r in results if r.success)

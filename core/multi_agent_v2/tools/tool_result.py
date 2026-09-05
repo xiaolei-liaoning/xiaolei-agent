@@ -78,19 +78,45 @@ def bound_result(tool_name: str, raw: Any) -> Any:
 
 
 def _truncate(text: str, max_chars: int, tool_name: str = "") -> str:
+    """截断文本，超出部分写入临时文件并给出读取提示（OpenCode 风格）"""
+    if len(text) <= max_chars:
+        return text
+
+    import tempfile, os
     head_len = int(max_chars * 0.6)
     tail_len = max_chars - head_len - 30
     head = text[:head_len]
     tail = text[-tail_len:] if tail_len > 0 else ""
     truncated_count = len(text) - max_chars
-    result = f"{head}\n\n... [截断 {truncated_count} 字符] ...\n\n{tail}"
-    logger.info(f"输出截断: {tool_name} {len(text)}→{len(result)}字符 (节省{truncated_count})")
+
+    # 保存完整输出到临时文件
+    try:
+        tmp_dir = os.path.expanduser("~/.xiaolei/truncated")
+        os.makedirs(tmp_dir, exist_ok=True)
+        tmp_path = os.path.join(tmp_dir, f"{tool_name}_{os.getpid()}.txt")
+        with open(tmp_path, 'w') as f:
+            f.write(text)
+        hint = (
+            f"[截断 {truncated_count} 字符] 完整输出已保存到 {tmp_path}。"
+            f"需读取完整内容时使用 task 工具委托 explore 子代理读取此文件，"
+            f"不要自己 read_file。"
+        )
+    except Exception:
+        hint = f"[截断 {truncated_count} 字符]"
+
+    result = f"{head}\n\n... {hint} ...\n\n{tail}"
+    logger.info(f"输出截断: {tool_name} {len(text)}→{len(result)}字符, 完整文件: {tmp_path}")
     return result
 
 
-def ok(data: str) -> Dict[str, Any]:
-    """成功结果"""
-    return {"ok": True, "data": data}
+def ok(data: str, title: str = "", metadata: dict = None) -> Dict[str, Any]:
+    """成功结果 — OpenCode 风格: title(展示) + data(LLM上下文) + metadata(结构化信息)"""
+    result = {"ok": True, "data": data}
+    if title:
+        result["title"] = title
+    if metadata:
+        result["metadata"] = metadata
+    return result
 
 
 def err(error: str) -> Dict[str, Any]:

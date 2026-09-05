@@ -142,7 +142,9 @@ class AgentResult:
 
     success: bool = False
     output: Any = None
-    error: Optional[str] = None
+    error: Optional[str] = None       # deprecated: 使用 diagnostic + exit_reason 替代
+    diagnostic: Optional[str] = None  # 非致命诊断信息（如空转12轮但已有输出）
+    exit_reason: str = ""             # 精确退出原因
     execution_time: float = 0.0
     label: str = ""
     agent_id: str = ""
@@ -338,6 +340,8 @@ async def _execute_agent(
                     success=result.success,
                     output=result.output,
                     error=result.error,
+                    diagnostic=result.diagnostic if hasattr(result, 'diagnostic') else result.error,
+                    exit_reason=result.exit_reason if hasattr(result, 'exit_reason') else "",
                     execution_time=elapsed,
                     label=label,
                     agent_id=agent_id,

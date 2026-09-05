@@ -28,8 +28,9 @@ class AgentProfile(str, Enum):
 
 PROFILE_PERMISSIONS = {
     AgentProfile.EXPLORE: {
-        "allowed": ["read_file", "search_files", "glob", "fetch_url", "web_search", "grep", "bash"],
-        "disallowed": ["write_file", "edit_file", "execute_python", "execute_shell", "task", "orchestrate"],
+        # ponytail: 不再硬限制工具（allowed_tools 导致 step 要求缺失工具的 deadlock）
+        "allowed": None,
+        "disallowed": None,
         "system_hint": _builder.get_agent_prompt("explore"),
     },
     AgentProfile.BUILD: {
@@ -44,12 +45,12 @@ PROFILE_PERMISSIONS = {
     },
     AgentProfile.ANALYZE: {
         "allowed": None,
-        "disallowed": ["write_file", "edit_file", "execute_shell"],
+        "disallowed": None,
         "system_hint": _builder.get_agent_prompt("analyze"),
     },
     AgentProfile.ORCHESTRATOR: {
-        "allowed": ["read_file", "write_file", "task", "orchestrate"],
-        "disallowed": ["execute_shell", "execute_python", "edit_file"],
+        "allowed": None,
+        "disallowed": None,
         "system_hint": _builder.get_agent_prompt("orchestrator"),
     },
 }

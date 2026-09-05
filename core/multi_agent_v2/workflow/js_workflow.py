@@ -31,12 +31,12 @@ logger = logging.getLogger(__name__)
 @dataclass
 class WorkflowConfig:
     node_path: str = "node"
-    timeout: int = 600
+    timeout: int = 1200  # ponytail: 大项目 LLM 慢，600→1200
     max_concurrent_agents: int = 16
     max_agents: int = 1000
-    budget_total: int = 1_000_000  # 默认100万token预算
-    resume_cache: bool = True  # 是否启用 resume 缓存
-    agent_timeout: int = 300  # ponytail: 单 agent 默认超时，JS 侧可用 opts.timeout 覆盖
+    budget_total: int = 1_000_000
+    resume_cache: bool = True
+    agent_timeout: int = 600  # ponytail: LLM 慢时单 agent 可能需要 600s
 
 
 class ClaudeCodeWorkflow:
@@ -463,7 +463,9 @@ class ClaudeCodeWorkflow:
                 response_result = {
                     "success": result.success if result else True,
                     "output": output,
-                    "error": result.error if result else None,
+                    "error": result.diagnostic if result and hasattr(result, 'diagnostic') else (result.error if result else None),
+                    "exit_reason": result.exit_reason if result and hasattr(result, 'exit_reason') else "",
+                    "artifacts": getattr(result, 'artifacts', {}) if result else {},
                     "executionTime": round(result.execution_time, 2) if result else 0.0,
                     "agentId": result.agent_id if result else "",
                     "metadata": result.metadata if result else {},
@@ -473,11 +475,27 @@ class ClaudeCodeWorkflow:
                 if self.config.resume_cache and cache_key:
                     self._resume_cache[cache_key] = response_result
 
+                # ── Phase 追踪：递增对应 phase 的 agent_calls ──
+                phase_name = opts.get("phase", "")
+                if phase_name and self._phase_records:
+                    for pr in self._phase_records:
+                        if pr.title == phase_name:
+                            pr.agent_calls += 1
+                            pr.elapsed += result.execution_time if result else 0
+                            break
+
                 # ── 多模型记录 ──
                 self._model_records[model] = self._model_records.get(model, 0) + 1
 
                 response = {"id": msg_id, "result": response_result}
                 await stdin_queue.put(response)
+
+                # ponytail: drain stdout queue after agent completes
+                try:
+                    from core.multi_agent_v2.agents.subagent.spawn import _drain_print_queue
+                    await _drain_print_queue()
+                except Exception:
+                    pass
 
             # ── batch_agents: 并行执行一组 Agent（一次 IPC 搞定 parallel） ──
             elif msg_type == "batch_agents":
@@ -515,6 +533,13 @@ class ClaudeCodeWorkflow:
 
                 await stdin_queue.put({"id": msg_id, "result": response_results})
 
+                # ponytail: drain stdout queue after parallel batch completes
+                try:
+                    from core.multi_agent_v2.agents.subagent.spawn import _drain_print_queue
+                    await _drain_print_queue()
+                except Exception:
+                    pass
+
             # ── workflow: 嵌套子 Workflow ────────────────────────
             elif msg_type == "workflow":
                 data = msg.get("data", {})
@@ -522,6 +547,14 @@ class ClaudeCodeWorkflow:
                 wf_args = data.get("args", {})
 
                 print(f"    \033[35m▸ Workflow 嵌套: {name_or_ref}\033[0m")
+
+                # 递归深度限制（先于文件查找，避免误报 "not found"）
+                if self._depth >= 5:
+                    await stdin_queue.put({
+                        "id": msg_id,
+                        "error": f"Workflow nesting depth exceeded (max 5, current {self._depth})",
+                    })
+                    return
 
                 # 解析 workflow 来源
                 if isinstance(name_or_ref, str):
@@ -631,6 +664,7 @@ class ClaudeCodeWorkflow:
             budget_total: 预算上限
             args_json: 传入的 args JSON 字符串或 "undefined"
         """
+        js_budget = "null" if budget_total is None else str(budget_total)
         return f'''import {{ fileURLToPath }} from 'url';
 import {{ dirname, join }} from 'path';
 import {{ writeFile }} from 'fs/promises';
@@ -704,17 +738,20 @@ globalThis._prevResults = {{}};
 globalThis._agentCount = 0;
 globalThis._agentCalls = [];  // 跟踪每个 agent 调用用于协作图
 globalThis._dagEdges = [];    // 跟踪 DAG 边用于协作图
+globalThis._retryEvents = []; // 重试/重规划事件
+globalThis._compressionWarnings = []; // 上下文压缩事件
 
 // ── Budget 追踪（支持多模型） ──
 let _budgetSpent = 0;
 const _budgetModelSpent = {{}};
 
 const budget = {{
-    total: {budget_total},
+    total: {js_budget},
     spent() {{
         return _budgetSpent;
     }},
     remaining() {{
+        if (this.total === null) return Infinity;
         return Math.max(0, this.total - _budgetSpent);
     }},
     modelSpent: _budgetModelSpent,
@@ -748,8 +785,9 @@ globalThis.log = async function(msg) {{
 // ── agent() — 调用子 Agent（支持多模型路由、Resume 缓存） ──
 globalThis.agent = async function(prompt, opts = {{}}) {{
     const label = opts.label || `Agent #${{++globalThis._agentCount}}`;
-    const _ar = {{label, prompt: ''+(prompt||'').substring(0,80), status: 'running', phase: currentPhase || '', startTime: Date.now()}};
-    globalThis._agentCalls.push(_ar);
+    const startTime = Date.now();
+    const callIdx = globalThis._agentCalls.length;
+    globalThis._agentCalls.push({{label, prompt: ''+(prompt||'').substring(0,80), status: 'running', startTime, phase: currentPhase}});
     console.log(`[Agent] ${{label}}${{opts.model ? ' [' + opts.model + ']' : ''}}: ${{String(prompt).substr(0, 100)}}`);
 
     // 自动注入工作流上下文
@@ -761,14 +799,45 @@ globalThis.agent = async function(prompt, opts = {{}}) {{
     }};
     const enhancedOpts = {{...opts, _workflowContext: ctx}};
 
-    const result = await send('agent', {{ prompt, opts: enhancedOpts }});
-    if (result.error) {{
-        _ar.status = 'failed';
-        _ar.duration = Date.now() - _ar.startTime;
-        throw new Error(result.error);
+    let result;
+    try {{
+        result = await send('agent', {{ prompt, opts: enhancedOpts }});
+    }} catch (e) {{
+        const call = globalThis._agentCalls[callIdx];
+        call.status = 'failed';
+        call.endTime = Date.now();
+        call.duration = call.endTime - startTime;
+        call.error = e.message;
+        globalThis._retryEvents.push({{label, type: 'fail', time: Date.now()}});
+        throw e;
     }}
-    _ar.status = 'done';
-    _ar.duration = Date.now() - _ar.startTime;
+    // ponytail: error grading — success=False always fails the workflow
+    if (!result.success) {{
+        const call = globalThis._agentCalls[callIdx];
+        call.status = 'failed';
+        call.endTime = Date.now();
+        call.duration = call.endTime - startTime;
+        call.error = result.error || result.diagnostic || result.exit_reason || 'agent failed';
+        globalThis._retryEvents.push({{label, type: 'fail', time: Date.now()}});
+        throw new Error(result.error || result.diagnostic || result.exit_reason || 'agent failed');
+    }}
+    // non-fatal diagnostic on success: log but return output
+    if (result.exit_reason && result.exit_reason !== 'plan_completed' && result.exit_reason !== 'completed_with_answer') {{
+        console.log(`[Agent] ${{label}}: succeeded with ${{result.exit_reason}}`);
+    }}
+
+    const call = globalThis._agentCalls[callIdx];
+    call.status = 'done';
+    call.endTime = Date.now();
+    call.duration = call.endTime - startTime;
+    call.model = opts.model || 'default';
+    call.executionTime = result.executionTime || 0;
+    if (result.metadata) {{
+        call.metadata = result.metadata;
+        if (result.metadata.truncated) {{
+            globalThis._compressionWarnings.push({{label, type: 'truncation', detail: result.metadata.truncationDetail || '输出被截断'}});
+        }}
+    }}
 
     // Schema 解析
     if (opts.schema && result.output) {{
@@ -781,12 +850,12 @@ globalThis.agent = async function(prompt, opts = {{}}) {{
         }}
     }}
 
-    // fullResult: true 时返回完整元数据（含耗时、agentId 等）
-    // 默认只返回 output（向后兼容）
+    const _out = result.output;
     if (opts.fullResult) {{
+        if (_out == null) result.output = "";
         return result;
     }}
-    return result.output;
+    return _out ?? "";
 }};
 
 // ── batchAgents() — 批量并行执行 Agent（一次 IPC 搞定 parallel） ──
@@ -800,10 +869,20 @@ globalThis.batchAgents = async function(agentSpecs, timeout = 120) {{
 globalThis.parallel = async function(thunks) {{
     console.log(`[Parallel] Starting ${{thunks.length}} tasks...`);
     const settled = await Promise.allSettled(
-        thunks.map(t => typeof t === 'function' ? t() : t)
+        thunks.map(t => {{
+            try {{
+                const r = typeof t === 'function' ? t() : t;
+                return r instanceof Promise ? r : Promise.resolve(r);
+            }} catch (e) {{
+                return Promise.reject(e);
+            }}
+        }})
     );
     console.log(`[Parallel] ${{settled.length}} tasks completed`);
-    return settled.map(r => r.status === 'fulfilled' ? r.value : null);
+    return settled.map(r => {{
+        if (r.status === 'rejected') return null;
+        return r.value ?? null;
+    }});
 }};
 
 // ── $dag() — 声明式 DAG 图编排 ──
@@ -974,12 +1053,14 @@ main().finally(() => process.stdin?.destroy());
 
         phase_records = []
         for pr in data.get("phaseRecords", []):
+            title = pr.get("title", "")
+            python_pr = next((p for p in self._phase_records if p.title == title), None)
             phase_records.append(
                 PhaseRecord(
-                    title=pr.get("title", ""),
+                    title=title,
                     detail="",
-                    agent_calls=data.get("agentCount", 0),
-                    elapsed=0.0,
+                    agent_calls=python_pr.agent_calls if python_pr else 0,
+                    elapsed=python_pr.elapsed if python_pr else 0.0,
                 )
             )
 
@@ -1004,7 +1085,8 @@ main().finally(() => process.stdin?.destroy());
 async def run_claude_workflow(
     script: str,
     config: Optional[WorkflowConfig] = None,
+    args: Any = None,
 ) -> WorkflowResult:
     """运行 Claude Code 风格的 Workflow（便捷函数）"""
     runtime = ClaudeCodeWorkflow(config)
-    return await runtime.run(script)
+    return await runtime.run(script, args=args)

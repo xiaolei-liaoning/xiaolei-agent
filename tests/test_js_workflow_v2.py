@@ -731,36 +731,29 @@ class TestWriteFileDedup:
     """验证 write_file 同路径写入去重机制"""
 
     @pytest.mark.asyncio
-    async def test_write_same_path_3_times_blocked(self):
-        """同一路径写入 3 次（内容不同），第 3 次拦截，force=true 可绕过"""
+    async def test_write_same_path_10_times_blocked(self):
+        """同一路径写入 10 次后（阈值 ≥10），第 10 次被拦截"""
         import tempfile
         from core.multi_agent_v2.tools.tool_registry import (
             _handle_write_file, _written_file_registry,
         )
 
-        # 清理注册表避免残留
         _written_file_registry.clear()
 
         with tempfile.NamedTemporaryFile(suffix=".txt", delete=False, mode="w") as f:
             temp_path = f.name
 
         try:
-            # 第 1 次: 应成功
-            r1 = await _handle_write_file({"path": temp_path, "content": "content v1"})
-            assert r1.get("ok"), f"第 1 次写入应成功: {r1}"
+            for i in range(1, 10):
+                r = await _handle_write_file({"path": temp_path, "content": f"content v{i}"})
+                assert r.get("ok"), f"第 {i} 次写入应成功: {r}"
 
-            # 第 2 次: 应成功（不同内容）
-            r2 = await _handle_write_file({"path": temp_path, "content": "content v2"})
-            assert r2.get("ok"), f"第 2 次写入应成功: {r2}"
+            r10 = await _handle_write_file({"path": temp_path, "content": "content v10"})
+            assert not r10.get("ok"), f"第 10 次应被拦截: {r10}"
+            assert "反复写入" in r10.get("error", ""), f"错误信息应提示反复写入: {r10}"
 
-            # 第 3 次: 应被拦截
-            r3 = await _handle_write_file({"path": temp_path, "content": "content v3"})
-            assert not r3.get("ok"), f"第 3 次应被拦截: {r3}"
-            assert "反复写入" in r3.get("error", ""), f"错误信息应提示反复写入: {r3}"
-
-            # force=true 也不能绕过（registry 阻止重写循环）
-            r4 = await _handle_write_file({"path": temp_path, "content": "content v4", "force": True})
-            assert not r4.get("ok"), f"force=true 也应被拦截: {r4}"
+            r11 = await _handle_write_file({"path": temp_path, "content": "content v11", "force": True})
+            assert not r11.get("ok"), f"force=true 也应被拦截: {r11}"
 
         finally:
             os.unlink(temp_path)
@@ -810,16 +803,14 @@ class TestWriteFileDedup:
             path_b = fb.name
 
         try:
-            # 路径 A 写 2 次成功
-            await _handle_write_file({"path": path_a, "content": "a1"})
-            await _handle_write_file({"path": path_a, "content": "a2"})
-            # 路径 A 第 3 次被拦截
-            r_a3 = await _handle_write_file({"path": path_a, "content": "a3"})
-            assert not r_a3.get("ok"), "路径 A 第 3 次应被拦截"
+            for i in range(1, 10):
+                r = await _handle_write_file({"path": path_a, "content": f"a{i}"})
+                assert r.get("ok"), f"路径 A 第 {i} 次应成功"
+            r_a10 = await _handle_write_file({"path": path_a, "content": "a10"})
+            assert not r_a10.get("ok"), "路径 A 第 10 次应被拦截"
 
-            # 路径 B 第 1 次不受影响（独立计数）
             r_b1 = await _handle_write_file({"path": path_b, "content": "b1"})
-            assert r_b1.get("ok"), "路径 B 第 1 次应成功"
+            assert r_b1.get("ok"), "路径 B 第 1 次应成功（独立计数）"
             print("  ✅ 不同路径独立计数验证通过")
 
         finally:

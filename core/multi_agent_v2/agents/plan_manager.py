@@ -9,6 +9,7 @@
 
 import asyncio
 import logging
+import os
 import re
 from typing import Any, List, Optional
 
@@ -28,35 +29,146 @@ def _consolidate_subagent_steps(ctx: RunContext, current_step: PlanStep) -> None
                 logger.debug(f"步骤 {_s.index} 被步骤 {current_step.index} 覆盖，自动完成")
 
 
+def _verify_step_completion(step: PlanStep, ctx: RunContext) -> bool:
+    """检查步骤的所有后置条件是否满足。返回 False 时设置 forced_instructions。"""
+    if not step.postconditions:
+        return True
+    for cond in step.postconditions:
+        if cond.startswith("file_exists:"):
+            path = os.path.expanduser(cond[12:])
+            if not os.path.exists(path):
+                logger.info(f"步骤 {step.index} 后置条件未满足: 文件 {path} 不存在")
+                ctx.forced_instructions = (
+                    f"⚠️ 当前步骤要求创建文件 {path}，但文件尚不存在。"
+                    "请立即使用 write_file 写入完整内容！"
+                )
+                return False
+        elif cond.startswith("capability:file_written"):
+            if "(" in cond and "path=" in cond:
+                import re
+                _m = re.search(r"path=([^)]+)", cond)
+                if _m:
+                    _path = _m.group(1)
+                    if not os.path.exists(os.path.expanduser(_path)):
+                        logger.info(f"步 {step.index} 后置条件未满足: capability:file_written 文件 {_path} 不存在")
+                        ctx.forced_instructions = (
+                            f"⚠️ 当前步骤要求创建文件 {_path}，但文件尚不存在。请 write_file 完成！"
+                        )
+                        return False
+            elif not any(
+                r.get("tool_call", {}).get("name") in ("write_file", "edit_file") and r.get("success")
+                for r in ctx.tool_results
+            ):
+                logger.info(f"步 {step.index} 后置条件未满足: write_file 未成功调用")
+                ctx.forced_instructions = "⚠️ 当前步骤要求 write_file，但尚未成功调用。请立即执行！"
+                return False
+        elif cond.startswith("tool_called:"):
+            required = cond[12:]
+            if not any(
+                r.get("tool_call", {}).get("name") == required and r.get("success")
+                for r in ctx.tool_results
+            ):
+                logger.info(f"步骤 {step.index} 后置条件未满足: 工具 {required} 未成功调用")
+                ctx.forced_instructions = (
+                    f"⚠️ 当前步骤要求调用 {required}，但尚未成功调用。"
+                    f"请立即使用 {required} 完成此步骤！"
+                )
+                return False
+    return True
+
+
+def _infer_postconditions(step: PlanStep, task_description: str) -> List[str]:
+    """根据步骤工具名推断后置条件 — 验证产出真实达成
+
+    ponytail: write/edit 步骤 → capability:file_written；搜索 → web_search；
+    执行 → code_executed；读取/探索 → file_read。确保步骤推进后有真实产出，
+    与 deepseek-harness 的「后置条件验证执行效果」思路一致。
+    无工具绑定的通用步骤不设后置条件，靠实质产出自然推进，避免卡死。
+    """
+    if not step.tool_names:
+        return []
+    conds = []
+    for tool in step.tool_names:
+        if tool in ("write_file", "edit_file"):
+            conds.append("capability:file_written")
+        elif tool in ("web_search", "fetch_url", "fetch_json", "hot_search"):
+            conds.append("capability:web_search")
+        elif tool in ("execute_python", "execute_shell"):
+            conds.append("capability:code_executed")
+        elif tool == "read_file":
+            conds.append("capability:file_read")
+        elif tool in ("codegraph_explore", "codegraph_search", "codegraph_files", "search_files"):
+            conds.append("capability:file_read")
+    return conds if conds else ["capability:file_written"]
+
+
 def _parse_plan_steps(text: str) -> List[PlanStep]:
-    """从文本中解析计划步骤，支持 步骤|描述|工具 格式"""
+    """从文本中解析计划步骤。支持两种格式：
+    - 旧 步骤|描述|工具
+    - 新 每行一段描述（OpenCode 风格，无工具绑定）
+    """
     template_blacklist = {"步骤描述", "具体描述", "任务描述", "描述", "步骤一", "步骤二"}
     steps = []
-    for line in text.split("\n"):
-        line = line.strip()
-        if not line:
-            continue
-        if line.startswith("步骤|"):
+    lines = [l.strip() for l in text.split("\n") if l.strip()]
+
+    for line in lines:
+        # 旧格式：步骤|描述|工具 或 1|描述|工具
+        if line.startswith("步骤|") or re.match(r'^\d+\|', line):
             parts = line.split("|")
-        elif re.match(r'^\d+\|', line):
-            parts = line.split("|")
-        else:
+            desc = parts[1].strip() if len(parts) > 1 else ""
+            tools_str = parts[2].strip() if len(parts) > 2 else ""
+            if "直接回答" in desc or desc in template_blacklist or len(desc) < 3:
+                continue
+            tools = ([t.strip() for t in tools_str.split(",") if t.strip()] if tools_str else []) or ["write_file"]
+            steps.append(PlanStep(index=len(steps) + 1, description=desc, tool_names=tools))
             continue
-        desc = parts[1].strip() if len(parts) > 1 else ""
-        tools_str = parts[2].strip() if len(parts) > 2 else ""
-        if "直接回答" in desc:
-            return []
-        if desc in template_blacklist or len(desc) < 3:
+
+        # 跳过编号、前缀、示例标记
+        if re.match(r'^(步骤\s*[一二三四五六七八九十\d]|[一二三四五六七八九十\d]+[\.\、\)）]|[-*•]|#)', line):
             continue
-        tools = (
-            [t.strip() for t in tools_str.split(",") if t.strip()]
-            if tools_str
-            else []
-        )
-        steps.append(
-            PlanStep(index=len(steps) + 1, description=desc, tool_names=tools)
-        )
+        # 跳过太短的行
+        if len(line) < 4:
+            continue
+
+        # 纯文本行 → 新格式步骤
+        steps.append(PlanStep(
+            index=len(steps) + 1,
+            description=line,
+            tool_names=[],  # 不绑定工具
+        ))
+
     return steps
+
+
+def _insert_explore_before_write(steps: List[PlanStep]) -> List[PlanStep]:
+    """Insert explore step before write_file steps that lack preceding exploration.
+
+    ponytail: explore step is a warmup — postconditions left empty so it advances
+    as soon as any real capability is detected, never blocking progress.
+    """
+    _write_tools = {"write_file", "edit_file"}
+    _explore_tools = {"execute_shell", "codegraph_explore", "read_file", "search_files", "glob"}
+    new_steps = []
+    for i, step in enumerate(steps):
+        if step.tool_names and set(step.tool_names) & _write_tools:
+            prev_is_explore = (
+                i > 0
+                and steps[i-1].tool_names
+                and set(steps[i-1].tool_names) & _explore_tools
+            )
+            if not prev_is_explore:
+                explore_step = PlanStep(
+                    index=0,
+                    description="探索项目结构，确认目录和前置文件存在",
+                    tool_names=["execute_shell", "codegraph_explore", "read_file"],
+                    postconditions=[],
+                )
+                explore_step._is_warmup = True
+                new_steps.append(explore_step)
+        new_steps.append(step)
+    for idx, s in enumerate(new_steps):
+        s.index = idx + 1
+    return new_steps
 
 
 async def generate_plan(
@@ -139,7 +251,10 @@ async def generate_plan(
             _personality_hint = f"\n【角色说明】\n" + "\n".join(_first_lines) + "\n"
 
     _plan_template = get_builder().load("system/plan_generation")
-    _plan_desc = understanding if understanding else task_description[:200]
+    # ponytail: 用原始任务作为权威描述，避免理解文本漂移导致计划跑偏（如贪吃蛇→AI工具搜索）
+    _plan_desc = task_description[:300]
+    if understanding and len(understanding) > 30:
+        _plan_desc = f"{task_description[:200]}\n理解: {understanding[:200]}"
     _plan_role = _personality_hint if _personality_hint else ""
     plan_prompt = _plan_template.replace("{task_description}", _plan_desc).replace("{tool_list}", _plan_tools_text).replace("{role_description}", _plan_role)
     try:
@@ -160,7 +275,14 @@ async def generate_plan(
             steps = _parse_plan_steps(text)
 
         if steps:
-            return steps[:5]
+            steps = _insert_explore_before_write(steps[:5])
+            for s in steps:
+                # ponytail: only skip inference for explicitly marked warmup steps
+                if hasattr(s, '_is_warmup') and s._is_warmup:
+                    s.postconditions = []
+                else:
+                    s.postconditions = _infer_postconditions(s, task_description)
+            return steps
 
         # ponytail: 首次失败 → 极简降级 prompt，更大概率成功
         logger.info("plan_generation 首次尝试无结果，降级极简 prompt")
@@ -179,7 +301,13 @@ async def generate_plan(
         )
         text2 = str(resp2).strip() if resp2 else ""
         if text2 and "[LLM_MOCK]" not in text2:
-            return _parse_plan_steps(text2)[:5]
+            fb_steps = _insert_explore_before_write(_parse_plan_steps(text2)[:5])
+            for s in fb_steps:
+                if hasattr(s, '_is_warmup') and s._is_warmup:
+                    s.postconditions = []
+                else:
+                    s.postconditions = _infer_postconditions(s, task_description)
+            return fb_steps
         return []
     except Exception as _e:
         logger.warning(f"plan_generation step failed: {_e}")
@@ -207,11 +335,16 @@ def display_plan(
             bar_segments.append("\033[2m▇\033[0m")
     bar = "".join(bar_segments)
 
+    # ponytail: 标记当前待执行步骤为 "running" 以便显示 ▶ 而非 ·
+    _first_pending = next((s for s in ctx.plan if s.status == "pending"), None)
+    if _first_pending:
+        _first_pending._display_active = True
+
     lines = [f"{prefix}    \033[1m{header}\033[0m  {bar}  \033[2m{done}/{total}\033[0m"]
     for step in ctx.plan:
         if step.status == "done":
             icon, color = "✓", "\033[32m"
-        elif step.status == "running":
+        elif step.status == "running" or getattr(step, '_display_active', False):
             icon, color = "▶", "\033[1;37m"
         elif step.status == "failed":
             icon, color = "✗", "\033[31m"
@@ -244,7 +377,23 @@ def steps_summary(ctx: RunContext) -> str:
 
 
 def update_step_status(ctx: RunContext, prefix: str = "") -> None:
-    """更新步骤状态：检查步骤中指定的工具是否都已调用完成
+    """更新步骤状态 — 委托给 TaskProgress（能力追踪模式）
+
+    ponytail: 旧版工具等价组 + deadlock breaker 逻辑已废弃，
+    保留函数签名供 react_core 调用，内部走 TaskProgress。
+    无 task_progress 时回退到 legacy 逻辑（测试/兼容路径）。
+    """
+    if not ctx.plan:
+        return
+    _tp = getattr(ctx, 'task_progress', None)
+    if _tp is not None:
+        _tp.update()
+    else:
+        _update_step_status_legacy(ctx, prefix)
+
+
+def _update_step_status_legacy(ctx: RunContext, prefix: str = "") -> None:
+    """旧版步骤状态更新 — 仅作参考，disabled by default
 
     增强功能：
     1. 支持语义匹配：步骤描述关键词 vs 工具调用参数
@@ -281,6 +430,8 @@ def update_step_status(ctx: RunContext, prefix: str = "") -> None:
         _search_tools = {"web_search", "fetch_url", "fetch_json", "hot_search"}
         if step_tools & _search_tools:
             if succeeded.keys() & _search_tools:
+                if not _verify_step_completion(current_step, ctx):
+                    return
                 current_step.status = "done"
                 _consolidate_subagent_steps(ctx, current_step)
                 return
@@ -288,6 +439,8 @@ def update_step_status(ctx: RunContext, prefix: str = "") -> None:
         _subagent_tools = {"task", "orchestrate"}
         if step_tools & _subagent_tools:
             if succeeded.keys() & _subagent_tools:
+                if not _verify_step_completion(current_step, ctx):
+                    return
                 current_step.status = "done"
                 _consolidate_subagent_steps(ctx, current_step)
                 return
@@ -295,6 +448,8 @@ def update_step_status(ctx: RunContext, prefix: str = "") -> None:
         _explore_tools = {"codegraph_explore", "codegraph_files", "search_files", "execute_shell", "read_file"}
         if step_tools & _explore_tools:
             if succeeded.keys() & _explore_tools:
+                if not _verify_step_completion(current_step, ctx):
+                    return
                 current_step.status = "done"
                 _consolidate_subagent_steps(ctx, current_step)
                 return
@@ -302,22 +457,41 @@ def update_step_status(ctx: RunContext, prefix: str = "") -> None:
         _write_tools = {"write_file", "edit_file"}
         if step_tools & _write_tools:
             if succeeded.keys() & _explore_tools:
-                current_step.status = "done"
-                _consolidate_subagent_steps(ctx, current_step)
-                return
+                # ponytail: guard — only swap if agent has written a file before
+                # Prevents first write_file from being skipped when LLM calls mkdir/ls
+                # Postconditions (file_exists:/path) add another safety net below.
+                _ever_written = any(
+                    tr.get("tool_call", {}).get("name") in _write_tools and tr.get("success")
+                    for tr in ctx.tool_results
+                )
+                if _ever_written:
+                    if not _verify_step_completion(current_step, ctx):
+                        return
+                    current_step.status = "done"
+                    _consolidate_subagent_steps(ctx, current_step)
+                    return
         # ponytail: 探索步骤也可被写文件工具推进（LLM 跳过探索直接写）
         if step_tools & _explore_tools:
             if succeeded.keys() & _write_tools:
+                if not _verify_step_completion(current_step, ctx):
+                    return
                 current_step.status = "done"
                 _consolidate_subagent_steps(ctx, current_step)
                 return
         if step_tools & set(succeeded.keys()):
+            if not _verify_step_completion(current_step, ctx):
+                return
             current_step.status = "done"
             return
 
-    # 工具失败 → 标记当前步骤为 failed 并触发重规划
+    # 工具失败 → 判断是否是当前步骤需要的工具
     if tool_has_error:
-        # 仅在工具失败时，额外检查结果中是否有明确的代码错误（如 SyntaxError）
+        last_tc = last_result.get("tool_call", {})
+        last_name = last_tc.get("name", "")
+        # 失败的工具不是当前步骤需要的 → 忽略（LLM 思考扩展出去的附加调用）
+        if current_step.tool_names and last_name not in current_step.tool_names:
+            return
+        # 当前步骤需要的工具失败 → 标记步骤失败并触发重规划
         last_raw = str(last_result.get("result", last_result.get("error", "")))
         code_error = any(
             marker in last_raw
@@ -392,6 +566,8 @@ def update_step_status(ctx: RunContext, prefix: str = "") -> None:
                 current_step.tool_names = list(step_tools | _file_tools)
 
         if all_tools_done:
+            if not _verify_step_completion(current_step, ctx):
+                return
             current_step.status = "done"
             _consolidate_subagent_steps(ctx, current_step)
             logger.debug(f"步骤 {current_step.index} 完成");
@@ -408,6 +584,8 @@ def update_step_status(ctx: RunContext, prefix: str = "") -> None:
     if not current_step.tool_names:
         _total_ok = sum(1 for r in ctx.tool_results if r.get("success"))
         if _total_ok >= done_count + 1:
+            if not _verify_step_completion(current_step, ctx):
+                return
             current_step.status = "done"
             _consolidate_subagent_steps(ctx, current_step)
             _pending_after_no = [s for s in ctx.plan if s.status == "pending"]
@@ -432,8 +610,32 @@ def update_step_status(ctx: RunContext, prefix: str = "") -> None:
                 if result_text and result_text != "None" and len(result_text) > 20:
                     _has_substance = True
                     break
+        # ponytail: LLM 无有效输出且步骤有指定工具 → 强制提示调用
+        if not _has_substance and current_step.tool_names and ctx.react_depth >= 5:
+            _required = ", ".join(current_step.tool_names[:3])
+            ctx.forced_instructions = (
+                f"⚠️ 当前步骤需要调用 {_required}。不要输出解释文本，请直接调用 {_required} 完成任务！"
+            )
+            logger.info(f"步骤 {current_step.index} LLM 无输出，强制提示调用 {_required}")
+            return
         if _has_substance:
+            # ponytail: don't skip write_file steps that haven't written yet
+            _write_tools = {"write_file", "edit_file"}
+            if current_step.tool_names and set(current_step.tool_names) & _write_tools:
+                _ever_written = any(
+                    r.get("tool_call", {}).get("name") in _write_tools and r.get("success")
+                    for r in ctx.tool_results
+                )
+                if not _ever_written:
+                    ctx.forced_instructions = (
+                        "⚠️ 当前步骤要求创建文件，但你尚未成功调用 write_file。"
+                        "请立即使用 write_file 写入完整内容，不要再执行其他工具！"
+                    )
+                    logger.info(f"步骤 {current_step.index} 卡在 write_file 前，设置 forced_instructions")
+                    return
             logger.info(f"步骤 {current_step.index} 多轮未推进且有实质进展，兜底标记为 done")
+            if not _verify_step_completion(current_step, ctx):
+                return
             current_step.status = "done"
             _consolidate_subagent_steps(ctx, current_step)
             _pending_after_fallback = [s for s in ctx.plan if s.status == "pending"]
@@ -442,7 +644,7 @@ def update_step_status(ctx: RunContext, prefix: str = "") -> None:
                 _tf = f" → {_nxt_f.tool_names[0]}" if _nxt_f.tool_names else ""
                 ctx.forced_instructions = f"立即执行下一步：{_nxt_f.description}{_tf}"
 
-    # 编辑任务卡住检测：步骤 pending 且一直只调 read_file → 禁用 read_file 逼它换工具
+    # 任务卡住检测：步骤 pending 且一直只调 read_file → 禁用 read_file 逼它换工具
     if current_step.status not in ("done", "failed") and ctx.react_depth >= 2:
         recent_tools = [r.get("tool_call", {}).get("name", "") for r in ctx.tool_results[-3:]]
         if all(t == "read_file" for t in recent_tools if t):
@@ -450,18 +652,28 @@ def update_step_status(ctx: RunContext, prefix: str = "") -> None:
             _flags = getattr(ctx, '_task_flags', None)
             if _flags:
                 _is_edit = _flags.get("edit", False)
+            desc_lower = (current_step.description + ctx.task_description).lower()
             if not _is_edit:
-                desc_lower = (current_step.description + ctx.task_description).lower()
                 _is_edit = any(kw in desc_lower for kw in ["替换", "修改", "编辑", "改", "replace", "edit", "change"])
+            _is_write = any(kw in desc_lower for kw in ["创建", "写", "生成", "写入", "creat", "write"])
             if _is_edit:
                 ctx.disallowed_tools = list(set(ctx.disallowed_tools or []) | {"read_file"})
-                ctx._filtered_tools = None  # 清缓存，下次 on_llm_invoke 重新过滤
+                ctx._filtered_tools = None
                 inst = (
                     "⚠️ read_file 已被禁用！你已经读取了文件内容，现在必须使用 edit_file 工具进行修改。"
                     "用法：edit_file(path='文件路径', old_string='要替换的原文', new_string='替换后的新内容')"
                 )
                 ctx.forced_instructions = inst
                 logger.info(f"步骤 {current_step.index} 卡在 read_file，禁用 read_file，强制使用 edit_file")
+            elif _is_write:
+                ctx.disallowed_tools = list(set(ctx.disallowed_tools or []) | {"read_file"})
+                ctx._filtered_tools = None
+                inst = (
+                    "⚠️ read_file 已被禁用！你已经读取了足够的信息，现在必须使用 write_file 工具写入完整文件内容。"
+                    "不要再继续读取或探索，直接 write_file！"
+                )
+                ctx.forced_instructions = inst
+                logger.info(f"步骤 {current_step.index} 卡在 read_file，禁用 read_file，强制使用 write_file")
 
 
 async def replan_failed(ctx: RunContext) -> bool:

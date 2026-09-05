@@ -813,14 +813,14 @@ async def _handle_execute_shell(args: Dict) -> Dict:
                 return {
                     "result": {"content": [{"text": f"[沙盒] ✅ 执行成功\n{full}"}]}
                 }
-            # 沙盒执行失败，返回错误信息（不降级）
+            # 沙盒执行失败，提示用 mode=local 重试
             return {
                 "result": {
                     "content": [
                         {
-                            "text": f"[沙盒] ❌ 执行失败: {sr.error_message or sr.stderr or '未知错误'}"[
-                                :5000
-                            ]
+                            "text": f"[沙盒] ❌ 执行失败: {sr.error_message or sr.stderr or '未知错误'}"
+                            f"\n\n💡 提示：如果命令包含 pipe(|)、重定向(>)、或使用 Python，"
+                            f"请设置 mode=local 在本地执行：execute_shell(command=..., mode='local')"[:5000]
                         }
                     ]
                 }
@@ -828,7 +828,8 @@ async def _handle_execute_shell(args: Dict) -> Dict:
         except Exception as e:
             return {
                 "result": {
-                    "content": [{"text": f"[沙盒] ❌ {type(e).__name__}: {e}"[:3000]}]
+                    "content": [{"text": f"[沙盒] ❌ {type(e).__name__}: {e}"
+                                 f"\n\n💡 提示：如果命令需要 pipe/重定向，请设置 mode=local"[:3000]}]
                 }
             }
 
@@ -1042,7 +1043,7 @@ async def _handle_write_file(args: Dict) -> Dict:
             if prev.get("content") == content:
                 return ok(f"✅ 文件内容相同，无需写入: {path}")
             prev["count"] = prev.get("count", 1) + 1
-            # ponytail: 10 次才拦截，防止 stub 检测+迭代写入循环过早阻断
+            # ponytail: 同路径第 10 次写入才拦截，防止 stub 检测+迭代写入循环过早阻断
             if prev["count"] >= 10:
                 return err(f"❌ 反复写入被拦截: {path} (已写入 {prev['count']} 次)")
         else:
@@ -1219,7 +1220,7 @@ async def _handle_write_file(args: Dict) -> Dict:
 # ═══════════════════════════════════════════════════════════════════
 
 async def _handle_read_file(args: Dict) -> Dict:
-    """读取文件或目录 — 支持分页"""
+    """读取文件或目录 — 支持分页 + 重复读取警告"""
     from core.multi_agent_v2.tools.tool_result import ok, err
 
     path = args.get("path", "")
@@ -1229,17 +1230,33 @@ async def _handle_read_file(args: Dict) -> Dict:
     p = Path(path)
     if not p.exists():
         return err(f"路径不存在: {path}")
+
+    # ── 重复读取检测 ──
+    if not hasattr(_handle_read_file, '_read_count'):
+        _handle_read_file._read_count = {}
+        _handle_read_file._unique_files = set()
+    _counts = _handle_read_file._read_count
+    _unique = _handle_read_file._unique_files
+    _key = str(p.resolve())
+    _counts[_key] = _counts.get(_key, 0) + 1
+    _unique.add(_key)
+    repeat_hint = ""
+    if _counts[_key] >= 3:
+        repeat_hint = f"\n\n⚠️ 此文件已读取 {_counts[_key]} 次。不要再重读了，数据已足够。"
+
     if p.is_dir():
         entries = sorted(p.iterdir())[:args.get("limit", 200)]
         lines = [f"{'📁' if e.is_dir() else '📄'} {e.name}" for e in entries]
-        return ok(f"目录 {path} ({len(entries)} 项):\n" + "\n".join(lines))
-    # ponytail: 项目分析缓存拦截 — 已注入上下文的文件直接拒绝，节省一轮
+        return ok(f"目录 {path} ({len(entries)} 项):\n" + "\n".join(lines) + repeat_hint)
+
+    # ponytail: 项目分析缓存拦截
     try:
         from core.multi_agent_v2.tools.cache import is_file_cached
         if is_file_cached(path) and args.get("offset", 1) == 1:
-            return ok(f"[CACHED] '{path}' 的内容已在上面提供。继续分析，不要再读这个文件。")
+            return ok(f"[CACHED] '{path}' 的内容已在上面提供。继续分析，不要再读这个文件。{repeat_hint}")
     except Exception:
         pass
+
     try:
         text = p.read_text(encoding="utf-8")
     except UnicodeDecodeError:
@@ -1251,7 +1268,10 @@ async def _handle_read_file(args: Dict) -> Dict:
     result = "\n".join(page)
     if offset > 0 or offset + limit < len(lines):
         result = f"(行 {offset+1}-{min(offset+limit, len(lines))}/{len(lines)})\n{result}"
-    # _file_read_cache[cache_key] = result  # ponytail: 禁用缓存
+
+    # ── 进度信息 ──
+    progress = f"\n\n📊 已读取 {len(_unique)} 个不同文件（共 {sum(_counts.values())} 次调用）"
+    result = result + progress + repeat_hint
     return ok(result)
 
 
@@ -1425,8 +1445,83 @@ async def _handle_text_analyzer(args: Dict) -> Dict:
         return err(f"文本分析失败: {e}")
 
 
+async def _handle_skill(args: Dict) -> Dict:
+    """Load skill content by name — OpenCode-style on-demand skill loading"""
+    from core.multi_agent_v2.tools.tool_result import ok, err
+    from core.multi_agent_v2.skills.skill_loader import discover_skills
+
+    name = args.get("name", "")
+    if not name:
+        return err("需要 name 参数")
+
+    skills = discover_skills()
+    if name not in skills:
+        available = ", ".join(sorted(skills.keys()))
+        return err(f"Skill '{name}' 未找到。可用: {available}")
+
+    s = skills[name]
+    output = (
+        f"<skill_content name=\"{s.name}\">\n"
+        f"{s.content}\n"
+        f"</skill_content>\n\n"
+        f"Base directory for this skill: {os.path.dirname(s.location)}"
+    )
+    return ok(output)
+
+
+async def _handle_task(args: Dict) -> Dict:
+    """OpenCode-style task tool — spawn single sub-agent"""
+    from core.multi_agent_v2.tools.tool_result import ok, err
+    from core.multi_agent_v2.agents.subagent.spawn import spawn_subagent
+    from core.multi_agent_v2.agents.subagent.types import AgentProfile
+
+    description = args.get("description", "")
+    subagent_type = args.get("subagent_type", "general")
+    prompt = args.get("prompt", description)
+
+    if not prompt:
+        return err("需要 description 或 prompt 参数")
+
+    try:
+        profile = AgentProfile(subagent_type)
+    except ValueError:
+        return err(f"未知代理类型: {subagent_type}。可用: {[p.value for p in AgentProfile]}")
+
+    result = await spawn_subagent(
+        task_description=prompt,
+        profile=profile,
+    )
+    if result.get("success"):
+        return ok(f"[子代理 {result.get('session_id', '?')}] {result.get('output', '')}")
+    return err(f"子代理失败: {result.get('error', '未知错误')}")
+
+
+async def _handle_orchestrate(args: Dict) -> Dict:
+    """OpenCode-style orchestrate tool — DAG parallel sub-agents"""
+    from core.multi_agent_v2.tools.tool_result import ok, err
+    from core.multi_agent_v2.agents.subagent.spawn import orchestrate_subagents
+
+    tasks = args.get("tasks", [])
+    max_concurrent = args.get("max_concurrent", 5)
+
+    if not tasks:
+        return err("需要 tasks 参数")
+
+    result = await orchestrate_subagents(
+        tasks=tasks,
+        max_concurrent=max_concurrent,
+    )
+    if result.get("success"):
+        outputs = []
+        for r in result.get("results", []):
+            status = "✓" if r.get("success") else "✗"
+            outputs.append(f"[{r.get('id', '?')}] {status} {r.get('output', '')[:500]}")
+        return ok("\n".join(outputs))
+    return err(f"编排失败: {result.get('error', '未知错误')}")
+
+
 # ═══════════════════════════════════════════════════════════════════
-# 子代理工具 Handlers
+# 子代理工具 Handlers — 已移至上方 task/orchestrate
 # ═══════════════════════════════════════════════════════════════════
 
 
@@ -1681,6 +1776,88 @@ _SANDBOX_TOOL_DEFS = [
             "required": ["text"],
         },
         handler=_handle_text_analyzer,
+    ),
+    ToolDefinition(
+        name="skill",
+        server=SERVER_BUILTIN,
+        tags=["skill", "meta"],
+        description="Load a specialized skill when a task matches its description. "
+                    "Use this to get detailed instructions for specific workflows.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "The name of the skill from available_skills"},
+            },
+            "required": ["name"],
+        },
+        handler=_handle_skill,
+    ),
+    ToolDefinition(
+        name="task",
+        server=SERVER_BUILTIN,
+        tags=["subagent", "task"],
+        description="Launch a new agent to handle complex, multistep tasks autonomously.\n\n"
+                    "Available agent types: explore, build, general, analyze.\n"
+                    "Use the explore agent for codebase exploration, build for editing, "
+                    "general for complex multi-step research.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "subagent_type": {
+                    "type": "string",
+                    "description": "Agent type: explore|build|general|analyze",
+                    "enum": ["explore", "build", "general", "analyze"],
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Short (3-5 word) description of the task",
+                },
+                "prompt": {
+                    "type": "string",
+                    "description": "The task for the sub-agent to execute",
+                },
+            },
+            "required": ["subagent_type", "description", "prompt"],
+        },
+        handler=_handle_task,
+    ),
+    ToolDefinition(
+        name="orchestrate",
+        server=SERVER_BUILTIN,
+        tags=["subagent", "orchestrate"],
+        description="Run multiple tasks in parallel or with dependencies using sub-agents.\n\n"
+                    "Use this for complex multi-step workflows. Each task can specify "
+                    "agent type, dependencies, and a detailed prompt.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "tasks": {
+                    "type": "array",
+                    "description": "List of tasks to orchestrate",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string", "description": "Unique task identifier"},
+                            "description": {"type": "string", "description": "Short description"},
+                            "prompt": {"type": "string", "description": "Full task prompt"},
+                            "agent": {"type": "string", "description": "Agent type"},
+                            "depends_on": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Task IDs to wait for",
+                            },
+                        },
+                        "required": ["id", "description", "prompt"],
+                    },
+                },
+                "max_concurrent": {
+                    "type": "integer",
+                    "description": "Max concurrent tasks (default 5)",
+                },
+            },
+            "required": ["tasks"],
+        },
+        handler=_handle_orchestrate,
     ),
 ]
 

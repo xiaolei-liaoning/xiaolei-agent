@@ -750,8 +750,10 @@ class TestFullFlowIntegration:
                    return_value=mock_router):
             with patch.object(mock_router, "is_available", return_value=True):
                 steps = await generate_plan("写一个贪吃蛇游戏到桌面", ctx)
-                assert len(steps) >= 1
-                assert steps[0].tool_names == ["write_file"]
+                assert len(steps) >= 2
+                assert len(steps[0].tool_names) >= 1  # Q3 inserts explore before write
+                assert steps[1].tool_names == ["write_file"]
+                assert steps[1].postconditions  # postcondition inferred
 
     @pytest.mark.asyncio
     async def test_step_status_update_replan(self):

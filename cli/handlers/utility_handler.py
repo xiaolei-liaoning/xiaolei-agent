@@ -326,7 +326,7 @@ class UtilityHandler:
         components = [
             ("命令解析器", "cli.command_parser", "CommandParser"),
             ("思考引擎", "cli.thinking_engine", "ThinkingEngine"),
-            ("日志系统", "cli.logging_system", "EnhancedLogger"),
+            ("日志系统", "cli.logging_system", "SimpleLogger"),
         ]
 
         print_color("核心组件:", CliColors.CYAN)

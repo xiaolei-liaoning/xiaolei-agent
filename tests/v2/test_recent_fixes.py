@@ -63,11 +63,11 @@ class TestPlanParsing:
         assert _parse_plan_steps("   ") == []
 
     def test_parse_without_tool(self):
-        """没有工具名的步骤"""
+        """没有工具名的步骤 → 默认 write_file"""
         text = "步骤|只看报告"
         steps = _parse_plan_steps(text)
         assert len(steps) == 1
-        assert steps[0].tool_names == []
+        assert steps[0].tool_names == ["write_file"]
 
     def test_parse_multi_tool(self):
         """逗号分隔的多个工具名"""

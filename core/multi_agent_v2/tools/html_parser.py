@@ -50,7 +50,7 @@ def extract_search_results_bing(html: str) -> List[Dict[str, str]]:
     """从 Bing 搜索结果页提取标题+摘要+URL"""
     results = []
     for block in re.findall(r'<li class="b_algo"[^>]*>(.*?)</li>', html, re.DOTALL):
-        title_m = re.search(r'<h2><a[^>]*href="([^"]*)"[^>]*>(.*?)</a></h2>', block, re.DOTALL)
+        title_m = re.search(r'<h2[^>]*><a[^>]*href="([^"]*)"[^>]*>(.*?)</a></h2>', block, re.DOTALL)
         snippet_m = re.search(r'<p[^>]*>(.*?)</p>', block, re.DOTALL)
         if title_m:
             url = title_m.group(1)

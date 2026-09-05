@@ -320,24 +320,24 @@ class LoopDetectionMiddleware(BaseMiddleware):
 
     # 工具级频率阈值覆盖（参考 deerflow 的 per-tool config）
     TOOL_FREQ_LIMITS = {
-        "read_file": {"warn": 20, "hard": 999},  # ponytail: 不设硬上限，读文件不应触发循环检测
+        "read_file": {"warn": 30, "hard": 999},  # 不设硬上限
         "execute_shell": {"warn": 12, "hard": 25},
         "execute_python": {"warn": 6, "hard": 12},
-        "web_search": {"warn": 4, "hard": 8},
-        "fetch_url": {"warn": 4, "hard": 8},
+        "web_search": {"warn": 8, "hard": 20},    # ponytail: 搜索分析类任务需要更多次
+        "fetch_url": {"warn": 8, "hard": 20},
         "write_file": {"warn": 5, "hard": 10},
         "edit_file": {"warn": 5, "hard": 10},
         "search_files": {"warn": 15, "hard": 30},
-        "codegraph_explore": {"warn": 10, "hard": 25},
-        "codegraph_files": {"warn": 8, "hard": 20},
+        "codegraph_explore": {"warn": 40, "hard": 80},
+        "codegraph_files": {"warn": 40, "hard": 100},
     }
 
     def __init__(
         self,
-        warn_threshold: int = 5,
-        hard_limit: int = 10,
-        tool_freq_warn: int = 5,
-        tool_freq_hard_limit: int = 10,
+        warn_threshold: int = 8,
+        hard_limit: int = 20,
+        tool_freq_warn: int = 8,
+        tool_freq_hard_limit: int = 20,
         window_size: int = 50,
     ):
         self.warn_threshold = warn_threshold
@@ -713,10 +713,7 @@ class ClarificationMiddleware(BaseMiddleware):
 # ════════════════════════════════════════════════════════════════
 
 class ReasoningMiddleware(BaseMiddleware):
-    """提取并展示 LLM 的思考过程（思考由 ReActCore 的预思考阶段生成）
-
-    on_plan_check 阶段检查 LLM 回复中是否含 <thinking> 标签，有则提取打印。
-    """
+    """展示 LLM 思考过程，不强制"""
     HOOKS = ("on_plan_check",)
 
     async def on_plan_check(self, ctx: RunContext) -> Optional[HookResult]:
@@ -996,3 +993,46 @@ class HookMiddleware(BaseMiddleware):
                 return HookResult(jump_to="retry", reason=f"Hook 请求重试 {tool_name}")
 
         return HookResult()
+
+
+# ════════════════════════════════════════════════════════════════
+# QualityCheckMiddleware — AI 质检
+# ════════════════════════════════════════════════════════════════
+
+class QualityCheckMiddleware(BaseMiddleware):
+    """AI 质检中间件 — agent 输出后由轻量 LLM 审查质量。
+
+    挂载在 on_tool_end 钩子。若 final_answer 不合格：
+    - 清除 final_answer
+    - 注入质检反馈到 forced_instructions
+    - 把 ctx.interrupted 改回 False 让 ReAct 继续执行
+    """
+    HOOKS = ("on_tool_end",)
+    _MAX_RETRIES = 2
+
+    def __init__(self):
+        super().__init__()
+        self._retry_count = 0
+
+    def reset_task_state(self):
+        self._retry_count = 0
+
+    async def on_tool_end(self, ctx: RunContext) -> None:
+        if not ctx.final_answer:
+            return
+        if self._retry_count >= self._MAX_RETRIES:
+            return
+
+        from core.multi_agent_v2.agents.react_core import _ai_quality_check
+        feedback = await _ai_quality_check(ctx.final_answer)
+        if not feedback:
+            return
+
+        self._retry_count += 1
+        logger.warning(f"质检 #{self._retry_count}: {feedback}")
+        ctx.forced_instructions = (
+            f"⚠️ 质检未通过（第{self._retry_count}/{self._MAX_RETRIES}次）：{feedback}。"
+            "请立刻修正以上问题，直接输出完整有效的内容。"
+        )
+        ctx.final_answer = ""
+        ctx.interrupted = False

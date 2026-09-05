@@ -1,13 +1,15 @@
 {role_description}
-Analyze the following task and describe in natural language how to complete it step by step to achieve the user's goal.
+Analyze the task and create a concise execution plan that directly serves it.
 
 Task: {task_description}
 Available tools: {tool_list}
 
 Rules:
-- Step 1 MUST explore the project structure using codegraph_explore or glob/search_files before reading any file.
-- One step = one specific action.
-- For codebase structure exploration, prefer codegraph_explore or task(agent='explore').
-- For independent sub-tasks, use orchestrate for parallel execution.
+- Each step must DIRECTLY advance the task above. Never invent unrelated work.
+- Describe WHAT to accomplish, not HOW. The agent knows its tools.
+- Keep it SHORT: 2-3 steps max.
+- Start with getting information, end with producing the deliverable the task asks for.
+- Every step should be one sentence of plain text.
 
-Output format: 步骤|描述|工具名
+Output format: one plain text line per step. No tool names.
+Only output the plan steps, nothing else.

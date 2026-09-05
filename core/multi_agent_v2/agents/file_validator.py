@@ -11,18 +11,7 @@ def validate_file_content(
     ctx: Optional[Any] = None,
     agent: Optional[Any] = None,
 ) -> List[str]:
-    """验证文件内容，返回警告列表，含截断循环检测
-
-    Args:
-        path: 文件路径
-        content: 验证内容
-        raw: 原始内容（用于截断检测）
-        ctx: 运行上下文（含 _write_retries, forced_instructions 等）
-        agent: 当前 Agent 实例
-
-    Returns:
-        warnings 列表
-    """
+    """验证文件内容，返回警告列表，含截断循环检测和语法检查"""
     from types import SimpleNamespace
 
     if ctx is None:
@@ -44,20 +33,50 @@ def validate_file_content(
         retry_count = ctx._write_retries.get(key, 0) + 1
         ctx._write_retries[key] = retry_count
 
-        # 检测截断（内容以不完整标签结尾）
         is_truncated = _is_truncated(content)
-
         if is_truncated and retry_count < 3:
             ctx.forced_instructions = (
                 f"文件内容被截断，需要续写完整内容。"
                 f"已续写 {retry_count} 次，请确保输出完整的 {path} 文件。"
             )
-
         elif is_truncated and retry_count >= 3:
             ctx.forced_instructions = None
 
+    # ── 语法检测 ──
+    syntax_ok, syntax_msg = _check_syntax(path, content)
+    if not syntax_ok:
+        warnings.append(syntax_msg)
+
     ctx.warnings.extend(warnings)
     return warnings
+
+
+def _check_syntax(path: str, content: str) -> tuple:
+    """检测文件语法错误"""
+    ext = path.rsplit('.', 1)[-1].lower() if '.' in path else ''
+    if not content or len(content) < 20:
+        return True, ""
+
+    try:
+        if ext == 'py':
+            import ast
+            ast.parse(content)
+            return True, ""
+        elif ext in ('js', 'ts', 'jsx', 'tsx'):
+            return True, ""  # js syntax check needs node; skip
+        elif ext in ('html', 'htm'):
+            _open = len(re.findall(r'<\w+[^>]*>', content))
+            _close = len(re.findall(r'</\w+>', content))
+            _self = len(re.findall(r'<(?:br|hr|img|input|meta|link|doctype|!doctype)\b[^>]*>', content, re.I))
+            if _open > _close + _self + 5:
+                return False, f"HTML: 开标签({_open})远多于闭标签({_close}+{_self})，可能截断"
+            return True, ""
+    except SyntaxError as e:
+        return False, f"Python 语法错误: {e}"
+    except Exception:
+        pass
+
+    return True, ""
 
 
 def _is_truncated(content: str) -> bool:

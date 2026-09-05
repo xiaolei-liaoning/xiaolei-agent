@@ -203,11 +203,13 @@ async def test_project_analysis_role():
 
 async def test_orchestrate_simple():
     """orchestrate 并行 2 个子代理（简单方式）"""
-    from core.multi_agent_v2.tools.tool_registry import _handle_orchestrate
+    from core.multi_agent_v2.agents.subagent.tool_handler import _handle_orchestrate
     result = await _handle_orchestrate({
-        "task1": "用一句话说明Python是什么",
-        "task2": "用一句话说明JavaScript是什么",
-        "agent": "general",
+        "tasks": [
+            {"id": "task1", "description": "用一句话说明Python是什么", "agent": "general"},
+            {"id": "task2", "description": "用一句话说明JavaScript是什么", "agent": "general"},
+        ],
+        "max_concurrent": 2,
     })
     ok = result.get("ok", False)
     output = result.get("data", "")

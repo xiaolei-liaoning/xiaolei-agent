@@ -44,13 +44,13 @@ async def _handle_task(args: Dict[str, Any]) -> Dict[str, Any]:
                 background=background,
                 parent_id=task_id or "",
             ),
-            timeout=600,  # 10 分钟超时
+            timeout=900,  # ponytail: LLM 慢，600→900
         )
         return result
     except asyncio.TimeoutError:
         return {
             "success": False,
-            "error": "子代理执行超时 (600s)",
+            "error": "子代理执行超时 (900s)",
             "output": f"<task_error>子代理 {task_description[:60]} 执行超时</task_error>",
         }
     except Exception as e:

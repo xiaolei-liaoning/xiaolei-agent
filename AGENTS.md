@@ -8,47 +8,58 @@
 
 ## Progress
 ### Done
-- Fix 1: `chain.on_plan_check(ctx)` called between `on_llm_invoke` and `on_tool_invoke` in `react_core.py` main loop → LoopDetectionMiddleware and ClarificationMiddleware now active.
-- Fix 2: `HookMiddleware.on_tool_end()` returns `HookResult(jump_to="retry")` instead of `None` → retry requests consumed.
-- Fix 3: Main loop calls `async_check_and_compact()` (async, LLM-capable), falls back to template compaction on exception.
-- Fix 4: Final answer heuristic tightened: requires plan completed + >100 chars, or explicit report markers.
-- Fix 5: Empty-run retry picks first available tool from `ctx.tool_defs` in priority order.
-- Fix 6: `consecutive_idle_rounds` incremented on idle rounds, reset on tool calls; exits at ≥3.
-- Fix 7: Post-completion `forced_instructions` loop capped at 3 rounds.
-- Fix 8: `write_file` fallback uses base64 encode/decode, replacing fragile `'''` approach.
-- Fix 9: `replan_failed()` clears `ctx._step_tool_snapshots`.
-- Fix 10: `on_tool_invoke()` skips writing `_validation_error` results to conversation history.
-- Fix 11: `update_step_status()` eliminated redundant re-computations.
-- Verified via unit tests (16 scenarios) + 2 end-to-end CLI tasks.
-- Investigated MCP: all 7 servers defined in `~/.config/opencode/opencode.jsonc` (v1 format, top-level `mcp` key). Desktop sidecar reads global config + plugin-registered MCP servers.
-- 3 plugin-loading errors identified: `opencode-antigravity-auth` (ESM dir import), `@zilliz/memsearch-opencode` (TS stripping), `superpowers` (no git in $PATH).
-- `.mcp.json` only read by CLI binary, NOT by desktop sidecar.
+- Fix 1-11: ReAct loop bugs (see previous sessions for details)
+- Fixes A-F: 项目分析截断修复 (see previous sessions for details)
 
-### Session 2: 项目分析输出截断修复
-- Fix A: 移除 fallback 输出 `[:2000]` `[:1000]` 人肉截断
-- Fix B: LLM max_tokens 16384→32768（主循环 + fallback + 自动报告）
-- Fix C: post-execution 守卫 — write_file 成功即跳出循环，跳过 3 轮空转
-- Fix D: `_extract_text_from_json()` — knowledge_context 存纯文本而非 JSON
-- Fix E: `_trim_desc()` — fallback 总结 prompt 只取前 500 字，释放 context window
-- Fix F: 守卫 final_answer 从 tool_result 提取可读文本（`from_handler`），非 raw JSON
-- 新增 3 个测试用例验证 JSON 泄露/截断/纯文本提取
-- 77 tests passing
+### Session 3: KOF 工作流修复
+- Swap guard: explore→write swap 仅当 agent 已成功写过一个文件
+- Fallback guard: 不跳过未写的 write_file step，设 forced_instructions
+- Q1: read_file loop 检测扩展到 write 类任务
+- Q2: spawn.py `_extract_expected_files` — 工作流级输出验证，正则匹配中英文两种格式
+- Q3: plan 生成时自动插入 explore step 在 write_file 之前
+- 验证: 19/19 测试通过
+- KOF 首轮: DESIGN.md✅ engine.js✅ characters_mod 完成但 file 缺失 → Q2 修复
+
+### Session 4: Root Cause — 完成契约 (PlanStep.postconditions)
+- 根因分析: 5 个系统性问题 (无完成契约、输出验证位置错、等价级联、无循环不变式、中间件无类型安全)
+- 修复: PlanStep 增加 `postconditions: List[str]` 字段
+  - "file_exists:/path" — 标记 done 前验证文件在磁盘上存在
+  - "tool_called:name" — 标记 done 前验证工具已成功调用
+- `_infer_postconditions()`: 从 plan 步骤的 tool_names + task_description 自动推导
+- `_verify_step_completion()`: 在 update_step_status 的每个 `status = "done"` 点前调用
+- 替代了 swap guard 中 `_ever_written` 的逻辑，postconditions 提供更精确的验证
+- 验证: 0 回归（15 pre-existing failures, 336 passed, 6 skipped）
 
 ### In Progress
-- 4 MCP servers (arbor, codegraph, evermem_search, memsearch) disconnected in desktop UI → likely Electron $PATH issue for binaries, missing script paths.
+- 4 MCP servers (arbor, codegraph, evermem_search, memsearch) disconnected in desktop UI → likely Electron $PATH issue
 
-### Blocked
-- Need desktop app sidecar logs to confirm root cause of 4 MCP failures.
+### Session 5: Root Cause — Python 3.14 `hasattr` 在 dataclass 动态属性上失效
+- **根因分析**: `RunContext` 是 `@dataclass`，`task_progress` 是动态赋值的属性。Python 3.14.5 上 `hasattr(ctx, 'task_progress')` 在 while 循环第二轮后始终返回 `False`，导致 `TaskProgress.update()` 只在 round=1 执行。
+- **修复**: 两处 `hasattr(ctx, 'task_progress')` 替换为 `getattr(ctx, 'task_progress', None) is not None`：
+  - `react_core.py:1169` — while 循环内的主调度
+  - `plan_manager.py:403` — `update_step_status` 调用路径
+- **验证**: `getattr` 修复后所有 6 轮都正确调用 `TaskProgress.update()`，`_match_steps` 每轮正常执行
+- **剩余问题**: Plan 仍可能卡在特定步骤（如 step 要求 `codegraph_explore` 但 `allowed_tools` 不含它）— 这是计划生成质量问题，非 TaskProgress 可用性问题
 
-## Key Decisions
-- Global config is source of truth for MCP (no project-level `opencode.json` in 小雷版agent).
-- ReAct fixes are small, targeted patches in-place rather than middleware chain refactor.
-- 项目分析 fallback 不应偷懒避开 — 需要保留 fallback 总结 LLM 调用来生成完整摘要，而非用工具确认消息草草了事。
+### Session 6: 工具策略重构 — 参考 OpenCode 全量暴露 + Skill 系统
+- **OpenCode 设计分析**: OpenCode 不硬过滤工具，所有 built-in + MCP 全量暴露给 LLM，精度靠系统提示词引导 + LLM 推理，安全靠运行时权限系统 (deny/allow/ask)。
+- **allowed_tools → None**: `run_react()` 默认 `allowed_tools=None`（已有），不传即全量暴露。`get_tools_for_task()` 在 `allowed=None` 时不过滤。之前测试卡住是因为手动传了 `allowed_tools=['write_file','execute_shell','read_file']` 硬限制。
+  - 对比：不传 allowed_tools → 24 工具 → plan 2步 5轮完成；传 3 工具 → plan 6步 6轮卡死
+- **MCP 连接**: 确认 3/7 服务器连接正常 (codegraph, deepwiki, context7)，12 个 MCP 工具 + 12 内置工具 = 24 工具全暴露
+- **Skill 系统**: 照搬 OpenCode 模式，新增三个组件：
+  1. `skill_loader.py` — 从 `~/.opencode/skills/` + `~/.agents/skills/` 扫描 SKILL.md（34 个技能），解析 YAML frontmatter
+  2. `skill` 工具 — 注册到 ToolRegistry，按名加载 skill 内容返回给 LLM
+  3. System prompt 注入 — `<available_skills>` 列表（OpenCode 格式），LLM 按需调用 skill 工具
 
-## Relevant Files
-- `core/multi_agent_v2/agents/react_core.py` — Fixes 1, 3-7, 10, A-F
-- `core/multi_agent_v2/agents/middlewares.py` — Fix 2
-- `core/multi_agent_v2/agents/tool_executor.py` — Fix 8
-- `core/multi_agent_v2/agents/plan_manager.py` — Fixes 9, 11
-- `~/.config/opencode/opencode.jsonc` — All 7 MCP servers
-- `~/.config/opencode/opencode.json` — Plugin definitions + providers
+### Key Decisions
+- **Session 6**
+  - `allowed_tools` 不再硬过滤，改为 None（全量暴露）。stuck≥6 动态限制机制保留
+  - Skill 系统 = OpenCode 模式：system prompt 列出 + `skill` 工具按需加载
+  - MCP 工具已天然绕过白名单（`get_tools_for_task` 的 MCP 放行逻辑）
+
+### Relevant Files
+- `core/multi_agent_v2/agents/react_core.py` — `hasattr`→`getattr` fix, skill system prompt injection (line ~378)
+- `core/multi_agent_v2/agents/plan_manager.py` — `hasattr`→`getattr` fix
+- `core/multi_agent_v2/agents/task_progress.py` — `_match_steps`, capability matching
+- `core/multi_agent_v2/tools/tool_registry.py` — `_handle_skill` handler, skill tool definition
+- `core/multi_agent_v2/skills/skill_loader.py` — **NEW** skill discovery + loading

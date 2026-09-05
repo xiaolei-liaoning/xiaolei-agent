@@ -143,14 +143,19 @@ globalThis.agent = async function(prompt, opts = {}) {
         globalThis._retryEvents.push({label, type: 'fail', time: Date.now()});
         throw e;
     }
-    if (result.error) {
+    // ponytail: error grading — success=False always fails the workflow
+    if (!result.success) {
         const call = globalThis._agentCalls[callIdx];
         call.status = 'failed';
         call.endTime = Date.now();
         call.duration = call.endTime - startTime;
-        call.error = result.error;
+        call.error = result.error || result.diagnostic || result.exit_reason || 'agent failed';
         globalThis._retryEvents.push({label, type: 'fail', time: Date.now()});
-        throw new Error(result.error);
+        throw new Error(result.error || result.diagnostic || result.exit_reason || 'agent failed');
+    }
+    // non-fatal diagnostic on success: log but return output
+    if (result.exit_reason && result.exit_reason !== 'plan_completed' && result.exit_reason !== 'completed_with_answer') {
+        console.log(`[Agent] ${label}: succeeded with ${result.exit_reason}`);
     }
 
     const call = globalThis._agentCalls[callIdx];
@@ -178,12 +183,13 @@ globalThis.agent = async function(prompt, opts = {}) {
         }
     }
 
-    // fullResult: true 时返回完整元数据（含耗时、agentId 等）
-    // 默认只返回 output（向后兼容）
+    // ponytail: output 为 null/undefined 时返回空字符串，防止下游 .slice() 崩溃
+    const _out = result.output;
     if (opts.fullResult) {
+        if (_out == null) result.output = "";
         return result;
     }
-    return result.output;
+    return _out ?? "";
 };
 
 // ── batchAgents() — 批量并行执行 Agent（一次 IPC 搞定 parallel） ──
@@ -197,10 +203,20 @@ globalThis.batchAgents = async function(agentSpecs, timeout = 120) {
 globalThis.parallel = async function(thunks) {
     console.log(`[Parallel] Starting ${thunks.length} tasks...`);
     const settled = await Promise.allSettled(
-        thunks.map(t => typeof t === 'function' ? t() : t)
+        thunks.map(t => {
+            try {
+                const r = typeof t === 'function' ? t() : t;
+                return r instanceof Promise ? r : Promise.resolve(r);
+            } catch (e) {
+                return Promise.reject(e);
+            }
+        })
     );
     console.log(`[Parallel] ${settled.length} tasks completed`);
-    return settled.map(r => r.status === 'fulfilled' ? r.value : null);
+    return settled.map(r => {
+        if (r.status === 'rejected') return null;
+        return r.value ?? null;
+    });
 };
 
 // ── $dag() — 声明式 DAG 图编排 ──

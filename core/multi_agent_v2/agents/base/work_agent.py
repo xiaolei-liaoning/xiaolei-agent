@@ -119,46 +119,47 @@ class WorkAgent(BaseAgent):
             logger.info(f"WorkAgent → UnifiedAgent (max_rounds={max_rounds})")
             from core.multi_agent_v2.agents.unified_agent import run_unified
 
-            # ── 三层 Skill 匹配 ──
-            try:
-                from core.skills.base_skills import get_skill_system
-                skill_result = await get_skill_system().match(desc)
-                if skill_result.personality:
-                    overlay = f"【Skill角色】\n{skill_result.personality[:500]}"
-                    self.personality = f"{self.personality}\n\n---\n{overlay}" if self.personality else skill_result.personality[:2000]
-                    self._skill_tools = list(skill_result.tool_preference)
-                    print(f"    \033[1;36m🧠 Skill: {skill_result.skill_name}\033[0m")
-                    role_chars = len(skill_result.personality)
-                    print(f"    \033[2m📄 角色定义: {role_chars} 字符\033[0m")
-                # ponytail: Expert 人格与工具调用冲突 (Persona 走查专家 → LLM 停止调工具)
-                # skill_agent_map.yaml 中的 Expert 覆盖会跳过
-                if skill_result.guidance:
-                    self._skill_guidance = skill_result.guidance
-                    print(f"    \033[2m📖 Skill 指导: {len(skill_result.guidance)} 字符\033[0m")
-
-                # ── skill_agent_map.yaml Expert 覆盖 ──
+            # ── 三层 Skill 匹配（personality 已由 opts/agentType 指定时跳过） ──
+            if not self.personality:
                 try:
-                    import yaml, os
-                    _map_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), "config", "skill_agent_map.yaml")
-                    if os.path.isfile(_map_path):
-                        with open(_map_path) as _f:
-                            _map_data = yaml.safe_load(_f)
-                        _agent_map = _map_data.get("skill_agent_map", {})
-                        if skill_result.skill_id in _agent_map:
-                            _override_id = _agent_map[skill_result.skill_id]
-                            # ponytail: 跳过 Expert 人格（走查专家等角色不适合工具型 agent）
-                            if "expert" in _override_id.lower():
-                                logger.info(f"Skill 跳过 Expert 覆盖: {_override_id}")
-                            else:
-                                _base = get_skill_system().base_skills.get(_override_id)
-                                if _base and _base.role_prompt:
-                                    self.personality = _base.role_prompt
-                                    print(f"    \033[1;36m🧠 Skill: {_override_id} (skill_agent_map 覆盖)\033[0m")
-                                    print(f"    \033[2m📄 角色定义: {len(_base.role_prompt)} 字符, tools: {len(_base.tools)}\033[0m")
-                except Exception as _e:
-                    logger.debug(f"skill_agent_map 覆盖失败: {_e}")
-            except Exception as e:
-                logger.warning(f"Skill 匹配异常: {e}")
+                    from core.skills.base_skills import get_skill_system
+                    skill_result = await get_skill_system().match(desc)
+                    if skill_result.personality:
+                        overlay = f"【Skill角色】\n{skill_result.personality[:500]}"
+                        self.personality = f"{self.personality}\n\n---\n{overlay}" if self.personality else skill_result.personality[:2000]
+                        self._skill_tools = list(skill_result.tool_preference)
+                        print(f"    \033[1;36m🧠 Skill: {skill_result.skill_name}\033[0m")
+                        role_chars = len(skill_result.personality)
+                        print(f"    \033[2m📄 角色定义: {role_chars} 字符\033[0m")
+                    # ponytail: Expert 人格与工具调用冲突 (Persona 走查专家 → LLM 停止调工具)
+                    # skill_agent_map.yaml 中的 Expert 覆盖会跳过
+                    if skill_result.guidance:
+                        self._skill_guidance = skill_result.guidance
+                        print(f"    \033[2m📖 Skill 指导: {len(skill_result.guidance)} 字符\033[0m")
+
+                    # ── skill_agent_map.yaml Expert 覆盖 ──
+                    try:
+                        import yaml, os
+                        _map_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), "config", "skill_agent_map.yaml")
+                        if os.path.isfile(_map_path):
+                            with open(_map_path) as _f:
+                                _map_data = yaml.safe_load(_f)
+                            _agent_map = _map_data.get("skill_agent_map", {})
+                            if skill_result.skill_id in _agent_map:
+                                _override_id = _agent_map[skill_result.skill_id]
+                                # ponytail: 跳过 Expert 人格（走查专家等角色不适合工具型 agent）
+                                if "expert" in _override_id.lower():
+                                    logger.info(f"Skill 跳过 Expert 覆盖: {_override_id}")
+                                else:
+                                    _base = get_skill_system().base_skills.get(_override_id)
+                                    if _base and _base.role_prompt:
+                                        self.personality = _base.role_prompt
+                                        print(f"    \033[1;36m🧠 Skill: {_override_id} (skill_agent_map 覆盖)\033[0m")
+                                        print(f"    \033[2m📄 角色定义: {len(_base.role_prompt)} 字符, tools: {len(_base.tools)}\033[0m")
+                    except Exception as _e:
+                        logger.debug(f"skill_agent_map 覆盖失败: {_e}")
+                except Exception as e:
+                    logger.warning(f"Skill 匹配异常: {e}")
 
             # 如果有 Guidance，注入到 personality_prompt
             guidance_text = getattr(self, "_skill_guidance", "")

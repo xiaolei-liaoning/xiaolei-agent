@@ -218,12 +218,32 @@ class ChatHandler:
             log_status("LLM 正在编写 JS Workflow 脚本...", color=CLAUDE)
             script = await self._llm_write_workflow(task)
             if script:
-                # ponytail: 保存生成的脚本到桌面方便调试
+                # ponytail: 保存生成的脚本到桌面，用描述性文件名
                 try:
-                    _dbg_path = os.path.expanduser("~/Desktop/_last_workflow.js")
-                    with open(_dbg_path, "w", encoding="utf-8") as _f:
+                    import re as _re
+                    _name = "workflow"
+                    _m = _re.search(r"name:\s*['\"]([^'\"]+)", script)
+                    if _m:
+                        _name = _m.group(1).strip().replace(" ", "_")[:40]
+                    else:
+                        _safe = _re.sub(r"[^\w]", "_", task[:30]).strip("_")[:30]
+                        if _safe:
+                            _name = _safe
+                    _path = os.path.expanduser(f"~/Desktop/{_name}.js")
+                    # 如果文件已存在，加序号
+                    if os.path.exists(_path):
+                        _base = _path.rsplit(".", 1)[0]
+                        _n = 1
+                        while os.path.exists(f"{_base}_{_n}.js"):
+                            _n += 1
+                        _path = f"{_base}_{_n}.js"
+                    # 同时更新 _last_workflow.js 方便快速查看最新
+                    _last = os.path.expanduser("~/Desktop/_last_workflow.js")
+                    with open(_last, "w", encoding="utf-8") as _f:
                         _f.write(script)
-                    log_status(f"已保存脚本到 {_dbg_path}", color="white")
+                    with open(_path, "w", encoding="utf-8") as _f:
+                        _f.write(script)
+                    log_status(f"已保存脚本到 {_path}", color="white")
                 except Exception:
                     pass
             if script and not self._validate_workflow_script(script, task):
@@ -251,7 +271,13 @@ export default async function() {{
         try:
             from core.multi_agent_v2.workflow import run_claude_workflow
 
-            wr = await run_claude_workflow(script)
+            # ponytail: 如果 task 是本地目录路径，作为 args.path 传入 workflow
+            workflow_args = None
+            _stripped = task.strip()
+            if os.path.isdir(_stripped):
+                workflow_args = {"path": os.path.abspath(_stripped)}
+
+            wr = await run_claude_workflow(script, args=workflow_args)
 
             if wr.success and wr.output:
                 text = str(wr.output)
@@ -311,6 +337,15 @@ export default async function() {{
                     "独立模块必须用 parallel() 并行，禁止串行。\n"
                     "可以组合/嵌套多个模板来满足任务需求。\n"
                 )
+                # ponytail: prevent LLM from dropping HTML output in game workflows
+                if "⑩" in matched_pattern or "10" in matched_pattern:
+                    rules += (
+                        "⚠️ 游戏开发铁律（违者输出不可运行）：\n"
+                        "• 最后一个 agent 必须用 write_file 生成完整的 game.html\n"
+                        "• game.html 必须内联/引用所有 JS 模块，可直接在浏览器打开\n"
+                        "• 绝对禁止省略 HTML 输出或用 read_file 替代 write_file\n"
+                    )
+
                 prompt = (
                     f"【匹配 Pattern: {matched_pattern}】\n"
                     + rules

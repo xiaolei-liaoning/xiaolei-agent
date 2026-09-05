@@ -33,11 +33,12 @@ _BUILTIN_PROFILES: Dict[str, SubagentProfile] = {
         description="规划 Agent，用于任务分解和方案设计。只有读取和搜索工具。",
         tools=["read_file", "search_files", "web_search", "fetch_url"],
     ),
-    # 编码型 — 全工具可用，但排除 git（交由 orchestrator 决定）
+    # 编码型 — 全工具可用 + build 人格（直接写代码，不先探索）
     "Coder": SubagentProfile(
         name="Coder",
         description="代码 Agent，用于编写和调试代码。可使用所有开发和搜索工具。",
         disallowed_tools=["git"],
+        personality="你是构建型代理，擅长从零创建项目。\n行为准则：\n- 首次创建：用 write_file 一次性写入完整可运行的代码\n- 已有文件：先 read_file 确认 → 再用 edit_file 精确修改\n- 禁止添加探索步骤，直接按任务指定的工具执行\n- 功能完整，不留占位符或 TODO",
     ),
     # 分析型 — 读取 + 搜索 + 执行 Python（数据分析用）
     "Analyst": SubagentProfile(

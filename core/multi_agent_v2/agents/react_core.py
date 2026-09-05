@@ -27,6 +27,7 @@ import re
 import sys
 from typing import Any, Dict, List, Optional
 
+from core.multi_agent_v2.agents.task_progress import TaskProgress
 from core.multi_agent_v2.tools.json_util import safe_parse_json
 from core.multi_agent_v2.prompts import get_builder
 
@@ -83,6 +84,87 @@ def _get_prefix(agent: Any = None) -> str:
     if agent and hasattr(agent, "name"):
         return f"\033[2m[{agent.name}]\033[0m "
     return ""
+
+async def _ai_quality_check(content: str) -> str:
+    """AI 质检 — 轻量 LLM 审查输出内容是否完整有效。返回空字符串表示 PASS。"""
+    if not content or len(content) < 20:
+        return "输出内容过短或为空"
+    try:
+        from core.engine.llm_backend import get_llm_router
+        router = get_llm_router()
+        if not router or not router.is_available():
+            return ""
+        text = content[:3000]
+        prompt = (
+            "Review this output. Answer with one word: PASS if it's complete/valid output, "
+            "or FAIL with a short reason if it's incomplete/placeholder/empty/only-tool-calls. "
+            "Ignore minor formatting issues.\n\n"
+            f"Output:\n{text}"
+        )
+        resp = await asyncio.wait_for(
+            router.chat([{"role": "user", "content": prompt}], temperature=0, max_tokens=50),
+            timeout=8.0,
+        )
+        result = str(resp).strip().upper() if resp else ""
+        if result.startswith("PASS"):
+            return ""
+        return result[:80] if result else ""
+    except Exception:
+        return ""
+
+
+def _check_postcondition_exit_guard(ctx: RunContext) -> bool:
+    """Plan 未完成时拦截退出，强制 LLM 执行剩余步骤
+
+    Returns True if loop should continue (exit blocked), False if exit is OK.
+    仅当 ctx.react_depth >= 3 且 ctx.final_answer 有值时触发检查。
+
+    postcondition-aware：当前待执行步骤的后置条件已满足（file_exists/tool_called）
+    或无后置条件时允许退出，避免在真实产出已达成时卡死循环。
+    """
+    if ctx.react_depth < 3 or not getattr(ctx, 'final_answer', None):
+        return False
+    if not ctx.plan:
+        return False
+    _done = sum(1 for s in ctx.plan if s.status == "done")
+    if _done >= len(ctx.plan):
+        return False
+
+    # 当前待执行步骤
+    _pending = ctx.plan[_done]
+
+    # 无后置条件 → 不拦截（允许 LLM 直接产出并退出）
+    if not _pending.postconditions:
+        return False
+
+    # 后置条件全部满足 → 允许退出
+    _satisfied = True
+    for cond in _pending.postconditions:
+        if cond.startswith("file_exists:"):
+            if not os.path.exists(os.path.expanduser(cond[12:])):
+                _satisfied = False
+                break
+        elif cond.startswith("tool_called:"):
+            _required = cond[12:]
+            _called = any(
+                r.get("tool_call", {}).get("name") == _required and r.get("success")
+                for r in ctx.tool_results
+            )
+            if not _called:
+                _satisfied = False
+                break
+    if _satisfied:
+        return False
+
+    # 计划未完成且后置条件未满足 → 拦截退出
+    _tool = _pending.tool_names[0] if _pending.tool_names else "一个合适的工具"
+    ctx.forced_instructions = (
+        f"⚠️ 计划还有 {len(ctx.plan) - _done} 步未完成（共 {len(ctx.plan)} 步）。"
+        f"当前：{_pending.description[:80]}"
+        f" → 请立即调用 {_tool}，不要输出解释文本。"
+    )
+    ctx.final_answer = ""
+    return True
 
 
 class ReActCoreMiddleware(BaseMiddleware):
@@ -287,10 +369,23 @@ class ReActCoreMiddleware(BaseMiddleware):
         # ponytail: system architecture awareness block
         system_content += "\n\n" + builder.load("blocks/architecture")
 
+        # ponytail: 注入项目根路径，防 LLM 路径幻觉
+        import os as _os
+        system_content += f"\n<project_root>{_os.getcwd()}</project_root>"
+
+        # ponytail: 注入可用 skill 列表，LLM 按需调用 skill 工具加载
+        try:
+            from core.multi_agent_v2.skills.skill_loader import discover_skills, format_skills_xml
+            _skills = discover_skills()
+            if _skills:
+                system_content += "\n" + format_skills_xml(_skills)
+        except Exception:
+            pass
+
         # 注入强制指令（如：文件写入失败需要重试）
         if ctx.forced_instructions:
             system_content += f"\n\n<forced_instructions>\n{ctx.forced_instructions}\n</forced_instructions>"
-            ctx._fi_consumed = True  # 标记已消费，保留值供同轮后续路径使用
+            ctx._fi_consumed = True
         
         # 注入警告信息（如：循环检测警告）
         if ctx.warnings:
@@ -327,6 +422,10 @@ class ReActCoreMiddleware(BaseMiddleware):
                 _user_content += f"\n- {name}({args_summary}): {err}"
             _user_content += "\n</failed_approaches>"
 
+        # ponytail: forced_instructions 也在 user message 前注入（LLM 更难忽略）
+        if ctx.forced_instructions:
+            _user_content = f"<forced_instructions>\n{ctx.forced_instructions}\n</forced_instructions>\n\n{_user_content}"
+
         ctx._pending_messages = [
             {"role": "system", "content": system_content},
             {"role": "user", "content": _user_content},
@@ -335,24 +434,18 @@ class ReActCoreMiddleware(BaseMiddleware):
         # ── 2. 构建 LLM 消息（含对话历史 + RAG 增强 + 个性化）──
         messages = ctx._pending_messages.copy()
 
-        # 注入对话历史（滑动窗口：全量保留，只传最近 N 条，旧消息摘要注入）
+        # 注入对话历史（滑动窗口：最近 16 条全量，旧消息 LLM 摘要）
         if ctx._conversation_history:
             _MAX_WINDOW = 16
             _hist = ctx._conversation_history
             if len(_hist) > _MAX_WINDOW:
-                _old = _hist[:-_MAX_WINDOW]
                 _recent = _hist[-_MAX_WINDOW:]
-                # 旧消息压缩摘要注入 system prompt
-                _old_summary_lines = []
-                for _m in _old[-8:]:  # 最多摘要 8 条
-                    _r = _m.get("role", "?")
-                    _c = str(_m.get("content", ""))[:80]
-                    if _c:
-                        _old_summary_lines.append(f"[{_r}] {_c}")
-                if _old_summary_lines:
-                    _ctx = "\n".join(_old_summary_lines)
+                _old = _hist[:-_MAX_WINDOW]
+                # 用 LLM 压缩旧消息为结构化摘要
+                _summary = await self._summarize_history(_old)
+                if _summary:
                     messages[0]["content"] += (
-                        f"\n\n【历史会话摘要】以下 {len(_old)} 条消息已压缩：\n{_ctx}"
+                        f"\n\n【历史摘要 — 以下 {len(_old)} 条消息已压缩】\n{_summary}"
                     )
                 messages.extend(_recent)
             else:
@@ -408,6 +501,8 @@ class ReActCoreMiddleware(BaseMiddleware):
             pass
         # ponytail: LLM 会在回复中输出 thinking 文本 + tool_calls，由 system prompt 引导
         _last_reply = ""
+        _round_idle = True
+        _has_successful_results = bool(ctx.tool_results and any(r.get("success") for r in ctx.tool_results))
         for _attempt in range(2):
             try:
                 task = asyncio.create_task(router.chat(
@@ -419,7 +514,10 @@ class ReActCoreMiddleware(BaseMiddleware):
                 try:
                     from cli.animated_spinner import shimmer_spinner
                     async with shimmer_spinner("Thinking…") as _shimmer:
-                        reply = await asyncio.wait_for(task, timeout=180)
+                        # 动态超时：正常 60s，卡住时逐步收紧
+                        _stuck = getattr(getattr(ctx, 'task_progress', None), 'stuck_counter', 0)
+                        _timeout = 30 if _stuck >= 5 else (45 if _stuck >= 3 else 60)
+                        reply = await asyncio.wait_for(task, timeout=_timeout)
                 except asyncio.TimeoutError:
                     task.cancel()
                     try:
@@ -488,11 +586,11 @@ class ReActCoreMiddleware(BaseMiddleware):
                     ctx._pending_tool_calls = tool_calls
                     ctx._pending_reply = reply
                     ctx.consecutive_idle_rounds = 0  # 有工具调用，重置空转计数
+                    _round_idle = False
                     break  # 有工具调用 → 跳出重试循环
 
                 # 没有工具调用
                 _last_reply = reply
-                ctx.consecutive_idle_rounds = getattr(ctx, 'consecutive_idle_rounds', 0) + 1
                 # ponytail: 从 JSON 响应中提取纯文本
                 _plain = reply
                 if _plain.startswith("{"):
@@ -500,25 +598,15 @@ class ReActCoreMiddleware(BaseMiddleware):
                     if _extracted:
                         _plain = _extracted
 
-                # ponytail: 已有工具结果 + LLM 输出实质内容 → 直接接受为 final answer
-                # 解决 CodeGraph 扫描后 LLM 合成报告被误判为空转的 bug
-                _has_successful_results = bool(ctx.tool_results and any(r.get("success") for r in ctx.tool_results))
-                if _has_successful_results and _plain and len(_plain) > 100 and ctx.consecutive_idle_rounds >= 1:
-                    ctx.final_answer = _plain
-                    ctx.interrupted = True
-                    break
-                if ctx.consecutive_idle_rounds >= 6:
-                    logger.debug(f"连续 {ctx.consecutive_idle_rounds} 轮空转，强制结束")
-                    ctx.last_error = f"连续 {ctx.consecutive_idle_rounds} 轮空转无工具调用"
-                    ctx.interrupted = True
-                    if _plain and len(_plain) > 20:
-                        ctx.final_answer = _plain
-                    break
                 _plan_done = ctx.plan and all(s.status == "done" for s in ctx.plan)
                 if _plan_done:
                     ctx.final_answer = _plain
                     ctx.interrupted = True
+                    ctx.exit_reason = "plan_completed"
                     break
+                # ponytail: 思考文本存入历史，LLM 下轮/重试时能看到
+                if _plain and len(_plain) > 20:
+                    ctx._conversation_history.append({"role": "assistant", "content": _plain[:2000]})
                 # ponytail: 空跑重试 — 根据可用工具动态建议，不硬编码
                 _avail = [t.get("function", {}).get("name", "") for t in (ctx.tool_defs or [])]
                 # ponytail: 有工具结果时建议 write_file（写报告），而非 read_file
@@ -541,16 +629,36 @@ class ReActCoreMiddleware(BaseMiddleware):
             except asyncio.TimeoutError:
                 logger.debug("LLM 调用超时 (60s)")
                 ctx.last_error = "LLM 调用超时"
+                ctx.exit_reason = "llm_timeout"
                 ctx.interrupted = True
                 break
             except Exception as e:
                 logger.debug(f"LLM 调用失败: {e}")
                 ctx.last_error = f"LLM 调用失败: {e}"
+                ctx.exit_reason = "llm_error"
                 ctx.interrupted = True
                 break
-        else:
-            # 2 次都空转，用最后一次回复
+        # ponytail: per-round idle counting (was per-attempt before)
+        if _round_idle:
+            ctx.consecutive_idle_rounds = getattr(ctx, 'consecutive_idle_rounds', 0) + 1
             ctx._pending_reply = _last_reply
+            if ctx.consecutive_idle_rounds >= 4 and not ctx.forced_instructions:
+                _step_name = ""
+                if ctx.plan:
+                    _pending = [s for s in ctx.plan if s.status == "pending"]
+                    if _pending and _pending[0].tool_names:
+                        _step_name = _pending[0].tool_names[0]
+                _hint = f"请立即调用 {_step_name}" if _step_name else "请调用可用工具"
+                ctx.forced_instructions = (
+                    f"⚠️ 已经连续 {ctx.consecutive_idle_rounds} 轮没有调用工具！{_hint} 完成任务，不要只输出文本。"
+                )
+            if ctx.consecutive_idle_rounds >= 6:
+                logger.debug(f"连续 {ctx.consecutive_idle_rounds} 轮空转，强制结束")
+                ctx.last_error = f"连续 {ctx.consecutive_idle_rounds} 轮空转无工具调用"
+                ctx.exit_reason = "empty_run_6_rounds"
+                ctx.interrupted = True
+                if _last_reply and len(_last_reply) > 20:
+                    ctx.final_answer = _last_reply
                 
     async def on_tool_invoke(self, ctx: RunContext) -> None:
         """执行工具调用"""
@@ -797,6 +905,47 @@ class ReActCoreMiddleware(BaseMiddleware):
             logger.debug(f"RAG 检索失败: {e}")
         return ""
 
+    async def _summarize_history(self, old_messages: list) -> str:
+        """LLM 压缩旧消息为结构化摘要（OpenCode 风格）"""
+        if not old_messages:
+            return ""
+        lines = []
+        for m in old_messages[-20:]:
+            role = m.get("role", "?")
+            content = str(m.get("content", ""))[:150]
+            if role == "tool":
+                name = m.get("name", "?")
+                lines.append(f"[{role}:{name}] {content}")
+            elif role == "assistant":
+                tc = m.get("tool_calls", [])
+                tools = ",".join(t.get("function", {}).get("name", "") for t in tc[:3])
+                lines.append(f"[{role}] called: {tools}")
+            else:
+                lines.append(f"[{role}] {content}")
+        if not lines:
+            return ""
+        try:
+            from core.engine.llm_backend import get_llm_router
+            router = get_llm_router()
+            if router and router.is_available():
+                resp = await asyncio.wait_for(
+                    router.simple_chat(
+                        "将以下对话记录压缩为简短摘要（每个层级一行）：\n"
+                        "1. 任务名称：用一句话概括要做什么\n"
+                        "2. 关键操作：列出调用了哪些工具，做了什么\n"
+                        "3. 产出结果：最终完成了什么或失败原因\n"
+                        "4. 待办事项：还有什么没做\n\n"
+                        + "\n".join(lines[:30]),
+                        temperature=0.1,
+                        max_tokens=200,
+                    ),
+                    timeout=8.0,
+                )
+                return str(resp).strip() if resp else ""
+        except Exception:
+            pass
+        return "\n".join(lines[:8])
+
 
 # ═══════════════════════════════════════════════════════════════════
 # 链构建与运行
@@ -813,6 +962,7 @@ def build_default_chain() -> MiddlewareChain:
         KEPAMiddleware,
         LoopDetectionMiddleware,
         PermissionMiddleware,
+        QualityCheckMiddleware,
         ReActDepthMiddleware,
         ReasoningMiddleware,
         ReflectionMiddleware,
@@ -924,6 +1074,14 @@ async def run_react(
         ctx.tool_preference = tool_preference
     ctx._is_subagent = is_subagent
 
+    # 重置 read_file 重复计数器
+    try:
+        from core.multi_agent_v2.tools.tool_registry import _handle_read_file
+        _handle_read_file._read_count = {}
+        _handle_read_file._unique_files = set()
+    except Exception:
+        pass
+
     # 默认启用上下文预算管理
     ctx.context_budget = ContextBudgetManager()
 
@@ -953,6 +1111,32 @@ async def run_react(
     else:
         print(f"{prefix}    \033[2m◇ No plan generated\033[0m")
 
+    # ponytail: TaskProgress 统一追踪，替代旧版 update_step_status
+    ctx.task_progress = TaskProgress(ctx)
+    if ctx.plan:
+        ctx._progress_tool_snapshot = 0
+
+    # 对话历史持久化：每轮保存。每个 run_react 用独立 session ID
+    _sid = getattr(ctx, '_session_id', None) or os.urandom(6).hex()
+    ctx._session_id = _sid
+    _session_file = os.path.join(
+        os.path.expanduser("~/.xiaolei/sessions"), f"{_sid}.json"
+    )
+    os.makedirs(os.path.dirname(_session_file), exist_ok=True)
+    if os.path.exists(_session_file):
+        try:
+            with open(_session_file) as f:
+                ctx._conversation_history = json.loads(f.read())
+        except Exception:
+            pass
+
+    def _save_history():
+        try:
+            with open(_session_file, 'w') as f:
+                json.dump(ctx._conversation_history[-30:], f, ensure_ascii=False)
+        except Exception:
+            pass
+
     while not ctx.interrupted and ctx.react_depth < ctx.max_iterations:
         round_idx = ctx.react_depth + 1
         if not prefix:
@@ -966,21 +1150,54 @@ async def run_react(
             display_plan(ctx, prefix=prefix)
 
         if ctx.plan and all(s.status == "done" for s in ctx.plan):
-            if ctx.forced_instructions:
-                _post_rounds = getattr(ctx, '_post_completion_rounds', 0) + 1
-                ctx._post_completion_rounds = _post_rounds
-                if _post_rounds >= 3:
-                    print(f"{prefix}    \033[2m◇ Post-completion limit reached\033[0m")
-                    ctx.interrupted = True
-                    break
+            # 验证：任务要求产出文件时，必须有 file_written 能力
+            _task = ctx.task_description or ""
+            _need_output = any(kw in _task for kw in [
+                "生成", "创建", "写", "保存", "输出", "报告", "文件",
+                "create", "write", "generate", "save", "output", "report",
+            ])
+            _has_output = any(
+                c.kind == "file_written"
+                for c in getattr(ctx, 'task_progress', None) and ctx.task_progress.completed_capabilities or []
+            )
+            if _need_output and not _has_output:
+                _last = ctx.plan[-1]
+                _last.status = "pending"
+                ctx.forced_instructions = (
+                    f"⚠️ 所有步骤已标记完成，但实际没有创建任何文件！"
+                    f"请立即 write_file 完成最终产出：{_last.description[:60]}"
+                )
             else:
+                ctx.forced_instructions = ""
                 print(f"{prefix}    \033[32m◇ All steps complete\033[0m")
                 ctx.interrupted = True
+                ctx.exit_reason = "plan_completed"
                 break
+
+        # ponytail: AI 质检 — 有 final_answer 且即将退出时，先审查质量
+        _exiting_with_answer = (
+            ctx.react_depth >= 3
+            and getattr(ctx, 'final_answer', None)
+            and not getattr(ctx, '_quality_checked', False)
+        )
+        if _exiting_with_answer:
+            _feedback = await _ai_quality_check(ctx.final_answer)
+            if _feedback:
+                print(f"{prefix}    \033[1;33m◇ Quality: {_feedback}\033[0m")
+                ctx.forced_instructions = (
+                    f"⚠️ 质检未通过：{_feedback}。请立刻修正并输出完整有效内容。"
+                )
+                ctx.final_answer = ""
+                ctx.interrupted = False
+                ctx._quality_checked = True  # 只给一次修正机会
+                continue
 
         # ponytail: 多轮无进展且有实质内容 → 中间退出，不浪费轮次
         if ctx.react_depth >= 3 and getattr(ctx, 'final_answer', None):
+            if _check_postcondition_exit_guard(ctx):
+                continue
             ctx.interrupted = True
+            ctx.exit_reason = "completed_with_answer"
             break
 
         if ctx.react_depth >= 3 and ctx.plan:
@@ -988,16 +1205,17 @@ async def run_react(
             if done_count == 0 and ctx.react_depth >= 8:
                 print(f"{prefix}    \033[31m◇ No progress after {ctx.react_depth} rounds\033[0m")
                 ctx.interrupted = True
+                ctx.exit_reason = "no_progress_8_rounds"
                 break
 
         if ctx.react_depth == ctx.max_iterations - 1:
             print(f"{prefix}    \033[33m◇ Final round\033[0m")
-            ctx.warnings.append("[最后轮次] 本轮后结束。如果主要任务已经完成，直接输出结果。")
 
         ctx.react_depth += 1
         hr_start = await chain.on_llm_invoke(ctx)
         if hr_start and hr_start.jump_to == "end":
             ctx.interrupted = True
+            ctx.exit_reason = "middleware_kill_llm"
             ctx.last_error = hr_start.reason or "中间件终止(think_start)"
             break
         if hr_start and hr_start.jump_to == "retry":
@@ -1007,6 +1225,7 @@ async def run_react(
         hr_plan = await chain.on_plan_check(ctx)
         if hr_plan and hr_plan.jump_to == "end":
             ctx.interrupted = True
+            ctx.exit_reason = "middleware_kill_plan"
             ctx.last_error = hr_plan.reason or "中间件终止(plan_check)"
             break
         if hr_plan and hr_plan.jump_to == "retry":
@@ -1015,10 +1234,60 @@ async def run_react(
         hr_end = await chain.on_tool_invoke(ctx)
         if hr_end and hr_end.jump_to == "end":
             ctx.interrupted = True
+            ctx.exit_reason = "middleware_kill_tool"
             ctx.last_error = hr_end.reason or "中间件终止(think_end)"
             break
 
-        if ctx.plan:
+        # ponytail: TaskProgress — 统一能力追踪，替代旧版 update_step_status
+        _tp = getattr(ctx, 'task_progress', None)
+        if _tp is not None:
+            ctx.task_progress.update()
+
+            # ponytail: 自适应重规划 — 卡住 5 轮后才重规划 (先让 forced_instructions 在 stuck>=4 有机会生效)
+            if ctx.task_progress.stuck_counter >= 5 and ctx.plan:
+                _pending = [s for s in ctx.plan if s.status == "pending"]
+                if _pending:
+                    replanned = await ctx.task_progress.adaptive_replan()
+                    if replanned:
+                        ctx.forced_instructions = ""
+                        print(f"{prefix}    \033[33m◇ Replanned remaining steps\033[0m")
+                        display_plan(ctx, prefix=prefix)
+
+            # ponytail: 硬限制工具 — 卡住 3+ 轮后强制引导
+            if ctx.task_progress.stuck_counter >= 3:
+                _pending_steps = [s for s in ctx.plan if s.status == "pending"]
+                if _pending_steps:
+                    _step_desc = _pending_steps[0].description
+                    _step_tool = _pending_steps[0].tool_names[0] if _pending_steps[0].tool_names else "write_file"
+                    _searches = sum(1 for r in ctx.tool_results if r.get("tool_call",{}).get("name") in ("web_search","fetch_url","hot_search"))
+                    _reads = sum(1 for r in ctx.tool_results if r.get("tool_call",{}).get("name") in ("read_file","search_files","codegraph_explore"))
+                    _hint = ""
+                    if _reads >= 5:
+                        _hint = f"你已经读了{_reads}个文件，不要再读了！用 task(explore) 委托子代理探索，你自己只负责写输出。"
+                    elif _searches >= 3:
+                        _hint = f"你已经搜了{_searches}次，数据足够。立即调用 {_step_tool} 输出结果，不要再搜了。"
+                    ctx.forced_instructions = (
+                        f"⚠️ 连续 {ctx.task_progress.stuck_counter} 轮没有实质进展！"
+                        f"{_hint}"
+                        f"当前还需完成：{_step_desc}。"
+                        f"请立即调用 {_step_tool} 输出结果，不要再搜索/阅读了。"
+                    )
+                    # ponytail: 卡了 6+ 轮 → 硬限制工具，只允许当前步骤需要的
+                    if ctx.task_progress.stuck_counter >= 6:
+                        _need = set(_pending_steps[0].tool_names) if _pending_steps[0].tool_names else {"write_file"}
+                        _saved = getattr(ctx, '_allow_restore', ctx.allowed_tools)
+                        if ctx.task_progress.stuck_counter == 6:  # first time hitting 6
+                            ctx._allow_restore = ctx.allowed_tools
+                        ctx.allowed_tools = list(_need)
+                        ctx._filtered_tools = None
+                        logger.info(f"Stuck {ctx.task_progress.stuck_counter} rounds, tools limited to {_need}")
+            elif hasattr(ctx, '_allow_restore'):
+                # stuck resolved → restore toolset
+                ctx.allowed_tools = ctx._allow_restore
+                ctx._allow_restore = None
+                ctx._filtered_tools = None
+        elif ctx.plan:
+            # fallback: 没有 task_progress 时用旧版 update_step_status
             update_step_status(ctx, prefix)
 
             # 计划强制执行：当前步骤要求 task/orchestrate 但 LLM 绕路时强制引导
@@ -1085,9 +1354,11 @@ async def run_react(
                 else:
                     print(f"  \033[31m→\033[0m 任务已中止")
                     ctx.last_error = "用户中止"
+                    ctx.exit_reason = "user_aborted"
                     break
                 break
             ctx.interrupted = True
+            ctx.exit_reason = "loop_detected"
             ctx.last_error = ctx.last_error or hr_tool.reason or "中间件终止(tool_end)"
             break
         if hr_tool and hr_tool.jump_to == "retry":
@@ -1100,6 +1371,7 @@ async def run_react(
             continue
 
     # ── 搜索报告自动生成兜底 ──
+    _save_history()
     if not ctx.final_answer:
         _has_search_data = any(
             r.get("tool_call", {}).get("name") in ("web_search", "fetch_url", "fetch_json")
@@ -1253,8 +1525,8 @@ async def run_react(
         except Exception:
             pass
 
-    # ponytail: final_answer 自动保存到桌面（>=50字），天气/问答等短结果也能持久化
-    if ctx.final_answer and len(ctx.final_answer) >= 50:
+    # ponytail: final_answer 自动保存到桌面（>=50字），仅主代理写入，子代理不污染
+    if ctx.final_answer and len(ctx.final_answer) >= 50 and not ctx._is_subagent:
         _path = os.path.expanduser("~/Desktop/v2_result.txt")
         try:
             with open(_path, "w", encoding="utf-8") as _f:
@@ -1262,6 +1534,22 @@ async def run_react(
             print(f"    \033[32m◇ \033[0m\033[2mSaved result to \033[0m{_path}")
         except Exception:
             pass
+
+    # ponytail: 已有 final_answer 但 plan 还显示 pending → 兜底补齐。
+    # BUT: file_written(path=...) steps must verify the file exists on disk.
+    if ctx.final_answer and ctx.plan:
+        for step in ctx.plan:
+            if step.status != "pending":
+                continue
+            _can_advance = True
+            for cond in step.postconditions:
+                if cond.startswith("capability:file_written(path="):
+                    _path = cond[len("capability:file_written(path="):].rstrip(")")
+                    if not os.path.exists(os.path.expanduser(_path)):
+                        _can_advance = False
+                        break
+            if _can_advance:
+                step.status = "done"
 
     # ponytail: on_finish 必须在兜底之后调用，确保 final_answer 非空时写入记忆
     await chain.on_finish(ctx)
@@ -1271,7 +1559,9 @@ async def run_react(
         "answer": ctx.final_answer,
         "iterations": ctx.react_depth,
         "tool_results": ctx.tool_results,
-        "error": ctx.last_error,
+        "exit_reason": getattr(ctx, 'exit_reason', 'completed_with_answer' if ctx.final_answer else 'no_progress_8_rounds'),
+        "diagnostic": ctx.last_error or "",
+        "error": ctx.last_error or "",
     }
 
 

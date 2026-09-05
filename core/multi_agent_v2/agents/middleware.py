@@ -29,6 +29,10 @@ class PlanStep:
     status: str = "pending"    # pending / running / done / failed
     tool_names: List[str] = field(default_factory=list)  # 预计使用的工具名
     result_summary: str = ""
+    postconditions: List[str] = field(default_factory=list)
+    # ponytail: 完成契约 — 字符串列表，标记 done 前全部满足
+    # "file_exists:/path" — 文件必须在磁盘上存在
+    # "tool_called:name"  — 工具 name 必须成功调用过
 
 
 @dataclass
@@ -64,6 +68,7 @@ class RunContext:
     interrupted_reason: str = ""
     tool_results: List[Dict] = field(default_factory=list)
     last_error: Optional[str] = None
+    exit_reason: str = ""  # 精确退出原因: plan_completed | empty_run_12_rounds | llm_timeout | ...
     warnings: List[str] = field(default_factory=list)
     final_answer: str = ""
     react_depth: int = 0
