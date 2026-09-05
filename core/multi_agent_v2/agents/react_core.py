@@ -1156,8 +1156,9 @@ async def run_react(
                 "生成", "创建", "写", "保存", "输出", "报告", "文件",
                 "create", "write", "generate", "save", "output", "report",
             ])
+            # ponytail: code_executed (execute_python/shell) 也可能创建文件/产出 → 算作有产出
             _has_output = any(
-                c.kind == "file_written"
+                c.kind in ("file_written", "code_executed")
                 for c in getattr(ctx, 'task_progress', None) and ctx.task_progress.completed_capabilities or []
             )
             if _need_output and not _has_output:
@@ -1315,6 +1316,41 @@ async def run_react(
                     if replanned:
                         print(f"{prefix}    \033[33m◇ \033[0m\033[2mStep {step.index} failed, replanning\033[0m")
                         break
+
+        # ponytail: 交付物完成检测 — 核心产出已创建且后续步骤无需再产出时，直接完成
+        # 解决"agent 写完交付物后空转跑满 max_iterations"的问题
+        if ctx.plan and not ctx.interrupted:
+            _tp = getattr(ctx, 'task_progress', None)
+            _has_output = any(
+                c.kind in ("file_written", "code_executed")
+                for c in (_tp.completed_capabilities if _tp else [])
+            )
+            _pending = [s for s in ctx.plan if s.status == "pending"]
+            _remaining_need_output = any(
+                s.tool_names and set(s.tool_names) & {"write_file", "execute_python", "execute_shell", "edit_file"}
+                for s in _pending
+            ) if _pending else False
+            _task = ctx.task_description or ""
+            _is_production = any(kw in _task for kw in [
+                "写", "创建", "生成", "报告", "文件", "保存", "输出",
+                "write", "create", "generate", "save", "output", "report",
+            ])
+            if _has_output and _is_production and not _remaining_need_output:
+                if not getattr(ctx, 'final_answer', None):
+                    # 从 file_written 能力提取路径，让完成消息更具体
+                    _path = next(
+                        (c.metadata.get("path") for c in (_tp.completed_capabilities if _tp else [])
+                         if c.kind == "file_written" and c.metadata.get("path")),
+                        ""
+                    )
+                    ctx.final_answer = (
+                        f"✅ 任务已完成，产出已写入：{os.path.expanduser(_path)}"
+                        if _path else "✅ 任务已完成。"
+                    )
+                print(f"{prefix}    \033[32m◇ \033[0m\033[2mDeliverable complete, finalizing\033[0m")
+                ctx.interrupted = True
+                ctx.exit_reason = "deliverable_complete"
+                break
 
         hr_tool = await chain.on_tool_end(ctx)
         if hr_tool and hr_tool.jump_to == "end":
