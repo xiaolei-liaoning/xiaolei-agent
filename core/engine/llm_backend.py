@@ -482,24 +482,25 @@ class GLMBackend:
         if not await self._rate_limiter.acquire(timeout=30.0):
             return LLMResponse(content="请求过于频繁，请稍后再试")
 
-        # ── tool 消息清理已禁用 — 真实测试证实它删除合法的 tool 结果 ──
-        # 原逻辑的致命缺陷：遇到纯文本 assistant 就清空 _expected_tool_ids，
-        # 之后所有 tool 消息被当孤儿删除 → agent 看不到自己 write_file 的结果
-        # → 写了又写空转循环（2026-09-06 全天热搜任务空转的根因）。
-        # 防止 API 400 的正确做法：配对修复应保留跨 assistant 的 tool 消息。
+        # ── tool 消息清理 — 累积式已见集合（对齐 deepseek sourceEventSeqs 思想）──
+        # 2026-09-06 陷阱：原逻辑用"最近一次 assistant 的 tool_calls"集合，跨轮被覆盖：
+        #   第1轮工具A → 第2轮 assistant 带工具B → 集合={B} → 第1轮的A消息被误判孤儿删除
+        #   → agent 看不到自己 write_file 的结果 → 写了又写空转循环。
+        # 修正：已见集合只增不减（跨 assistant 累积）。只要调用历史上出现过 id，就不删。
+        # 真孤儿（LLM 幻觉 id）仍会被清理（API 400 防护保留）。
         try:
             _cleaned = []
-            _expected_tool_ids = set()
+            _seen_tool_ids: set = set()
             for _m in messages:
                 if _m["role"] == "assistant":
                     _tc = _m.get("tool_calls", [])
-                    _new_ids = {tc.get("id", "") for tc in _tc if tc.get("id")}
-                    if _new_ids:
-                        _expected_tool_ids = _new_ids  # 有 tool_calls 才更新，纯文本不清空
+                    for _tc_ in _tc:
+                        if isinstance(_tc_, dict) and _tc_.get("id"):
+                            _seen_tool_ids.add(_tc_["id"])
                     _cleaned.append(_m)
                 elif _m["role"] == "tool":
                     _tid = _m.get("tool_call_id", "")
-                    if _tid and _tid not in _expected_tool_ids:
+                    if _tid and _tid not in _seen_tool_ids:
                         continue  # 真孤儿才删
                     _cleaned.append(_m)
                 else:
