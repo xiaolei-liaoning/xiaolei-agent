@@ -1,0 +1,6 @@
+Declare the state of the current objective — completion and blocking are YOUR call, backed by evidence.
+Actions:
+- complete: Call when the whole objective is actually achieved AND the deliverable is written to disk (verify before declaring). Include a 1-3 sentence summary as reason.
+- blocked: Call when the same concrete obstacle persists. Include the specific blocking condition as reason (what/why, not "difficulty" or "remaining work"). The system accepts it after 3 consecutive identical declarations.
+- progress: Optional. Record a short status note for context continuity.
+Do NOT declare complete for narrated-only work — completion requires the deliverable on disk.

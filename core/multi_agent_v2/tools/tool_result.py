@@ -6,7 +6,7 @@
 """
 
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -109,13 +109,24 @@ def _truncate(text: str, max_chars: int, tool_name: str = "") -> str:
     return result
 
 
-def ok(data: str, title: str = "", metadata: dict = None) -> Dict[str, Any]:
-    """成功结果 — OpenCode 风格: title(展示) + data(LLM上下文) + metadata(结构化信息)"""
-    result = {"ok": True, "data": data}
+def ok(
+    data: str,
+    title: str = "",
+    metadata: Optional[Dict[str, Any]] = None,
+    extra_contexts: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """成功结果 — OpenCode 风格: title(展示) + data(LLM上下文) + metadata(结构化信息)
+
+    ponytail + deepseek: extra_contexts 列表项会作为 user 消息注入下一轮 LLM 输入（addl. observe）。
+    工具作者可借此告诉 agent 该如何理解本次结果（如写入摘要、读取分片提示）。
+    """
+    result: Dict[str, Any] = {"ok": True, "data": data}
     if title:
         result["title"] = title
     if metadata:
         result["metadata"] = metadata
+    if extra_contexts:
+        result["_extra_contexts"] = extra_contexts
     return result
 
 

@@ -28,6 +28,14 @@ import sys
 from typing import Any, Dict, List, Optional
 
 from core.multi_agent_v2.agents.task_progress import TaskProgress
+
+# ponytail: 进行时意图 — 含"现在我/接下来/让我"的文本是"宣布下一步"，不是完成声明。
+# deepseek Ralph 语义：complete 需要 evidence + 无 nextSteps；带进行时意图的文本
+# 不构成有效完成（真实测试：'文件已写入桌面。现在我验证 JS 逻辑...' 被误存为最终结果）
+_ONGOING_INTENT_RE = re.compile(
+    r"(现在我|接下来我?要?|让我|让我先|首先我|然后我|我(将|要|来|需要|打算|先)|"
+    r"我正在|我准备|I will|I'll|Let me|Now (let|I)|going to|about to)"
+)
 from core.multi_agent_v2.tools.json_util import safe_parse_json
 from core.multi_agent_v2.prompts import get_builder
 
@@ -133,6 +141,23 @@ def _check_deliverable_verified(ctx: RunContext, written_path: str) -> bool:
             cmd = str(args.get("command", args.get("code", "")))
             if os.path.basename(_exp) in cmd or os.path.abspath(os.path.expanduser(cmd)) == _exp:
                 return True
+    return False
+
+
+def _has_real_deliverable(tp) -> bool:
+    """真实交付物：file_written 能力中路径不在 /tmp 或 macOS tempdir。
+    真实测试：agent 用 python3 写 /tmp/hot_list.txt → 被当交付物 → stall guard 失效"""
+    if not tp:
+        return False
+    for c in tp.completed_capabilities:
+        if c.kind != "file_written":
+            continue
+        _p = os.path.abspath(str(c.metadata.get("path", "")))
+        if not _p:
+            continue
+        if "/tmp/" in _p or "/var/folders/" in _p:
+            continue
+        return True
     return False
 
 
@@ -284,11 +309,9 @@ class ReActCoreMiddleware(BaseMiddleware):
             from core.multi_agent_v2.tools.schema import get_schema_adapter
             adapter = get_schema_adapter(ctx.model_override)
             ctx.tool_defs = adapter.adapt(raw_defs)
-            # ponytail: 数据已获取 → 隐藏搜索工具，防重复
-            if getattr(ctx, '_data_fetched', False) and ctx.tool_defs:
-                _search_tools = {"web_search", "fetch_url", "fetch_json", "hot_search"}
-                ctx.tool_defs = [t for t in ctx.tool_defs
-                                 if t.get("function", {}).get("name") not in _search_tools]
+            # ponytail + deepseek 对齐：不隐藏工具（真实测试：隐藏后 LLM 惯性再调 →
+            # 调用被 valid_names 蒸发零反馈 → 空转 8 轮）。数据足够靠 forced_instructions
+            # 引导（"直接 write_file"），调了也只多一次无害请求，不再静默蒸发。
         else:
             ctx.tool_defs = None
 
@@ -378,12 +401,12 @@ class ReActCoreMiddleware(BaseMiddleware):
                                   if t.get("function", {}).get("name") not in _dead_tools]
                 logger.info(f"工具连续失败，已隐藏: {_dead_tools}")
 
-        # ── 项目分析任务：更多轮次 ──
+        # ── per-goal 轮次（deepseek-harness: maxGoalRounds 属于 goal 定义，按任务类型设定）──
+        # agent 声明机制就位后，更高上限只影响"未声明完成"的兜底路径，不会拖慢正常收尾
         if _task_flags.get("project_analysis"):
             ctx.max_iterations = max(ctx.max_iterations, 15)
-        # ponytail: 报告任务 — 骨架+分段填充需要更多轮次（deepseek-harness: maxGoalRounds 属于 goal 定义）
-        if _task_flags.get("report"):
-            ctx.max_iterations = max(ctx.max_iterations, 10)
+        if _task_flags.get("report") or _task_flags.get("code") or _task_flags.get("game"):
+            ctx.max_iterations = max(ctx.max_iterations, 15)
 
         if ctx.plan:
             modules.append("plan")
@@ -412,7 +435,12 @@ class ReActCoreMiddleware(BaseMiddleware):
         if ctx.forced_instructions:
             system_content += f"\n\n<forced_instructions>\n{ctx.forced_instructions}\n</forced_instructions>"
             ctx._fi_consumed = True
-        
+
+        # 注入 agent 自报进度（update_goal progress，跨轮连续性）
+        _goal_note = getattr(ctx, '_goal_progress_note', '')
+        if _goal_note:
+            system_content += f"\n\n<goal_progress>\n{_goal_note}\n</goal_progress>"
+
         # 注入警告信息（如：循环检测警告）
         if ctx.warnings:
             warnings_text = "\n".join(ctx.warnings)
@@ -584,9 +612,11 @@ class ReActCoreMiddleware(BaseMiddleware):
                 
                 # 解析工具调用
                 tool_calls = parse_tool_calls(reply)
-
-                # ponytail: 截断且无tool_calls且无实质内容 → 注指令重试
-                if is_truncated and not tool_calls and len(reply) < 50 and _attempt < 1:
+                # ponytail: 截断且无tool_calls → 注指令重试。
+                # 真实测试（象棋）：600 字总结末尾戛然而止（"规则校验：不能"）——
+                # 原条件 len<50 只拦极短截断，长总结截断直接当 final_answer 泄漏给用户。
+                # 改为：任何被标记 truncated 的纯文本回复都触发一次续写重试（_attempt<1 防死循环）
+                if is_truncated and not tool_calls and _attempt < 1:
                     ctx.forced_instructions = (
                         "你的上次回复被截断（输出token不够）。请简洁回答，"
                         "只输出最关键的结论或直接调用工具。不要输出冗长的前言或解释。"
@@ -605,6 +635,17 @@ class ReActCoreMiddleware(BaseMiddleware):
                 # 过滤：从 tool_defs 里排除掉的工具，解析出来的也不应该执行
                 if tool_calls and ctx.tool_defs:
                     valid_names = {t.get("function", {}).get("name", "") for t in ctx.tool_defs}
+                    _dropped = [tc.get("function", {}).get("name", "?") for tc in tool_calls
+                                if tc.get("function", {}).get("name", "") not in valid_names]
+                    if _dropped and not getattr(ctx, '_fi_consumed', False):
+                        # ponytail: 丢弃必须反馈 — 真实测试：fetch_url 被 _data_fetched 隐藏后，
+                        # LLM 惯性再调 → 调用凭空蒸发零反馈 → agent 困惑空转 8 轮
+                        _dropped_str = ", ".join(_dropped)
+                        ctx.forced_instructions = (
+                            f"⚠️ 你调用的 {_dropped_str} 已被系统隐藏（数据已获取足够）。"
+                            f"不要再调用它。直接基于已有数据用 write_file 产出交付物，"
+                            f"完成后调用 update_goal(action=\"complete\")。"
+                        )
                     tool_calls = [tc for tc in tool_calls
                                   if tc.get("function", {}).get("name", "") in valid_names]
 
@@ -814,23 +855,32 @@ class ReActCoreMiddleware(BaseMiddleware):
                                     print(f"    \033[36m{line}\033[0m")
 
                 # ── 累积 tool 结果到对话历史（紧跟在 assistant 消息之后）──
+                # ponytail + deepseek: 头尾保留 + 中间 marker（信任 tool_result.bound_result
+                # 已在注册表层做基础截断，这里只对 8K+ 的极端大结果再剪一遍并保头尾）
                 _tool_id = tc.get("id", f"call_{tool_name}_{ctx.react_depth}")
                 # 校验失败的结果不写入对话历史（已被 forced_instructions 处理，写进去只会污染）
                 if result.get("_validation_error"):
                     continue
-                # ponytail: task/orchestrate 结果可能极长，压缩到 1500 字避免撑爆上下文
                 _tool_content = result_text
-                if tool_name in ("task", "orchestrate"):
-                    if len(_tool_content) > 1500:
-                        _tool_content = _tool_content[:1500] + "\n...(子代理输出已截断，完整结果在之前的段落)"
-                elif len(_tool_content) > 2000:
-                    _tool_content = _tool_content[:2000]
+                if len(_tool_content) > 8192:
+                    _tool_content = (
+                        _tool_content[:4096]
+                        + "\n\n[... tool result middle pruned — 完整内容见历史前段或路径文件 ...]\n\n"
+                        + _tool_content[-1024:]
+                    )
                 ctx._conversation_history.append({
                     "role": "tool",
                     "tool_call_id": _tool_id,
                     "content": _tool_content,
                     "name": tool_name,
                 })
+                # ponytail + deepseek 风格：工具可附带 additionalContexts 作为下一步强提示。
+                # 让工具作者决定 agent 该看到什么补充语境（观察质量下沉到工具层）
+                for _extra in (result.get("_extra_contexts") if isinstance(result, dict) else []) or []:
+                    ctx._conversation_history.append({
+                        "role": "user",
+                        "content": f"[Tool context: {tool_name}] {_extra}",
+                    })
 
                 # 文件验证（write_file 特殊处理）
                 if ok and tool_name == "write_file":
@@ -1112,6 +1162,36 @@ async def run_react(
     if personality_prompt:
         ctx.personality_prompt = personality_prompt
 
+    # ── 未完成目标恢复（goal_store 持久化）──
+    # 上次 blocked/round_limit 收尾的目标，本次续跑时注入已有进度，agent 不从零开始。
+    # "继续"类恢复指令 → 直接改写 task_description 为原任务（generate_plan 只看任务本体，
+    # 不看 forced_instructions — 只注入提示会生成"检查上下文"的错误计划，真实测试已验证）
+    try:
+        from core.multi_agent_v2.agents.goal_store import load_unfinished_goal
+        _prev_goal = load_unfinished_goal(task_description)
+        if _prev_goal and not is_subagent:
+            _orig_task = str(_prev_goal.get('task', '')).strip()
+            if _orig_task:
+                ctx.task_description = (
+                    f"{_orig_task}（从上次断点继续：已完成的部分不要重做，"
+                    f"先检查已有产物再补齐缺失部分）"
+                )
+            ctx._goal_resumed = True
+            ctx.forced_instructions = (
+                f"<goal_resume>\n"
+                f"检测到上次未完成的目标（{_prev_goal.get('exit_reason', '?')} 收尾，"
+                f"已进行 {_prev_goal.get('rounds_done', 0)} 轮）：\n"
+                f"- 原任务: {_orig_task[:200] or '(同任务)'}\n"
+                f"- 已写入文件: {', '.join(_prev_goal.get('files_written', [])) or '无'}\n"
+                f"- 上次进度: {str(_prev_goal.get('progress_note', ''))[:150] or '无'}\n"
+                f"- 上次阻塞: {str(_prev_goal.get('blocked_reason', ''))[:150] or '无'}\n"
+                f"检查这些已有产物，从断点继续，不要重做已完成的部分。\n"
+                f"</goal_resume>"
+            )
+            logger.info(f"检测到未完成目标，已恢复任务上下文: {_orig_task[:60]}")
+    except Exception as _e:
+        logger.debug(f"goal 恢复检查失败: {_e}")
+
     # ponytail: 不再对 "Phase 1 扫描" 做特殊限制，走通用 ReAct 流程
     ctx.allowed_tools = allowed_tools
     ctx.disallowed_tools = disallowed_tools
@@ -1150,7 +1230,7 @@ async def run_react(
 
     # ── 规划阶段 ──
     from core.multi_agent_v2.tools.tool_registry import get_tool_registry
-    ctx.plan = await generate_plan(task_description, ctx)
+    ctx.plan = await generate_plan(ctx.task_description, ctx)
     if ctx.plan:
         display_plan(ctx, prefix=prefix)
     else:
@@ -1195,12 +1275,23 @@ async def run_react(
             display_plan(ctx, prefix=prefix)
 
         if ctx.plan and all(s.status == "done" for s in ctx.plan):
-            # 验证：任务要求产出文件时，必须有 file_written 能力
+            # 验证：产出型任务必须有 file_written 能力。
+            # ponytail: 不信单一启发式（deepseek 精神）— 任务级关键词 + 步骤级工具绑定/描述动词，
+            # 三重判定任一命中即视为产出型（真实测试："加一个人机对决功能"漏判 → 零交付假完成）
             _task = ctx.task_description or ""
-            _need_output = any(kw in _task for kw in [
-                "生成", "创建", "写", "保存", "输出", "报告", "文件",
-                "create", "write", "generate", "save", "output", "report",
-            ])
+            _need_output = (
+                any(kw in _task for kw in [
+                    "生成", "创建", "写", "保存", "输出", "报告", "文件",
+                    "create", "write", "generate", "save", "output", "report",
+                ])
+                or any(
+                    (set(s.tool_names or []) & {"write_file", "edit_file"})
+                    or any(kw in (s.description or "") for kw in (
+                        "实现", "设计", "开发", "编写", "制作", "添加", "修改", "生成", "创建",
+                    ))
+                    for s in ctx.plan
+                )
+            )
             _has_output = any(
                 c.kind == "file_written"
                 for c in getattr(ctx, 'task_progress', None) and ctx.task_progress.completed_capabilities or []
@@ -1238,6 +1329,92 @@ async def run_react(
                 ctx.exit_reason = "plan_completed"
                 break
 
+        # ── Agent 驱动状态声明（deepseek-harness update_goal 语义）──
+        # 完成判定权在 agent：系统只校验证据，不再用启发式猜测。
+        _blocked_streak = getattr(ctx, '_blocked_streak', 0)
+        if _blocked_streak >= 3:
+            _br = getattr(ctx, '_blocked_reason', '')
+            if not ctx.final_answer:
+                ctx.final_answer = (
+                    f"⚠️ 任务被阻塞（连续 {_blocked_streak} 轮相同阻塞条件）：{_br}\n"
+                    f"已完成的进度已保留，可人工介入后继续。"
+                )
+            ctx.interrupted = True
+            ctx.exit_reason = "agent_declared_blocked"
+            logger.info(f"Agent declared blocked x{_blocked_streak} → finalizing: {_br[:80]}")
+            break
+
+        if getattr(ctx, '_agent_declared_complete', False):
+            _tp = getattr(ctx, 'task_progress', None)
+            _deliverable_ok = getattr(ctx, '_deliverable_verified', False) or _has_real_deliverable(_tp)
+            _td = (ctx.task_description or "")[:300]
+            _is_production = any(kw in _td for kw in [
+                "写", "创建", "生成", "报告", "文件", "保存", "输出",
+                "write", "create", "generate", "save", "output", "report",
+            ])
+            if not _is_production or _deliverable_ok:
+                if not ctx.final_answer:
+                    ctx.final_answer = (
+                        (getattr(ctx, '_agent_complete_reason', '') or '').strip()
+                        or (getattr(ctx, '_pending_reply', '') or '').strip()
+                    )
+                ctx.interrupted = True
+                ctx.exit_reason = "agent_declared_complete"
+                logger.info("Agent declared complete (evidence verified) → finalizing")
+                break
+            # 证据不足 → 驳回一次，要求交付物
+            ctx._agent_declared_complete = False
+            ctx.forced_instructions = (
+                "⚠️ 你声明任务完成，但系统中没有交付物写入记录。"
+                "完成声明需要证据：先用 write_file 把交付物写入磁盘，"
+                "写入成功后再次声明 complete；或直接输出最终总结结束任务。"
+            )
+            logger.info("Agent declared complete but no deliverable evidence → rejected")
+        elif _blocked_streak == 2:
+            _br = getattr(ctx, '_blocked_reason', '')
+            ctx.forced_instructions = (
+                f"⚠️ 你连续 2 轮报告相同阻塞：{_br}\n"
+                "请绕开它：换一个工具、换一条路径，或直接用 write_file 产出可交付的部分结果。"
+                "若确实无法继续，再次声明 blocked（连续 3 轮系统将接受并收尾）。"
+            )
+
+        # ── 无进展硬保护（每轮独立检查，不依赖 idle 块入口）──
+        # 轮差=距上次步骤推进的轮数（主判据：每轮检查，空转/假活动都无法规避 —
+        # stuck 只在 on_tool_end 更新会被空转冻结，idle 会被假活动重置，真实测试均已复现）；
+        # stuck/idle 保留为并列判据。任一 ≥6 且交付物未写出 → blocker 式收尾（保存断点）
+        if not getattr(ctx, 'final_answer', None):
+            _tp_guard = getattr(ctx, 'task_progress', None)
+            _stuck = _tp_guard.stuck_counter if _tp_guard else 0
+            _idle_guard = getattr(ctx, 'consecutive_idle_rounds', 0)
+            _round_gap = ctx.react_depth - getattr(ctx, '_last_step_progress_round', 0)
+            _td_guard = (ctx.task_description or "")[:300]
+            _prod_guard = (
+                any(kw in _td_guard for kw in [
+                    "写", "创建", "生成", "报告", "文件", "保存", "输出",
+                    "write", "create", "generate", "save", "output", "report",
+                ])
+                or getattr(ctx, '_goal_resumed', False)
+            )
+            _deliv_guard = getattr(ctx, '_deliverable_verified', False) or _has_real_deliverable(_tp_guard)
+            if _prod_guard and not _deliv_guard and (
+                _round_gap >= 6 or _stuck >= 6 or _idle_guard >= 6
+            ):
+                _stall_br = (
+                    f"连续 {_round_gap} 轮无步骤推进（{_stuck} 轮 stuck / {_idle_guard} 轮无工具调用），"
+                    f"交付物未写出。"
+                )
+                ctx._blocked_reason = _stall_br
+                ctx.final_answer = ctx.final_answer or (
+                    f"⚠️ 任务未完成被暂停：{_stall_br}\n"
+                    f"已完成进度已保存为断点，输入\"继续\"可从断点恢复。"
+                )
+                ctx.interrupted = True
+                ctx.exit_reason = "idle_round_limit"
+                logger.info(
+                    f"Stall guard: round_gap={_round_gap} stuck={_stuck} idle={_idle_guard} → pause"
+                )
+                break
+
         # ponytail: goal-round 续轮（deepseek-harness 原则1+2 的对齐实现）—
         # 上一轮是文本回复（无工具调用 = 完成的轮次）：
         #   目标已达成 → 该文本就是最终回答；目标未达成 → 注入续轮指令（inspect durable state），
@@ -1254,9 +1431,7 @@ async def run_react(
                 "write", "create", "generate", "save", "output", "report",
             ])
             _tp = getattr(ctx, 'task_progress', None)
-            _deliverable_ok = getattr(ctx, '_deliverable_verified', False) or (
-                _tp and any(c.kind == "file_written" for c in _tp.completed_capabilities)
-            )
+            _deliverable_ok = getattr(ctx, '_deliverable_verified', False) or _has_real_deliverable(_tp)
             if _is_production and not _deliverable_ok:
                 # 目标未达成 → 续轮指令（goal-round 风格，durable state 为权威）
                 _claimed = getattr(ctx, '_agent_claims_complete', False)
@@ -1284,7 +1459,10 @@ async def run_react(
                     + (f"- 当前步骤: {_next_step}\n" if _next_step else "")
                     + _claim_note
                     + f"Make concrete progress and verify the result: 用 write_file 把交付物写入磁盘"
-                    f"（大文件先写骨架再逐节 edit_file 填充）。完成后输出简短总结即可结束。\n"
+                    f"（大文件先写骨架再逐节 edit_file 填充）。\n"
+                    f"写完交付物后必须调用 update_goal(action=\"complete\", reason=总结) 声明完成；"
+                    f"无法继续时调用 update_goal(action=\"blocked\", reason=具体原因)。"
+                    f"不要只输出文本结束。\n"
                     f"</goal_round>"
                 )
                 # ponytail: 对齐 deepseek-harness — 续轮以 user 消息进入历史
@@ -1297,11 +1475,20 @@ async def run_react(
                 logger.info(f"Goal-round continuation (user message): deliverable missing, round {ctx.react_depth + 1}/{ctx.max_iterations}")
             else:
                 # 目标已达成 或 非产出型任务 → 文本即最终回答（no tool calls = completed）
-                if _reply_text and _reply_text.strip():
+                # ponytail: 进行时意图文本（"现在我验证..."）是宣布下一步，不当最终回答 —
+                # 转为续轮信号（deepseek Ralph：complete 需 evidence，进行中文本无效）
+                if _reply_text and _reply_text.strip() and not _ONGOING_INTENT_RE.search(_reply_text[:200]):
                     ctx.final_answer = _reply_text.strip()
-                ctx.interrupted = True
-                ctx.exit_reason = "completed_with_answer"
-                break
+                    ctx.interrupted = True
+                    ctx.exit_reason = "completed_with_answer"
+                    break
+                # 进行时文本 → 注入指令要求 agent 用 update_goal 声明状态或输出完成总结
+                if not ctx.forced_instructions:
+                    ctx.forced_instructions = (
+                        "⚠️ 你的回复是'宣布下一步'（如'现在我验证...'）而非任务完成。"
+                        "请立即执行你宣布的动作（工具调用），"
+                        "完成后调用 update_goal(action=\"complete\") 或输出不含进行时意图的最终总结。"
+                    )
 
         # ponytail: AI 质检 — 有 final_answer 且即将退出时，先审查质量
         _exiting_with_answer = (
@@ -1698,7 +1885,8 @@ async def run_react(
             extracted = _extract_text_from_json(_last_reply)
             if extracted:
                 _last_reply = extracted
-        if _last_reply and len(_last_reply) > 20:
+        # ponytail: 进行时意图文本（"现在我验证..."）不是完成声明，不入 final_answer
+        if _last_reply and len(_last_reply) > 20 and not _ONGOING_INTENT_RE.search(_last_reply[:200]):
             ctx.final_answer = _last_reply
 
     # 兜底：有工具结果但无 final_answer 时让 LLM 总结
@@ -1783,7 +1971,9 @@ async def run_react(
 
     # ponytail: 已有 final_answer 但 plan 还显示 pending → 兜底补齐。
     # BUT: file_written(path=...) steps must verify the file exists on disk.
-    if ctx.final_answer and ctx.plan:
+    # 暂停类收尾（stall guard/agent blocked）不补齐 — 断点账目必须如实反映未完成状态
+    _exit_pause = getattr(ctx, 'exit_reason', '') in ("idle_round_limit", "agent_declared_blocked")
+    if ctx.final_answer and ctx.plan and not _exit_pause:
         for step in ctx.plan:
             if step.status != "pending":
                 continue
@@ -1805,6 +1995,35 @@ async def run_react(
         _blocker = next((w for w in ctx.warnings if w.startswith("[round-limit]")), "")
         if _blocker and ctx.final_answer and _blocker not in ctx.final_answer:
             ctx.final_answer = f"{ctx.final_answer}\n\n{_blocker}"
+
+    # ── goal 状态持久化（goal_store）──
+    # 完成类收尾 → 清除未完成记录；未完成类收尾 → 保存断点，供下次"继续"恢复
+    try:
+        from core.multi_agent_v2.agents.goal_store import save_unfinished_goal, clear_unfinished_goal
+        _exit = getattr(ctx, 'exit_reason', '')
+        _tp = getattr(ctx, 'task_progress', None)
+        _files = [
+            c.metadata.get("path") for c in (_tp.completed_capabilities if _tp else [])
+            if c.kind == "file_written" and c.metadata.get("path")
+        ]
+        if _exit in ("plan_completed", "completed_with_answer", "agent_declared_complete", "deliverable_complete"):
+            clear_unfinished_goal()
+        elif not ctx._is_subagent and (ctx.task_description or "").strip():
+            _done = sum(1 for s in ctx.plan if s.status == "done") if ctx.plan else 0
+            _total = len(ctx.plan) if ctx.plan else 0
+            save_unfinished_goal({
+                "task": ctx.task_description,
+                "exit_reason": _exit or "interrupted",
+                "rounds_done": ctx.react_depth,
+                "max_rounds": ctx.max_iterations,
+                "blocked_reason": getattr(ctx, '_blocked_reason', ''),
+                "blocked_streak": getattr(ctx, '_blocked_streak', 0),
+                "progress_note": getattr(ctx, '_goal_progress_note', ''),
+                "plan_summary": f"{_done}/{_total} steps done",
+                "files_written": _files,
+            })
+    except Exception as _e:
+        logger.debug(f"goal 持久化失败: {_e}")
 
     return {
         "success": bool(ctx.final_answer),

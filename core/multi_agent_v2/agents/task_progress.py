@@ -171,6 +171,10 @@ class TaskProgress:
             for r in new_results:
                 caps = _detect_from_result(r)
                 for cap in caps:
+                    # ponytail: 失败的能力不入 completed（失败≠达成）—
+                    # 否则历史成功 code_executed 会让 postcondition 匹配放行失败轮的推进
+                    if cap.metadata.get("failed"):
+                        continue
                     if not self._has_capability(cap):
                         self.completed_capabilities.append(cap)
                         self.new_capabilities_this_round.append(cap)
@@ -309,7 +313,11 @@ class TaskProgress:
         if not self._ctx.plan:
             return
 
-        _can_advance = bool(self.new_capabilities_this_round) or (
+        # ponytail: 失败的工具调用不产生推进资格（真实测试：execute_shell 失败仍推进了 Step1）
+        _productive_new = [
+            c for c in self.new_capabilities_this_round if not c.metadata.get("failed")
+        ]
+        _can_advance = bool(_productive_new) or (
             self.stuck_counter >= 2 and self.completed_capabilities
         )
 
@@ -318,39 +326,84 @@ class TaskProgress:
                 continue
 
             if step.postconditions:
-                # 旧格式：逐条匹配后置条件
-                matched = True
-                for cond in step.postconditions:
-                    if not self._match_cap(cond):
-                        matched = False
-                        break
-                    if cond.startswith("capability:file_written(path="):
-                        _path = cond[len("capability:file_written(path="):].rstrip(")")
-                        if not os.path.exists(os.path.expanduser(_path)):
+                # ponytail: 工具级条件（无参数）= 可选工具集，任一达成即完成（OR）；
+                # 含精确条件（如 file_written(path=...)）= 硬性交付要求，全部满足（AND）。
+                # 修复真实测试 bug：Step1 绑定 [execute_shell, read_file] 推断出两个条件，
+                # agent 只调 read_file → AND 语义下永远卡住（Plan 显示 0/2 失真）
+                _tool_level = all(c in (
+                    "capability:file_written", "capability:web_search",
+                    "capability:code_executed", "capability:file_read",
+                ) for c in step.postconditions)
+                if _tool_level:
+                    matched = any(self._match_cap(c) for c in step.postconditions)
+                else:
+                    matched = True
+                    for cond in step.postconditions:
+                        if not self._match_cap(cond):
                             matched = False
-                            self._ctx.forced_instructions = (
-                                f"⚠️ 文件 {_path} 不存在，请 write_file！"
-                            )
                             break
+                        if cond.startswith("capability:file_written(path="):
+                            _path = cond[len("capability:file_written(path="):].rstrip(")")
+                            if not os.path.exists(os.path.expanduser(_path)):
+                                matched = False
+                                self._ctx.forced_instructions = (
+                                    f"⚠️ 文件 {_path} 不存在，请 write_file！"
+                                )
+                                break
                 if not matched and self.stuck_counter >= 2 and self.completed_capabilities:
                     matched = True
                 if matched:
                     step.status = "done"
+                    # ponytail: 记录推进轮号 — stall guard 用轮差判据（空转轮 on_tool_end
+                    # 不触发，stuck 冻结；轮差在主循环每轮检查，无法被假活动规避）
+                    self._ctx._last_step_progress_round = getattr(self._ctx, 'react_depth', 0)
                 break
 
             # 新格式：有资格就推进
             if _can_advance:
-                # 最后一步需有实质产出才推进
+                # ponytail: 产出型步骤需产出型能力才能推进 —
+                # 探索能力（ls/read_file 产生的 code_executed/file_read/tool_called）
+                # 不得推进"写/生成/报告/清洗/分析"类步骤（真实测试：ls Desktop 连推 Step2/Step3）
+                _step_desc = step.description or ""
+                _is_output_step = any(kw in _step_desc for kw in (
+                    "写", "生成", "报告", "保存", "输出", "创建", "清洗", "处理", "分析", "统计",
+                    "write", "create", "report", "save", "output", "analyze", "process",
+                ))
+                if _is_output_step:
+                    # ponytail: 浏览类命令（ls/find/cat/wc/du/df/head/tail/echo）输出再大也只是浏览，
+                    # 不得推进"写/生成/报告/清洗/分析"步骤（真实测试：ls -la 桌面输出大被当 productive）
+                    _exec_cmd = ""
+                    for _nc in self.new_capabilities_this_round:
+                        if _nc.kind == "code_executed":
+                            _exec_cmd = _nc.metadata.get("code_snippet", "") or ""
+                            break
+                    _browse_cmd = _exec_cmd.strip().split(maxsplit=1)[0].lower() if _exec_cmd else ""
+                    _is_browse = _browse_cmd in {
+                        "ls", "find", "cat", "head", "tail", "wc", "du", "df", "echo", "pwd", "tree",
+                    }
+                    _productive = any(
+                        (c.kind in ("file_written", "web_search", "url_fetched")
+                         or (c.kind == "code_executed" and (c.metadata.get("stdout_len") or 0) > 500))
+                        and not c.metadata.get("failed")
+                        for c in self.new_capabilities_this_round
+                        if not _is_browse or c is not _nc  # 浏览命令的 code_executed 不算 productive
+                    )
+                    if not _productive:
+                        break  # 本轮只有浏览能力 → 不推进产出型步骤
+
+                # 最后一步需有实质产出才推进（仅产出型步骤用严格标准；探索型步骤任何能力即可）
                 _is_last = step.index == len(self._ctx.plan)
-                if _is_last:
+                if _is_last and _is_output_step:
                     _has_substance = any(
-                        c.kind in ("file_written", "code_executed")
+                        c.kind == "file_written"
+                        or (c.kind == "code_executed" and (c.metadata.get("stdout_len") or 0) > 500)
                         for c in self.completed_capabilities
                     ) or getattr(self._ctx, 'final_answer', None)
                     if not _has_substance:
                         break  # 没有实质产出，不推进最后一步
 
                 step.status = "done"
+                self._ctx._last_step_progress_round = getattr(self._ctx, 'react_depth', 0)
                 _pending = [s for s in self._ctx.plan if s.status == "pending"]
                 if _pending and not self._ctx.forced_instructions:
                     # 过程信号：告诉 LLM 上一步已完成，给出下一步方向

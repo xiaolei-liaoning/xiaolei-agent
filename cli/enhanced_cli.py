@@ -523,7 +523,7 @@ class EnhancedCLI:
 
         final_result = result.get("result", "")
         if final_result and len(str(final_result)) > 10:
-            answer_text = str(final_result)[:800]
+            answer_text = str(final_result)
             elapsed = result.get("total_time", 0)
             header = "Result"
             if elapsed:

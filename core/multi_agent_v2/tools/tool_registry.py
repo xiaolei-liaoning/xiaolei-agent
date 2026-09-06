@@ -206,12 +206,19 @@ async def _handle_fetch_url(args: Dict) -> Dict:
                 preview = f"获取到 {len(hot_items)} 条热搜/榜单数据：\n" + "\n".join(hot_items[:20])
                 if len(hot_items) > 20:
                     preview += f"\n  ...共{len(hot_items)}条"
-                return ok(preview)
+                # ponytail + deepseek: additionalContext — 告诉 agent 数据全貌（条数、摘要）
+                _ex = (
+                    f"fetch_url 从 {url} 抓取到 {len(hot_items)} 条热搜/榜单条目。"
+                    f"已展示前 20 条，如需全部请参考全部 {len(hot_items)} 条的 prev 文本。"
+                )
+                return ok(preview, extra_contexts=[_ex])
             # 通用 JSON
             text_repr = json.dumps(parsed, ensure_ascii=False, indent=2)
             if len(text_repr) > ml:
                 text_repr = text_repr[:int(ml * 0.7)] + f"\n...截断 ({len(text_repr)} 字符)"
-            return ok(text_repr)
+            # ponytail + deepseek: additionalContext — JSON 数据大小 + 截断提示
+            _ex = f"fetch_url 从 {url} 返回 JSON 数据 {len(text_repr)} 字符（原始可能更长）。已展示在 data 中。"
+            return ok(text_repr, extra_contexts=[_ex])
         except (json.JSONDecodeError, AttributeError):
             pass
         return ok(je[:ml])
@@ -220,7 +227,9 @@ async def _handle_fetch_url(args: Dict) -> Dict:
     readable = html_to_text(text, max_length=ml)
     if not readable or len(readable) < 20:
         return err("无法解析页面内容")
-    return ok(readable)
+    # ponytail + deepseek: additionalContext — 告诉 agent 看到的是页面截断版
+    _ex = f"fetch_url 从 {url} 抓取页面 {len(readable)} 字符正文，已展示。如需更多细节再追加 fetch。"
+    return ok(readable, extra_contexts=[_ex])
 
 
 
@@ -994,6 +1003,48 @@ async def _handle_write_todos(args: Dict, ctx=None) -> Dict:
     return ok(f"✅ 任务清单已更新 ({done}/{len(todos)} 完成){_plan_note}")
 
 
+async def _handle_update_goal(args: Dict, ctx=None) -> Dict:
+    """update_goal — agent 自主声明目标状态（deepseek-harness update_goal 工具对齐）。
+
+    完成判定权在 agent：complete/blocked 由 LLM 主动声明，系统只校验证据。
+    - complete → ctx._agent_declared_complete（主循环校验交付物证据后收尾）
+    - blocked  → ctx._blocked_streak（同因连续 3 轮 → 系统接受阻塞并收尾）
+    - progress → ctx._goal_progress_note（进度备注，注入上下文）
+    """
+    from core.multi_agent_v2.tools.tool_result import ok, err
+    action = (args.get("action") or "").strip().lower()
+    reason = (args.get("reason") or "").strip()
+
+    if ctx is None:
+        # 无运行上下文（测试/独立调用）→ 纯确认
+        return ok(f"goal 状态声明已记录: {action or '(空)'}")
+
+    if action == "complete":
+        ctx._agent_declared_complete = True
+        ctx._agent_complete_reason = reason[:300]
+        logger.info("update_goal: agent declares COMPLETE（等待交付物证据校验）")
+        return ok("✅ 完成声明已记录。系统将校验交付物证据；若交付物未写入磁盘将被驳回。")
+
+    if action == "blocked":
+        prev = getattr(ctx, "_blocked_reason", "") or ""
+        if reason and reason[:80] == prev[:80]:
+            ctx._blocked_streak = getattr(ctx, "_blocked_streak", 0) + 1
+        else:
+            ctx._blocked_streak = 1
+        ctx._blocked_reason = (reason or "未说明原因")[:300]
+        streak = ctx._blocked_streak
+        logger.info(f"update_goal: agent declares BLOCKED x{streak}: {ctx._blocked_reason[:80]}")
+        if streak >= 3:
+            return ok(f"⚠️ 阻塞声明已接受（连续 {streak} 轮相同阻塞），系统将收尾并保留进度。")
+        return ok(f"⚠️ 阻塞声明已记录（{streak}/3）。系统将注入绕行指引；连续 3 轮相同阻塞才会被接受。")
+
+    if action == "progress":
+        ctx._goal_progress_note = reason[:200]
+        return ok("📝 进度已记录")
+
+    return err(f"未知 action: {action or '(空)'}（可选: complete / blocked / progress）")
+
+
 async def _handle_write_file(args: Dict) -> Dict:
     """写文件到指定路径 — 兼容多种参数名"""
     from core.multi_agent_v2.tools.tool_result import ok, err
@@ -1244,8 +1295,17 @@ async def _handle_write_file(args: Dict) -> Dict:
             result_msg = f"✅ 已追加到文件: {path} (+{len(content)} 字符, 总计{len(existing) + len(content)} 字符)"
         if truncation_msg:
             result_msg += truncation_msg
-        
-        return ok(result_msg)
+
+        # ponytail + deepseek: 把写入内容摘要作为 additionalContext 注入下一轮 LLM 输入。
+        # 真实测试（人机对决）：write_file 后 agent 不知自己写了什么 → 无法修改。摘要让 agent 看见。
+        _head = content[:500]
+        _tail = content[-300:] if len(content) > 800 else ""
+        _extra = (
+            f"write_file 已落盘 {path}（{len(content)} 字符）。"
+            f"开头摘要：{_head}"
+            + (f"\n…\n结尾摘要：{_tail}" if _tail else "")
+        )
+        return ok(result_msg, extra_contexts=[_extra])
     except Exception as e:
         return err(f"❌ 写入失败: {type(e).__name__}: {e}")
 
@@ -1264,7 +1324,21 @@ async def _handle_read_file(args: Dict) -> Dict:
     path = os.path.expanduser(path)
     p = Path(path)
     if not p.exists():
-        return err(f"路径不存在: {path}")
+        # ponytail + deepseek: 失败回流附加具体可行的修复指引
+        _siblings = ""
+        try:
+            _parent = p.parent
+            if _parent.exists():
+                _names = [e.name for e in sorted(_parent.iterdir())[:20] if p.name.lower() in e.name.lower() or len(e.name) <= 4]
+                if _names:
+                    _siblings = f"\n同目录下相近文件：{', '.join(_names[:8])}"
+        except Exception:
+            pass
+        return err(
+            f"路径不存在: {path}\n"
+            f"可能：文件名拼写错误 / 工作目录不对（用 execute_shell pwd 检查）/ 文件确实未创建。"
+            f"{_siblings}"
+        )
 
     # ── 重复读取检测 ──
     if not hasattr(_handle_read_file, '_read_count'):
@@ -1307,7 +1381,16 @@ async def _handle_read_file(args: Dict) -> Dict:
     # ── 进度信息 ──
     progress = f"\n\n📊 已读取 {len(_unique)} 个不同文件（共 {sum(_counts.values())} 次调用）"
     result = result + progress + repeat_hint
-    return ok(result)
+
+    # ponytail + deepseek: 截断时给 agent 后续探索指引（additionalContext）
+    _extras = []
+    if offset + limit < len(lines):
+        _next_offset = offset + limit + 1
+        _extras.append(
+            f"read_file 显示了第 {offset+1}-{offset+limit} 行 / 共 {len(lines)} 行。"
+            f"如需后续内容，用 offset={_next_offset} 继续读，或用更大的 limit 参数。"
+        )
+    return ok(result, extra_contexts=_extras if _extras else None)
 
 
 async def _handle_edit_file(args: Dict) -> Dict:
@@ -1587,6 +1670,28 @@ _SANDBOX_TOOL_DEFS = [
             "required": ["todos"]
         },
         handler=_handle_write_todos,
+    ),
+    ToolDefinition(
+        name="update_goal",
+        server=SERVER_BUILTIN,
+        tags=["task", "tracking"],
+        description=_builder.get_tool_desc("update_goal"),
+        parameters={
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["complete", "blocked", "progress"],
+                    "description": "目标状态声明: complete=已完成, blocked=被阻塞, progress=进度备注"
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "complete=1-3句总结; blocked=具体阻塞条件(什么/为什么,而非'难度'或'剩余工作'); progress=简短状态"
+                }
+            },
+            "required": ["action", "reason"]
+        },
+        handler=_handle_update_goal,
     ),
     ToolDefinition(
         name="write_file",
