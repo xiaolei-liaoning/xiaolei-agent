@@ -250,15 +250,17 @@ class GLMBackend:
                          model=None, tools=None) -> LLMResponse:
         """内部实现：返回结构化 LLMResponse，包含原生 tool_calls"""
         # ── 清理 tool 消息顺序 — 防止 DeepSeek API 400 ──
+        # 累积式: 历史上任意 assistant 带过 tool_calls 即保留 tool 消息。
+        # 原逻辑(最近 assistant 有 tool_calls 才保留)在"纯文本 assistant 前置"时
+        # 误删真实 tool 结果 → agent 看不到结果 → 空转(2026-09-06 同类根因)。
         try:
             cleaned = []
+            _ever_had_tool_calls = False
             for m in messages:
-                if m["role"] == "tool":
-                    has_pending = any(
-                        p.get("tool_calls") for p in cleaned if p["role"] == "assistant"
-                    )
-                    if not has_pending:
-                        continue
+                if m["role"] == "assistant" and m.get("tool_calls"):
+                    _ever_had_tool_calls = True
+                if m["role"] == "tool" and not _ever_had_tool_calls:
+                    continue
                 cleaned.append(m)
             messages = cleaned
         except Exception:

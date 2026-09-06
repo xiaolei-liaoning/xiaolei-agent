@@ -197,7 +197,19 @@ class CommandParser:
 
             if matched:
                 # 解析动作和参数
-                action, params, remaining_text = self._parse_action_params(remaining)
+                # ponytail: 自然语言型命令(/run /task /explore /analyze /build /orchestrate
+                # /agents /smart) 的 action 是"用户任务描述"——按空格分割会截断成"第一个词"
+                # (真实测试: "/run 在桌面写 hello.txt" → action="在桌面", remaining="test-opt..."
+                # → agent 只见"在桌面"跑偏)。此类命令全文作为 action, 仅提取 -- 参数。
+                _nl_commands = {
+                    CommandType.RUN, CommandType.ORCHESTRATE, CommandType.SMART,
+                    CommandType.TASK_AGENT, CommandType.EXPLORE_AGENT,
+                    CommandType.ANALYZE_AGENT, CommandType.BUILD_AGENT,
+                }
+                if cmd_type in _nl_commands:
+                    action, params, remaining_text = self._parse_text_command(remaining)
+                else:
+                    action, params, remaining_text = self._parse_action_params(remaining)
                 result.action = action
                 result.params = params
                 result.remaining = remaining_text
@@ -215,6 +227,22 @@ class CommandParser:
         # 不是命令，返回原始文本
         result.remaining = input_text
         return result
+
+    def _parse_text_command(self, text: str) -> Tuple[str, Dict[str, Any], str]:
+        """解析自然语言命令：全文作为 action，仅提取 --key value 参数"""
+        params = {}
+        # 提取 --key value 形式的参数（与 _parse_action_params 相同的参数模式）
+        param_pattern = r'--(\w+)\s+("[^"]*"|\'[^\']*\'|\S+)'
+        matches = re.findall(param_pattern, text)
+        for key, value in matches:
+            params[key] = value.strip('"').strip("'")
+            text = text.replace(f"--{key} {value}", "", 1) if " " in value else text.replace(f"--{key} {value}", "", 1)
+        # 剩余全文作为 action
+        remaining = text.strip()
+        # 参数提取后再次清理多余空格
+        if params:
+            remaining = " ".join(remaining.split())
+        return remaining, params, ""
 
     def _parse_action_params(self, text: str) -> Tuple[str, Dict[str, Any], str]:
         """解析动作和参数"""
