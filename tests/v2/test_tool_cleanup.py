@@ -55,3 +55,19 @@ async def test_tool_cleanup_accumulative_across_rounds():
     assert "call_a" in ids, f"轮1 结果被误删: {ids}"
     assert "call_b" in ids, f"轮2 结果被误删: {ids}"
     assert "call_ghost" not in ids, f"幻觉孤儿未删除: {ids}"
+
+
+def test_truncate_marker_no_subagent_instruction():
+    """P1.2 — _truncate 提示语不再诱导 spawn 子代理读完整文件"""
+    from core.multi_agent_v2.tools.tool_result import _truncate
+    t = _truncate("内容" * 10000, 3000, "read_file")
+    assert "委托 explore" not in t
+    assert "截断" in t
+    assert len(t) < 3200, f"长度失控: {len(t)}"
+
+
+def test_truncate_short_text_unchanged():
+    """P1.2 — 短文本不截断"""
+    from core.multi_agent_v2.tools.tool_result import _truncate
+    t = _truncate("短内容", 3000, "read_file")
+    assert t == "短内容"

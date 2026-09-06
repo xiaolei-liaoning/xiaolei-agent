@@ -1633,7 +1633,10 @@ async def _handle_orchestrate(args: Dict) -> Dict:
         outputs = []
         for r in result.get("results", []):
             status = "✓" if r.get("success") else "✗"
-            outputs.append(f"[{r.get('id', '?')}] {status} {r.get('output', '')[:500]}")
+            _out = r.get("output", "")
+            if len(_out) > 500:
+                _out = _out[:300] + "\n\n[... 中间部分省略 — 总长 " + str(len(_out)) + " 字符 ...]\n\n" + _out[-200:]
+            outputs.append(f"[{r.get('id', '?')}] {status} {_out}")
         return ok("\n".join(outputs))
     return err(f"编排失败: {result.get('error', '未知错误')}")
 

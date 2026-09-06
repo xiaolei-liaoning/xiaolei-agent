@@ -96,11 +96,7 @@ def _truncate(text: str, max_chars: int, tool_name: str = "") -> str:
         tmp_path = os.path.join(tmp_dir, f"{tool_name}_{os.getpid()}.txt")
         with open(tmp_path, 'w') as f:
             f.write(text)
-        hint = (
-            f"[截断 {truncated_count} 字符] 完整输出已保存到 {tmp_path}。"
-            f"需读取完整内容时使用 task 工具委托 explore 子代理读取此文件，"
-            f"不要自己 read_file。"
-        )
+        hint = f"[截断 {truncated_count} 字符 — 完整内容存于工作目录，按需引用]"
     except Exception:
         hint = f"[截断 {truncated_count} 字符]"
 
