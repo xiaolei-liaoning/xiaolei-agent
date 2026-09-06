@@ -253,7 +253,8 @@ async def test_dedup_identical_tool_calls():
     ])
     await get_tool_cache().clear()
     with patch.object(_tr, "get_tool_registry", return_value=reg):
-        result = await run_react("dedup test")
+        # ponytail: use_plan=True — 本测试的 mock 含 plan 生成步骤回复，需走 plan 路径
+        result = await run_react("dedup test", use_plan=True)
     assert _call_count == 1, f"Expected 1 execution, got {_call_count}"
 
 

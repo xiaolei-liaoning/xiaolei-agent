@@ -482,22 +482,25 @@ class GLMBackend:
         if not await self._rate_limiter.acquire(timeout=30.0):
             return LLMResponse(content="请求过于频繁，请稍后再试")
 
-        # ── 清理 tool 消息顺序 — 防止 DeepSeek/OpenRouter API 400 ──
-        # tool 消息必须紧跟有 tool_calls 的 assistant，且 tool_call_id 必须匹配
+        # ── tool 消息清理已禁用 — 真实测试证实它删除合法的 tool 结果 ──
+        # 原逻辑的致命缺陷：遇到纯文本 assistant 就清空 _expected_tool_ids，
+        # 之后所有 tool 消息被当孤儿删除 → agent 看不到自己 write_file 的结果
+        # → 写了又写空转循环（2026-09-06 全天热搜任务空转的根因）。
+        # 防止 API 400 的正确做法：配对修复应保留跨 assistant 的 tool 消息。
         try:
             _cleaned = []
             _expected_tool_ids = set()
             for _m in messages:
                 if _m["role"] == "assistant":
                     _tc = _m.get("tool_calls", [])
-                    _expected_tool_ids = {tc.get("id", "") for tc in _tc if tc.get("id")}
+                    _new_ids = {tc.get("id", "") for tc in _tc if tc.get("id")}
+                    if _new_ids:
+                        _expected_tool_ids = _new_ids  # 有 tool_calls 才更新，纯文本不清空
                     _cleaned.append(_m)
                 elif _m["role"] == "tool":
                     _tid = _m.get("tool_call_id", "")
                     if _tid and _tid not in _expected_tool_ids:
-                        continue  # tool_call_id 不匹配任何 tool_calls → 孤儿
-                    if not _tid and not _expected_tool_ids:
-                        continue  # 无 tool_calls 可匹配 → 孤儿
+                        continue  # 真孤儿才删
                     _cleaned.append(_m)
                 else:
                     _cleaned.append(_m)

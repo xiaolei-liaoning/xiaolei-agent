@@ -144,7 +144,7 @@ class ChatHandler:
         success = result.get("success", False)
         output = result.get("output", result.get("answer", ""))
         if success and output:
-            print_success(f"✅ {output[:500]}")
+            print_success(f"✅ {output}")
         else:
             error = result.get("error", "无输出")
             print_error(f"❌ {error}")
@@ -771,7 +771,7 @@ export default async function() {{
             return
 
         if result.success:
-            text = str(result.output)[:300]
+            text = str(result.output)
             if text.strip():
                 ps(f"   {text.strip()}")
         else:

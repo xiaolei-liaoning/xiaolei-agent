@@ -139,6 +139,14 @@ def _detect_from_result(r: Dict[str, Any]) -> List[Capability]:
     if name in ("text_analyzer", "codegraph_explore", "codegraph_search", "search_files", "codegraph_files"):
         caps.append(Capability(kind="tool_called", metadata={"tool": name}))
 
+    # ponytail: task/orchestrate 子代理是真产出（真实测试：3 个 task 分析子代理成功
+    # 但 Step2"深入分析"不推进 — tool_called 不是 productive。子代理输出算实质分析产出）
+    if name in ("task", "orchestrate"):
+        caps.append(Capability(kind="subagent_output", metadata={
+            "tool": name,
+            "result_len": len(result_text),
+        }))
+
     # ponytail: 兜底 — 任何成功调用的工具至少产生 tool_called
     if not caps:
         caps.append(Capability(kind="tool_called", metadata={"tool": name}))
@@ -382,7 +390,7 @@ class TaskProgress:
                         "ls", "find", "cat", "head", "tail", "wc", "du", "df", "echo", "pwd", "tree",
                     }
                     _productive = any(
-                        (c.kind in ("file_written", "web_search", "url_fetched")
+                        (c.kind in ("file_written", "web_search", "url_fetched", "subagent_output")
                          or (c.kind == "code_executed" and (c.metadata.get("stdout_len") or 0) > 500))
                         and not c.metadata.get("failed")
                         for c in self.new_capabilities_this_round
@@ -395,7 +403,7 @@ class TaskProgress:
                 _is_last = step.index == len(self._ctx.plan)
                 if _is_last and _is_output_step:
                     _has_substance = any(
-                        c.kind == "file_written"
+                        c.kind in ("file_written", "subagent_output")
                         or (c.kind == "code_executed" and (c.metadata.get("stdout_len") or 0) > 500)
                         for c in self.completed_capabilities
                     ) or getattr(self._ctx, 'final_answer', None)

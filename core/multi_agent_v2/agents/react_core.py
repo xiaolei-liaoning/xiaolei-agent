@@ -1150,6 +1150,7 @@ async def run_react(
     disallowed_tools: Optional[List[str]] = None,
     tool_preference: Optional[set] = None,
     is_subagent: bool = False,
+    use_plan: bool = False,
 ) -> dict:
     """快捷入口：直接用 ReActCore 处理任务"""
     if max_rounds == 0:
@@ -1228,13 +1229,14 @@ async def run_react(
 
     prefix = _get_prefix(agent)
 
-    # ── 规划阶段 ──
+    # ── 规划阶段（默认关闭 — 纯 ReAct 对齐 deepseek；plan 是收益为负的负载：碎片化、
+    # 裁决偏差、显示失真。子代理/编排按需 use_plan=True）──
     from core.multi_agent_v2.tools.tool_registry import get_tool_registry
-    ctx.plan = await generate_plan(ctx.task_description, ctx)
+    ctx.plan = await generate_plan(ctx.task_description, ctx) if use_plan else None
     if ctx.plan:
         display_plan(ctx, prefix=prefix)
     else:
-        print(f"{prefix}    \033[2m◇ No plan generated\033[0m")
+        print(f"{prefix}    \033[2m◇ 纯 ReAct 模式（无 plan）\033[0m")
 
     # ponytail: TaskProgress 统一追踪，替代旧版 update_step_status
     ctx.task_progress = TaskProgress(ctx)
@@ -1404,14 +1406,14 @@ async def run_react(
                     f"交付物未写出。"
                 )
                 ctx._blocked_reason = _stall_br
-                ctx.final_answer = ctx.final_answer or (
-                    f"⚠️ 任务未完成被暂停：{_stall_br}\n"
-                    f"已完成进度已保存为断点，输入\"继续\"可从断点恢复。"
-                )
+                # ponytail: 不设 final_answer — 留空让 post-loop 兜底链接管：
+                # "搜索报告兜底"（有 fetch 数据无文件 → LLM 生成 HTML 落盘）会在收尾时
+                # 用已有数据产出报告。真实测试：agent 写作瘫痪时系统接管产出，而非纯暂停。
                 ctx.interrupted = True
                 ctx.exit_reason = "idle_round_limit"
                 logger.info(
-                    f"Stall guard: round_gap={_round_gap} stuck={_stuck} idle={_idle_guard} → pause"
+                    f"Stall guard: round_gap={_round_gap} stuck={_stuck} idle={_idle_guard} → pause, "
+                    f"断点已存: {getattr(ctx, '_blocked_reason', '')[:60]}"
                 )
                 break
 
@@ -1930,6 +1932,25 @@ async def run_react(
                     extracted = _extract_text_from_json(text)
                     if extracted:
                         text = extracted
+                # ponytail: Summarizing 兜底也要防截断 — 真实测试：总结输出到尾段
+                # "结----" 戛然而止。truncated 标记检测 + 一次续写重试
+                _sum_truncated = getattr(final_resp, 'truncated', False) if hasattr(final_resp, 'truncated') else False
+                if _sum_truncated and len(text) > 200:
+                    _half = text.rstrip()
+                    _resume = await asyncio.wait_for(
+                        router.chat(
+                            [
+                                {"role": "system", "content": "继续上一条总结，从断点续写剩余部分，不要重复已有内容。"},
+                                {"role": "user", "content": f"上一条总结已输出到：\n{_half[-500:]}\n\n请从断点处继续，输出剩余部分。"},
+                            ],
+                            temperature=0.3,
+                            max_tokens=32768,
+                        ),
+                        timeout=30,
+                    )
+                    _tail = str(_resume) if _resume else ""
+                    if _tail and not _tail.startswith("{"):
+                        text = text + "\n" + _tail
                 if text and text != "None" and len(text) > 20:
                     ctx.final_answer = text
             except Exception:
@@ -2019,7 +2040,7 @@ async def run_react(
                 "blocked_reason": getattr(ctx, '_blocked_reason', ''),
                 "blocked_streak": getattr(ctx, '_blocked_streak', 0),
                 "progress_note": getattr(ctx, '_goal_progress_note', ''),
-                "plan_summary": f"{_done}/{_total} steps done",
+                "plan_summary": (f"{_done}/{_total} steps done" if _total else "纯 ReAct 模式"),
                 "files_written": _files,
             })
     except Exception as _e:
