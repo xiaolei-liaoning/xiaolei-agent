@@ -1364,8 +1364,18 @@ async def run_react(
                 ctx.exit_reason = "agent_declared_complete"
                 logger.info("Agent declared complete (evidence verified) → finalizing")
                 break
-            # 证据不足 → 驳回一次，要求交付物
+            # 证据不足 → 驳回；有界重试（2 次），防"声明-驳回-再声明"无限循环
             ctx._agent_declared_complete = False
+            ctx._complete_rejection_count = getattr(ctx, '_complete_rejection_count', 0) + 1
+            if ctx._complete_rejection_count >= 2:
+                ctx.final_answer = (
+                    "⚠️ 已两次声明完成但未交出交付物，系统强制收尾。\n"
+                    "请基于已有数据输出最终总结；交付物可通过后续会话补足。"
+                )
+                ctx.interrupted = True
+                ctx.exit_reason = "complete_rejected_twice"
+                logger.info("Agent declared complete rejected x2 → forced finalize")
+                break
             ctx.forced_instructions = (
                 "⚠️ 你声明任务完成，但系统中没有交付物写入记录。"
                 "完成声明需要证据：先用 write_file 把交付物写入磁盘，"
