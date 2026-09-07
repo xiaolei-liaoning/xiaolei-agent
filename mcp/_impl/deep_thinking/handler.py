@@ -55,7 +55,7 @@ class DeepThinkingHandler:
         
         # 初始化性能监控工具
         try:
-            from core.performance_utils import get_resource_monitor, get_progress_tracker
+            from core.monitoring.performance_utils import get_resource_monitor, get_progress_tracker
             self.resource_monitor = get_resource_monitor()
             self.progress_tracker = get_progress_tracker()
             logger.info("性能监控工具初始化成功")

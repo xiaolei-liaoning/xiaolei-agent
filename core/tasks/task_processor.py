@@ -555,13 +555,14 @@ class TaskProcessor:
                 success=False,
             )
     
-    # ========================================================
-# 早期版本预留了"用户反馈学习机制"接口（疑点 #219），
-# 但 record_feedback 方法从未实现。反馈学习由其他模块负责：
-# - core/auto_reviewer.py     任务完成复盘
-# - core/memory/memory_middleware.py  长期记忆迁移
-# - core/memory/self_evolution.py     自我进化
-# ========================================================
+# ---------------------------------------------------------------------------
+# 说明：早期版本预留了"用户反馈学习机制"接口（疑点 #219），
+# 但 record_feedback 方法从未实现，调用方不应依赖该方法。
+# 反馈学习实际由以下模块分别负责：
+#   - core/auto_reviewer.py                任务完成复盘
+#   - core/memory/memory_middleware.py     长期记忆迁移
+#   - core/memory/self_evolution.py        自我进化
+# ---------------------------------------------------------------------------
 
 # 全局单例
 task_processor = TaskProcessor()

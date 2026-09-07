@@ -350,13 +350,13 @@ def get_db_session():
 
 
 def get_session() -> Session:
-    """获取一个新的数据库会话（已废弃，请使用 get_db_session）
-    
-    WARNING: 使用此方法需手动管理会话关闭！
+    """获取一个新的数据库会话（低层 API，需手动 close）
+
+    新代码优先使用 get_db_session 上下文管理器（自动 commit/rollback/close）。
+    当前调用方：core/auto_reviewer.py、core/workflow/bfs_processor.py。
     """
     if _SessionLocal is None:
         raise RuntimeError("数据库未初始化，请先调用 init_db()")
-    logger.warning("get_session已废弃，建议使用 get_db_session 上下文管理器")
     return _SessionLocal()
 
 

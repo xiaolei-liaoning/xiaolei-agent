@@ -5,15 +5,11 @@
 - 资源监控（内存、CPU）
 - 延迟加载装饰器
 - 任务进度追踪
-"""
 
-# ⚠️ DEPRECATED: 此模块未被核心流程使用
-import warnings
-warnings.warn(
-    "core.monitoring.performance_utils is deprecated and not used by the core pipeline",
-    DeprecationWarning,
-    stacklevel=2,
-)
+使用方：
+- mcp/_impl/deep_thinking/handler.py — get_resource_monitor / get_progress_tracker
+- 其余装饰器类（async_retry / async_with_timeout / LazyLoader）暂无调用方
+"""
 
 import logging
 import asyncio

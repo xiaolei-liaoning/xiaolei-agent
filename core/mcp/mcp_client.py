@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """
-DEPRECATED: 此模块已弃用，请使用 awesome_mcp_manager 替代 (2026-06-17)
-"""
+MCP 客户端管理器（v3）
 
-import warnings
-warnings.warn("mcp_client.py 已弃用，请使用 core.mcp.awesome_mcp_manager", DeprecationWarning, stacklevel=2)
+注意：本文件与 core/multi_agent_v2/tools/mcp_client.py（v1，已废弃）是
+两个不同的东西——本文件是当前在用的 v3 实现，调用方：
+- core/plugin_loader.py — mcp_client.connect_server()
+- core/multi_agent_v2/tools/tool_registry.py — mcp_client.list_tools()
+- core/mcp/__init__.py — re-export
+新代码可优先评估 awesome_mcp_manager，但本模块并非死代码。
+"""
 
 import asyncio
 import json

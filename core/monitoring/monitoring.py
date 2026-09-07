@@ -1,15 +1,11 @@
 """监控和指标收集模块
 
 实现系统监控和性能指标收集
-"""
 
-# ⚠️ DEPRECATED: 此模块未被核心流程使用
-import warnings
-warnings.warn(
-    "core.monitoring is deprecated and not used by the core pipeline",
-    DeprecationWarning,
-    stacklevel=2,
-)
+使用方：
+- core/tasks/task_scheduler.py — monitoring_manager（record_task / record_error）
+- core/memory/memory_optimizer.py — get_monitor()
+"""
 
 import json
 import logging
