@@ -1,11 +1,16 @@
 """L1b: CollapseReadSearch — UI-only display metadata tracker.
 
-V1→V2: V1 压缩层 L1b。由 ContextCompactor 编排，在 V1 pipeline 中作为第三层运行。
-  纯消息透传（不修改内容），跟踪 UI 折叠元数据。V2 无 UI 层，此层实际无操作，
-  保留以保持 pipeline 完整。
+V1→V2: V1 压缩层 L1b。由 ContextCompactor.compact() line 198 主动调用，
+  纯消息透传（不修改内容），跟踪 UI 折叠元数据。
 
-保留原因: ContextCompactor 8-layer pipeline 的组成部分。当前为 no-op，但若
-  未来 V2 需要折叠元数据追踪（如日志/遥测），可直接启用。
+⚠️ 当前是 no-op（passthrough）：
+  - V2 没 UI 层（React/CLI/TUI）所以折叠元数据没用
+  - collapse() 直接 return messages，原样返回
+  - 仍被 ContextCompactor.compact() 调用，因为删这一层要同时改 ContextCompactor
+
+保留原因: ContextCompactor 8-layer pipeline 的组成部分。删前需先改
+  ContextCompactor.compact() line 197-198（移除 self.l1b.collapse(messages)）。
+  删完 ContextCompactor 调用后，本文件即可整个删除（156 行）。
 
 In Claude Code this is a rendering concern: consecutive Read/Grep/Search
 tool_use blocks are collapsed into a summary group for the UI. The message

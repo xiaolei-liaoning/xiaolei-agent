@@ -14,7 +14,9 @@ Based on Claude Code's timeBasedMCConfig.ts:
 - Runs BEFORE API call (in microcompactMessages, upstream of callModel)
 
 Default config:
-- enabled: false (opt-in via feature flag)
+- enabled: false（参数字段，但 clear_old_results() 实际不读此字段，每次都执行）
+  注意：原注释说 "opt-in via feature flag"，但代码里没有 feature flag 机制
+  —— enabled 只控制 should_clear() 返回值，不影响 clear_old_results() 调用
 - gapThresholdMinutes: 60 (matches server's 1h cache TTL)
 - keepRecent: 5 (keep most recent N compactable tool results)
 """

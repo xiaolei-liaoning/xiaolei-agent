@@ -4,14 +4,15 @@
 - 规则匹配（快速）
 - 复杂度判断（可选）
 - AI 分解（兜底）
-- 用户反馈学习机制
+
+⚠️ 早期注释提到"用户反馈学习机制"和 record_feedback() 方法，
+   但实际代码里**没有实现 record_feedback**（疑点 #219）。
+   反馈学习功能由其他模块（core/auto_reviewer.py + core/memory/memory_middleware.py）实现，
+   本类只负责规则匹配和 AI 分解。
 
 使用方式：
     from core.tasks.task_processor import task_processor
     result = await task_processor.process("爬取微博热搜并分析")
-    
-    # 记录用户反馈
-    await task_processor.record_feedback("爬取微博热搜并分析", "web_scraper", success=True)
 """
 
 import asyncio
@@ -555,8 +556,12 @@ class TaskProcessor:
             )
     
     # ========================================================
-    # 用户反馈学习机制
-    # ========================================================
-    
+# 早期版本预留了"用户反馈学习机制"接口（疑点 #219），
+# 但 record_feedback 方法从未实现。反馈学习由其他模块负责：
+# - core/auto_reviewer.py     任务完成复盘
+# - core/memory/memory_middleware.py  长期记忆迁移
+# - core/memory/self_evolution.py     自我进化
+# ========================================================
+
 # 全局单例
 task_processor = TaskProcessor()

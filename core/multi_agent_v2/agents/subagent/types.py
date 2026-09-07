@@ -26,9 +26,13 @@ class AgentProfile(str, Enum):
 
 
 
+# 5 个 profile 的工具白名单（仅 system_hint 区分，工具权限全部 None）
+# 原因：allowed_tools 硬限制会让 plan_manager 生成"需要某工具但不在白名单"的死锁。
+# 实际差异在 system_hint prompt 上（5 个角色提示词不同）。
+# 如未来需要差异化权限（如 EXPLORE 只读、BUILD 可写），参见疑点 #016 修复方案。
 PROFILE_PERMISSIONS = {
     AgentProfile.EXPLORE: {
-        # ponytail: 不再硬限制工具（allowed_tools 导致 step 要求缺失工具的 deadlock）
+        # 不再硬限制工具（allowed_tools 导致 step 要求缺失工具的 deadlock）
         "allowed": None,
         "disallowed": None,
         "system_hint": _builder.get_agent_prompt("explore"),

@@ -76,7 +76,8 @@ class L1aApiContextMgmt:
         """Clear tool results from old messages.
 
         Based on clear_tool_uses_20250919 strategy:
-        - Keep first half + last quarter of old tool results
+        - 保留范围说明：见 compact() 方法注释。原始注释 "Keep first half + last quarter"
+          与实际行为相反（实际清中段，保留 [first_half, last_quarter)），代码已修正。
         - More aggressive if >1h since last assistant message (cache expired)
 
         Args:

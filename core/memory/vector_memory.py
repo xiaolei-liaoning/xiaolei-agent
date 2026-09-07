@@ -11,7 +11,7 @@ VectorMemoryStore 单例类：
   - bge-large-zh-v1.5: 智源大模型，高性能
   - bge-m3: 智源多语言多任务模型
   - qwen3-embedding: 阿里巴巴通义千问最新模型
-  - local: 本地 TF-IDF（备选方案）
+  - local: 本地哈希 Embedding（备选方案，无语义）
 """
 
 import os
@@ -230,7 +230,7 @@ class SentenceTransformerEmbeddingFunction:
                     f"模型加载成功！设备: {self.device}, 输出维度: {actual_dim}"
                 )
             except Exception as e:
-                logger.error(f"模型加载失败: {e}, 回退到本地TF-IDF方案")
+                logger.error(f"模型加载失败: {e}, 回退到本地哈希方案")
                 raise
 
     def __call__(self, input):
@@ -253,8 +253,8 @@ class SentenceTransformerEmbeddingFunction:
             return embeddings.tolist()
         except Exception as e:
             logger.error(f"Embedding 生成失败: {e}")
-            # 回退到本地TF-IDF
-            logger.info("回退到本地TF-IDF方案")
+            # 回退到本地哈希
+            logger.info("回退到本地哈希方案")
             local_embed = LocalEmbeddingFunction()
             return local_embed(input)
 
@@ -308,7 +308,7 @@ def get_bge_embedding_function():
     - bge-large-zh-v1.5: 智源大模型
     - bge-m3: 智源多语言模型
     - qwen3: 阿里巴巴通义千问
-    - local: 本地TF-IDF备选方案
+    - local: 本地哈希备选方案
 
     所有模型均免费商用！
     """
@@ -317,7 +317,7 @@ def get_bge_embedding_function():
         model_type = _EMBEDDING_MODEL_NAME.lower()
 
         if model_type == "local":
-            logger.info("使用本地 TF-IDF Embedding")
+            logger.info("使用本地 哈希 Embedding")
             _bge_embedding_function = LocalEmbeddingFunction()
         else:
             try:
@@ -336,7 +336,7 @@ def get_bge_embedding_function():
                     )
             except Exception as e:
                 logger.error(
-                    f"加载 Sentence-Transformers 模型失败: {e}, 回退到本地TF-IDF"
+                    f"加载 Sentence-Transformers 模型失败: {e}, 回退到本地哈希"
                 )
                 _bge_embedding_function = LocalEmbeddingFunction()
     return _bge_embedding_function
@@ -467,7 +467,7 @@ class VectorMemoryStore:
             logger.info("ChromaDB 集合 long_term_memory 就绪")
         except Exception as e:
             logger.error("ChromaDB sentence-transformer 初始化失败: %s", e)
-            # 回退到本地 TF-IDF
+            # 回退到本地 哈希
             try:
                 from core.memory.vector_memory import LocalEmbeddingFunction
                 embed_fn = LocalEmbeddingFunction()
@@ -477,9 +477,9 @@ class VectorMemoryStore:
                 )
                 self._embedding_ready = True
                 self._collection_ready_event.set()
-                logger.info("ChromaDB 使用本地 TF-IDF 降级成功")
+                logger.info("ChromaDB 使用本地 哈希 降级成功")
             except Exception as e2:
-                logger.error("ChromaDB TF-IDF 降级也失败: %s", e2)
+                logger.error("ChromaDB 哈希 降级也失败: %s", e2)
                 self._collection = None
 
     def wait_for_collection(self, timeout: float = 10.0) -> bool:
@@ -969,7 +969,7 @@ class VectorMemoryStore:
 
             embeddings = embed_fn(test_texts)
 
-            model_name = getattr(embed_fn, "model_name", "Local TF-IDF")
+            model_name = getattr(embed_fn, "model_name", "Local 哈希")
             device = getattr(embed_fn, "device", "local")
 
             return {

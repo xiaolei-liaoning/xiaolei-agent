@@ -609,7 +609,7 @@ async def _handle_with_agent(
         logger.info("Agent系统处理完成，耗时: %.2fs", elapsed)
 
         reply_text = result.get("reply", "任务已完成")
-        skill_name = result.get("skill", "agent_system")
+        skill_name = result.get("skill", "general")  # 修正：之前写 "agent_system" 是 V1 残留
         thinking_process = result.get("thinking_process")
         md_path = result.get("md_path")  # ✅ 新增
 
