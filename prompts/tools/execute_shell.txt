@@ -3,3 +3,5 @@ Execute shell system commands.
 - Commands run in subprocess, auto-terminated on timeout (default 120s).
 - Executing Python code → use execute_python.
 - Dangerous commands (rm -rf /) are blocked.
+- Output is returned directly in the tool result — do NOT write to temp files to read output back.
+- Default mode runs in an isolated sandbox: its filesystem is separate from the host, so files created there (e.g. /tmp/xxx) do NOT exist for read_file afterwards. Verify from the returned output/exit code itself; use mode=local only when the command must touch real host files.

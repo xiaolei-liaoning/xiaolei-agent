@@ -103,3 +103,10 @@ mcp/_impl/data_analysis/output/
 
 # Old scripts directory (all one-time scripts removed)
 scripts/
+
+# Generated reports & session data (privacy)
+.report.json
+.omo/
+code_analysis_report.md
+python_vs_javascript_version_comparison.md
+docs/

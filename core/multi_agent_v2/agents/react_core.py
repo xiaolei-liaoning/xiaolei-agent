@@ -1350,7 +1350,13 @@ async def run_react(
             _tp = getattr(ctx, 'task_progress', None)
             _deliverable_ok = getattr(ctx, '_deliverable_verified', False) or _has_real_deliverable(_tp)
             _td = (ctx.task_description or "")[:300]
-            _is_production = any(kw in _td for kw in [
+            _negates_file = any(neg in _td for neg in [
+                "不要写", "不用写", "无需写", "不写文件", "不要文件", "无需文件",
+                "不用文件", "不要创建", "不用创建", "无需创建",
+                "不要生成", "不用生成", "无需生成", "不要保存", "不用保存", "无需保存",
+                "don't write", "no file", "without writing",
+            ])
+            _is_production = not _negates_file and any(kw in _td for kw in [
                 "写", "创建", "生成", "报告", "文件", "保存", "输出",
                 "write", "create", "generate", "save", "output", "report",
             ])
