@@ -1,15 +1,16 @@
 """
-ReActCore — V2 单 Agent 核心执行器（DEPRECATED）
+ReActCore — V2 unified_agent 内部的 ReAct 循环执行器
 
-⚠️  已废弃 — 请使用 core.multi_agent_v2.agents.unified_agent.run_unified()
-    V1 架构已融入，提供 LeaderAgent + SubAgent 能力。
+本文件是 core.multi_agent_v2.agents.unified_agent.run_unified() 的底层实现：
+- unified_agent.run_unified(mode="react") 调用本文件的 run_react()
+- 通过 MiddlewareChain 实现洋葱式 middleware 串联
+- LLM → Tool → Observation → 继续/结束
 
-保留此文件用于:
-  1. 向后兼容 (旧测试/旧 WorkAgent 代码可继续导入)
-  2. run_unified(mode="react") 的回退路径
+5 个 profile（EXPLORE/BUILD/ANALYZE/GENERAL/ORCHESTRATOR）都共享同一套
+ReAct 循环，差异仅在 system_hint 提示词（见 subagent/types.py PROFILE_PERMISSIONS）。
 
-基于 MiddlewareChain 的 ReAct 循环：
-  LLM → Tool → Observation → 继续/结束
+注意：早期注释里的 "V1 队长-队员" 描述已废弃 — core/agent_system.py 不存在，
+请不要在 docstring 里再引用 V1 架构。
 
 拆分后的模块：
   - tool_evaluator: 工具结果评估与格式化

@@ -37,6 +37,15 @@ class L2bSnipCompact:
         self._chars_snipped = 0
 
     def compact(self, messages: list[dict], aggressive: bool = False) -> list[dict]:
+        """
+        Snip long tool/user messages, keep first_half + last_quarter.
+
+        参数命名说明（注意：与直觉相反）：
+        - aggressive=True  → 截断阈值更小（max_chars // 2），**更激进**地缩短
+        - aggressive=False → 截断阈值更大（max_chars），**保守**地保留更多内容
+
+        调用方按"想更狠地压缩 → 传 True"理解即可。
+        """
         if len(messages) <= self.preserve_last_n_turns:
             return messages
 

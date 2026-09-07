@@ -82,18 +82,20 @@ _MODEL_CONFIGS = {
         "dim": 4096,
         "description": "阿里巴巴通义千问最新模型",
     },
-    "local": {"model_name": "local", "dim": 768, "description": "本地TF-IDF备选方案"},
+    "local": {"model_name": "local", "dim": 768, "description": "本地哈希 Embedding 备选方案（无语义，仅用于离线/无网络环境）"},
 }
 
 
 class LocalEmbeddingFunction:
-    """本地固定维度哈希 Embedding（离线，永不联网）
+    """本地固定维度哈希 Embedding（离线，永不联网，无语义）
 
     使用 hashing trick 将任意 token 映射到固定 768 维向量的位置。
-    - 无需网络，无需 sklearn
+    - 无需网络，无需 sklearn，无需任何模型权重
+    - 仅做位置哈希，没有语义相似度能力（同义词、反义词、近义词都视为无关）
     - 维度始终 768，ChromaDB 兼容
-    - 支持中英文混合
+    - 支持中英文混合（按 \\w 切词）
     - 输出已 L2 归一化
+    - 仅作为离线/无网络环境的占位实现，生产请用真实 embedding 服务
     """
 
     DIM = 768

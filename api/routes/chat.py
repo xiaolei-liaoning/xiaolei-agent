@@ -195,11 +195,13 @@ def _needs_agent(message: str) -> bool:
 # 内部函数：判断是否需要使用多Agent模式（multi_agent_v2）
 # ---------------------------------------------------------------------------
 def _needs_multi_agent(message: str) -> bool:
-    """判断是否需要使用 V1 队长-队员多Agent系统
+    """判断是否需要走 multi_agent_v2 unified_agent（不再是 V1 队长-队员）
 
     触发条件：
     1. 明确提到"深度思考"、"自主搜索"等深度思考触发词
     2. 需要多技能协作的复杂任务
+
+    注：早期注释说 "V1 队长-队员多Agent系统" 是迁移前的描述，实际跑 V2 unified_agent。
     """
     try:
         from core.engine.skill_dispatcher import SkillDispatcher
@@ -277,13 +279,15 @@ def _get_context_info(user_id: int, query: str = "") -> Dict[str, Any]:
 async def chat(request: ChatRequest) -> ChatResponse:
     """核心聊天 API 入口
 
-    Web 统一走 V1 队长-队员多Agent系统（LeaderAgent + LLMAgent）。
+    Web 走 V2 unified_agent 系统（ReAct 循环 + 5 个 profile）。
+    注：早期注释说的 "V1 队长-队员多Agent系统（LeaderAgent + LLMAgent）" 已迁移到 V2，
+    旧入口 core/agent_system.py 已删除，不要再引用。
 
     特性：
     - 使用对话历史管理器（自动压缩）
-    - 支持MessageBus通信
-    - 集成RAG引擎
-    - 智能Agent自动选择（auto_agent_selection=True时启用）
+    - 支持 MessageBus 通信
+    - 集成 RAG 引擎
+    - 智能 Agent 自动选择（auto_agent_selection=True 时启用）
     """
     message: str = request.message.strip()
     if not message:
@@ -294,11 +298,11 @@ async def chat(request: ChatRequest) -> ChatResponse:
     # 获取上下文信息（包括向量记忆检索）
     context_info = _get_context_info(request.user_id, query=message)
 
-    # 智能Agent自动选择（如果启用）
+    # 智能 Agent 自动选择（如果启用）
     execution_plan_info = None
     agents_used = None
 
-    # Web 统一走 V1 队长-队员多Agent系统（忽略 force_single_agent / force_multi_agent）
+    # 走 V2 unified_agent 系统（忽略 force_single_agent / force_multi_agent 等旧参数）
     return await _handle_with_multi_agent(request, message, start_time, context_info, execution_plan_info, agents_used)
 
 
@@ -310,9 +314,9 @@ async def _handle_with_multi_agent(
     execution_plan_info: Optional[Dict[str, Any]],
     agents_used: Optional[List[str]]
 ) -> ChatResponse:
-    """通过 V2 统一Agent（LeaderAgent + Worker + SubAgent）处理 Web 聊天请求"""
+    """通过 V2 unified_agent（unified_agent.run_unified）处理 Web 聊天请求"""
     try:
-        logger.info("🚀 V1 多Agent 开始处理: %s...", message[:60])
+        logger.info("🚀 V2 unified_agent 开始处理: %s...", message[:60])
 
         # 保存用户消息到对话历史（自动压缩）
         try:
@@ -331,7 +335,7 @@ async def _handle_with_multi_agent(
                 message = f"{message}\n\n{ocr_text}"
                 logger.info(f"已将OCR结果附加到消息，追加字符数: {len(ocr_text)}")
 
-        # ========== V2 统一 Agent 模式执行（V1 LeaderAgent + SubAgent）==========
+        # ========== V2 unified_agent 执行（5 个 profile 都共享 unified_agent.run_unified）==========
         from core.multi_agent_v2.agents.unified_agent import run_unified
 
         uid = str(request.user_id)
@@ -497,7 +501,8 @@ async def _handle_with_multi_agent(
         )
 
     except Exception as e:
-        logger.error(f"V1 多Agent 异常，降级到单Agent处理: {e}", exc_info=True)
+        # V2 unified_agent 异常，降级到单 Agent 处理（V1 不存在）
+        logger.error(f"V2 多Agent 异常，降级到单Agent处理: {e}", exc_info=True)
         return await _handle_with_agent(request, message, start_time, context_info, execution_plan_info, agents_used)
 
 

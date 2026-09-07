@@ -27,7 +27,7 @@ from pathlib import Path
 TOOLS = [
     {
         "name": "analyze_project",
-        "description": "【推荐】批量读取项目关键文件内容，一次可读10~30个核心文件（含README、配置、入口、主要源码），自动检测技术栈（语言/框架/LLM提供商），按重要性排序。适合分析项目结构和代码。比逐文件手动read_file快10倍。返回：files[{path,content,lines}], tech_stack{languages,frameworks}, structure{total_files,top_dirs}",
+        "description": "批量读取项目关键文件内容，一次可读10~30个核心文件（含README、配置、入口、主要源码），自动检测技术栈（语言/框架/LLM提供商），按重要性排序。适合分析项目结构和代码。返回：files[{path,content,lines}], tech_stack{languages,frameworks}, structure{total_files,top_dirs}",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -43,7 +43,7 @@ TOOLS = [
     },
     {
         "name": "analyze_project_structure",
-        "description": "【轻量】扫描项目结构元数据（不读文件正文），返回文件树、技术栈、依赖清单、git统计、函数/类签名、import关系。比analyze_project快10倍，适合快速了解项目全貌。返回纯元数据，不含文件正文。",
+        "description": "扫描项目结构元数据（不读文件正文），返回文件树、技术栈、依赖清单、git统计、函数/类签名、import关系。比analyze_project更快（因为不读文件正文），适合快速了解项目全貌。返回纯元数据，不含文件正文。",
         "inputSchema": {
             "type": "object",
             "properties": {

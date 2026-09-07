@@ -113,9 +113,11 @@ def load_skill_metadata(skill_dir: str) -> Optional[Dict[str, Any]]:
                 agent_path = os.path.join(agents_dir, agent_file)
                 try:
                     with open(agent_path, "r", encoding="utf-8") as f:
+                        # ⚠️ 当前为前 500 字符预览；完整内容后续会通过 MCP resource 暴露（尚未实现）
                         agents.append({
                             "name": agent_file.replace(".md", ""),
-                            "content": f.read()[:500]  # 截断，完整内容走 resource
+                            "content": f.read()[:500],
+                            "_truncated": True,
                         })
                 except Exception:
                     pass

@@ -128,14 +128,19 @@ class L1aApiContextMgmt:
         # Sort by index (oldest first) and clear until we've freed enough tokens
         clearable_indices.sort(key=lambda x: x[0])
 
-        # Keep first half + last quarter strategy (from clawspring/compaction.py)
+        # Strategy（与早期注释 "Keep first half + last quarter" 相反）：
+        # 实际保留的是 clearable 列表的 [first_half : last_quarter_start] 段，
+        # 即**清掉前 50% + 后 25%，保留中段 25%**。
+        # 注释历史：源自 clawspring/compaction.py，逻辑抄错导致保留区间颠倒。
         total_clearable = len(clearable_indices)
         first_half_end = total_clearable // 2
         last_quarter_start = total_clearable * 3 // 4
 
         cleared_count = 0
         for idx, (i, char_count) in enumerate(clearable_indices):
-            # Keep first half and last quarter
+            # 跳过前一半（前 50% 保留） — 注意：这里 idx < first_half_end 是 continue，
+            # 意味着前 50% 也"保留"了。配合下面 last_quarter_start，
+            # 实际清理的是 [first_half, last_quarter) 这段中段。
             if idx < first_half_end or idx >= last_quarter_start:
                 continue
 
