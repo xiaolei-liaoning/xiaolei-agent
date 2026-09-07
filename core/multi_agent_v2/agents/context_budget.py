@@ -439,17 +439,18 @@ class ContextBudgetManager:
     # ────────────────────────────────────────────────
 
     async def async_check_and_compact(self, ctx: RunContext) -> bool:
-        """检查并执行 LLM 压缩（异步主入口）
+        """检查并执行压缩（V2 异步主入口）
+
+        压缩分两步：
+        1. 先调 V1 ContextCompactor 跑 8-layer pipeline（消息列表级压缩）— use_v1_compaction=True 时
+        2. 再做 V2 自己的工具条目级压缩（结构化 LLM 摘要 + 上下文重排）
+
+        关系说明（重要，避免后续维护者困惑）：
+        - V1 8-layer 不是独立压缩系统，是 V2 主动调用的子模块
+        - 删除 ContextCompactor 会让 V2 失去 L0/L1a/L1b/L1c/L2b 的精细压缩能力
+        - V1 管 messages 数组改写，V2 管 tool_results 列表摘要 — **互补不重复**
 
         对标 Opencode 的 compaction.process()：
-
-        1. V1 8-layer: L0-L4 + SessionMem + CircuitBreaker (新增)
-        2. 检查溢出
-        3. 选择旧条目
-        4. LLM 摘要
-        5. 重建上下文（重排 + 历史重建）
-        6. 设置重放指令
-        7. 持久化
 
         Returns:
             True 表示执行了压缩
