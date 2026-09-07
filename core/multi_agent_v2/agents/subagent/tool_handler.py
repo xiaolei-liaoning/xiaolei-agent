@@ -7,11 +7,34 @@
 
 import asyncio
 import logging
-from core.multi_agent_v2.prompts import get_builder
-_builder = get_builder()
 from typing import Any, Dict, List
 
 logger = logging.getLogger(__name__)
+
+# 修复 #015: 延迟初始化 _builder — 之前 module-level 立即调 get_builder()，
+# 一旦失败会导致整个模块无法加载（cached in sys.modules）。
+_builder = None
+
+
+def _get_builder():
+    """懒加载 builder — 失败时返回 None 而不是让模块崩。"""
+    global _builder
+    if _builder is None:
+        try:
+            from core.multi_agent_v2.prompts import get_builder
+            _builder = get_builder()
+        except Exception as e:
+            logger.error(f"SubAgent prompt builder 初始化失败: {e}", exc_info=True)
+            _builder = False  # 标记失败，避免重复尝试
+    return _builder if _builder is not False else None
+
+
+class _NullBuilder:
+    """builder 不可用时的 fallback — 返回空描述避免崩。"""
+
+    @staticmethod
+    def get_tool_desc(name: str) -> str:
+        return f"[builder unavailable] {name}"
 
 
 async def _handle_task(args: Dict[str, Any]) -> Dict[str, Any]:
@@ -118,7 +141,7 @@ def get_task_tool_def():
         name="task",
         server=SERVER_BUILTIN,
         tags=["agent", "subagent", "delegation"],
-        description=_builder.get_tool_desc("task"),
+        description=(_get_builder() or _NullBuilder()).get_tool_desc("task"),
         parameters={
             "type": "object",
             "properties": {
@@ -164,7 +187,7 @@ def get_orchestrate_tool_def():
         name="orchestrate",
         server=SERVER_BUILTIN,
         tags=["agent", "orchestrate", "parallel"],
-        description=_builder.get_tool_desc("orchestrate"),
+        description=(_get_builder() or _NullBuilder()).get_tool_desc("orchestrate"),
         parameters={
             "type": "object",
             "properties": {

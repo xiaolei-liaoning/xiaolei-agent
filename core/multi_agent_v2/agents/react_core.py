@@ -1152,6 +1152,7 @@ async def run_react(
     tool_preference: Optional[set] = None,
     is_subagent: bool = False,
     use_plan: bool = False,
+    user_id: str = "",  # 修复 #003: 接收并设置到 ctx.user_id
 ) -> dict:
     """快捷入口：直接用 ReActCore 处理任务"""
     if max_rounds == 0:
@@ -1163,6 +1164,8 @@ async def run_react(
         ctx.model_override = model
     if personality_prompt:
         ctx.personality_prompt = personality_prompt
+    if user_id:
+        ctx.user_id = user_id  # 修复 #003: 透传给 RunContext
 
     # ── 未完成目标恢复（goal_store 持久化）──
     # 上次 blocked/round_limit 收尾的目标，本次续跑时注入已有进度，agent 不从零开始。
@@ -1634,8 +1637,11 @@ async def run_react(
                     # ponytail: 卡了 6+ 轮 → 硬限制工具，只允许当前步骤需要的
                     if ctx.task_progress.stuck_counter >= 6:
                         _need = set(_pending_steps[0].tool_names) if _pending_steps[0].tool_names else {"write_file"}
-                        _saved = getattr(ctx, '_allow_restore', ctx.allowed_tools)
-                        if ctx.task_progress.stuck_counter == 6:  # first time hitting 6
+                        # 修复 #022: stuck==6 第一轮存的应该是"未限制"的工具集
+                        # 原 bug: 第一行 getattr(ctx, '_allow_restore', ctx.allowed_tools) 拿的是
+                        # ctx.allowed_tools，可能已被前面的硬限制污染（存的是"被限制的子集"）。
+                        # 新逻辑: 只在第一次进入 stuck==6 时保存；用 "hasattr 判断"避免重复保存。
+                        if ctx.task_progress.stuck_counter == 6 and not hasattr(ctx, '_allow_restore'):
                             ctx._allow_restore = ctx.allowed_tools
                         ctx.allowed_tools = list(_need)
                         ctx._filtered_tools = None

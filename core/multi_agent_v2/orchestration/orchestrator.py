@@ -69,8 +69,18 @@ class AgentPool:
             return tmp
 
     def release(self, agent: Any) -> None:
+        # 修复 #019: 拆开 try-except — reset 失败也要把 agent 归还池里
+        # 原 bug: agent.reset() 抛异常 → 整个 release 失败 → agent 永不归还池里 → 池逐渐泄漏
         try:
             agent.reset()
+        except Exception as e:
+            # reset 失败不能阻断后续流程（否则池里 agent 永远少一个）
+            logger.warning(
+                f"AgentPool.release: agent.reset() 失败: {e}。"
+                f"agent_id={getattr(agent, 'agent_id', 'unknown')} 仍会归还池里。",
+                exc_info=True,
+            )
+        try:
             orig_id = getattr(agent, "_pool_original_id", None)
             orig_name = getattr(agent, "_pool_original_name", None)
             if orig_id:
@@ -310,95 +320,107 @@ async def _execute_agent(
         start = time.time()
         # ponytail: heartbeat — 长时间 agent 执行时每 30s 显示进度，避免用户以为卡死
         _hb_interval = 30
+        _hb_task = None  # 修复 #020: 提前声明，确保 finally 块能访问
         async def _heartbeat():
             while True:
                 await asyncio.sleep(_hb_interval)
                 logger.info(f"Agent [{label}] 执行中... ({time.time()-start:.0f}s / timeout={timeout}s)")
         _hb_task = asyncio.create_task(_heartbeat())
-        max_retries = opts.get("schema_max_retries", 3)
-        result = None
-        last_error = None
-        ar = None
-        _prev_error_hash = None
+        # 修复 #020: 把整个 retry 循环 + cleanup 包到 try/finally 保证心跳必取消
+        try:
+            max_retries = opts.get("schema_max_retries", 3)
+            result = None
+            last_error = None
+            ar = None
+            _prev_error_hash = None
 
-        for retry in range(max_retries):
-            try:
-                # 创建任务以便超时时可以取消
-                exec_task = asyncio.ensure_future(pool_agent.execute(task))
+            for retry in range(max_retries):
                 try:
-                    result = await asyncio.wait_for(exec_task, timeout=timeout)
-                except asyncio.TimeoutError:
-                    exec_task.cancel()
+                    # 创建任务以便超时时可以取消
+                    exec_task = asyncio.ensure_future(pool_agent.execute(task))
                     try:
-                        await exec_task
-                    except asyncio.CancelledError:
-                        pass
-                    raise
-                elapsed = time.time() - start
-
-                ar = AgentResult(
-                    success=result.success,
-                    output=result.output,
-                    error=result.error,
-                    diagnostic=result.diagnostic if hasattr(result, 'diagnostic') else result.error,
-                    exit_reason=result.exit_reason if hasattr(result, 'exit_reason') else "",
-                    execution_time=elapsed,
-                    label=label,
-                    agent_id=agent_id,
-                    metadata=result.metadata or {},
-                )
-
-                # Schema校验+重试
-                if schema and result.success:
-                    # 当 schema 存在时，尝试将字符串输出解析为 JSON
-                    if isinstance(result.output, str) and schema:
+                        result = await asyncio.wait_for(exec_task, timeout=timeout)
+                    except asyncio.TimeoutError:
+                        exec_task.cancel()
                         try:
-                            result.output = json.loads(result.output)
-                        except (json.JSONDecodeError, TypeError):
+                            await exec_task
+                        except asyncio.CancelledError:
                             pass
-                    valid, errors = _validate_schema_with_status(result.output, schema)
-                    if valid:
-                        ar.output = result.output
-                        break
-                    else:
-                        last_error = "; ".join(errors)
-                        if retry < max_retries - 1:
-                            # 注入错误反馈，让LLM修正
-                            retry_prompt = f"{effective_prompt}\n\n【上次输出格式错误】\n{last_error}\n请严格按照要求输出！"
-                            task = Task(
-                                task_id=f"task_{uuid.uuid4().hex[:8]}",
-                                type="general",
-                                description=retry_prompt,
-                                context=task.context,
-                            )
-                            logger.info(
-                                f"Schema校验失败，第{retry+1}次重试: {last_error}"
-                            )
-                        else:
-                            # 最后一次尝试，返回带_error的结果
-                            ar.output = {
-                                "_error": last_error,
-                                **(
-                                    result.output
-                                    if isinstance(result.output, dict)
-                                    else {}
-                                ),
-                            }
+                        raise
+                    elapsed = time.time() - start
+
+                    ar = AgentResult(
+                        success=result.success,
+                        output=result.output,
+                        error=result.error,
+                        diagnostic=result.diagnostic if hasattr(result, 'diagnostic') else result.error,
+                        exit_reason=result.exit_reason if hasattr(result, 'exit_reason') else "",
+                        execution_time=elapsed,
+                        label=label,
+                        agent_id=agent_id,
+                        metadata=result.metadata or {},
+                    )
+
+                    # Schema校验+重试
+                    if schema and result.success:
+                        # 当 schema 存在时，尝试将字符串输出解析为 JSON
+                        if isinstance(result.output, str) and schema:
+                            try:
+                                result.output = json.loads(result.output)
+                            except (json.JSONDecodeError, TypeError):
+                                pass
+                        valid, errors = _validate_schema_with_status(result.output, schema)
+                        if valid:
+                            ar.output = result.output
                             break
-                else:
-                    # 无schema或失败，直接返回
-                    break
-            except Exception as e:
-                last_error = str(e)
-                _err_hash = hashlib.md5(last_error.encode()).hexdigest()[:8]
-                if _err_hash == _prev_error_hash:
-                    logger.warning(f"循环检测命中: 同一错误连续出现: {last_error[:80]}")
-                    ar = AgentResult(success=False, error=f"循环检测命中: {last_error[:80]}", label=label)
-                    break
-                _prev_error_hash = _err_hash
-                if retry == max_retries - 1:
-                    raise
-                continue
+                        else:
+                            last_error = "; ".join(errors)
+                            if retry < max_retries - 1:
+                                # 注入错误反馈，让LLM修正
+                                retry_prompt = f"{effective_prompt}\n\n【上次输出格式错误】\n{last_error}\n请严格按照要求输出！"
+                                task = Task(
+                                    task_id=f"task_{uuid.uuid4().hex[:8]}",
+                                    type="general",
+                                    description=retry_prompt,
+                                    context=task.context,
+                                )
+                                logger.info(
+                                    f"Schema校验失败，第{retry+1}次重试: {last_error}"
+                                )
+                            else:
+                                # 最后一次尝试，返回带_error的结果
+                                ar.output = {
+                                    "_error": last_error,
+                                    **(
+                                        result.output
+                                        if isinstance(result.output, dict)
+                                        else {}
+                                    ),
+                                }
+                                break
+                    else:
+                        # 无schema或失败，直接返回
+                        break
+                except Exception as e:
+                    last_error = str(e)
+                    _err_hash = hashlib.md5(last_error.encode()).hexdigest()[:8]
+                    if _err_hash == _prev_error_hash:
+                        logger.warning(f"循环检测命中: 同一错误连续出现: {last_error[:80]}")
+                        ar = AgentResult(success=False, error=f"循环检测命中: {last_error[:80]}", label=label)
+                        break
+                    _prev_error_hash = _err_hash
+                    if retry == max_retries - 1:
+                        raise
+                    continue
+        finally:
+            # 修复 #020: 用 try/finally 显式 cancel 心跳
+            # 原 bug: _hb_task 启动后永不取消，即使主任务已 cancel，心跳继续打印"执行中"
+            if _hb_task and not _hb_task.done():
+                _hb_task.cancel()
+                try:
+                    await _hb_task
+                except (asyncio.CancelledError, Exception):
+                    pass
 
         if ar is None:
             ar = AgentResult(success=False, error=last_error or "未知错误", label=label)
@@ -424,7 +446,11 @@ async def _execute_agent(
 
 
 def _validate_schema_with_status(output: Any, schema: Dict) -> tuple[bool, list[str]]:
-    """代理 SchemaValidator 进行校验，返回 (valid, errors)"""
+    """代理 SchemaValidator 进行校验，返回 (valid, errors)。
+
+    修复 #021: 原报告怀疑"未导入"是错的 — 本函数定义在 orchestrator.py:448，
+    上方 line 372 直接调用（同文件内），不需要 import。
+    """
     if not isinstance(schema, dict):
         return False, ["schema不是dict"]
     if not isinstance(output, dict):

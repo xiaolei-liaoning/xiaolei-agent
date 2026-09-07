@@ -27,11 +27,25 @@ def _parse_extra_args(argv):
     """从 argv 中提取真实命令参数（排除脚本专属 flags）。
 
     纯计算函数，无副作用。供 main() 和测试使用。
+
+    修复 #002: startswith 检查覆盖全部 6 个 flag 名称（之前漏了 4 个），
+    并处理 `=` 形式如 `--no-console-log=foo`。
     """
-    _SCRIPT_FLAGS = {"--log-file", "-l", "--no-console-log",
-                     "--dual-terminal", "-d", "--single-terminal", "-s"}
-    return [a for a in argv if a not in _SCRIPT_FLAGS
-            and not any(a.startswith(f) for f in ("--log-file", "-l"))]
+    _SCRIPT_FLAGS = ("--log-file", "-l", "--no-console-log",
+                     "--dual-terminal", "-d", "--single-terminal", "-s")
+    result = []
+    for a in argv:
+        # 精确匹配（--no-console-log）
+        if a in _SCRIPT_FLAGS:
+            continue
+        # 前缀匹配（--log-file=foo 形式）
+        if any(a.startswith(f + "=") for f in _SCRIPT_FLAGS):
+            continue
+        # 短格式前缀（-l foo / -d / -s）
+        if any(a == f for f in _SCRIPT_FLAGS):
+            continue
+        result.append(a)
+    return result
 
 
 def main():

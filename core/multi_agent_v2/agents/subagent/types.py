@@ -26,35 +26,41 @@ class AgentProfile(str, Enum):
 
 
 
-# 5 个 profile 的工具白名单（仅 system_hint 区分，工具权限全部 None）
-# 原因：allowed_tools 硬限制会让 plan_manager 生成"需要某工具但不在白名单"的死锁。
-# 实际差异在 system_hint prompt 上（5 个角色提示词不同）。
-# 如未来需要差异化权限（如 EXPLORE 只读、BUILD 可写），参见疑点 #016 修复方案。
+# 5 个 profile 的差异化权限（修复 #016）
+# 设计原则：
+#   - allowed=None（不硬限制）→ 避免 plan_manager 死锁
+#   - disallowed 按 profile 风险分层 → 真正差异化
+#   - ORCHESTRATOR 独有 task/orchestrate（只有它能调子代理）
+# 配合 system_hint 提示词，profile 才有实际意义。
 PROFILE_PERMISSIONS = {
     AgentProfile.EXPLORE: {
-        # 不再硬限制工具（allowed_tools 导致 step 要求缺失工具的 deadlock）
+        # 只读型：禁写、禁执行、禁编排
         "allowed": None,
-        "disallowed": None,
+        "disallowed": ["write_file", "edit_file", "execute_shell", "execute_python", "task", "orchestrate"],
         "system_hint": _builder.get_agent_prompt("explore"),
     },
     AgentProfile.BUILD: {
+        # 构建型：禁编排（单一任务，不许递归）
         "allowed": None,
-        "disallowed": None,
+        "disallowed": ["task", "orchestrate"],
         "system_hint": _builder.get_agent_prompt("build"),
     },
     AgentProfile.GENERAL: {
+        # 通用型：禁编排（避免误用）
         "allowed": None,
-        "disallowed": None,
+        "disallowed": ["task", "orchestrate"],
         "system_hint": _builder.get_agent_prompt("general"),
     },
     AgentProfile.ANALYZE: {
+        # 分析型：禁写、禁执行、禁编排（只读分析）
         "allowed": None,
-        "disallowed": None,
+        "disallowed": ["write_file", "edit_file", "execute_shell", "execute_python", "task", "orchestrate"],
         "system_hint": _builder.get_agent_prompt("analyze"),
     },
     AgentProfile.ORCHESTRATOR: {
+        # 编排型：能调 task / orchestrate（核心能力），但本身不能写文件
         "allowed": None,
-        "disallowed": None,
+        "disallowed": ["write_file", "edit_file"],  # 编排者不直接写，由子代理写
         "system_hint": _builder.get_agent_prompt("orchestrator"),
     },
 }

@@ -164,10 +164,16 @@ async def spawn_subagent(
         allowed = list(parent_allowed)
 
     # 默认：子代理禁止递归生成子子代理
-    if "task" not in (allowed or []):
-        disallowed.append("task")
-    if "orchestrate" not in (allowed or []):
-        disallowed.append("orchestrate")
+    # 修复 #014: 永远加 disallowed，不依赖父 allowed 链。
+    # 原 bug: 父 allowed=["task"] 时，这里检查失效导致子代理也能生成子子代理。
+    # 新逻辑: 无条件禁用 task/orchestrate（除非显式解除），用 _ALLOW_RECURSIVE 标志
+    # 显式允许（不推荐，仅供调试）。
+    _ALLOW_RECURSIVE = os.environ.get("XIAOLEI_ALLOW_SUBAGENT_RECURSION", "").lower() in ("1", "true")
+    if not _ALLOW_RECURSIVE:
+        if "task" not in disallowed:
+            disallowed.append("task")
+        if "orchestrate" not in disallowed:
+            disallowed.append("orchestrate")
 
     # 构建子代理的完整任务 — 角色提示词 + 工具范围 + 父上下文 + 任务要求
     full_task = hint

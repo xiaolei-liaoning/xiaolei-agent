@@ -47,6 +47,8 @@ class RunContext:
     is_code_task: bool = False
     model_override: Optional[str] = None
     personality_prompt: str = ""
+    # 修复 #003: 加 user_id 字段 — 透传用户身份用于记忆归因 + 反馈归因
+    user_id: str = ""
     # ── Base Skill 集成 ──
     skill_personality: str = ""
     tool_preference: set = field(default_factory=set)
@@ -178,7 +180,13 @@ class BaseMiddleware:
         return await next_mw()
 
     async def on_wrap_model_call(self, ctx: RunContext, next_mw: Callable) -> Any:
-        """包裹 LLM 调用（洋葱模式）"""
+        """包裹 LLM 调用（洋葱模式）— 修复 #017。
+
+        ⚠️ 当前为占位实现，react_core.py 直接调 router.chat_structured，
+        还没有接入洋葱式 LLM 调用钩子。需要 MiddlewareChain 提供
+        wrap_model_call() 串联方法（与 wrap_tool_call 对称）。
+        """
+        # TODO 修复 #017: 接入洋葱式 LLM 调用
         return await next_mw()
 
     async def on_finish(self, ctx: RunContext) -> Optional[HookResult]:
@@ -360,11 +368,17 @@ class MiddlewareChain:
                         }
                     try:
                         # ponytail: 需要 ctx 的 handler（如 write_todos 同步计划）按签名传 ctx
+                        # 修复 #018: inspect.signature 每次调用都很贵，加 LRU 缓存
                         import inspect as _inspect
-                        try:
-                            _accepts_ctx = 'ctx' in _inspect.signature(handler).parameters
-                        except (ValueError, TypeError):
-                            _accepts_ctx = False
+                        import functools
+                        @functools.lru_cache(maxsize=256)
+                        def _signature_accepts_ctx(handler_id, handler_ref):
+                            try:
+                                return 'ctx' in _inspect.signature(handler_ref).parameters
+                            except (ValueError, TypeError):
+                                return False
+                        # 用 id(handler) 当 cache key — handler 不可哈希
+                        _accepts_ctx = _signature_accepts_ctx(id(handler), handler)
                         if _accepts_ctx:
                             result = await handler(args, ctx=ctx)
                         else:
