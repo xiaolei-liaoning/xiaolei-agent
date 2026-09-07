@@ -73,6 +73,7 @@ async def handle_multi_step(
     # 自动审查：多步任务完成后生成复盘
     try:
         from core.auto_reviewer import AutoReviewer
+        from core.learning.feedback import get_hub, create_task_completion_event
         reviewer = AutoReviewer()
         logs = "\n".join(f"{'✅' if r.get('success') else '❌'} [{s.get('tool_call', {}).get('name','?')}] {s.get('user_message','')}" for s, r in zip(sub_tasks, results))
         review = reviewer.review(
@@ -81,6 +82,22 @@ async def handle_multi_step(
             execution_logs=logs,
         )
         logger.debug("多步任务复盘完成: %s", review.review_id)
+
+        # 方案C: 同时 emit task_completion 事件，让 FeedbackHub 同步记录
+        all_success = all(r.get("success") for r in results)
+        try:
+            hub = get_hub()
+            event = create_task_completion_event(
+                user_id=str(user_id),
+                task_id=f"multi_{hash(message)}",
+                success=all_success,
+                source="multi_step_handler",
+            )
+            event.payload["description"] = message[:200]
+            event.payload["logs"] = logs[:5000]  # 限制大小
+            await hub.emit(event)
+        except Exception as hub_e:
+            logger.debug(f"FeedbackHub emit 失败（不影响主流程）: {hub_e}")
     except Exception:
         pass  # 审查失败不影响主流程
 
