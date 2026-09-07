@@ -284,8 +284,7 @@
 <nav>
   <div class="logo">⚡ 小雷版Agent</div>
   <ul class="links">
-    <li><a href="#v1">V1 架构</a></li>
-    <li><a href="#v2">V2 架构</a></li>
+    <li><a href="#v2">架构</a></li>
     <li><a href="#feat">核心能力</a></li>
   </ul>
 </nav>
@@ -295,14 +294,14 @@
   <div class="hero-bg"></div>
   <div class="orb orb1"></div><div class="orb orb2"></div><div class="orb orb3"></div><div class="orb orb4"></div>
 
-  <div class="hero-badge"><span class="badge-dot" style="margin-right:4px"></span> v3.4 · 双架构智能引擎</div>
-  <h1>一套代码<br><span class="gt">两套颠覆性架构</span></h1>
+  <div class="hero-badge"><span class="badge-dot" style="margin-right:4px"></span> v3.4 · 统一智能引擎</div>
+  <h1>一个 Agent<br><span class="gt">双执行模式</span></h1>
   <p>
-    从 <strong>V1 队长-队员</strong> 的分工协作，到 <strong>V2 纯JS工作流编排</strong>——<br>
+    <strong>统一 ReAct Agent</strong> 智能决策，<strong>纯JS工作流编排</strong> 灵活并行——<br>
     简单任务单Agent直通，复杂任务JS编排并行执行
   </p>
   <div class="btns">
-    <a href="#v1" class="btn btn1">探索架构 →</a>
+    <a href="#v2" class="btn btn1">探索架构 →</a>
     <a href="#feat" class="btn btn2">核心能力</a>
   </div>
   <div class="stats">
@@ -315,8 +314,8 @@
   <div class="hero-row">
     <div class="hcard">
       <div class="ic">🧠</div>
-      <h3>V1 队长-队员</h3>
-      <p>LeaderAgent 决策 → Worker 并行 → KEPA 自愈</p>
+      <h3>统一 ReAct Agent</h3>
+      <p>LLM 决策 → 工具执行 → 观察循环 · 5 种 profile 自适应</p>
     </div>
     <div class="hcard">
       <div class="ic">⚙️</div>
@@ -325,8 +324,8 @@
     </div>
     <div class="hcard">
       <div class="ic">⚡</div>
-      <h3>比 V1 更灵活</h3>
-      <p>无队长瓶颈 · 脚本即流程 · agent/parallel/pipeline</p>
+      <h3>脚本即流程</h3>
+      <p>无决策瓶颈 · agent/parallel/pipeline 自由组合</p>
     </div>
   </div>
 
@@ -336,72 +335,16 @@
   </div>
 </section>
 
-<!---- V1 ---->
-<div class="dv"><span>✦ V1 队长-队员模式 ✦</span></div>
-
-<section id="v1">
-  <div class="in">
-    <div class="slabel">🚀 分工协作范式</div>
-    <h2 class="stitle"><span class="gt">V1 队长-队员</span> · 智能分治</h2>
-    <p class="sdesc">
-      <strong>LeaderAgent</strong> 动态拆解任务，<strong>Worker</strong> 池并行执行，<strong>KEPA</strong> 闭环反思——<br>
-      队长只决策不执行，队员只执行不决策，角色分离带来极致效率。
-    </p>
-
-    <div class="acard">
-      <div class="acont">
-        <div style="display:flex;flex-direction:column;align-items:center;gap:10px;margin:10px 0">
-          <div class="r"><div class="n n-lg n-cpt">🤖 LeaderAgent<div style="font-weight:400;font-size:12px;opacity:.8">队长 · 决策 · 拆解</div></div></div>
-          <div class="arw"></div>
-          <div class="flow"><span class="fd f1"></span><span class="fd f2"></span><span class="fd f3"></span> ReAct 决策循环</div>
-          <div class="arw"></div>
-          <div class="r">
-            <div class="n n-wk">⚡ Worker 1<div style="font-weight:400;font-size:10px;opacity:.7">并行执行</div></div>
-            <div class="n n-wk">⚡ Worker 2<div style="font-weight:400;font-size:10px;opacity:.7">并行执行</div></div>
-            <div class="n n-wk">⚡ Worker 3<div style="font-weight:400;font-size:10px;opacity:.7">并行执行</div></div>
-            <div class="n n-wk" style="opacity:.6">⚡ 更多<div style="font-weight:400;font-size:10px">...</div></div>
-          </div>
-          <div class="arw"></div>
-          <div class="r">
-            <div class="n n-sm">delegate ▸</div>
-            <div class="n n-sm">batch_delegate ▸</div>
-            <div class="n n-sm">tool ▸</div>
-            <div class="n n-sm">process_results ▸</div>
-            <div class="n n-sm" style="border-color:rgba(245,158,11,.3);color:#d97706">KEPA 反思</div>
-          </div>
-          <div class="arw"></div>
-          <div class="r">
-            <div class="n n-tl">🔧 内置工具</div>
-            <div class="n n-tl">🔌 MCP 工具</div>
-            <div class="n n-tl">🧠 三层记忆</div>
-            <div class="n n-tl">🔍 RAG 检索</div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <div style="text-align:center;margin-top:8px;color:#94a3b8;font-size:13px">
-      <strong style="color:#7C3AED">ReAct</strong> Thought → Action → Observation · <strong style="color:#7C3AED">batch_delegate</strong> 并行加速 · <strong style="color:#7C3AED">KEPA</strong> ≤3次自愈
-    </div>
-
-    <div class="cg">
-      <div class="cc"><div class="ic">🧠</div><h4>LeaderAgent 队长</h4><p>ReAct 决策循环，动态拆解任务，分配 Worker，分析结果。只决策不执行。</p></div>
-      <div class="cc"><div class="ic">⚡</div><h4>Worker 并行池</h4><p>3~5 个 Worker 并行执行子任务，batch_delegate 一键分发，效率倍增。</p></div>
-      <div class="cc"><div class="ic">🔄</div><h4>KEPA 反思闭环</h4><p>Think → Act → Reflect，自动重试失败任务 ≤3 次，智能自愈。</p></div>
-    </div>
-  </div>
-</section>
-
 <!---- V2 ---->
-<div class="dv"><span>✦ V2 纯JS工作流编排 ✦</span></div>
+<div class="dv"><span>✦ 纯JS工作流编排 ✦</span></div>
 
 <section id="v2" style="background:linear-gradient(180deg,transparent,rgba(245,158,11,.02))">
   <div class="in">
     <div class="slabel">⚡ 工作流即代码</div>
     <h2 class="stitle"><span class="gt">V2 · 纯JS Workflow</span> 编排引擎</h2>
     <p class="sdesc">
-      用 <strong>JavaScript</strong> 直接定义多 Agent 执行流程——<strong style="color:#d97706">比 V1 队长-队员更灵活</strong>。<br>
-      简单任务单 Agent 直通，复杂任务 JS 编排脚本，一键并行执行，无需队长决策。
+      用 <strong>JavaScript</strong> 直接定义多 Agent 执行流程——<strong style="color:#d97706">脚本即流程，声明式编排</strong>。<br>
+      简单任务单 Agent 直通，复杂任务 JS 编排脚本，一键并行执行。
     </p>
 
     <div class="acard">
@@ -461,7 +404,7 @@
     <div class="cg">
       <div class="cc"><div class="ic">📄</div><h4>纯JS定义工作流</h4><p>用 async/await 写 Agent 流程，agent()、parallel()、pipeline() 原语自由组合。</p></div>
       <div class="cc"><div class="ic">⚡</div><h4>单Agent直通</h4><p>简单任务无需编排，一个 Agent 直接调用工具链，零配置开箱即用。</p></div>
-      <div class="cc"><div class="ic">🔄</div><h4>无队长瓶颈</h4><p>不再依赖 LeaderAgent 决策，JS 脚本直接控制执行流，更高效可控。</p></div>
+      <div class="cc"><div class="ic">🔄</div><h4>声明式控制流</h4><p>JS 脚本直接控制执行流，agent()/parallel()/pipeline() 原语自由组合，高效可控。</p></div>
     </div>
   </div>
 </section>
@@ -492,7 +435,7 @@
 </div>
 
 <footer>
-  <p>小雷版Agent v3.4 · 一套代码，两套架构 · Made with ❤️</p>
+  <p>小雷版Agent v3.4 · 统一 Agent + 双执行模式 · Made with ❤️</p>
 </footer>
 
 </body>
