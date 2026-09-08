@@ -737,13 +737,16 @@ def _update_step_status_legacy(ctx: RunContext, prefix: str = "") -> None:
             return
 
     # ponytail: 步骤卡住多轮 → 检查是否有实质进展（工具产生了有效输出），有则推进
+    # 修复 #064: read_file 从"实质进展"名单移除——读文件不改变世界状态，
+    # 把它算进展会让 stuck 永远涨不上去，步骤卡死循环。如需读文件进展，
+    # 必须伴随产出（execute_python 结果、写入等）。
     if current_step.status != "done" and ctx.react_depth >= 4:
         _has_substance = False
         for r in ctx.tool_results:
             if not r.get("success"):
                 continue
             name = r.get("tool_call", {}).get("name", "")
-            if name in ("write_file", "web_search", "fetch_url", "fetch_json", "hot_search", "execute_shell", "read_file"):
+            if name in ("write_file", "edit_file", "web_search", "fetch_url", "fetch_json", "hot_search", "execute_shell"):
                 _has_substance = True
                 break
             if name == "execute_python":
@@ -786,9 +789,10 @@ def _update_step_status_legacy(ctx: RunContext, prefix: str = "") -> None:
                 ctx.forced_instructions = f"立即执行下一步：{_nxt_f.description}{_tf}"
 
     # 任务卡住检测：步骤 pending 且一直只调 read_file → 禁用 read_file 逼它换工具
+    # 修复 #065: 加 len 守卫——空列表/1条时 all() 恒 True，会误触发禁 read_file
     if current_step.status not in ("done", "failed") and ctx.react_depth >= 2:
         recent_tools = [r.get("tool_call", {}).get("name", "") for r in ctx.tool_results[-3:]]
-        if all(t == "read_file" for t in recent_tools if t):
+        if len(recent_tools) >= 2 and all(t == "read_file" for t in recent_tools if t):
             _is_edit = False
             _flags = getattr(ctx, '_task_flags', None)
             if _flags:

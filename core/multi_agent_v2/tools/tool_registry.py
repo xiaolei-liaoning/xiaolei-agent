@@ -72,7 +72,13 @@ class ToolDefinition:
 
 
 async def _http_get(url: str, timeout: int = 10) -> str:
-    """HTTP GET — 使用 aiohttp，自动跟随重定向，SSL 验证优先开启"""
+    """HTTP GET — 使用 aiohttp，自动跟随重定向
+
+    修复 #057 (原 SSL 静默降级漏洞):
+    - SSL 验证失败不再静默 → 记录 warning 并返回明确错误
+    - 禁用验证的回退改为 opt-in（XIAOLEI_ALLOW_INSECURE_SSL=1），
+      且回退时必须打 warning，让 MITM 风险对运维可见
+    """
     import aiohttp
     import ssl as _ssl
 
@@ -80,8 +86,8 @@ async def _http_get(url: str, timeout: int = 10) -> str:
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
         "Accept": "text/html,application/json,*/*",
     }
-    
-    # 先尝试 SSL 验证
+
+    # 第一次尝试：SSL 验证开启（默认，安全）
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(
@@ -92,30 +98,36 @@ async def _http_get(url: str, timeout: int = 10) -> str:
             ) as resp:
                 body = await resp.text(encoding="utf-8", errors="replace")
                 return body
-    except (aiohttp.ClientConnectorError, aiohttp.ClientOSError, _ssl.SSLError):
-        pass
-    
-    # SSL 验证失败时，禁用验证重试
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                url,
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(total=timeout),
-                ssl=False,
-                max_redirects=10,
-            ) as resp:
-                body = await resp.text(encoding="utf-8", errors="replace")
-                return body
-    except Exception:
-        # aiohttp 失败时 fallback 到 urllib
-        import urllib.request
-        ctx = _ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = _ssl.CERT_NONE
-        req = urllib.request.Request(url, headers=headers)
-        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
-            return resp.read().decode("utf-8", errors="replace")
+    except (aiohttp.ClientConnectorError, aiohttp.ClientOSError, _ssl.SSLError) as e:
+        # 修复 #057: 不再 pass——SSL 失败要让运维看到
+        logger.warning(f"fetch_url SSL/连接失败 ({type(e).__name__}): {url}: {e}")
+
+    # 回退路径：仅在显式 opt-in 时禁用 SSL 验证重试（默认关闭）
+    # 修复 #057: 原 default 开启 → 任何中间人可伪造证书窃听/篡改 HTTPS 内容
+    if os.environ.get("XIAOLEI_ALLOW_INSECURE_SSL", "").lower() in ("1", "true"):
+        logger.warning(
+            f"⚠️ INSECURE: 已按 XIAOLEI_ALLOW_INSECURE_SSL 禁用 SSL 验证重试: {url} "
+            f"(此连接可能被中间人攻击)"
+        )
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    url,
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=timeout),
+                    ssl=False,
+                    max_redirects=10,
+                ) as resp:
+                    body = await resp.text(encoding="utf-8", errors="replace")
+                    return body
+        except Exception as e:
+            logger.warning(f"fetch_url insecure 回退也失败: {url}: {e}")
+
+    # 默认路径：SSL 失败即失败——不静默降级到禁用验证
+    # 调用方（_try_json/_search_one/_handle_fetch_url）均按 str 消费并有空值兜底，
+    # 返回空串 + 异常标记注释，让上层走各自的 err() 分支
+    logger.error(f"fetch_url 彻底失败 (SSL 验证开启): {url}")
+    return ""
 
 
 async def _handle_fetch_url(args: Dict) -> Dict:
@@ -1068,7 +1080,10 @@ async def _handle_write_file(args: Dict) -> Dict:
             return err(f"❌ 内容包含省略占位符 {omissions}，请提供完整内容，不要使用 'rest of methods ...' 等占位符！")
         
         # 内容修正（移植自 gemini-cli）
-        content = ensure_correct_content(content, aggressive_unescape=True)
+        # 修复 #069: aggressive_unescape=True 会把合法的 \\n 字面量也"修正"，
+        # 可能破坏含正则/转义序列的 Python 代码。改为 False（保守模式）：
+        # 只在检测结果"明显是 LLM 双重转义"时才修正，不再激进替换。
+        content = ensure_correct_content(content, aggressive_unescape=False)
         
         # 检测编码问题
         encoding_issues = detect_encoding_issues(content)
@@ -2265,7 +2280,12 @@ class ToolRegistry:
         all_tools = list(self._tools.values())
 
         # Agent 类型硬约束过滤
-        # ponytail: 白名单只约束内置工具，MCP 工具（外部服务器）始终放行
+        # 修复 #060 (语义文档化): 白名单约束语义——
+        #   - disallowed: 全工具生效（内置 + MCP），黑名单是硬约束
+        #   - allowed: 只约束内置工具；MCP 工具放行是有意设计（对标 OpenCode
+        #     全量暴露哲学——MCP 工具是外部服务，白名单管不住也不该管）。
+        #   ⚠️ 因此：需要"只读"等强约束时必须用 disallowed（EXPLORE/ANALYZE
+        #   profile 即如此），不要用 allowed 表达安全边界。
         if allowed is not None:
             allowed_set = set(allowed)
             all_tools = [t for t in all_tools if t.name in allowed_set or t.server not in ("__builtin__",)]

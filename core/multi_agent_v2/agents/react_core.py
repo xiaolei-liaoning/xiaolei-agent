@@ -1058,7 +1058,6 @@ def build_default_chain() -> MiddlewareChain:
         KEPAMiddleware,
         LoopDetectionMiddleware,
         PermissionMiddleware,
-        QualityCheckMiddleware,
         ReActDepthMiddleware,
         ReasoningMiddleware,
         ReflectionMiddleware,

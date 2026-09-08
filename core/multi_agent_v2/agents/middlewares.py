@@ -369,28 +369,10 @@ class LoopDetectionMiddleware(BaseMiddleware):
             return limits["warn"], limits["hard"]
         return self.tool_freq_warn, self.tool_freq_hard_limit
 
-    _PROFILE_THRESHOLDS = {
-        "game": {"write_file": {"warn": 4, "hard": 8}},
-        "code": {"write_file": {"warn": 3, "hard": 6}},
-        "design": {"write_file": {"warn": 4, "hard": 8}},
-        "report": {"write_file": {"warn": 3, "hard": 5}},
-    }
-
-    def set_profile_thresholds(self, profile_id: str) -> None:
-        """根据任务画像动态调整工具频率阈值
-
-        游戏/设计类任务需要反复迭代文件写入，放宽阈值；
-        代码/报告类任务保持较严格限制。
-        """
-        override = self._PROFILE_THRESHOLDS.get(profile_id)
-        if override:
-            for tool_name, limits in override.items():
-                old = self.TOOL_FREQ_LIMITS.get(tool_name, {"warn": self.tool_freq_warn, "hard": self.tool_freq_hard_limit})
-                self.TOOL_FREQ_LIMITS[tool_name] = limits
-                logger.info(
-                    f"LoopDetection: profile={profile_id}, {tool_name} 阈值 "
-                    f"warn: {old['warn']}→{limits['warn']}, hard: {old['hard']}→{limits['hard']}"
-                )
+    # 修复 #051: 删除 _PROFILE_THRESHOLDS / set_profile_thresholds
+    # （完整实现但全仓零调用者，纯死代码。如需 profile 级阈值，
+    #   在 spawn 时调用 LoopDetectionMiddleware.set_profile_thresholds() 即可——
+    #   届时再恢复此表，不要保留无人调用的配置。）
 
     def _normalize_read_file_args(self, args: Dict) -> Dict:
         """read_file 参数归一化：将行区间分桶到 200 行块
@@ -760,8 +742,12 @@ class TodoMiddleware(BaseMiddleware):
 
     当工具调用失败率过高且 agent 试图输出 final_answer 时，
     注入提醒并清除 final_answer，强制继续执行。
+
+    修复 #054: 原挂 on_finish——主循环已结束，清 final_answer 无效
+    （完全失效的死中间件）。改挂 on_tool_end：每轮工具结束后检查，
+    此时 final_answer 刚出现，清掉它 LLM 才会继续下一轮。
     """
-    HOOKS = ("on_finish",)
+    HOOKS = ("on_tool_end",)
 
     _MAX_REMINDERS = 2
 
@@ -772,7 +758,7 @@ class TodoMiddleware(BaseMiddleware):
         """任务开始时重置提醒计数"""
         self._reminder_count = 0
 
-    async def on_finish(self, ctx: RunContext) -> None:
+    async def on_tool_end(self, ctx: RunContext) -> None:
         # 仅在 agent 试图输出 final_answer 时检查
         if not ctx.final_answer:
             return
@@ -813,15 +799,26 @@ class TruncationMiddleware(BaseMiddleware):
         self.max_messages = max_messages
 
     async def on_llm_invoke(self, ctx: RunContext) -> None:
-        """在构建消息前，清理过旧的 tool_results"""
-        if not ctx.tool_results or len(ctx.tool_results) <= self.keep_recent:
+        """在构建消息前，标记过旧的 tool_results 为已截断
+
+        修复 #055: 原版直接 ctx.tool_results = ctx.tool_results[n:] 切列表，
+        导致 plan_manager / task_progress 在同轮后段按索引/全量扫描时
+        找不到匹配工具 → 步骤推进竞态。
+
+        新方案：不删条目，改写旧条目的 result 为短占位符。
+        长度收敛（LLM 见到的上下文变小），但条目数不变，
+        plan 推进和循环检测依然能扫到完整历史。
+        """
+        results = ctx.tool_results
+        if not results or len(results) <= self.keep_recent:
             return
 
-        # 只保留最近 N 轮的 tool_results
-        # 旧的已经被 progressive truncation 处理了，这里进一步清理
-        n_to_remove = len(ctx.tool_results) - self.keep_recent * 2
-        if n_to_remove > 0:
-            ctx.tool_results = ctx.tool_results[n_to_remove:]
+        n_to_compact = len(results) - self.keep_recent * 2
+        for r in results[:n_to_compact]:
+            if isinstance(r, dict) and not r.get("_truncated"):
+                name = r.get("tool_call", {}).get("name", "?")
+                r["result"] = f"[已截断: {name} 早期结果，仅保留摘要]"
+                r["_truncated"] = True
 
 
 # ════════════════════════════════════════════════════════════════
@@ -1021,40 +1018,7 @@ class HookMiddleware(BaseMiddleware):
 # QualityCheckMiddleware — AI 质检
 # ════════════════════════════════════════════════════════════════
 
-class QualityCheckMiddleware(BaseMiddleware):
-    """AI 质检中间件 — agent 输出后由轻量 LLM 审查质量。
-
-    挂载在 on_tool_end 钩子。若 final_answer 不合格：
-    - 清除 final_answer
-    - 注入质检反馈到 forced_instructions
-    - 把 ctx.interrupted 改回 False 让 ReAct 继续执行
-    """
-    HOOKS = ("on_tool_end",)
-    _MAX_RETRIES = 2
-
-    def __init__(self):
-        super().__init__()
-        self._retry_count = 0
-
-    def reset_task_state(self):
-        self._retry_count = 0
-
-    async def on_tool_end(self, ctx: RunContext) -> None:
-        if not ctx.final_answer:
-            return
-        if self._retry_count >= self._MAX_RETRIES:
-            return
-
-        from core.multi_agent_v2.agents.react_core import _ai_quality_check
-        feedback = await _ai_quality_check(ctx.final_answer)
-        if not feedback:
-            return
-
-        self._retry_count += 1
-        logger.warning(f"质检 #{self._retry_count}: {feedback}")
-        ctx.forced_instructions = (
-            f"⚠️ 质检未通过（第{self._retry_count}/{self._MAX_RETRIES}次）：{feedback}。"
-            "请立刻修正以上问题，直接输出完整有效的内容。"
-        )
-        ctx.final_answer = ""
-        ctx.interrupted = False
+# 修复 #056: 删除 QualityCheckMiddleware
+# （完整实现但 build_default_chain 从未 add 它——未上链的死中间件。
+#   真实质检只有 react_core.py 里的 _ai_quality_check 在跑，不重复。
+#   如未来需要中间件形态的质检，恢复此段并加进 build_default_chain。）
