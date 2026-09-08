@@ -18,6 +18,7 @@ if the LLM backend provides per-message token counts.
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from typing import Any
@@ -72,9 +73,12 @@ class L0ToolResultBudget:
     def _write_spill(self, content: str, msg: dict) -> str:
         os.makedirs(self.spill_dir, exist_ok=True)
         tool_name = msg.get("name", "unknown")
+        # 修复 #111: tool_name 可能含 "/" 或 ".."（LLM 可控），拼路径会逃逸 spill_dir
+        # 只保留安全字符，其余替换为 _
+        safe_name = re.sub(r"[^a-zA-Z0-9_\-]+", "_", str(tool_name))[:40] or "unknown"
         stamp = time.strftime("%Y%m%d_%H%M%S")
         fid = uuid.uuid4().hex[:8]
-        path = os.path.join(self.spill_dir, f"{tool_name}_{stamp}_{fid}.txt")
+        path = os.path.join(self.spill_dir, f"{safe_name}_{stamp}_{fid}.txt")
         with open(path, "w") as f:
             f.write(content)
         self._spilled += 1

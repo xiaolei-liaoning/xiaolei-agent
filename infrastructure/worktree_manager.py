@@ -171,19 +171,19 @@ class WorktreeManager:
         return True
 
     def _pop_stash(self) -> None:
-        """pop 最近一次 stash（忽略冲突 — 用户变更优先）。"""
+        """pop 最近一次 stash（冲突时保留 stash 不删）。
+
+        修复 #162: 原逻辑 pop 冲突后直接 stash drop——
+        stash 里的用户工作区变更被永久丢弃，无法找回（git 无回收站）。
+        新逻辑: 冲突时保留 stash 条目并提示用户手动处理。
+        """
         try:
             self._run_git(["stash", "pop"])
         except Exception as exc:
-            # stash pop 冲突不致命：用户的工作区变更优先
+            # stash pop 冲突：不致命，但 stash 必须保留——里面是用户的工作区变更
             logger.warning(
-                "stash pop 冲突（这是合理的 — 用户变更优先）: %s", exc,
+                "stash pop 冲突: %s。stash 条目已保留，请手动处理: git stash list / git stash pop", exc,
             )
-            # 尝试 drop 以避免污染 stash 列表
-            try:
-                self._run_git(["stash", "drop"])
-            except Exception:
-                pass
 
     def _run_git(self, args: list) -> str:
         """执行 git 子命令，返回 stdout。异常时抛 RuntimeError。"""

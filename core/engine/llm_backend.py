@@ -73,11 +73,18 @@ class TokenUsage:
 
 @dataclass
 class LLMResponse:
-    """结构化 LLM 响应，含文本内容和原生 tool_calls"""
+    """结构化 LLM 响应，含文本内容和原生 tool_calls
+
+    修复 #295: 新增 is_mock 标记——API 全挂时 _chat_impl 返回
+    "[LLM_MOCK] ..." 假字符串（历史行为，6 处调用方靠 substring 检测）。
+    现在携带结构化标记，新代码可以直接判断 resp.is_mock，
+    不再需要字符串扫描。
+    """
     content: str = ""
     tool_calls: List[Dict] = field(default_factory=list)
     truncated: bool = False   # finish_reason=length，输出被截断
     reasoning_content: str = ""  # DeepSeek thinking 模式
+    is_mock: bool = False     # 修复 #295: True = LLM 全挂的占位响应
 
     def has_tools(self) -> bool:
         return bool(self.tool_calls)
@@ -399,7 +406,9 @@ class GLMBackend:
         self._consecutive_failures += 1
         logger.warning("所有 LLM API 不可用 (deepseek=%s, openrouter=%s, glm=%s), 连续失败=%d",
                        bool(self.deepseek_client), bool(self.openrouter_client), bool(self.client), self._consecutive_failures)
-        return LLMResponse(content="[LLM_MOCK] 系统正在处理您的请求...")
+        # 修复 #295: 假字符串保留（6 处消费方靠它检测），但补结构化标记 is_mock
+        # 让新代码不必 substring 扫描
+        return LLMResponse(content="[LLM_MOCK] 系统正在处理您的请求...", is_mock=True)
 
     async def chat(self, messages, temperature=0.7, max_tokens=4096,
                    model=None, tools=None) -> str:
@@ -700,7 +709,8 @@ class GLMBackend:
                 logger.error(f"GLM 流式调用异常: {e}")
 
         self._consecutive_failures += 1
-        return LLMResponse(content="[LLM_MOCK] 流式调用失败")
+        # 修复 #295: 同上，流式失败占位响应补 is_mock 标记
+        return LLMResponse(content="[LLM_MOCK] 流式调用失败", is_mock=True)
 
     def is_available(self) -> bool:
         if self._consecutive_failures >= self._max_consecutive_failures:

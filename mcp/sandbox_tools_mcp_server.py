@@ -436,7 +436,11 @@ def check_path(path: str) -> str:
     abs_path = os.path.abspath(os.path.expanduser(path))
     for allowed in ALLOWED_PATHS:
         allowed_abs = os.path.abspath(os.path.expanduser(allowed))
-        if abs_path.startswith(allowed_abs):
+        # 修复 #091/#093/#096: 原裸 startswith 有前缀绕过——
+        # allowed="~" 时 "/Users/user2/xxx" 也通过（"/Users/user" 是 "/Users/xxx" 的前缀）。
+        # 修复: 前缀必须以 os.sep 结尾（allowed 本身精确相等除外），
+        # 且 abs_path 已由 abspath 解析过 ".."，路径遍历在此处天然被归一化。
+        if abs_path == allowed_abs or abs_path.startswith(allowed_abs.rstrip(os.sep) + os.sep):
             return abs_path
     raise PermissionError(f"路径 {abs_path} 不在允许范围内")
 
@@ -1091,7 +1095,8 @@ async def handle_request(request):
                 return {"jsonrpc": "2.0", "id": rid, "result": {"content": [{"text": f"✅ 已追加到 {path}"}]}}
 
             if tool == "list_dir":
-                path = os.path.expanduser(args.get("path", "."))
+                # 修复 #103 残留: list_dir 原来不调 check_path，可列出任意目录
+                path = check_path(os.path.expanduser(args.get("path", ".")))
                 if not os.path.isdir(path):
                     return {"jsonrpc": "2.0", "id": rid, "result": {"content": [{"text": f"错误：无效目录 {path}"}]}}
                 items = sorted(os.listdir(path))
@@ -1111,7 +1116,15 @@ async def handle_request(request):
 
             if tool == "remove":
                 p = check_path(args["path"])
+                # 修复 #106: recursive=True 可 rmtree 任意允许目录（含整个 home）。
+                # 加两层保护: 不许删 allowed 根本身 + 禁符号链接逃逸
                 if os.path.isdir(p):
+                    resolved = os.path.realpath(p)
+                    root_resolved = os.path.realpath(os.path.expanduser(ALLOWED_PATHS[0]))
+                    if resolved == root_resolved or resolved in (
+                        os.path.realpath(x) for x in ALLOWED_PATHS
+                    ):
+                        return {"jsonrpc": "2.0", "id": rid, "result": {"content": [{"text": f"❌ 拒绝: {p} 是允许路径根，禁止删除"}]}}
                     if args.get("recursive"):
                         shutil.rmtree(p)
                     else:
@@ -1304,6 +1317,16 @@ async def handle_request(request):
             if tool == "macos_notification":
                 title = args["title"]
                 msg = args["message"]
+                # 修复 #104 (osascript 注入 RCE): title/msg 原样拼进 AppleScript，
+                # `" & (do shell script "...") & "` 可执行任意命令 → 转义 + 拒控制字符
+                def _as_escape(s: str) -> str:
+                    if any(ord(c) < 32 for c in str(s)):
+                        raise ValueError("通知内容不能包含控制字符")
+                    return str(s).replace("\\", "\\\\").replace('"', '\\"')
+                try:
+                    title, msg = _as_escape(title), _as_escape(msg)
+                except ValueError as e:
+                    return {"jsonrpc": "2.0", "id": rid, "result": {"content": [{"text": f"错误: {e}"}]}}
                 subprocess.run(
                     ["osascript", "-e", f'display notification "{msg}" with title "{title}"'],
                     check=False, timeout=5)

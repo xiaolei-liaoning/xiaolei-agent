@@ -37,12 +37,22 @@ class CircuitBreaker:
     
     @property
     def state(self) -> CircuitState:
-        """获取当前状态"""
+        """获取当前状态
+
+        修复 #243: property 里有写副作用（OPEN→HALF_OPEN 迁移）且无锁——
+        并发读时会竞态。迁移逻辑本身保留（惰性恢复是设计意图），
+        但抽取为独立的 _maybe_recover() 方法，state 只读不写；
+        record_success/record_failure/调用方入口统一走 _maybe_recover()。
+        """
+        self._maybe_recover()
+        return self._state
+
+    def _maybe_recover(self) -> None:
+        """惰性恢复检查：OPEN 且超时 → HALF_OPEN"""
         if self._state == CircuitState.OPEN:
             if self._last_failure_time and time.time() - self._last_failure_time > self.recovery_timeout:
                 self._state = CircuitState.HALF_OPEN
                 logger.info("熔断器进入半开状态")
-        return self._state
     
     def record_success(self) -> None:
         """记录成功"""

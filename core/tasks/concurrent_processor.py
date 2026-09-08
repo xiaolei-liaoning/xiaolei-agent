@@ -34,14 +34,31 @@ from dataclasses import dataclass, field
 
 @dataclass
 class TaskMetrics:
-    """任务指标"""
+    """任务指标
+
+    修复 #211/#212: 原字段与调用方严重不符——
+    - _safe_execute 构造传 tool_name/start_time（原字段没有）→ TypeError
+    - _safe_execute finally 里写 end_time（靠动态属性侥幸活着）
+    - get_summary 读 m.elapsed（原字段没有）→ AttributeError
+    现补齐 tool_name/start_time/end_time，并加 elapsed 计算属性。
+    """
     task_id: str = ""
     type: str = ""
+    tool_name: str = "unknown"      # 修复 #212: _safe_execute 构造需要
+    start_time: float = 0.0         # 修复 #212: 计时起点
+    end_time: float = 0.0           # 修复 #211: 计时终点（原靠动态属性）
     duration: float = 0.0
     success: bool = True
     error: str = ""
     timestamp: float = 0.0
     queue_wait: float = 0.0
+
+    @property
+    def elapsed(self) -> float:
+        """修复 #211: get_summary 读 m.elapsed，原字段不存在"""
+        if self.end_time and self.start_time:
+            return self.end_time - self.start_time
+        return self.duration
 
 
 class MetricsCollector:

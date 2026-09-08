@@ -4,6 +4,7 @@
 import json
 import os
 import logging
+import re
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 from datetime import datetime
@@ -17,7 +18,9 @@ class UserProfile:
     def __init__(self, user_id: str, base_dir: str = None):
         self.user_id = user_id
         self._base_dir = base_dir or os.path.expanduser("~/.小雷版小龙虾/profiles")
-        self._path = Path(self._base_dir) / f"{user_id}.json"
+        # 修复 #169: user_id 未清洗直接拼路径（"../../x" 可逃逸 profiles 目录）
+        safe_id = re.sub(r"[^a-zA-Z0-9_\-]+", "_", str(user_id))[:64] or "default"
+        self._path = Path(self._base_dir) / f"{safe_id}.json"
         self._data: Dict[str, Any] = self._load()
 
     def _load(self) -> Dict[str, Any]:

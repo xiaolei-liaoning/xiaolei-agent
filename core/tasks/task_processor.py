@@ -513,6 +513,12 @@ class TaskProcessor:
     async def _try_ai(self, task: str) -> TaskResult:
         """AI 分解"""
         try:
+            # 修复 #221: router 可能为 None（LLM 初始化失败时 get_llm_router 仍返回实例，
+            # 但极端场景 backend 全 None → simple_chat 内部崩）。显式检查 + 降级路径。
+            if self.router is None:
+                logger.warning("_try_ai: router 未初始化，跳过 AI 分解，走规则降级")
+                raise RuntimeError("LLM router 不可用")
+
             # 获取所有可用技能列表
             from ..engine.skill_dispatcher import SkillDispatcher
             dispatcher = SkillDispatcher()
