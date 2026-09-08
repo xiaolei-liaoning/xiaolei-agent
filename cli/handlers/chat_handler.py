@@ -20,6 +20,11 @@ from cli.colors import (
     print_warning,
 )
 from cli.command_parser import CommandType, ParsedCommand
+
+# 修复: Python 3.11 f-string 不允许内嵌反斜杠，原代码在 f-string 里写
+# {"<span class=\"retry-badge\">...</span>" if ... else ""} 会 SyntaxError。
+# 提取为模块级常量，两处直接用变量名。
+_RETRY_BADGE_HTML = '<span class="retry-badge">🔄 重试</span>'
 from cli.logging_system import log_error, log_info, log_success, log_warning
 from cli.thinking_engine import (
     think_analyze,
@@ -730,7 +735,12 @@ export default async function() {{
         from core.multi_agent_v2.agents.base.work_agent import WorkAgent
 
         initial_message = request
-        agent = WorkAgent()
+        # 修复(B): 用 CLI 会话 id 作为 agent_id 传入——同一 CLI 会话的所有任务复用
+        # 同一个 session id，~/.xiaolei/sessions/{id}.json 对话历史能跨任务累加，
+        # "上回合说过什么/最近产物是什么" 才能被记住。否则每个 WorkAgent 随机 id，
+        # 历史文件永远读不到上一回合。
+        _cli_sess = str(getattr(self.cli, 'session_id', '') or '')[:8] or uuid.uuid4().hex[:8]
+        agent = WorkAgent(agent_id=_cli_sess)
         # ponytail: cli_user 默认 id，接 user_id 模块后可替换
         agent.user_id = str(getattr(self.cli, 'user_id', 'cli_user'))
         task = Task(task_id=uuid.uuid4().hex[:8], type="general", description=request)
@@ -1319,7 +1329,7 @@ def _render_agent_graph(graph: dict):
                 cards += f'''
       <div class="node-card" style="border-left:4px solid {color}">
         <h3>{badge} {label} <span class="node-time">{dur_str}</span></h3>
-        {"<span class=\"retry-badge\">🔄 重试</span>" if has_retry else ""}
+        {_RETRY_BADGE_HTML if has_retry else ""}
       </div>'''
             phase_detail_blocks.append(f'''
     <div class="phase-detail">
@@ -1335,7 +1345,7 @@ def _render_agent_graph(graph: dict):
             phase_detail_blocks.append(f'''
     <div class="node-card">
       <h3>{d["label"]}</h3>
-      {"<span class=\"retry-badge\">🔄 重试</span>" if d["has_retry"] else ""}
+      {_RETRY_BADGE_HTML if d["has_retry"] else ""}
     </div>''')
 
     detail_html = "".join(phase_detail_blocks)
