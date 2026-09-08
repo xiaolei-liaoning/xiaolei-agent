@@ -1167,16 +1167,28 @@ async def handle_request(request):
             if tool == "head":
                 path = check_path(args["path"])
                 n = args.get("n", 10)
+                try:
+                    n = int(n)
+                except (TypeError, ValueError):
+                    n = 10
+                # 修复 #109: 限制 n 上限 (防 LLM 传巨大值导致内存耗尽)
+                n = max(1, min(n, 500))
                 with open(path, "r", encoding=detect_encoding(path)) as f:
-                    lines = [next(f) for _ in range(int(n))]
+                    lines = [next(f) for _ in range(n)]
                 return {"jsonrpc": "2.0", "id": rid, "result": {"content": [{"text": "".join(lines)}]}}
 
             if tool == "tail":
                 path = check_path(args["path"])
                 n = args.get("n", 10)
+                try:
+                    n = int(n)
+                except (TypeError, ValueError):
+                    n = 10
+                # 修复 #109: 限制 n 上限
+                n = max(1, min(n, 500))
                 with open(path, "r", encoding=detect_encoding(path)) as f:
                     lines = f.readlines()
-                return {"jsonrpc": "2.0", "id": rid, "result": {"content": [{"text": "".join(lines[-int(n):])}]}}
+                return {"jsonrpc": "2.0", "id": rid, "result": {"content": [{"text": "".join(lines[-n:])}]}}
 
             if tool == "run_command":
                 cmd = args["command"]
