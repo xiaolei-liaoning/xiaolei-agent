@@ -442,6 +442,23 @@ class ReActCoreMiddleware(BaseMiddleware):
         if _goal_note:
             system_content += f"\n\n<goal_progress>\n{_goal_note}\n</goal_progress>"
 
+        # 修复(C): 每轮强制钉住"当前任务目标"——防止 LLM 中途看到无关数据(如已有报告)
+        # 就跑偏去读别的文件/整理目录。把原始 task_description 作为明确锚点注入系统提示，
+        # LLM 每轮都清楚自己在完成什么任务、下一步该往哪走。
+        try:
+            _goal_pin = (ctx.task_description or "").strip()
+            if _goal_pin:
+                _goal_pin_short = _goal_pin[:400]
+                system_content += (
+                    f"\n\n<task_goal>\n"
+                    f"【当前任务目标】{_goal_pin_short}\n"
+                    f"【纪律】始终围绕上述目标推进。不要因为看到中间文件/已有产物就跑偏去"
+                    f"读取无关内容或整理目录。完成任务的核心交付物(报告/文件/答案)才是终点。\n"
+                    f"</task_goal>"
+                )
+        except Exception:
+            pass
+
         # 注入警告信息（如：循环检测警告）
         if ctx.warnings:
             warnings_text = "\n".join(ctx.warnings)
