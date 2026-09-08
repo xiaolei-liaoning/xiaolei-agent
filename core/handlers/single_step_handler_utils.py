@@ -363,9 +363,62 @@ async def _check_skill_permission(skill_name: str, message: str) -> bool:
 
 async def _route_to_multi_agent(message: str, user_id: int,
                                  skill_name: str) -> Dict[str, Any]:
-    """多Agent系统已移除，返回简单回复。"""
+    """多Agent桥接 — 将认知闭环处理不了的复杂请求交给 V2 unified_agent 真正处理。
+
+    (原实现是 V1 多Agent系统移除后留下的空壳, 只返回"已收到"假确认;
+     本次修正: 真正调用 core.multi_agent_v2.agents.unified_agent.run_unified)
+    """
+    import asyncio
+    import json  # 提取 worker 结果时序列化用
+    # V2 统一入口 (Web 端 chat.py 也用同一入口处理复杂任务)
+    try:
+        from core.multi_agent_v2.agents.unified_agent import run_unified
+    except ImportError as e:
+        logger.warning("V2 unified_agent 不可用, 无法桥接多Agent: %s", e)
+        return {"success": False, "reply": f"抱歉, 多Agent处理暂不可用: {e}",
+                "multi_agent_result": False}
+
+    try:
+        result = await asyncio.wait_for(
+            run_unified(
+                message,
+                max_rounds=5,
+                mode="react",
+                user_id=str(user_id),
+            ),
+            timeout=120,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("V2 统一Agent 桥接超时")
+        return {"success": False, "reply": "多Agent处理超时, 请稍后重试或简化请求",
+                "multi_agent_result": False}
+    except Exception as e:
+        logger.warning("V2 统一Agent 桥接异常: %s", e, exc_info=True)
+        return {"success": False, "reply": f"多Agent处理失败: {e}",
+                "multi_agent_result": False}
+
+    success = result.get("success", False)
+    # 提取最后一条 worker 结果作为回复主体
+    all_results = result.get("results", [])
+    reply = ""
+    if all_results:
+        last = all_results[-1]
+        worker_result = last.get("result", {})
+        if isinstance(worker_result, dict):
+            reply = (
+                worker_result.get("tool_result_summary", "")
+                or worker_result.get("content", "")
+                or json.dumps(worker_result, ensure_ascii=False)[:3000]
+            )
+        else:
+            reply = str(worker_result)
+    if not reply:
+        reply = result.get("error", "统一Agent 处理完成但无有效回复")
+
     return {
-        "success": True,
-        "reply": f"已收到: {message[:100]}",
-        "multi_agent_result": False,
+        "success": success,
+        "reply": reply,
+        "multi_agent_result": True,
+        "rounds": result.get("rounds", 0),
+        "total_subtasks": result.get("total_subtasks", 0),
     }
