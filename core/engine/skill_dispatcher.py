@@ -426,6 +426,15 @@ class SkillDispatcher:
         # ── 第1步：@skill名格式（确定性路由，不走 LLM）─────────────────────────
         import re
 
+        # 修复(方案A): "用子代理/子代理/多agent编排" 是确定性信号，优先短路路由。
+        # 否则会被 "分析项目" 等关键词规则抢先 → 路由到 analyze(无task引导)。
+        # 用户明确要子代理时应路由到 project_analyzer——它 tools_available 含 task,
+        # behavior_rules 明确"必须用 task 子代理做深入分析"。
+        subagent_triggers = ["用子代理", "子代理", "subagent", "spawn子代理", "多agent协作", "多agent编排", "多智能体"]
+        if any(trig in message for trig in subagent_triggers):
+            logger.debug("检测到子代理信号: %r -> 短路路由为 project_analyzer(含task引导)", message[:40])
+            return "project_analyzer"
+
         at_skill_match = re.match(r"@(\w+)\s", message_lower)
         if at_skill_match:
             skill_name = at_skill_match.group(1)

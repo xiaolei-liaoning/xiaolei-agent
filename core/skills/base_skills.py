@@ -223,6 +223,15 @@ class SkillSystem:
         return None
 
     async def _match_base(self, task: str) -> Optional[BaseSkill]:
+        # 修复(方案A): "用子代理/子代理/多agent编排" 是确定性信号，优先短路路由。
+        # 用户明确要子代理时，路由到 project_analyzer——它 tools_available 含 task,
+        # behavior_rules 明确"必须用 task 子代理做深入分析"。
+        # 注意: 不能短路到 analyze——analyze.md 无 task 工具且禁止写文件，会导致诉求落空。
+        SUBAGENT_TRIGGERS = ("用子代理", "子代理", "subagent", "spawn子代理", "多agent协作", "多agent编排", "多智能体")
+        if any(t in task for t in SUBAGENT_TRIGGERS):
+            logger.debug("看到子代理信号，路由到 project_analyzer(含task引导)")
+            return self.base_skills.get("project_analyzer") or self.base_skills.get("general")
+
         from core.engine.llm_backend import get_llm_router
         router = get_llm_router()
         if router and router.is_available():
