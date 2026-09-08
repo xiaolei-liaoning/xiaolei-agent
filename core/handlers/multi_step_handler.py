@@ -113,9 +113,9 @@ async def handle_multi_step_streaming(
     message: str, 
     user_id: int, 
     websocket: WebSocket,
-    planner,
-    processor,
-    dispatcher,
+    planner=None,
+    processor=None,
+    dispatcher=None,
     db_initialized: bool = False
 ) -> Dict[str, Any]:
     """处理多步任务并通过 WebSocket 实时推送每个子任务的执行结果。
@@ -124,13 +124,16 @@ async def handle_multi_step_streaming(
         message: 用户消息
         user_id: 用户ID
         websocket: WebSocket 连接对象
-        planner: TaskPlanner 实例
-        processor: ConcurrentTaskProcessor 实例
+        planner: TaskPlanner 实例（None 时降级为单步处理）
+        processor: ConcurrentTaskProcessor 实例（None 时子任务仅记录不实跑）
         dispatcher: SkillDispatcher 实例
         db_initialized: 数据库是否已初始化
 
     Returns:
         包含 reply 和 success 的字典
+
+    注: planner/processor/dispatcher 均有 None 保护——
+        chat_ws.py 的调用仅传 (message, user_id, websocket)，缺省走降级路径。
     """
     from .single_step_handler import handle_single_step
     from .task_utils import process_task_with_processor
