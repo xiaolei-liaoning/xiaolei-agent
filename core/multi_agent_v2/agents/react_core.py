@@ -459,6 +459,29 @@ class ReActCoreMiddleware(BaseMiddleware):
         except Exception:
             pass
 
+        # 修复(记忆): 注入"已产出的文件/报告清单"——LLM 下回合能看到自己上回合生成了什么。
+        # 从对话历史里提取 write_file/edit_file 写入的路径(跨回合历史加载后仍能看到)，避免
+        # "它知道聊了什么，但不知道自己生成了 xxx.html"。用 set 去重，按最近排序。
+        try:
+            _written_paths = []
+            for _m in (getattr(ctx, '_conversation_history', None) or []):
+                if _m.get("name") in ("write_file", "edit_file") and _m.get("content"):
+                    _c = str(_m.get("content", ""))
+                    import re as _re
+                    _paths = _re.findall(r"(?:编辑成功|写入|生成|保存到)[:：]?\s*(/[^\s]+|~/[^\s]+)", _c)
+                    for _p in _paths:
+                        if _p and _p not in _written_paths:
+                            _written_paths.append(_p)
+            if _written_paths:
+                system_content += (
+                    "\n\n<产物清单>\n"
+                    "本会话已产出的文件/报告：\n"
+                    + "\n".join(f"- {_p}" for _p in _written_paths[:8])
+                    + "\n</产物清单>"
+                )
+        except Exception:
+            pass
+
         # 注入警告信息（如：循环检测警告）
         if ctx.warnings:
             warnings_text = "\n".join(ctx.warnings)
@@ -892,6 +915,26 @@ class ReActCoreMiddleware(BaseMiddleware):
                     "content": _tool_content,
                     "name": tool_name,
                 })
+                # ── 修复(记忆): 记录"产出的文件/报告"到跨回合产物清单 ──
+                # 用户反馈"它知道上回合聊了什么，但不知道生成了什么"——因为对话历史
+                # 只存 tool_calls 名字和 content 文本，没记"产物文件路径"。
+                # 这里对可能产出的工具(写文件/报告/搜索结果)统一记录产物，让 LLM
+                # 下回合能清晰看到"我上回合生成了 xxx.html/xxx.md"。
+                if ok and tool_name in ("write_file", "edit_file", "fetch_url", "web_search"):
+                    _artifact_path = ""
+                    if tool_name in ("write_file", "edit_file"):
+                        _artifact_path = str(arguments.get("path", "") or "") if arguments else ""
+                    elif tool_name in ("fetch_url", "web_search"):
+                        # 搜索结果不是文件, 但记录查询词/来源避免重复+作为上下文锚点
+                        _artifact_path = str(arguments.get("url", "") or arguments.get("query", "") or "") if arguments else ""
+                    if _artifact_path:
+                        _art = getattr(ctx, "_artifacts", None)
+                        if _art is None:
+                            ctx._artifacts = ["", ""]  # 前两个占位，第3个起真实
+                        ctx._artifacts.append(_artifact_path)
+                        # 只保留最近 5 个
+                        if len(ctx._artifacts) > 7:
+                            ctx._artifacts = ctx._artifacts[-5:]
                 # ponytail + deepseek 风格：工具可附带 additionalContexts 作为下一步强提示。
                 # 让工具作者决定 agent 该看到什么补充语境（观察质量下沉到工具层）
                 for _extra in (result.get("_extra_contexts") if isinstance(result, dict) else []) or []:

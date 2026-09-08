@@ -170,7 +170,15 @@ def from_handler(raw: Any) -> str:
         # 新格式优先
         if "ok" in raw:
             if raw["ok"]:
-                return raw.get("data", "")
+                text = raw.get("data", "")
+                # 修复: 编辑类工具返回 {ok, data, diff}，diff(新增+/删除-)单独字段，
+                # 原实现只取 data("编辑成功:x处") 就返回，diff 被丢弃，
+                # LLM 和终端都看不到改动。现在把 diff 一并拼进文本。
+                if "diff" in raw:
+                    diff = str(raw.get("diff", "")).strip()
+                    if diff:
+                        text = f"{text}\n\n--- 变更内容 (新增前 + / 删除前 -) ---\n{diff}"
+                return text
             else:
                 return f"错误: {raw.get('error', '未知错误')}"
 
