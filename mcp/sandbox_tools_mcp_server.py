@@ -896,7 +896,15 @@ async def handle_grep(pattern: str, path: str = ".", glob: Optional[str] = None,
                 rg_path, *args,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+            try:
+                # 修复 #092: wait_for 超时只取消 communicate() 协程, 不杀 rg 子进程 → 泄漏。
+                # 超时后主动 kill + await, 确保子进程被回收。
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+                logger.warning("GrepTool rg 超时(%ds), 子进程已终止", 30)
+                return {"text": f"⚠️ 搜索超时（{30}秒上限），已中止"}
 
             if proc.returncode not in (0, 1):
                 raise RuntimeError(f"rg 退出码 {proc.returncode}: {stderr.decode()}")
