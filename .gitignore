@@ -110,3 +110,6 @@ scripts/
 code_analysis_report.md
 python_vs_javascript_version_comparison.md
 docs/
+
+# 测试运行时生成的输出
+snake_game/
