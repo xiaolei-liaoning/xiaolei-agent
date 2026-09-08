@@ -35,31 +35,33 @@ class AgentProfile(str, Enum):
 # 设计原则：
 #   - allowed=None（不硬限制）→ 避免 plan_manager 死锁
 #   - disallowed 按 profile 风险分层 → 真正差异化
-#   - ORCHESTRATOR 独有 task/orchestrate（只有它能调子代理）
+#   - task/orchestrate 对全部 profile 开放——复杂任务（项目分析/多模块探索等）
+#     都该能派子代理；防递归（子代理禁止再造子代理）由 spawn.py #014 独立保证，
+#     不在这里按 profile 锁死。只保留"写文件/执行"等高危工具的分层限制。
 # 配合 system_hint 提示词，profile 才有实际意义。
 PROFILE_PERMISSIONS = {
     AgentProfile.EXPLORE: {
-        # 只读型：禁写、禁执行、禁编排
+        # 只读型：禁写、禁执行（但允许调子代理做深入探索）
         "allowed": None,
-        "disallowed": ["write_file", "edit_file", "execute_shell", "execute_python", "task", "orchestrate"],
+        "disallowed": ["write_file", "edit_file", "execute_shell", "execute_python"],
         "system_hint": _builder.get_agent_prompt("explore"),
     },
     AgentProfile.BUILD: {
-        # 构建型：禁编排（单一任务，不许递归）
+        # 构建型：可写可调子代理（单一任务不递归即可，防递归由 spawn.py 保证）
         "allowed": None,
-        "disallowed": ["task", "orchestrate"],
+        "disallowed": [],
         "system_hint": _builder.get_agent_prompt("build"),
     },
     AgentProfile.GENERAL: {
-        # 通用型：禁编排（避免误用）
+        # 通用型：全能力（含子代理），防递归由 spawn.py 保证
         "allowed": None,
-        "disallowed": ["task", "orchestrate"],
+        "disallowed": [],
         "system_hint": _builder.get_agent_prompt("general"),
     },
     AgentProfile.ANALYZE: {
-        # 分析型：禁写、禁执行、禁编排（只读分析）
+        # 分析型：禁写、禁执行（但允许调子代理做深度分析）
         "allowed": None,
-        "disallowed": ["write_file", "edit_file", "execute_shell", "execute_python", "task", "orchestrate"],
+        "disallowed": ["write_file", "edit_file", "execute_shell", "execute_python"],
         "system_hint": _builder.get_agent_prompt("analyze"),
     },
     AgentProfile.ORCHESTRATOR: {
