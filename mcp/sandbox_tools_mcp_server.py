@@ -513,7 +513,33 @@ def format_with_line_numbers(lines: List[str], offset: int = 0) -> str:
 
 
 def compute_git_diff(file_path: str, old_content: str, new_content: str) -> str:
-    """计算 git diff（如果文件在 git 仓库中）"""
+    """计算编辑前后的 diff（新增行 + / 删除行 -）。
+
+    修复: 原实现调用 `git diff` 对比"工作区 vs git index"，传入的
+    old_content/new_content 参数完全没用——若文件未 git add，会显示
+    index 里所有改动或为空，看不到本次编辑的干净 + / -。
+    改为优先 difflib 对比 old_content/new_content（参数生效，始终
+    得到本次编辑的精确 diff），若文件在 git 仓库再用 git diff 兜底。
+    """
+    import difflib
+
+    # 1. 用 difflib 直接对比"编辑前 vs 编辑后"，参数生效，始终得到本次编辑的精确 diff
+    try:
+        old_lines = old_content.splitlines(keepends=True)
+        new_lines = new_content.splitlines(keepends=True)
+        diff_lines = list(difflib.unified_diff(
+            old_lines, new_lines,
+            fromfile=os.path.basename(file_path),
+            tofile=os.path.basename(file_path),
+            n=3,
+        ))
+        diff_text = "".join(diff_lines)
+        if diff_text.strip():
+            return diff_text[:2000]
+    except Exception:
+        pass
+
+    # 2. 兜底：文件在 git 仓库则用 git diff 展示（对比工作区 vs HEAD）
     try:
         cwd = os.path.dirname(os.path.abspath(file_path))
         subprocess.run(

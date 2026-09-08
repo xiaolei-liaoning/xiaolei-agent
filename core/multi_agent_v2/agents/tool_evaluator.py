@@ -177,7 +177,7 @@ def format_tool_result(
         # 提取结果内容
         raw = result
         if isinstance(raw, dict):
-            # 优先取 content / text / output / result 字段
+            # 优先取 content / text / output / result / data 字段
             for key in ("content", "text", "output", "result", "data"):
                 if key in raw:
                     raw = raw[key]
@@ -186,6 +186,15 @@ def format_tool_result(
                 raw = json.dumps(raw, ensure_ascii=False, default=str)
 
         text = str(raw).strip()
+
+        # 修复: 编辑类工具返回 {data, diff}，diff（新增 + / 删除 -）单独字段，
+        # 之前只取了 data("编辑成功:x处") 就 break，diff 没进 LLM 文本 → LLM 看不到改动。
+        # 现在把 diff 一并拼进文本，让 LLM 明确看到加了什么/删了什么。
+        if isinstance(result, dict) and "diff" in result:
+            diff = str(result.get("diff", "")).strip()
+            if diff:
+                text = f"{text}\n\n--- 变更内容 (新增前 + / 删除前 -) ---\n{diff}"
+
         if len(text) > MAX_CONTENT:
             # 智能截断：保留头尾，中间省略
             head = text[: int(MAX_CONTENT * 0.7)]
