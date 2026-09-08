@@ -33,6 +33,8 @@ async def handle_multi_step(
     from .task_utils import process_task_with_processor
     
     if planner is None:
+        # 修复 #126: 原实现静默降级到单步, 用户/调用方不知情。记日志。
+        logger.debug("Multi-step: planner 未提供, 降级到单步处理")
         return await handle_single_step(message, user_id, "chat", "default", dispatcher, db_initialized)
 
     task: Dict[str, Any] = {
@@ -56,9 +58,15 @@ async def handle_multi_step(
     if processor is not None:
         results = await processor.submit_tasks(sub_tasks)
     else:
+        # 修复 #124: 原实现假装成功(返回"已处理"+success:True), 用户以为子任务真执行了。
+        # 改为诚实降级——明确告知子任务未被实际执行。
+        logger.warning("Multi-step: processor 未提供, %d 个子任务未实际执行", len(sub_tasks))
         results = []
         for sub_task in sub_tasks:
-            results.append({"success": True, "reply": f"已处理: {sub_task.get('user_message', '')}"})
+            results.append({
+                "success": False,
+                "reply": f"⚠️ 子任务未执行(处理器未配置): {sub_task.get('user_message', '')}",
+            })
 
     reply_lines: List[str] = ["多步任务执行结果："]
     for sub_task, result in zip(sub_tasks, results):
@@ -103,10 +111,13 @@ async def handle_multi_step(
             await hub.emit(event)
         except Exception as hub_e:
             logger.debug(f"FeedbackHub emit 失败（不影响主流程）: {hub_e}")
-    except Exception:
-        pass  # 审查失败不影响主流程
+    except Exception as e:
+        # 修复 #125: 原 except: pass 完全静默吞掉审查失败, 无法排障。记日志。
+        logger.warning("多步任务复盘失败(不影响主流程): %s", e)
 
-    return {"reply": "\n".join(reply_lines), "success": True}
+    # 修复 #124: success 不再硬编码 True, 反映实际子任务执行结果
+    all_ok = all(r.get("success") for r in results)
+    return {"reply": "\n".join(reply_lines), "success": all_ok}
 
 
 async def handle_multi_step_streaming(
@@ -139,6 +150,8 @@ async def handle_multi_step_streaming(
     from .task_utils import process_task_with_processor
     
     if planner is None:
+        # 修复 #126: 原实现静默降级到单步, 用户/调用方不知情。记日志。
+        logger.debug("Multi-step: planner 未提供, 降级到单步处理")
         return await handle_single_step(message, user_id, "chat", "default", dispatcher, db_initialized)
 
     task: Dict[str, Any] = {

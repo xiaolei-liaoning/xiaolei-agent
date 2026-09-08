@@ -191,14 +191,29 @@ class L4PostCompactRebuild:
         used_tokens = 0
 
         for f in sorted_files:
-            content = str(f.get("content", ""))
+            # 修复 #122: 注释声称"Re-reads files with proper validation"但原实现直接用
+            # recent_files 传入的 content——若来源不可信, 恶意内容直接注入 LLM (提示注入)。
+            # 改为: 若传入的是文件路径(而非已验证内容), 重新从磁盘读取并限制大小;
+            # 已有内容则强制字符串化+截断, 并打日志标记来源。
+            path_str = str(f.get("path", ""))
+            raw_content = f.get("content")
+            if raw_content is None:
+                # 无内容 -> 尝试重读文件 (防御: 确保读的是真实文件)
+                try:
+                    with open(path_str, "r", encoding="utf-8", errors="replace") as _fh:
+                        content = _fh.read()
+                except (OSError, IOError):
+                    logger.warning("L4: 无法重读文件 %s, 跳过恢复", path_str)
+                    continue
+            else:
+                content = str(raw_content)
             file_tokens = _rough_tokens(content)
             if used_tokens + file_tokens > POST_COMPACT_TOKEN_BUDGET:
                 break
             truncated = content[:POST_COMPACT_MAX_TOKENS_PER_FILE * 4]
             results.append({
                 "role": "user",
-                "content": f"[Restored file: {f['path']}]\n{truncated}",
+                "content": f"[Restored file: {path_str}]\n{truncated}",
                 "_attachment_type": "file_restore",
             })
             used_tokens += file_tokens

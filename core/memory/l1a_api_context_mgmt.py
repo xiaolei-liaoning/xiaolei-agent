@@ -138,6 +138,7 @@ class L1aApiContextMgmt:
         last_quarter_start = total_clearable * 3 // 4
 
         cleared_count = 0
+        freed_this_call = 0  # 修复 #117: 用本次调用的临时计数, 不用累计 _tokens_freed
         for idx, (i, char_count) in enumerate(clearable_indices):
             # 跳过前一半（前 50% 保留） — 注意：这里 idx < first_half_end 是 continue，
             # 意味着前 50% 也"保留"了。配合下面 last_quarter_start，
@@ -154,18 +155,22 @@ class L1aApiContextMgmt:
                 f"~{tokens_freed} tokens freed]"
             )
             cleared_count += 1
-            self._tokens_freed += tokens_freed
+            freed_this_call += tokens_freed
 
-            # Check if we've freed enough
-            if self._tokens_freed >= tokens_to_free:
+            # 修复 #117: 用本次累计计数判断本轮是否已清够, 而非全局 _tokens_freed
+            # (原实现 _tokens_freed 跨调用累计, 上次已清的量会让本次提前 break, 虚假"清够了")
+            if freed_this_call >= tokens_to_free:
                 break
+
+        # 只有真正执行了清理才更新全局累计统计
+        self._tokens_freed += freed_this_call
 
         if cleared_count > 0:
             self._clears += 1
             logger.debug(
                 "L1a: cleared %d tool results, freed ~%d tokens",
                 cleared_count,
-                self._tokens_freed,
+                freed_this_call,
             )
 
         return messages
