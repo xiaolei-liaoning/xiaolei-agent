@@ -4,11 +4,10 @@ Launch a new agent to handle complex, multistep tasks autonomously.
 
 When using the Task tool, you must specify a subagent_type parameter to select which agent type to use.
 
-When NOT to use the Task tool:
-- If you want to read a specific file path, use the Read tool instead to find the match more quickly.
-- If you are searching for a specific class definition like "class Foo", use the Grep tool instead to find the match more quickly.
-- If you are searching for code within a specific file or set of 2-3 files, use the Read tool instead to find the match more quickly.
-- If no available agent is a good fit for the task, use other tools directly.
+WHEN TO USE (强烈推荐):
+- 复杂/多步任务、多文件代码库探索、项目分析、需要并行调研多个模块时，优先用 task 派子代理，不要自己逐个 read_file 死磕。
+- 子代理完成后你负责汇总结果，再继续下一步。
+- 多个独立模块可并发派多个子代理（一条消息里多次调用 task）。
 
 Usage notes:
 1. Launch multiple agents concurrently whenever possible — use a single message with multiple tool calls.
