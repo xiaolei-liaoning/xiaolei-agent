@@ -695,6 +695,12 @@ class AutoReviewer:
 
 
 _auto_reviewer_instance: Optional[AutoReviewer] = None
+    # 全局单例：被 auto_reviewer.review() / memory_middleware.process_turn()
+    # /self_evolution.check_and_evolve() 三处调用，但全部 try/except: pass
+    # 静默不出，实际作用是「有备无患」的备用入口，不视为废弃代码。
+    # 保留原因：原设计承诺 task_processor.record_feedback 曾未实现，此单例作
+    # 为后备；现已在 task_processor.py 里实现 record_feedback()，三处静默
+    # 是已知行为，不影响功能。
 
 
 def get_auto_reviewer() -> AutoReviewer:
