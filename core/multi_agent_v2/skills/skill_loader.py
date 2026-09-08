@@ -6,6 +6,7 @@ return content on demand. Used by the `skill` tool and system prompt injection.
 
 import os
 import re
+import xml.sax.saxutils as xml_escape
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
@@ -62,13 +63,13 @@ def _parse_skill(path: str) -> Optional[SkillInfo]:
         return None
 
     frontmatter: Dict[str, str] = {}
-    for line in m.group(1).strip().split('\n'):
-        if ':' in line:
-            k, v = line.split(':', 1)
+    for line in m.group(1).strip().split("\n"):
+        if ":" in line:
+            k, v = line.split(":", 1)
             frontmatter[k.strip()] = v.strip()
 
-    name = frontmatter.get('name', '')
-    description = frontmatter.get('description', '')
+    name = frontmatter.get("name", "")
+    description = frontmatter.get("description", "")
     if not name:
         return None
 
@@ -86,10 +87,12 @@ def format_skills_xml(skills: Dict[str, SkillInfo]) -> str:
         "<available_skills>",
     ]
     for s in sorted(skills.values(), key=lambda x: x.name):
-        lines.append(f'  <skill>')
-        lines.append(f'    <name>{s.name}</name>')
-        lines.append(f'    <description>{s.description}</description>')
-        lines.append(f'    <location>file://{s.location}</location>')
-        lines.append(f'  </skill>')
+        lines.append(f"  <skill>")
+        lines.append(f"    <name>{s.name}</name>")
+        # 修复提示注入风险：将 description 中的 XML 特殊字符转义
+        safe_desc = xml_escape.escape(str(s.description))
+        lines.append(f"    <description>{safe_desc}</description>")
+        lines.append(f"    <location>file://{s.location}</location>")
+        lines.append(f"  </skill>")
     lines.append("</available_skills>")
-    return '\n'.join(lines)
+    return "\n".join(lines)
