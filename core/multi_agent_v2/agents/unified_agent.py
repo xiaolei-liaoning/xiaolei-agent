@@ -24,6 +24,7 @@ async def run_unified(
     mode: str = "react",
     worker_count: int = 0,
     skill_id: Optional[str] = None,
+    session_id: str = "",  # 修复(B): 跨回合记忆——透传给 run_react
 ) -> dict:
     """统一 Agent 执行入口 — 修复 #003
 
@@ -72,6 +73,7 @@ async def run_unified(
         personality_prompt, agent, allowed_tools, disallowed_tools,
         tool_preference,
         user_id=user_id,  # 修复 #003: 透传
+        session_id=session_id,  # 修复(B): 跨回合记忆
     )
 
 
@@ -85,6 +87,7 @@ async def _run_react_mode(
     disallowed_tools: Optional[List[str]] = None,
     tool_preference: Optional[set] = None,
     user_id: str = "",  # 修复 #003: 加 user_id 透传
+    session_id: str = "",  # 修复(B): 跨回合记忆
 ) -> dict:
     """纯 ReAct 模式 — 委托给 react_core.run_react()，启用 SubAgent 工具"""
     from .subagent.tool_handler import register_subagent_tools
@@ -106,4 +109,5 @@ async def _run_react_mode(
         disallowed_tools=disallowed_tools,
         tool_preference=tool_preference,
         user_id=user_id,  # 修复 #003: 透传
+        session_id=session_id,  # 修复(B): 跨回合记忆
     )

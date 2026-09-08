@@ -1152,6 +1152,7 @@ async def run_react(
     is_subagent: bool = False,
     use_plan: bool = False,
     user_id: str = "",  # 修复 #003: 接收并设置到 ctx.user_id
+    session_id: str = "",  # 修复(B): 跨回合记忆——同一会话复用同一 session，历史不丢
 ) -> dict:
     """快捷入口：直接用 ReActCore 处理任务"""
     if max_rounds == 0:
@@ -1165,6 +1166,8 @@ async def run_react(
         ctx.personality_prompt = personality_prompt
     if user_id:
         ctx.user_id = user_id  # 修复 #003: 透传给 RunContext
+    if session_id:
+        ctx._session_id = session_id  # 修复(B): 跨回合记忆——复用传入的会话 id
 
     # ── 未完成目标恢复（goal_store 持久化）──
     # 上次 blocked/round_limit 收尾的目标，本次续跑时注入已有进度，agent 不从零开始。

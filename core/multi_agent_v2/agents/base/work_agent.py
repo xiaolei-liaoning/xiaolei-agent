@@ -177,6 +177,7 @@ class WorkAgent(BaseAgent):
                 disallowed_tools=task.context.get("disallowed_tools"),
                 tool_preference=set(getattr(self, "_skill_tools", [])),
                 user_id=str(getattr(self, 'user_id', '')),
+                session_id=str(getattr(self, 'agent_id', '')),  # 修复(B): 复用 agent_id 作 session，跨任务历史不丢
                 mode="react",
             )
 
