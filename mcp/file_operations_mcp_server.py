@@ -9,6 +9,19 @@ import os
 from pathlib import Path
 import asyncio
 
+# 导入沙盒路径检查（复用已有的安全逻辑）
+try:
+    from .sandbox_tools_mcp_server import check_path
+except ImportError:
+    # 兜底：如果导入失败，定义最小检查
+    def check_path(path: str) -> str:
+        abs_path = os.path.abspath(os.path.expanduser(path))
+        # 仅允许当前工作目录及其子目录
+        cwd = os.path.abspath(os.getcwd())
+        if abs_path == cwd or abs_path.startswith(cwd + os.sep):
+            return abs_path
+        raise PermissionError(f"路径 {abs_path} 不在允许范围内")
+
 
 # 可用工具列表
 TOOLS = [
@@ -150,7 +163,8 @@ async def handle_request(request):
         if tool_name == "list_directory":
             path = arguments.get("path", ".")
             try:
-                p = Path(path)
+                p = check_path(path)
+                p = Path(p)
                 if not p.exists():
                     result_text = f"错误：目录不存在: {path}"
                 elif not p.is_dir():
@@ -170,6 +184,8 @@ async def handle_request(request):
                         for f in sorted(files):
                             result_parts.append(f"  {f.name}")
                     result_text = "\n".join(result_parts)
+            except PermissionError as e:
+                result_text = f"权限错误: {e}"
             except Exception as e:
                 result_text = f"错误：{str(e)}"
             
@@ -177,10 +193,13 @@ async def handle_request(request):
             path = arguments.get("path")
             encoding = arguments.get("encoding", "utf-8")
             try:
-                with open(path, "r", encoding=encoding) as f:
+                p = check_path(path)
+                with open(p, "r", encoding=encoding) as f:
                     content = f.read()
                 lines = content.split("\n")
                 result_text = f"📄 文件: {path} ({len(lines)} 行)\n\n{content}"
+            except PermissionError as e:
+                result_text = f"权限错误: {e}"
             except FileNotFoundError:
                 result_text = f"错误：文件不存在: {path}"
             except Exception as e:
@@ -191,11 +210,14 @@ async def handle_request(request):
             content = arguments.get("content", "")
             append = arguments.get("append", False)
             try:
+                p = check_path(path)
                 mode = "a" if append else "w"
-                with open(path, mode, encoding="utf-8") as f:
+                with open(p, mode, encoding="utf-8") as f:
                     f.write(content)
                 action = "追加到" if append else "写入"
                 result_text = f"✅ {action}文件成功: {path}"
+            except PermissionError as e:
+                result_text = f"权限错误: {e}"
             except Exception as e:
                 result_text = f"错误：{str(e)}"
             
@@ -203,9 +225,12 @@ async def handle_request(request):
             path = arguments.get("path")
             recursive = arguments.get("recursive", True)
             try:
-                p = Path(path)
+                p = check_path(path)
+                p = Path(p)
                 p.mkdir(parents=recursive, exist_ok=True)
                 result_text = f"✅ 创建目录成功: {path}"
+            except PermissionError as e:
+                result_text = f"权限错误: {e}"
             except Exception as e:
                 result_text = f"错误：{str(e)}"
             
@@ -213,7 +238,8 @@ async def handle_request(request):
             path = arguments.get("path")
             recursive = arguments.get("recursive", False)
             try:
-                p = Path(path)
+                p = check_path(path)
+                p = Path(p)
                 if not p.exists():
                     result_text = f"错误：文件不存在: {path}"
                 elif p.is_file():
@@ -228,6 +254,8 @@ async def handle_request(request):
                         result_text = f"错误：目录不为空，请使用 recursive=true 进行递归删除"
                 else:
                     result_text = f"✅ 删除成功: {path}"
+            except PermissionError as e:
+                result_text = f"权限错误: {e}"
             except Exception as e:
                 result_text = f"错误：{str(e)}"
             
@@ -235,9 +263,13 @@ async def handle_request(request):
             source = arguments.get("source")
             destination = arguments.get("destination")
             try:
+                src = check_path(source)
+                dst = check_path(destination)
                 import shutil
-                shutil.copy2(source, destination)
+                shutil.copy2(src, dst)
                 result_text = f"✅ 复制文件成功: {source} -> {destination}"
+            except PermissionError as e:
+                result_text = f"权限错误: {e}"
             except Exception as e:
                 result_text = f"错误：{str(e)}"
             
