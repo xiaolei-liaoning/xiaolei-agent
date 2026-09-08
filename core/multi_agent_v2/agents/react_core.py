@@ -1425,6 +1425,12 @@ async def run_react(
             _is_production = not _negates_file and any(kw in _td for kw in [
                 "写", "创建", "生成", "报告", "文件", "保存", "输出",
                 "write", "create", "generate", "save", "output", "report",
+                # 修复: 补写操作动词——"帮我加链接/加上/添加/替换/修改/改/编辑"这类
+                # 请求也是"要求产出文件"的任务，无交付物不能算完成。否则 agent 只给
+                # 分析方案就结束(实测"没成功"的根因)。
+                "加上", "加链接", "添加", "替换", "修改", "改", "编辑", "插入",
+                "删掉", "删除", "补充", "更新", "调整", "edit", "add", "insert",
+                "replace", "modify", "update", "remove", "cover", "填",
             ])
             if not _is_production or _deliverable_ok:
                 if not ctx.final_answer:
@@ -1513,6 +1519,9 @@ async def run_react(
             _is_production = any(kw in _task for kw in [
                 "写", "创建", "生成", "报告", "文件", "保存", "输出",
                 "write", "create", "generate", "save", "output", "report",
+                "加上", "加链接", "添加", "替换", "修改", "改", "编辑", "插入",
+                "删掉", "删除", "补充", "更新", "调整", "edit", "add", "insert",
+                "replace", "modify", "update", "remove", "cover", "填",
             ])
             _tp = getattr(ctx, 'task_progress', None)
             _deliverable_ok = getattr(ctx, '_deliverable_verified', False) or _has_real_deliverable(_tp)
@@ -1755,6 +1764,9 @@ async def run_react(
             _is_production = any(kw in _task for kw in [
                 "写", "创建", "生成", "报告", "文件", "保存", "输出",
                 "write", "create", "generate", "save", "output", "report",
+                "加上", "加链接", "添加", "替换", "修改", "改", "编辑", "插入",
+                "删掉", "删除", "补充", "更新", "调整", "edit", "add", "insert",
+                "replace", "modify", "update", "remove", "cover", "填",
             ])
             # ponytail: 本轮刚完成成功写入（qa_passed）→ 交付物即达成，直接收尾。
             # 实证：计划账目阻塞（_remaining_need_output）会让"已产出有效交付物"的
