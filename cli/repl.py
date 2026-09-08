@@ -52,6 +52,12 @@ class REPL:
                     _console.print(f"[{CliColors.GRAY}]{'─' * 60}[/{CliColors.GRAY}]")
                     continue
 
+                # 方案C: /feedback 命令直接识别（不走 command_parser）
+                if user_input.strip().lower().startswith("/feedback"):
+                    await self.cli.chat_handler.handle_feedback(user_input)
+                    _console.print(f"[{CliColors.GRAY}]{'─' * 60}[/{CliColors.GRAY}]")
+                    continue
+
                 # 命令模式
                 parsed_cmd = self.cli.command_parser.parse(user_input)
                 await self.cli.handle_command(parsed_cmd)

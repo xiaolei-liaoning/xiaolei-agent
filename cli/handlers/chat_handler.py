@@ -680,6 +680,11 @@ export default async function() {{
                 if not user_input.strip():
                     continue
 
+                # 方案C: /feedback 命令识别
+                if user_input.strip().lower().startswith("/feedback"):
+                    await self.handle_feedback(user_input)
+                    continue
+
                 self.cli.chat_history.append({"role": "user", "content": user_input})
                 print_chat_bubble(user_input, is_user=True)
 
@@ -740,9 +745,26 @@ export default async function() {{
             # ponytail: 对话结束后提取事实，失败静默
             try:
                 from core.memory.memory_middleware import get_memory_middleware
+                from core.learning.feedback import get_hub, FeedbackEvent
                 mw = get_memory_middleware()
                 uid = str(getattr(self.cli, 'user_id', 'cli_user'))
                 asyncio.ensure_future(mw.process_turn(uid, initial_message, str(answer)[:2000]))
+
+                # 方案C: 同步 emit every_turn 事件，让 MemorySink 记录每轮对话
+                try:
+                    hub = get_hub()
+                    event = FeedbackEvent(
+                        user_id=uid,
+                        event_type="every_turn",
+                        source="chat_handler",
+                        payload={
+                            "user_message": initial_message[:200],
+                            "assistant_reply": str(answer)[:500],
+                        },
+                    )
+                    asyncio.ensure_future(hub.emit(event))
+                except Exception as hub_e:
+                    logger.debug(f"FeedbackHub every_turn emit 失败: {hub_e}")
             except Exception:
                 pass
 
@@ -1076,6 +1098,43 @@ export default async function() {{
         print_color("─" * 50, CliColors.GRAY)
         print_color('使用 /orchestrate "任务" 启动多Agent自动编排', CliColors.GRAY)
         print_color('使用 /smart "任务" 启动智能Agent执行', CliColors.GRAY)
+
+    async def handle_feedback(self, user_input: str) -> None:
+        """方案C: 处理 /feedback <rating> [comment] 命令
+        用法:
+            /feedback 5 完美
+            /feedback 1 不喜欢
+            /feedback 3 (无评论)
+        """
+        from core.learning.feedback import get_hub, create_user_rating_event
+        import re
+
+        # 解析: /feedback <rating> [comment...]
+        m = re.match(r"^/feedback\s+(\d)\s*(.*)$", user_input.strip(), re.IGNORECASE)
+        if not m:
+            print_color("用法: /feedback <1-5> [评论]", CliColors.YELLOW)
+            print_color("示例: /feedback 5 完美", CliColors.WHITE)
+            return
+        rating = int(m.group(1))
+        comment = m.group(2).strip() or None
+        if rating < 1 or rating > 5:
+            print_color(f"评分必须 1-5，当前: {rating}", CliColors.RED)
+            return
+
+        user_id = getattr(self.cli, "user_id", "default")
+        hub = get_hub()
+        event = create_user_rating_event(
+            user_id=user_id,
+            rating=rating,
+            comment=comment,
+            task_id=getattr(self.cli, "current_task_id", None),
+            source="cli_user",
+        )
+        await hub.emit(event)
+        verdict = "✅ 满意" if event.success else "⚠️ 差评（已触发自我进化）"
+        print_color(f"反馈已记录: {rating}/5, comment='{comment or ''}'", CliColors.GREEN)
+        print_color(f"  → {verdict}", CliColors.CYAN)
+        print_color(f"  → 已写入 data/feedback_events.jsonl", CliColors.WHITE)
 
 
 # ═══════════════════════════════════════════════════════════════

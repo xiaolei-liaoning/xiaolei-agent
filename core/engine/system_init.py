@@ -27,6 +27,7 @@ class SystemInitializer:
         await self._step_init_task_scheduler()
         await self._step_config_driven_services()
         await self._step_init_database()
+        await self._step_init_feedback_hub()
         await self._step_inject_handler_refs()
         await self._step_inject_task_interface_refs()
         await self._step_check_env()
@@ -141,6 +142,24 @@ class SystemInitializer:
         except Exception as e:
             self.ctx.db_initialized = False
             logger.warning("MySQL 数据库初始化失败（系统仍可运行）: %s", e)
+
+    async def _step_init_feedback_hub(self):
+        """方案C: 注册 3 个 sink wrapper 到 FeedbackHub（不改原机制）"""
+        try:
+            from core.learning.feedback import get_hub
+            from core.learning.reflection import ReviewerSink, EvolutionSink, MemorySink
+            hub = get_hub()
+            # 包装原机制 - 不改它们的实现
+            import core.auto_reviewer as ar_mod
+            import core.memory.self_evolution as se_mod
+            import core.memory.memory_middleware as mw_mod
+            hub.register(ReviewerSink(ar_mod))
+            hub.register(EvolutionSink(se_mod))
+            hub.register(MemorySink(mw_mod))
+            self.ctx.feedback_hub = hub
+            logger.info(f"FeedbackHub 初始化完成，已注册 {len(hub.sinks)} 个 sink")
+        except Exception as e:
+            logger.warning(f"FeedbackHub 初始化失败（系统仍可运行）: {e}", exc_info=True)
 
     async def _step_inject_handler_refs(self):
         try:

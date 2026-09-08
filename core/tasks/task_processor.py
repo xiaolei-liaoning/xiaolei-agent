@@ -67,7 +67,58 @@ class TaskProcessor:
         self._feedback_history: List[Dict[str, Any]] = []
         self._skill_success_rates: Dict[str, Dict[str, int]] = {}
         logger.info("TaskProcessor 初始化完成")
-    
+
+    async def record_feedback(
+        self,
+        task_id: str,
+        rating: Optional[int] = None,
+        comment: Optional[str] = None,
+        source: str = "user",
+    ) -> Dict[str, Any]:
+        """方案C: 兑现注释承诺——记录用户反馈到 FeedbackHub
+        用法:
+            await task_processor.record_feedback(
+                task_id="t_123", rating=4, comment="还行"
+            )
+        """
+        from core.learning.feedback import get_hub, create_user_rating_event
+
+        if rating is not None and (rating < 1 or rating > 5):
+            return {"success": False, "reason": f"rating must be 1-5, got {rating}"}
+
+        # 存到本地历史
+        record = {
+            "task_id": task_id,
+            "rating": rating,
+            "comment": comment,
+            "source": source,
+            "timestamp": time.time(),
+        }
+        self._feedback_history.append(record)
+        # 限制历史长度（避免无限增长）
+        if len(self._feedback_history) > 1000:
+            self._feedback_history = self._feedback_history[-500:]
+
+        # 推送到 FeedbackHub（核心 - 触发 self_evolution 等）
+        hub = get_hub()
+        event = create_user_rating_event(
+            user_id="task_processor",
+            rating=rating or 0,
+            comment=comment,
+            task_id=task_id,
+            source=source,
+        )
+        await hub.emit(event)
+
+        logger.info(f"TaskProcessor.record_feedback: task={task_id} rating={rating}")
+        return {
+            "success": True,
+            "task_id": task_id,
+            "rating": rating,
+            "comment": comment,
+            "propagated": True,
+        }
+
     async def process(self, task: str) -> TaskResult:
         """处理任务
         
