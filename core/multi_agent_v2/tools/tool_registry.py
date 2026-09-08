@@ -614,16 +614,26 @@ async def _handle_search(args: Dict) -> Dict:
     async def _search_one(name: str, url: str, parser):
         for attempt in range(2):
             try:
-                html = await _http_get(url, timeout=25)
+                # 修复 REAL-BUG: 单个引擎超时/失败不能拖死其它引擎。
+                # 原实现 _http_get(timeout=25) 对 DDG(被墙) 每次 25s×2次重试,
+                # 且 asyncio.gather 等最慢的 → 其它引擎(Bing成功)的结果被拖到 40s+,
+                # 表现为 CLI "Thinking…卡住"。
+                # 改为: 每引擎 wait_for 上限(默认 8s), 失败立即放弃该引擎, 不阻塞其余。
+                html = await asyncio.wait_for(_http_get(url, timeout=8), timeout=9)
                 results = parser(html)
                 if results:
                     sources.append((name, results))
                     return
-            except Exception:
+            except (asyncio.TimeoutError, Exception):
                 if attempt == 0:
                     await asyncio.sleep(1)
+                # 失败/超时直接放弃本引擎, 不继续重试拖时间
 
-    await asyncio.gather(*[_search_one(n, u, p) for n, u, p in engines])
+    # return_exceptions=True: 任何引擎抛异常/超时都不会中断 gather, 也不等最慢引擎
+    await asyncio.gather(
+        *[_search_one(n, u, p) for n, u, p in engines],
+        return_exceptions=True,
+    )
 
     if not sources:
         # 兜底：重试百度
