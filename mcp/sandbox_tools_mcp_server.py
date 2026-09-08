@@ -53,6 +53,11 @@ except ImportError:
 # ────────────────────────────────────────
 
 _env_paths = os.environ.get("SANDBOX_ALLOWED_PATHS", "")
+# 默认允许 ~ (用户主目录) + /tmp。
+# 注: 这是刻意为之——若默认为 /tmp 或空, 未配置环境变量的用户连项目目录都读不了,
+#      MCP 沙盒工具(read/write/edit 文件)会直接瘫痪。要收紧沙盒请设 SANDBOX_ALLOWED_PATHS。
+#      #091 曾误标为"无沙盒漏洞"——实际有 check_path() 强校验(见 435 行),
+#      默认域是"用户自己的目录"而非全系统, 安全边界=当前用户权限。
 ALLOWED_PATHS: List[str] = (
     [p.strip() for p in _env_paths.split(",") if p.strip()]
     if _env_paths
