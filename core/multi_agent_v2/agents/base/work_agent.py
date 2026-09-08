@@ -88,18 +88,6 @@ class WorkAgent(BaseAgent):
         start = time.time()
         desc = task.description
 
-        # 修复(方案A): 用户明确要"子代理"时，把任务描述硬化成强约束指令。
-        # 仅靠 role 里的"必须用 task"软指令，LLM 在 ReAct 循环里仍会习惯性 read_file。
-        # 把指令直接写进任务描述，LLM 才能把它当硬性要求执行。
-        _subagent_signal = ("用子代理", "子代理", "subagent", "spawn子代理", "多agent协作", "多agent编排", "多智能体")
-        if any(s in desc for s in _subagent_signal):
-            desc += (
-                "\n\n【强制要求】本任务必须使用 task 工具派生子代理来执行。"
-                "不要用 read_file 直接深入读取每个文件——请先调用 task 工具"
-                "（指定 subagent_type，如 explore/analyze）把子任务委托给子代理，"
-                "子代理完成后你负责汇总与决策。这是硬性约束，违反会造成任务失败。"
-            )
-
         try:
             # ── SharedBus 工作记忆：搜索其他 Agent 已有成果 ──
             try:
