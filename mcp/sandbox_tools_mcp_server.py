@@ -26,6 +26,9 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional, List, Tuple
 
+import logging
+logger = logging.getLogger("sandbox_tools_mcp_server")
+
 # 标准工具导入（非 MCP 绕路）
 try:
     from core.tools.bash_tool import BashTool, BashResult
@@ -1311,7 +1314,12 @@ async def handle_request(request):
 
             if tool == "macos_open_app":
                 app = args["app"]
-                subprocess.run(["open", "-a", app], check=False, timeout=10)
+                try:
+                    r = subprocess.run(["open", "-a", app], capture_output=True, timeout=10)
+                    if r.returncode != 0:
+                        logger.warning("macos_open_app 失败: %s (%s)", app, r.stderr.strip()[:200])
+                except subprocess.TimeoutExpired:
+                    logger.warning("macos_open_app 超时: %s", app)
                 return {"jsonrpc": "2.0", "id": rid, "result": {"content": [{"text": f"已打开应用: {app}"}]}}
 
             if tool == "macos_notification":
@@ -1336,14 +1344,24 @@ async def handle_request(request):
                     title, msg = _as_escape(title), _as_escape(msg)
                 except ValueError as e:
                     return {"jsonrpc": "2.0", "id": rid, "result": {"content": [{"text": f"错误: {e}"}]}}
-                subprocess.run(
-                    ["osascript", "-e", f'display notification "{msg}" with title "{title}"'],
-                    check=False, timeout=5)
+                try:
+                    r = subprocess.run(
+                        ["osascript", "-e", f'display notification "{msg}" with title "{title}"'],
+                        capture_output=True, text=True, timeout=5)
+                    if r.returncode != 0:
+                        logger.warning("osascript 通知失败: %s", r.stderr.strip()[:200])
+                except subprocess.TimeoutExpired:
+                    logger.warning("osascript 通知超时: %s", title)
                 return {"jsonrpc": "2.0", "id": rid, "result": {"content": [{"text": f"通知已发送: {title}"}]}}
 
             if tool == "macos_screenshot":
                 path = args.get("path", os.path.expanduser("~/Desktop/screenshot.png"))
-                subprocess.run(["screencapture", path], check=False, timeout=10)
+                try:
+                    r = subprocess.run(["screencapture", path], capture_output=True, timeout=10)
+                    if r.returncode != 0:
+                        logger.warning("macos_screenshot 失败: %s (%s)", path, r.stderr.strip()[:200])
+                except subprocess.TimeoutExpired:
+                    logger.warning("macos_screenshot 超时: %s", path)
                 return {"jsonrpc": "2.0", "id": rid, "result": {"content": [{"text": f"截图已保存: {path}"}]}}
 
             if tool == "macos_clipboard":
