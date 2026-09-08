@@ -308,7 +308,8 @@ class ShortTermMemoryManager:
 
         result: List[Dict] = []
 
-        # 1. 元摘要
+        # 1. 元摘要（最高优先级保留——修复 #143: 原实现 meta 排最前,
+        #    倒序截断时第一个被删, 全局摘要最先丢, 与其"最浓缩"的价值相反）
         for mf in meta_files:
             result.append({
                 "role": "system",
@@ -333,15 +334,21 @@ class ShortTermMemoryManager:
         # 4. 按 token 截断（不超过上限）
         total = _estimate_tokens(" ".join(m.get("content", "") for m in result))
         if total > limit_tokens:
-            reversed_result = list(reversed(result))
+            # 修复 #143: 倒序保留(最新优先), 但 meta/summary 是"全局浓缩"信息,
+            # 必须无条件保留——只对普通消息倒序淘汰。
+            meta_and_summary = [m for m in result if m["content"].startswith("[对话历史摘要]") or m["content"].startswith("[历史片段]")]
+            normal = [m for m in result if m not in meta_and_summary]
+            reversed_normal = list(reversed(normal))
             keep = []
-            remaining = limit_tokens
-            for m in reversed_result:
+            remaining = limit_tokens - _estimate_tokens(" ".join(m.get("content", "") for m in meta_and_summary))
+            if remaining < 0:
+                remaining = 0
+            for m in reversed_normal:
                 t = _estimate_tokens(m.get("content", ""))
                 if t <= remaining:
                     keep.insert(0, m)
                     remaining -= t
-            result = keep
+            result = meta_and_summary + keep
 
         return result
 

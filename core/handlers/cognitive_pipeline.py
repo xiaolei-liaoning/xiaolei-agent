@@ -10,6 +10,7 @@ CognitivePipeline — 认知闭环编排中枢
 核心设计原则：任何步骤异常都不向上抛出，而是转换成反问问题让用户决策。
 """
 
+import asyncio
 import logging
 from typing import Dict, Any, Optional, List
 
@@ -78,6 +79,10 @@ class CognitivePipeline:
 
         try:
             return await self._run_pipeline(message, skill_name, dispatcher, db_initialized)
+        except asyncio.CancelledError:
+            # 修复 #135: CancelledError/KeyboardInterrupt 等 BaseException 子类
+            # 必须放行——被 except Exception 捕获会让用户 esc 中断变成"反问"假象。
+            raise
         except Exception as e:
             logger.error(f"认知闭环异常: {e}", exc_info=True)
             return self._error_to_clarification(
@@ -307,8 +312,9 @@ class CognitivePipeline:
                 if checked and checked.get("optimized_response"):
                     result["reply"] = checked["optimized_response"]
                     result["self_checked"] = True
-            except Exception:
-                pass  # 自检失败不影响主流程
+            except Exception as e:
+                # 修复 #158: 原 except: pass 静默——自检优化失效无从排查。
+                logger.debug(f"自检优化跳过(不影响主流程): {e}")
 
         return result
 
@@ -575,8 +581,10 @@ class CognitivePipeline:
                 result=str(result.get("reply", result.get("result", ""))),
                 success=result.get("success", False),
             )
-        except Exception:
-            pass  # 学习失败不影响主流程
+        except Exception as e:
+            # 修复 #160: 原 except: pass 完全静默——用户以为"AI 越用越聪明",
+            # 实际学习从未成功且无法排障。至少记 warning。
+            logger.warning(f"持续学习记录失败(不影响主流程): {e}")
 
     def _clarification_response(
         self, questions: List[ClarificationQuestion], skill_name: str, message: str,

@@ -144,7 +144,8 @@ class TaskPlanner:
             from ..engine.skill_dispatcher import SkillDispatcher
 
             dispatcher = SkillDispatcher()
-            skill = await dispatcher.match_skill(part)
+            # 修复: match_skill 是同步方法返回 str, `await str` 会直接 TypeError。
+            skill = dispatcher.match_skill(part)
             params = dispatcher.extract_params(part, skill)
 
             sub_task = {

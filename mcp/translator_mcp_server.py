@@ -97,13 +97,21 @@ def call_translate_api(text: str, langpair: str) -> dict:
     )
     response.raise_for_status()
     data = response.json()
+    # 修复 #182: 原式 `int(status) if status else 0 == 200` 有两层 bug——
+    #   1. 运算符优先级: else 分支是 `0 == 200`(永远 False), 不是 `int(status) == 200`;
+    #      而 status 非空时直接取 int(status) 当真值 → responseStatus=500 也判"成功"。
+    #   2. MyMemory 实际返回字符串 "200", int() 兜底转换。
     status = data.get('responseStatus')
-    if int(status) if status else 0 == 200:
+    try:
+        status_ok = status is not None and int(status) == 200
+    except (TypeError, ValueError):
+        status_ok = False
+    if status_ok:
         translated = data['responseData']['translatedText']
         match_val = data.get('responseData', {}).get('match', 0)
         confidence = round(float(match_val), 2) if match_val else None
         return {"success": True, "original": text, "translated": translated, "confidence": confidence}
-    return {"success": False, "error": data.get('responseDetails', '未知错误')}
+    return {"success": False, "error": data.get('responseDetails', f'responseStatus={status!r}')}
 
 
 async def handle_request(request):

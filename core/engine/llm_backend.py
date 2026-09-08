@@ -591,7 +591,10 @@ class GLMBackend:
         # ── OpenRouter (fallback) ──
         if self.openrouter_client:
             try:
-                payload = dict(model=self.deepseek_model, messages=messages,
+                # 修复: 原实现误用 self.deepseek_model("deepseek-chat")——
+                # OpenRouter 要求完整模型 ID (deepseek/deepseek-chat),
+                # 裸 "deepseek-chat" 会被判 ambiguous 报 400 (与 342 行非流式路径不一致)。
+                payload = dict(model=self.openrouter_model, messages=messages,
                                temperature=temperature, max_tokens=max_tokens,
                                stream=True, stream_options={"include_usage": True})
                 if tools:

@@ -126,15 +126,18 @@ class MemoryOptimizer:
                 self.memory_threshold = new_threshold
             
             # 2. 调整优化间隔
+            # 修复 #156: 原逻辑与注释相反——内存紧张时反而"增加间隔"(减少清理),
+            # 内存压力下清理频率更低 → OOM 风险。改为: 压力大→缩短间隔(更勤清理),
+            # 空闲→拉长间隔(省 CPU)。
             if (avg_cpu > 75 or avg_load > 1.8) or avg_memory_percent > 85:
-                # 系统负载较高或内存紧张，增加优化间隔
-                new_interval = min(180, self.optimization_interval * 1.3)
-                logger.info(f"自动调优: 增加优化间隔从 {self.optimization_interval}秒 到 {int(new_interval)}秒")
+                # 系统负载较高或内存紧张 → 缩短优化间隔, 更频繁清理
+                new_interval = max(10, self.optimization_interval * 0.7)
+                logger.info(f"自动调优: 内存/CPU 压力大, 缩短优化间隔从 {self.optimization_interval}秒 到 {int(new_interval)}秒")
                 self.optimization_interval = int(new_interval)
             elif (avg_cpu < 25 and avg_load < 0.4) and avg_memory_percent < 60:
-                # 系统负载较低且内存充足，减少优化间隔
-                new_interval = max(10, self.optimization_interval * 0.7)
-                logger.info(f"自动调优: 减少优化间隔从 {self.optimization_interval}秒 到 {int(new_interval)}秒")
+                # 系统负载较低且内存充足 → 拉长优化间隔, 降低自身开销
+                new_interval = min(180, self.optimization_interval * 1.3)
+                logger.info(f"自动调优: 系统空闲, 拉长优化间隔从 {self.optimization_interval}秒 到 {int(new_interval)}秒")
                 self.optimization_interval = int(new_interval)
             
             # 3. 调整告警阈值

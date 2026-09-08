@@ -356,17 +356,26 @@ class SkillDispatcher:
 
         system_prompt, user_msg = self._build_llm_classify_prompt(message)
         try:
-            loop = asyncio.new_event_loop()
-            try:
-                response = loop.run_until_complete(
-                    self.llm_router.simple_chat(
-                        user_message=user_msg,
-                        system_prompt=system_prompt,
-                        temperature=0.1,
-                    )
+            # 修复 #226: 原实现无条件 new_event_loop——若调用方已身处运行中的 loop
+            # (FastAPI 请求处理器), 嵌套 run_until_complete 会直接 RuntimeError;
+            # 且裸 new_event_loop 在部分场景与主 loop 冲突导致偶发 hang。
+            # 改为: 已在 loop 内 → 后台线程独立跑(不阻塞当前 loop, 也不会嵌套);
+            #       无 loop → 简单 asyncio.run。
+            async def _call() -> str:
+                return await self.llm_router.simple_chat(
+                    user_message=user_msg,
+                    system_prompt=system_prompt,
+                    temperature=0.1,
                 )
-            finally:
-                loop.close()
+
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                response = asyncio.run(_call())
+            else:
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _pool:
+                    response = _pool.submit(lambda: asyncio.run(_call())).result(timeout=60)
 
             if not response or not response.strip():
                 return None, 0.0
