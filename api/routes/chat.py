@@ -303,14 +303,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
     agents_used = None
 
     # 走 V2 unified_agent 系统(忽略 force_single_agent / force_multi_agent 等旧参数)
-    # 注：早期注释说的 "V1 队长-队员多Agent系统(LeaderAgent + LLMAgent)" 已迁移到 V2，
-    # 旧入口 core/agent_system.py 已删除，不要再引用。
-    特性：
-    - 使用对话历史管理器(自动压缩)
-    - 支持 MessageBus 通信
-    - 集成 RAG 引擎
-    - 智能 Agent 自动选择(auto_agent_selection=True 时启用)
-    - 统一 max_rounds=10, 与 CLI 保持一致
+    # 注: 早期注释说的 "V1 队长-队员多Agent系统" 已迁移到 V2, 旧入口 core/agent_system.py 已删除。
     return await _handle_with_multi_agent(request, message, start_time, context_info, execution_plan_info, agents_used)
 
 
@@ -487,9 +480,14 @@ async def _handle_with_multi_agent(
         try:
             from core.memory.memory_middleware import get_memory_middleware
             mw = get_memory_middleware()
-            asyncio.ensure_future(mw.process_turn(uid, message, reply_text))
-        except Exception:
-            pass
+            # 修复 #074: 用 create_task + 保存引用，避免 ensure_future 裸任务被 GC
+            # （ensure_future 不保存引用，任务可能在执行中被垃圾回收）
+            _mem_task = asyncio.create_task(mw.process_turn(uid, message, reply_text))
+            _mem_task.add_done_callback(
+                lambda t: t.exception() if not t.cancelled() else None
+            )
+        except Exception as e:
+            logger.warning("记忆提取任务创建失败: %s", e)
 
         return ChatResponse(
             reply=reply_text,
@@ -846,10 +844,27 @@ async def clear_context(request: ContextRequest):
 # ---------------------------------------------------------------------------
 @router.post("/upload", response_model=UploadResponse, summary="文件上传API")
 async def upload(file: UploadFile = File(...)) -> UploadResponse:
-    """文件上传 API 入口。"""
+    """文件上传 API 入口。
+
+    修复 #077: 增加 MIME content_type 白名单验证——扩展名可伪造,
+    但 FastAPI 会带浏览器/客户端声明的 Content-Type, 双重校验降低恶意文件风险。
+    """
     try:
         allowed_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.gif', '.tiff',
                             '.pdf', '.doc', '.docx', '.txt', '.csv', '.xlsx'}
+        # 扩展名 → 允许的 MIME 类型映射（主流浏览器/客户端实际声明的类型）
+        allowed_mime_by_ext = {
+            '.jpg': {'image/jpeg'}, '.jpeg': {'image/jpeg'},
+            '.png': {'image/png'}, '.bmp': {'image/bmp'},
+            '.gif': {'image/gif'}, '.tiff': {'image/tiff'}, '.webp': {'image/webp'},
+            '.pdf': {'application/pdf'},
+            '.doc': {'application/msword'},
+            '.docx': {'application/vnd.openxmlformats-officedocument.wordprocessingml.document'},
+            '.txt': {'text/plain'},
+            '.csv': {'text/csv', 'application/vnd.ms-excel', 'text/plain'},
+            '.xlsx': {'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                      'application/octet-stream'},  # 部分浏览器将 xlsx 报为 octet-stream
+        }
         file_ext = Path(file.filename).suffix.lower()
 
         if file_ext not in allowed_extensions:
@@ -858,12 +873,24 @@ async def upload(file: UploadFile = File(...)) -> UploadResponse:
                 detail=f"不支持的文件类型: {file_ext}"
             )
 
+        # 修复 #077: MIME 双校验——扩展名与声明的 content_type 不一致则拒绝
+        declared_ct = (file.content_type or "").split(";")[0].strip().lower()
+        allowed_mimes = allowed_mime_by_ext.get(file_ext, set())
+        # 允许的 MIME 白名单（含未声明/缺失时放行的常见类型之外，严格拒绝可疑组合）
+        if declared_ct and allowed_mimes and declared_ct not in allowed_mimes:
+            logger.warning("文件 MIME 不匹配被拒: ext=%s content_type=%s filename=%s",
+                           file_ext, declared_ct, file.filename)
+            raise HTTPException(
+                status_code=400,
+                detail=f"文件类型与扩展名不匹配: 扩展名 {file_ext} 但 MIME 是 {declared_ct}"
+            )
+
         MAX_FILE_SIZE = 10 * 1024 * 1024
         content = await file.read()
         if len(content) > MAX_FILE_SIZE:
             raise HTTPException(
                 status_code=400,
-                detail=f"文件大小超过限制(最大 {MAX_FILE_SIZE // (1024*1024)}MB)"
+                detail=f"文件大小超过限制（最大 {MAX_FILE_SIZE // (1024*1024)}MB）"
             )
 
         upload_dir = Path("uploads")

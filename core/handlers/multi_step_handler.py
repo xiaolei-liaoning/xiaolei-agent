@@ -75,7 +75,12 @@ async def handle_multi_step(
         from core.auto_reviewer import AutoReviewer
         from core.learning.feedback import get_hub, create_task_completion_event
         reviewer = AutoReviewer()
-        logs = "\n".join(f"{'✅' if r.get('success') else '❌'} [{s.get('tool_call', {}).get('name','?')}] {s.get('user_message','')}" for s, r in zip(sub_tasks, results))
+        # 修复 #241 (生产端): 复盘日志改用结构化前缀 [OK]/[FAIL]（保留 emoji 便于人读）。
+        # auto_reviewer._parse_status_line 优先识别前缀，emoji 判定只是兼容兜底。
+        logs = "\n".join(
+            f"{'[OK] ✅' if r.get('success') else '[FAIL] ❌'} [{s.get('tool_call', {}).get('name','?')}] {s.get('user_message','')}"
+            for s, r in zip(sub_tasks, results)
+        )
         review = reviewer.review(
             task_id=f"multi_{hash(message)}",
             task_name="多步任务",
