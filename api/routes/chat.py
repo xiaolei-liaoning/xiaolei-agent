@@ -37,12 +37,12 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["chat"])
 
 
-# WebSocket 连接管理器（从 chat_ws.py 导入，保持向后兼容性）
+# WebSocket 连接管理器(从 chat_ws.py 导入，保持向后兼容性)
 from api.routes.chat_ws import manager
 
 
 # ---------------------------------------------------------------------------
-# 辅助函数：处理图片文件（OCR识别）
+# 辅助函数：处理图片文件(OCR识别)
 # ---------------------------------------------------------------------------
 ALLOWED_IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.bmp', '.gif', '.tiff', '.webp'}
 
@@ -136,7 +136,7 @@ class ChatRequest(BaseModel):
     agent_id: str = Field(default="default", description="Agent ID")
     agent_name: str = Field(default="小龙虾助手", description="Agent 名称")
     file_paths: Optional[List[str]] = Field(default=None, description="已上传文件的路径列表")
-    auto_agent_selection: bool = Field(default=True, description="是否启用智能Agent自动选择（取代agent小组）")
+    auto_agent_selection: bool = Field(default=True, description="是否启用智能Agent自动选择(取代agent小组)")
     force_single_agent: bool = Field(default=False, description="强制使用单Agent模式")
     force_multi_agent: bool = Field(default=False, description="强制使用多Agent模式")
 
@@ -147,12 +147,12 @@ class ChatResponse(BaseModel):
     tool_call: Optional[Dict[str, Any]] = Field(default=None, description="工具调用信息")
     skill: Optional[str] = Field(default=None, description="匹配的技能名")
     task_id: Optional[str] = Field(default=None, description="任务ID")
-    message_id: Optional[int] = Field(default=None, description="AI回复的消息ID（用于点赞）")
+    message_id: Optional[int] = Field(default=None, description="AI回复的消息ID(用于点赞)")
     thinking_process: Optional[Dict[str, Any]] = Field(default=None, description="AI思考过程")
     context_info: Optional[Dict[str, Any]] = Field(default=None, description="使用的上下文信息")
-    agents_used: Optional[List[str]] = Field(default=None, description="实际使用的Agent列表（智能选择）")
-    execution_plan: Optional[Dict[str, Any]] = Field(default=None, description="执行计划信息（智能选择）")
-    md_path: Optional[str] = Field(default=None, description="MD报告路径（爬虫/搜索结果）")  # ✅ 新增
+    agents_used: Optional[List[str]] = Field(default=None, description="实际使用的Agent列表(智能选择)")
+    execution_plan: Optional[Dict[str, Any]] = Field(default=None, description="执行计划信息(智能选择)")
+    md_path: Optional[str] = Field(default=None, description="MD报告路径(爬虫/搜索结果)")  # ✅ 新增
     ocr_results: Optional[List[Dict[str, Any]]] = Field(default=None, description="图片OCR识别结果列表")  # 🖼️ 新增
 
 
@@ -161,7 +161,7 @@ class UploadResponse(BaseModel):
     success: bool = Field(..., description="是否成功")
     file_path: str = Field(..., description="保存的文件路径")
     filename: str = Field(..., description="文件名")
-    file_size: int = Field(..., description="文件大小（字节）")
+    file_size: int = Field(..., description="文件大小(字节)")
     message: str = Field(default="", description="附加消息")
 
 
@@ -173,7 +173,7 @@ class ContextRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# 内部函数：判断是否需要走Agent（智能版本）
+# 内部函数：判断是否需要走Agent(智能版本)
 # ---------------------------------------------------------------------------
 def _needs_agent(message: str) -> bool:
     """判断是否需要走Agent系统"""
@@ -192,10 +192,10 @@ def _needs_agent(message: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# 内部函数：判断是否需要使用多Agent模式（multi_agent_v2）
+# 内部函数：判断是否需要使用多Agent模式(multi_agent_v2)
 # ---------------------------------------------------------------------------
 def _needs_multi_agent(message: str) -> bool:
-    """判断是否需要走 multi_agent_v2 unified_agent（不再是 V1 队长-队员）
+    """判断是否需要走 multi_agent_v2 unified_agent(不再是 V1 队长-队员)
 
     触发条件：
     1. 明确提到"深度思考"、"自主搜索"等深度思考触发词
@@ -239,11 +239,11 @@ def _needs_multi_agent(message: str) -> bool:
 # 内部函数：获取上下文信息
 # ---------------------------------------------------------------------------
 def _get_context_info(user_id: int, query: str = "") -> Dict[str, Any]:
-    """获取用户的上下文信息（包括向量记忆）
+    """获取用户的上下文信息(包括向量记忆)
 
     Args:
         user_id: 用户ID
-        query: 查询文本（用于向量检索相关记忆）
+        query: 查询文本(用于向量检索相关记忆)
     """
     try:
         history = get_history_manager()
@@ -279,15 +279,15 @@ def _get_context_info(user_id: int, query: str = "") -> Dict[str, Any]:
 async def chat(request: ChatRequest) -> ChatResponse:
     """核心聊天 API 入口
 
-    Web 走 V2 unified_agent 系统（ReAct 循环 + 5 个 profile）。
-    注：早期注释说的 "V1 队长-队员多Agent系统（LeaderAgent + LLMAgent）" 已迁移到 V2，
+    Web 走 V2 unified_agent 系统(ReAct 循环 + 5 个 profile)。
+    注：早期注释说的 "V1 队长-队员多Agent系统(LeaderAgent + LLMAgent)" 已迁移到 V2，
     旧入口 core/agent_system.py 已删除，不要再引用。
 
-    特性：
-    - 使用对话历史管理器（自动压缩）
+    特性:
+    - 使用对话历史管理器(自动压缩)
     - 支持 MessageBus 通信
     - 集成 RAG 引擎
-    - 智能 Agent 自动选择（auto_agent_selection=True 时启用）
+    - 智能 Agent 自动选择(auto_agent_selection=True 时启用)
     """
     message: str = request.message.strip()
     if not message:
@@ -295,14 +295,22 @@ async def chat(request: ChatRequest) -> ChatResponse:
 
     start_time: float = time.time()
 
-    # 获取上下文信息（包括向量记忆检索）
+    # 获取上下文信息(包括向量记忆检索)
     context_info = _get_context_info(request.user_id, query=message)
 
-    # 智能 Agent 自动选择（如果启用）
+    # 智能 Agent 自动选择(如果启用)
     execution_plan_info = None
     agents_used = None
 
-    # 走 V2 unified_agent 系统（忽略 force_single_agent / force_multi_agent 等旧参数）
+    # 走 V2 unified_agent 系统(忽略 force_single_agent / force_multi_agent 等旧参数)
+    # 注：早期注释说的 "V1 队长-队员多Agent系统(LeaderAgent + LLMAgent)" 已迁移到 V2，
+    # 旧入口 core/agent_system.py 已删除，不要再引用。
+    特性：
+    - 使用对话历史管理器(自动压缩)
+    - 支持 MessageBus 通信
+    - 集成 RAG 引擎
+    - 智能 Agent 自动选择(auto_agent_selection=True 时启用)
+    - 统一 max_rounds=10, 与 CLI 保持一致
     return await _handle_with_multi_agent(request, message, start_time, context_info, execution_plan_info, agents_used)
 
 
@@ -314,11 +322,11 @@ async def _handle_with_multi_agent(
     execution_plan_info: Optional[Dict[str, Any]],
     agents_used: Optional[List[str]]
 ) -> ChatResponse:
-    """通过 V2 unified_agent（unified_agent.run_unified）处理 Web 聊天请求"""
+    """通过 V2 unified_agent(unified_agent.run_unified)处理 Web 聊天请求"""
     try:
         logger.info("🚀 V2 unified_agent 开始处理: %s...", message[:60])
 
-        # 保存用户消息到对话历史（自动压缩）
+        # 保存用户消息到对话历史(自动压缩)
         try:
             history = get_history_manager()
             history.add_message(request.user_id, "user", message)
@@ -326,7 +334,7 @@ async def _handle_with_multi_agent(
         except Exception as e:
             logger.warning("添加到对话历史失败: %s", e)
 
-        # 处理图片文件（OCR识别）
+        # 处理图片文件(OCR识别)
         ocr_results = []
         if request.file_paths:
             logger.info(f"检测到上传文件数量: {len(request.file_paths)}")
@@ -335,12 +343,12 @@ async def _handle_with_multi_agent(
                 message = f"{message}\n\n{ocr_text}"
                 logger.info(f"已将OCR结果附加到消息，追加字符数: {len(ocr_text)}")
 
-        # ========== V2 unified_agent 执行（5 个 profile 都共享 unified_agent.run_unified）==========
+        # ========== V2 unified_agent 执行(5 个 profile 都共享 unified_agent.run_unified)==========
         from core.multi_agent_v2.agents.unified_agent import run_unified
 
         uid = str(request.user_id)
 
-        # ===== 用户记忆：统一中间件 =====
+        # ===== 用户记忆:统一中间件 =====
         user_context_str = ""
         try:
             from core.memory.memory_middleware import get_memory_middleware
@@ -352,7 +360,7 @@ async def _handle_with_multi_agent(
         task_with_context = message
         if user_context_str:
             task_with_context = (
-                f"{message}\n\n【用户已知信息（来自长期记忆）】\n{user_context_str}\n\n"
+                f"{message}\n\n【用户已知信息(来自长期记忆)】\n{user_context_str}\n\n"
                 "以上信息供参考。请按用户当前要求执行，不要仅凭历史记录作答。"
             )
 
@@ -360,7 +368,7 @@ async def _handle_with_multi_agent(
             result = await asyncio.wait_for(
                 run_unified(
                     task_with_context,
-                    max_rounds=3,
+                    max_rounds=10,
                     mode="react",
                     user_id=uid,
                 ),
@@ -381,9 +389,9 @@ async def _handle_with_multi_agent(
         if success:
             reply_parts.append(f"✅ 统一Agent 任务完成！共 {total_rounds} 轮，{total_subtasks} 个子任务。\n")
         else:
-            reply_parts.append(f"❌ 统一Agent 任务未完全完成（{result.get('error', '未知错误')}）\n")
+            reply_parts.append(f"❌ 统一Agent 任务未完全完成({result.get('error', '未知错误')})\n")
 
-        # ponytail: 只显示最后一个结果（避免 batch_delegate 中间结果重复显示）
+        # ponytail: 只显示最后一个结果(避免 batch_delegate 中间结果重复显示)
         if all_results:
             r = all_results[-1]
             worker_name = r.get("worker", "leader")
@@ -485,9 +493,9 @@ async def _handle_with_multi_agent(
 
         return ChatResponse(
             reply=reply_text,
-            skill="v1_multi_agent",
+            skill="v2_unified_agent",
             thinking_process={
-                "mode": "v1_leader_worker",
+                "mode": "react",
                 "collaboration_mode": "leader_worker",
                 "agents_used": team_names,
                 "execution_plan": [
@@ -501,7 +509,7 @@ async def _handle_with_multi_agent(
         )
 
     except Exception as e:
-        # V2 unified_agent 异常，降级到单 Agent 处理（V1 不存在）
+        # V2 unified_agent 异常，降级到单 Agent 处理(V1 不存在)
         logger.error(f"V2 多Agent 异常，降级到单Agent处理: {e}", exc_info=True)
         return await _handle_with_agent(request, message, start_time, context_info, execution_plan_info, agents_used)
 
@@ -528,7 +536,7 @@ async def _handle_with_agent(
         except Exception as e:
             logger.warning("添加到对话历史失败: %s", e)
 
-        # 🖼️ 处理图片文件（OCR识别）
+        # 🖼️ 处理图片文件(OCR识别)
         ocr_results = []
         if request.file_paths:
             logger.info(f"检测到上传文件数量: {len(request.file_paths)}")
@@ -666,7 +674,7 @@ async def _handle_direct(
         except Exception as e:
             logger.warning("添加到对话历史失败: %s", e)
 
-        # 🖼️ 处理图片文件（OCR识别）
+        # 🖼️ 处理图片文件(OCR识别)
         ocr_results = []
         if request.file_paths:
             logger.info(f"检测到上传文件数量: {len(request.file_paths)}")
@@ -720,7 +728,7 @@ async def _handle_direct(
             task_success = result.get("success", True)
             md_path = result.get("md_path")  # ✅ 新增
 
-            # 提取thinking_process（如果存在）
+            # 提取thinking_process(如果存在)
             if skill_name == "deep_thinking" and result.get("result"):
                 result_data = result.get("result")
                 if isinstance(result_data, dict):
@@ -813,7 +821,7 @@ async def clear_context(request: ContextRequest):
         except Exception as e:
             logger.warning("清除数据库历史失败: %s", e)
 
-        # 清除内存中的上下文（如果有）
+        # 清除内存中的上下文(如果有)
         try:
             from core.handlers import short_term_memory
             short_term_memory.clear(request.user_id)
@@ -855,7 +863,7 @@ async def upload(file: UploadFile = File(...)) -> UploadResponse:
         if len(content) > MAX_FILE_SIZE:
             raise HTTPException(
                 status_code=400,
-                detail=f"文件大小超过限制（最大 {MAX_FILE_SIZE // (1024*1024)}MB）"
+                detail=f"文件大小超过限制(最大 {MAX_FILE_SIZE // (1024*1024)}MB)"
             )
 
         upload_dir = Path("uploads")
@@ -918,13 +926,13 @@ async def upload_batch(files: List[UploadFile] = File(...)) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# API 端点：获取Agent列表（适配 coze.js 前端）
+# API 端点：获取Agent列表(适配 coze.js 前端)
 # ---------------------------------------------------------------------------
 @router.get("/agents", summary="获取Agent列表")
 async def get_agents():
     """获取系统所有可用 Agent 列表
 
-    数据来源：config/agents.yml（使用 yaml.safe_load 加载）
+    数据来源：config/agents.yml(使用 yaml.safe_load 加载)
     如果 agents.yml 不存在或加载失败，则返回默认的硬编码列表。
     返回格式适配 coze.js 前端的期望格式：
         { "success": true, "data": [{"id": "...", "name": "...", "description": "..."}, ...] }
@@ -965,7 +973,7 @@ async def get_agents():
 
 
 def _get_default_agents_response() -> Dict[str, Any]:
-    """返回默认 Agent 列表（当 agents.yml 加载失败时）"""
+    """返回默认 Agent 列表(当 agents.yml 加载失败时)"""
     default_agents = [
         {"id": "general",        "name": "通用助手",       "description": "通用助手，擅长处理各种日常问题"},
         {"id": "weather_expert", "name": "天气查询助手",   "description": "天气查询助手，可以查询各城市的天气和预报"},

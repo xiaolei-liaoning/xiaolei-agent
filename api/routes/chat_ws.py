@@ -106,14 +106,26 @@ class ConnectionManager:
                 self._logger.error(f"清理超时连接失败: {e}")
 
     async def connect(self, websocket: WebSocket):
-        """连接客户端"""
-        await websocket.accept()
-        self.active_connections[websocket] = {
-            "connected_at": datetime.now(),
-            "last_pong": datetime.now(),
-            "last_ping": None
-        }
-        self._logger.info(f"新连接: {id(websocket)}, 当前活跃连接数: {len(self.active_connections)}")
+            """连接客户端，带简易鉴权（防止恶意客户端滥用 LLM 资源）"""
+            # 尝试从查询参数或 header 获取 token
+            token = websocket.query_params.get("token", "")
+            if not token:
+                # 兼容旧客户端：也尝试从 header 读取 Authorization: Bearer <token>
+                auth = websocket.headers.get("authorization", "")
+                if auth and auth.startswith("Bearer "):
+                    token = auth[7:]
+            if not token or token != "ws-secret-token-2026":
+                await websocket.close(code=1008, reason="invalid token")
+                self._logger.warning(f"WebSocket 连接因无效 token 被拒绝: {id(websocket)}")
+                return
+            await websocket.accept()
+            self.active_connections[websocket] = {
+                "connected_at": datetime.now(),
+                "last_pong": datetime.now(),
+                "last_ping": None,
+                "token": token
+            }
+            self._logger.info(f"WebSocket 连接授权通过: {id(websocket)}, 当前活跃连接数: {len(self.active_connections)}")
 
     async def disconnect(self, websocket: WebSocket):
         """断开连接"""
