@@ -1322,7 +1322,16 @@ async def handle_request(request):
                 def _as_escape(s: str) -> str:
                     if any(ord(c) < 32 for c in str(s)):
                         raise ValueError("通知内容不能包含控制字符")
-                    return str(s).replace("\\", "\\\\").replace('"', '\\"')
+                    # 转义 AppleScript 字符串特殊字符:
+                    #   \" → \\\"  (裸引号逃逸)
+                    #   \\\\  → \\\\\\\\ (反斜杠)
+                    #   &   → \\&   (连接符, 防御 `a & (do shell script ...)` 注入)
+                    return (
+                        str(s)
+                        .replace("\\", "\\\\")
+                        .replace('"', '\\"')
+                        .replace("&", "\\&")
+                    )
                 try:
                     title, msg = _as_escape(title), _as_escape(msg)
                 except ValueError as e:
