@@ -9,7 +9,12 @@ _builder = get_builder()
 
 
 class AgentProfile(str, Enum):
-    """代理类型 — 对应不同的工具权限和系统提示"""
+    """代理类型 — 对应不同的工具权限和系统提示
+
+    V2 定义：每种 profile 都有清晰的可做/不可做（disallowed）区分，
+    配合 system_hint 提示词，profile 才有实际意义。
+    所有 profile 的设计均遵循 OpenCode 设计哲学，避免 allowed=None 导致的死锁。
+    """
     EXPLORE = "explore"
     BUILD = "build"
     GENERAL = "general"
