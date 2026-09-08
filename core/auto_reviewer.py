@@ -270,6 +270,34 @@ class AutoReviewer:
             is_worth_saving=is_worth_saving,
         )
 
+    # ── 状态行解析（修复 #241）───────────────────────────────
+    # 原 3 处（_simple_review / _extract_execution_metrics / _analyze_failure_pattern）
+    # 各自 `if "✅" in line` 数 emoji——任何不含 emoji 的日志（错误堆栈、LLM 正文、
+    # 用户文本）都被算成"既不成功也不失败"，复盘数据失真。
+    # 统一收口：优先识别结构化前缀 [OK]/[FAIL]，兼容旧 emoji 格式。
+    _STATUS_OK_PREFIXES = ("[OK]",)
+    _STATUS_FAIL_PREFIXES = ("[FAIL]",)
+
+    @staticmethod
+    def _parse_status_line(line: str) -> str:
+        """解析一行日志的状态: 返回 "success" / "failed" / "unknown"
+
+        修复 #241: 不再裸数 emoji 子串。
+        识别顺序: 结构化前缀 [OK]/[FAIL] → 行首 emoji → 兜底 unknown
+        """
+        stripped = line.strip()
+        if stripped.startswith(AutoReviewer._STATUS_OK_PREFIXES):
+            return "success"
+        if stripped.startswith(AutoReviewer._STATUS_FAIL_PREFIXES):
+            return "failed"
+        # 兼容旧格式: emoji 在行首附近（前 4 字符内）才算，避免正文里碰巧含 emoji
+        head = stripped[:4]
+        if "✅" in head:
+            return "success"
+        if "❌" in head:
+            return "failed"
+        return "unknown"
+
     def _simple_review(
         self,
         task_id: str,
@@ -279,8 +307,10 @@ class AutoReviewer:
         """智能Mock复盘（无LLM时使用）"""
         lines = execution_logs.strip().split("\n")
 
-        success_count = sum(1 for line in lines if "✅" in line)
-        failed_count = sum(1 for line in lines if "❌" in line)
+        # 修复 #241: 统一走 _parse_status_line（结构化前缀优先, 兼容 emoji）
+        statuses = [self._parse_status_line(line) for line in lines]
+        success_count = sum(1 for s in statuses if s == "success")
+        failed_count = sum(1 for s in statuses if s == "failed")
         total_count = len(lines)
         
         # 分析任务类型
@@ -349,10 +379,12 @@ class AutoReviewer:
                 pattern_info["pattern"] = pattern_type
                 break
 
-        tool_pattern = r'\[([\w_]+)\]'
+        # 修复 #241 补充: tool_pattern 排除结构化前缀 [OK]/[FAIL]，否则会被当成工具名
+        tool_pattern = r'\[(?!OK\b|FAIL\b)([\w_]+)\]'
         failed_tools = set()
         for line in lines:
-            if "❌" in line or "失败" in line or "错误" in line:
+            # 修复 #241: 状态判定走统一解析器；"失败/错误"关键词保留兜底（旧日志可能无任何标记）
+            if self._parse_status_line(line) == "failed" or "失败" in line or "错误" in line:
                 match = re.search(tool_pattern, line)
                 if match:
                     failed_tools.add(match.group(1))
@@ -388,12 +420,14 @@ class AutoReviewer:
         duration_pattern = r'耗时:\s*(\d+)ms'
 
         for line in lines:
-            if "✅" in line:
+            status = self._parse_status_line(line)
+            if status == "success":
                 metrics["success_count"] += 1
-            elif "❌" in line:
+            elif status == "failed":
                 metrics["failed_count"] += 1
 
-            tool_match = re.search(r'\[([\w_]+)\]', line)
+            # 修复 #241 补充: 排除结构化前缀 [OK]/[FAIL]，否则被当成工具名
+            tool_match = re.search(r'\[(?!OK\b|FAIL\b)([\w_]+)\]', line)
             if tool_match:
                 metrics["tools_used"].add(tool_match.group(1))
 
