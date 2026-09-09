@@ -1146,7 +1146,8 @@ export default async function() {{
             print_color(f"评分必须 1-5，当前: {rating}", CliColors.RED)
             return
 
-        user_id = getattr(self.cli, "user_id", "default")
+        # 修复(B3): fallback 对齐 "default_user"（enhanced_cli 读路径同值）
+        user_id = getattr(self.cli, "user_id", "default_user") or "default_user"
         hub = get_hub()
         event = create_user_rating_event(
             user_id=user_id,

@@ -71,15 +71,18 @@ class MemoryMiddleware:
 
         return "\n\n".join(parts) if parts else ""
 
-    async def process_turn(self, user_id: str, user_message: str, assistant_reply: str) -> None:
+    async def process_turn(self, user_id: str, user_message: str, assistant_reply: str,
+                           session_id: str = "") -> None:
         """对话结束后：短期记忆写入 → 提取事实 → 更新画像 → 存入向量记忆"""
         # 0. 短期记忆写入（自动触发 4 层压缩链）
         try:
             from .short_term_memory import get_memory_manager
             stm = get_memory_manager()
-            stm.add(user_id, "user", user_message)
+            # 修复(B1): 写入时记录 session_id，读取端才能按会话边界过滤
+            stm.add(user_id, "user", user_message, session_id=session_id)
             if assistant_reply:
-                stm.add(user_id, "assistant", assistant_reply[:2000])
+                stm.add(user_id, "assistant", assistant_reply[:2000],
+                        session_id=session_id)
         except Exception as e:
             logger.debug("短期记忆写入失败: %s", e)
 

@@ -30,9 +30,19 @@ class MemoryCoordinator:
 
     async def record_tool(self, tool_name: str, success: bool,
                           result_raw: Any, round_idx: int,
-                          is_subagent: bool = False) -> Optional[str]:
+                          is_subagent: bool = False,
+                          user_id: str = "") -> Optional[str]:
         """记录一次工具执行到三层记忆，返回 artifact 路径（如有）"""
         artifact_path = None
+
+        # 修复(B3): user_id 由调用方传入（与读路径同门），不再写死
+        uid = user_id or "default_user"
+
+        # 修复(N1-写侧): 子代理的工具流水不进 STM —— 此前全写进死门
+        # cli_user 堆了 192 条垃圾；即便现在 role=tool 不参与注入，
+        # 也没必要为短平快的子代理任务膨胀存储和触发压缩链
+        if is_subagent:
+            return None
 
         # 1. 始终 → STM 摘要
         stm_summary = self._stm_summary(tool_name, success, result_raw)
@@ -40,7 +50,10 @@ class MemoryCoordinator:
             stm = self._get_stm()
             if stm:
                 try:
-                    await stm.add_async("cli_user", "assistant", stm_summary)
+                    # 修复(B4): 工具流水 role=tool（不是 assistant）——
+                    # "工具执行: ..." 不是 assistant 说的话，标错 role 会让
+                    # 读路径无法区分对话与流水
+                    await stm.add_async(uid, "tool", stm_summary)
                 except Exception as e:
                     logger.debug(f"STM add failed: {e}")
 
@@ -64,7 +77,8 @@ class MemoryCoordinator:
     # ── 会话结束（on_finish）──
 
     async def finalize(self, user_id: str, task: str,
-                       final_answer: str, is_subagent: bool = False):
+                       final_answer: str, is_subagent: bool = False,
+                       session_id: str = ""):
         """结束会话，统一写入三层记忆"""
         if not final_answer:
             return
@@ -74,7 +88,8 @@ class MemoryCoordinator:
             try:
                 from core.memory.memory_middleware import get_memory_middleware
                 v1_mw = get_memory_middleware()
-                await v1_mw.process_turn(user_id, task, final_answer)
+                await v1_mw.process_turn(user_id, task, final_answer,
+                                         session_id=session_id)
                 logger.info("STM process_turn 完成")
             except Exception as e:
                 logger.debug(f"STM process_turn failed: {e}")
@@ -144,15 +159,20 @@ class MemoryCoordinator:
 
     # ── 统一读路径 ──
 
-    async def get_context_for_llm(self, user_id: str, user_input: str) -> str:
-        """从三层记忆读取上下文（STM 每轮新鲜，其余缓存）"""
+    async def get_context_for_llm(self, user_id: str, user_input: str,
+                                  session_id: str = "") -> str:
+        """从三层记忆读取上下文（STM 每轮新鲜，其余缓存）
+
+        修复(B1): session_id 透传给 STM —— 注入只取当前会话的 raw 条目，
+        跨会话旧条目（如上个会话的烂尾任务）不再原样端给 LLM。
+        """
         sections = []
 
         # 1. 短期记忆（每轮新鲜——工具结果在追加）
         try:
             from core.memory.short_term_memory import get_memory_manager
             _stm = get_memory_manager()
-            short_term = _stm.get_context(user_id)
+            short_term = _stm.get_context(user_id, session_id=session_id)
             if short_term:
                 lines = ["<memory type=short_term>"]
                 for msg in short_term[-5:]:

@@ -90,7 +90,8 @@ def _next_seq(user_dir: Path) -> int:
 
 
 def _frontmatter(type_: str, role: str = "", tokens: int = 0,
-                 description: str = "", artifact_path: str = "") -> str:
+                 description: str = "", artifact_path: str = "",
+                 session_id: str = "") -> str:
     lines = ["---", f"type: {type_}"]
     if role:
         lines.append(f"role: {role}")
@@ -101,6 +102,10 @@ def _frontmatter(type_: str, role: str = "", tokens: int = 0,
         lines.append(f"description: {description}")
     if artifact_path:
         lines.append(f"artifact_path: {artifact_path}")
+    # 修复(B1): 记录来源会话 — 注入时只取当前会话的 raw 条目，
+    # 跨会话旧条目降权（最终被 Layer2/3/4 压缩进 summary/meta）
+    if session_id:
+        lines.append(f"session_id: {session_id}")
     lines.append("---")
     return "\n".join(lines)
 
@@ -253,35 +258,38 @@ class ShortTermMemoryManager:
     #  公开 API
     # ══════════════════════════════════════════════════════════════════════
 
-    def add(self, user_id: str, role: str, content: str) -> None:
+    def add(self, user_id: str, role: str, content: str, session_id: str = "") -> None:
         """添加一条消息 + 触发压缩链（同步）"""
-        self._write_and_compact(user_id, role, content)
+        self._write_and_compact(user_id, role, content, session_id)
 
-    async def add_async(self, user_id: str, role: str, content: str) -> None:
+    async def add_async(self, user_id: str, role: str, content: str, session_id: str = "") -> None:
         """添加一条消息 + 触发 async 压缩链"""
-        self._write_message(user_id, role, content)
+        self._write_message(user_id, role, content, session_id)
         await self._check_and_compact_async(user_id)
 
-    def add_message(self, user_id: str, role: str, content: str) -> None:
+    def add_message(self, user_id: str, role: str, content: str, session_id: str = "") -> None:
         """同 add()，兼容旧接口"""
-        self._write_and_compact(user_id, role, content)
+        self._write_and_compact(user_id, role, content, session_id)
 
-    def _write_message(self, user_id: str, role: str, content: str) -> None:
+    def _write_message(self, user_id: str, role: str, content: str,
+                       session_id: str = "") -> None:
         """纯写入，不触发压缩"""
         user_dir = _user_dir(user_id)
         user_dir.mkdir(parents=True, exist_ok=True)
         tokens = _estimate_tokens(content)
         seq = _next_seq(user_dir)
         desc = content[:60].replace("\n", " ")
-        front = _frontmatter("raw", role=role, tokens=tokens, description=desc)
+        front = _frontmatter("raw", role=role, tokens=tokens, description=desc,
+                             session_id=session_id)
         file_path = user_dir / f"{seq:04d}_raw.md"
         file_path.write_text(f"{front}\n\n{content}", encoding="utf-8")
         self._stats["files_written"] += 1
         _update_index(user_id)
 
-    def _write_and_compact(self, user_id: str, role: str, content: str) -> None:
+    def _write_and_compact(self, user_id: str, role: str, content: str,
+                           session_id: str = "") -> None:
         """写入 + 同步压缩（ThreadPoolExecutor fallback）"""
-        self._write_message(user_id, role, content)
+        self._write_message(user_id, role, content, session_id)
         self._check_and_compact(user_id)
 
     def add_context(self, user_id: str, content: str, context_type: str = "conversation") -> None:
@@ -289,10 +297,17 @@ class ShortTermMemoryManager:
         self.add_message(user_id, role, content)
 
     def get_context(self, user_id: str, max_tokens: Optional[int] = None,
-                    depth: int = 0, limit: int = 20) -> List[Dict]:
+                    depth: int = 0, limit: int = 20,
+                    session_id: str = "") -> List[Dict]:
         """获取上下文消息列表
 
         返回前先跑 micro-compact（Layer 1，裁剪旧的工具结果）。
+
+        修复(B1) 会话边界：传入 session_id 时，raw 条目只注入 frontmatter
+        里 session_id 与当前一致的——跨会话旧条目不再原样端给 LLM（历史
+        连续性由 summary/meta 摘要层 + goal_store 负责）。未传 session_id
+        时保持旧行为（V1 读路径兼容）。旧格式条目（无 session_id 字段）视
+        为跨会话条目，同样不注入——它们正是"烂尾任务复活"事故的载体。
         """
         # Layer 1: 每次获取前先微压缩
         self._micro_compact(user_id)
@@ -306,7 +321,23 @@ class ShortTermMemoryManager:
         summary_files = [f for f in files if f["type"] == "summary"]
         meta_files = [f for f in files if f["type"] == "meta"]
 
+        if session_id:
+            _current = [f for f in raw_files
+                        if f["meta"].get("session_id", "") == session_id]
+            _stale = len(raw_files) - len(_current)
+            raw_files = _current
+
         result: List[Dict] = []
+
+        # 0. 跨会话提示（修复 B1）：确实存在被排除的跨会话条目时告诉 LLM
+        #    "历史有但内容不注入"，防止它把"上一轮停在 XX"脑补成"继续执行 XX"
+        if session_id and _stale > 0:
+            result.append({
+                "role": "system",
+                "content": (f"[记忆边界] 检测到 {_stale} 条来自其他会话的历史记忆，"
+                            f"已按会话边界隔离，不注入当前上下文（全局要点见摘要层）。"
+                            f"当前任务完全以用户最新指令为准，除非用户明确要求继续之前的任务。"),
+            })
 
         # 1. 元摘要（最高优先级保留——修复 #143: 原实现 meta 排最前,
         #    倒序截断时第一个被删, 全局摘要最先丢, 与其"最浓缩"的价值相反）
@@ -324,7 +355,10 @@ class ShortTermMemoryManager:
             })
 
         # 3. 最近的原始消息
-        recent = raw_files[-self.keep_raw:] if len(raw_files) > self.keep_raw else raw_files
+        # 修复(B4): role=tool 的条目是工具流水，不进 LLM 注入
+        # （它们仍参与压缩链，只是不污染上下文）
+        _raw_injectable = [f for f in raw_files if f["meta"].get("role") != "tool"]
+        recent = _raw_injectable[-self.keep_raw:] if len(_raw_injectable) > self.keep_raw else _raw_injectable
         for rf in recent:
             result.append({
                 "role": rf["meta"].get("role", "user"),
@@ -584,7 +618,10 @@ class ShortTermMemoryManager:
         for f in files:
             role = f["meta"].get("role", "")
             body = f["body"]
-            if role == "user" and self._is_tool_result(body):
+            # 修复(B4): role=tool 直接算工具结果（新写入标记）
+            if role == "tool":
+                tool_results.append(f)
+            elif role == "user" and self._is_tool_result(body):
                 tool_results.append(f)
             elif role == "system" and len(body) > 200:
                 tool_results.append(f)

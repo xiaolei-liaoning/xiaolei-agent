@@ -50,16 +50,27 @@ class MemoryMiddleware(BaseMiddleware):
 
     async def on_llm_invoke(self, ctx: RunContext) -> None:
         """每轮 LLM 思考前注入记忆（经 Coordinator 统一读路径）"""
+        # 修复(N1): 子代理不注入记忆 —— 子代理拿不到 agent.user_id 会 fallback
+        # 到 "cli_user"，把 192 条工具流水当"记忆"吃进上下文（还全标 assistant）。
+        # 子代理任务短平快，注入 2 万字符垃圾纯浪费 token。
+        if getattr(ctx, '_is_subagent', False):
+            return
+
         user_input = ctx.task_description
         if not user_input:
             return
 
-        user_id = self._get_user_id()
+        user_id = self._get_user_id(ctx)
         coordinator = self._get_coordinator()
 
         if coordinator is not None:
             try:
-                context = await coordinator.get_context_for_llm(user_id, user_input)
+                # 修复(B1): 透传当前会话 id —— STM 注入只取当前会话条目，
+                # 跨会话烂尾任务不再复活
+                context = await coordinator.get_context_for_llm(
+                    user_id, user_input,
+                    session_id=str(getattr(ctx, '_session_id', '') or ''),
+                )
                 if context:
                     ctx.knowledge_context += (
                         f"\n{context}"
@@ -100,6 +111,8 @@ class MemoryMiddleware(BaseMiddleware):
             result_raw=result_raw,
             round_idx=ctx.react_depth,
             is_subagent=is_subagent,
+            # 修复(B3): 与读路径同门的 user_id（不再落进死门 cli_user）
+            user_id=self._get_user_id(ctx),
         )
 
     # ── on_finish — 会话结束 ──
@@ -113,7 +126,7 @@ class MemoryMiddleware(BaseMiddleware):
         if not final_answer:
             return
 
-        user_id = self._get_user_id()
+        user_id = self._get_user_id(ctx)
         is_subagent = getattr(ctx, '_is_subagent', False)
 
         await coordinator.finalize(
@@ -121,6 +134,9 @@ class MemoryMiddleware(BaseMiddleware):
             task=ctx.task_description,
             final_answer=final_answer,
             is_subagent=is_subagent,
+            # 修复(B1): finalize 写入 STM 时带上 session_id，
+            # 下个会话读取时才能按会话边界过滤
+            session_id=str(getattr(ctx, '_session_id', '') or ''),
         )
 
         if not is_subagent:
@@ -130,12 +146,20 @@ class MemoryMiddleware(BaseMiddleware):
 
     # ── 工具 ──
 
-    def _get_user_id(self) -> str:
+    def _get_user_id(self, ctx=None) -> str:
+        # 修复(N2/B3): user_id 统一真相源 —— 优先 ctx.user_id（run_react
+        # #003 透传链路，此前是死代码），其次 agent.user_id（V2 链路）。
+        # 两处都没有时才 fallback（不再写死 cli_user，用 default_user 对齐
+        # 读路径 enhanced_cli.py 的取值，写读同门）。
+        if ctx is not None:
+            src = str(getattr(ctx, 'user_id', '') or '')
+            if src:
+                return src
         if self._agent is not None and hasattr(self._agent, 'user_id'):
             uid = self._agent.user_id
             if uid:
                 return str(uid)
-        return "cli_user"
+        return "default_user"
 
     def _ensure_v1_mw(self):
         if self._v1_mw_broken:

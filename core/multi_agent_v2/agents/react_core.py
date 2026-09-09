@@ -531,9 +531,12 @@ class ReActCoreMiddleware(BaseMiddleware):
         messages = ctx._pending_messages.copy()
 
         # 注入对话历史（滑动窗口：最近 16 条全量，旧消息 LLM 摘要）
+        # 修复(B2): name=_task_seed 的条目是落盘种子（用户任务本体），prompt
+        # 里已有完整任务消息，这里跳过避免重复注入
         if ctx._conversation_history:
             _MAX_WINDOW = 16
-            _hist = ctx._conversation_history
+            _hist = [m for m in ctx._conversation_history
+                     if not (m.get("role") == "user" and m.get("name") == "_task_seed")]
             if len(_hist) > _MAX_WINDOW:
                 _recent = _hist[-_MAX_WINDOW:]
                 _old = _hist[:-_MAX_WINDOW]
@@ -1337,6 +1340,17 @@ async def run_react(
                 ctx._conversation_history = json.loads(f.read())
         except Exception:
             pass
+
+    # 修复(B2): 把用户任务以 role=user 播种进历史——session.json 落盘的
+    # 消息数组里必须能回放到"用户到底说了什么"，否则审计/回放即失真。
+    # 去重：恢复的历史里已带同内容 seed 时不再重复插入。
+    _seed_flag = {"role": "user", "content": task_description, "name": "_task_seed"}
+    _seed_dup = any(
+        m.get("name") == "_task_seed" and m.get("content") == task_description
+        for m in ctx._conversation_history
+    )
+    if not _seed_dup:
+        ctx._conversation_history.insert(0, dict(_seed_flag))
 
     def _save_history():
         try:

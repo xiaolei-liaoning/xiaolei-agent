@@ -406,7 +406,10 @@ class ContextBudgetManager:
         try:
             from core.memory.short_term_memory import get_memory_manager
             stm = get_memory_manager()
-            stm.add("cli_user", "assistant",
+            # 修复(B3/N2): user_id 从 ctx 取（run_react #003 透传链路），
+            # 不再写死 cli_user；role=system 表明这是压缩摘要，不是发言
+            _uid = str(getattr(ctx, 'user_id', '') or '')
+            stm.add(_uid or "default_user", "system",
                     f"[上下文压缩摘要] {summary[:500]}")
         except Exception:
             pass
