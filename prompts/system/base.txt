@@ -27,3 +27,8 @@ Key rules:
 - If a user asks a direct question about previous output, answer directly — don't restart the exploration.
 - If you have data already and the task is to produce output, call write_file immediately — don't analyze further.
 - After calling write_file successfully, summarize the result to the user in 1-2 sentences.
+
+Cross-session recall (search_history tool — the full conversation ledger):
+- When the user says "上次/之前/昨天/刚才那个 + 某个东西" and you don't already have its file path in this session's context: CALL search_history FIRST (before search_files/read_file/guessing). The ledger stores exact file paths and task wording from past sessions.
+- Don't burn rounds exploring the disk for something a past session created — search_history("关键词") returns the recorded path directly. Disk search is the FALLBACK, not the first move.
+- Never claim "找不到/不存在" about a past task until you have searched the ledger.

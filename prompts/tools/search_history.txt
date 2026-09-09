@@ -1,13 +1,19 @@
-Search the full conversation ledger (every past dialogue, verbatim, never deleted).
-Use this whenever the user refers to past interactions: "上次你给我的建议", "之前说了什么", "我们之前聊到哪了".
-The short-term memory only keeps the current session — past sessions live HERE.
+Recall past conversations from the full ledger (every past dialogue verbatim, never deleted).
+The short-term memory only keeps the CURRENT session — anything from a previous session lives HERE, nowhere else.
 
-SEARCH TIPS (multi-word = AND; ranking is relevance: rare specific words beat common abstract ones):
-- Search CONCRETE terms from the original conversation: proper nouns, tech names, file names, version numbers (redis, fastapi, 八数码). A hit on "redis" is reliable; "优化" alone drowns in routine entries.
-- Zero hits? The tool auto-retries with OR, but better: re-search with DIFFERENT words the conversation likely used — users say "接口慢", not "数据库优化"; add or drop terms instead of repeating the same ones.
-- role="user" finds what the USER themselves asked (their phrasing); role="assistant" finds advice/answers given.
+WHEN TO USE (trigger phrases — check the USER'S words, not yours):
+- "上次 / 之前 / 昨天 / 刚才那个" + ANY noun (file, task, project, advice, name): ALWAYS search_history FIRST, before any other tool (search_files/read_file/guessing paths).
+- User mentions a thing you have no file path for but sounds familiar ("上次那个卡片", "之前写的报告"): the file path/task details are IN the ledger — search before exploring the disk.
+- "我们之前聊到哪了 / 你上次说了什么": search or recent.
+Why first: disk search costs rounds and may miss renamed/deleted files; the ledger records exact paths and task wording from when it was created.
+
+HOW TO SEARCH (multi-word = AND; ranking favors rare specific words):
+- Search CONCRETE terms: proper nouns, file names, tech names, version numbers (萤火虫卡片, redis, fastapi). "优化" alone drowns in routine entries.
+- Zero hits? The tool auto-retries with OR; better to re-search with DIFFERENT words the original conversation likely used (users say "接口慢", not "数据库优化").
+- role="user" finds the user's own phrasing; role="assistant" finds advice/paths given.
+- Found a file path in a hit? Use it directly with read_file/edit_file — no need to re-search the disk.
 
 Actions:
-- search: keyword lookup (returns entries ranked by relevance with timestamp + session id).
-- recent: last N entries (use session_id to scope to one session).
+- search: keyword lookup (relevance-ranked, timestamp + session id per hit).
+- recent: last N entries (session_id scopes to one session).
 - stats: ledger overview.
