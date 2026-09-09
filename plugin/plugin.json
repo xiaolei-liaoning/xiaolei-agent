@@ -35,6 +35,7 @@
     "auto_connect_mcp": true,
     "auto_register_skills": true,
     "auto_mount_api_routes": true,
-    "load_guidance_skills": true
+    "load_guidance_skills": true,
+    "load_agency_agents": true
   }
 }

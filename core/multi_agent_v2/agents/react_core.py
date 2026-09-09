@@ -286,6 +286,7 @@ class ReActCoreMiddleware(BaseMiddleware):
                         allowed=ctx.allowed_tools,
                         disallowed=ctx.disallowed_tools,
                         tool_preference=ctx.tool_preference,
+                        platform=getattr(ctx, 'platform', '') or '',
                     )
                 except Exception:
                     filtered = tool_cache[:20]
@@ -1289,9 +1290,23 @@ async def run_react(
     try:
         from core.memory.session_manager import get_session_manager
         _session_mgr = get_session_manager()
-        _session_mgr.create_session(task_description)
+        created_sid = _session_mgr.create_session(task_description)
     except Exception as e:
         logger.debug(f"Session init skipped: {e}")
+        created_sid = None
+
+    # 修复(c): 标准 session 状态机接入运行路径 —— 用 StandardSessionDB 记录
+    # turn 状态（Running）与 parent 继承，供跨轮次/生命周期追踪。不破坏
+    # 上面的文件式 session_manager，只并行记录到标准 SQLite。
+    try:
+        _sid0 = getattr(ctx, '_session_id', None) or created_sid or os.urandom(6).hex()
+        from core.memory.session_db_standard import StandardSessionDB
+        _std_db = StandardSessionDB()
+        _std_db.upsert(_sid0, status="running", parent_id=None, meta={"task": task_description[:100]})
+        ctx._session_id = _sid0
+        print(f"    \033[36m◇ Session {_sid0[:16]}... → running\033[0m")
+    except Exception as e:
+        logger.debug(f"StandardSessionDB record skipped: {e}")
 
     prefix = _get_prefix(agent)
 
@@ -2076,6 +2091,19 @@ async def run_react(
                 _sm.record_artifact("conversation_log", f"# Conversation Log\n\n{_conv_text}")
         except Exception:
             pass
+
+    # ── 标准 session 状态机收尾: 记录完成 + 显示（可观测性③）──
+    # 用户能从日志看到标准 SQLite session 的 turn 生命周期 (running→complete)
+    try:
+        _sid_f = getattr(ctx, '_session_id', None)
+        _status_f = "complete" if ctx.final_answer else "interrupted"
+        if _sid_f:
+            from core.memory.session_db_standard import StandardSessionDB
+            _std_db_f = StandardSessionDB()
+            _std_db_f.upsert(_sid_f, status=_status_f, meta={"task": task_description[:100]})
+            print(f"    \033[36m◇ Session {_sid_f[:16]}... → {_status_f}\033[0m")
+    except Exception as e:
+        logger.debug(f"StandardSessionDB finalize skipped: {e}")
 
     # ponytail: final_answer 自动保存到桌面（>=50字），仅主代理写入，子代理不污染
     if ctx.final_answer and len(ctx.final_answer) >= 50 and not ctx._is_subagent:

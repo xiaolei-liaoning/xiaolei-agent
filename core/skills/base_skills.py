@@ -179,8 +179,12 @@ class SkillSystem:
             # 优先加载完整的 MD 角色定义，没有则用 YAML description
             md_content = self._load_expert_md(expert)
             if md_content:
+                # 可观测性④: 显示命中专家 + 完整 MD 加载成功
+                print(f"    \033[36m🧠 Expert: 命中 '{expert.get('name','')}' ({expert.get('id','')}) 完整MD {len(md_content)}字\033[0m")
                 result.expert_personality = md_content
             else:
+                # 可观测性④: 显示命中专家但走了 description fallback（MD 缺失）
+                print(f"    \033[36m🧠 Expert: 命中 '{expert.get('name','')}' ({expert.get('id','')}) 无完整MD→160字描述\033[0m")
                 result.expert_personality = f"你的专业方向是：{expert.get('description', '')[:300]}"
 
         # Layer 3: Guidance
@@ -208,7 +212,7 @@ class SkillSystem:
         dir_name = CATEGORY_TO_DIR.get(category, category.replace("_", "-"))
         md_path = os.path.join(AGENCY_AGENTS_DIR, dir_name, f"{expert_id}.md")
 
-        if not os.path.isfile(md_path):
+        if not isinstance(md_path, str) or not os.path.isfile(md_path):
             return None
 
         try:

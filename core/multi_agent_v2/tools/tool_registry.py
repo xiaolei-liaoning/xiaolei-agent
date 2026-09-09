@@ -26,6 +26,43 @@ from core.multi_agent_v2.prompts import get_builder
 _builder = get_builder()
 
 
+# ── ToolSets — 工具集分组层（对齐 hermes-agent toolsets.py）──
+# 与 SKILL 角色解耦：工具按"编组"而非"角色"启用，按平台/来源 session 动态选择。
+# 默认全量暴露（OpenCode 哲学），工具集只做"按平台裁剪"的兜底，不做硬白名单剪枝。
+_CORE_TOOLSET = {
+    "__builtin__": {
+        "web_search", "web_extract", "fetch_url", "read_file", "write_file",
+        "patch", "edit_file", "search_files", "execute_python", "execute_shell",
+        "git", "task", "orchestrate", "write_todos",
+    },
+}
+# 平台 → 附加/裁剪工具集（对齐 hermes _load_enabled_toolsets(platform)）
+_PLATFORM_TOOLSET = {
+    "cli": set(),                     # CLI 全量
+    "web": set(),                     # Web 端全量
+    "desktop": set(),                 # Desktop 全量
+    "sandbox": {"execute_shell"},     # 沙盒：默认禁 shell
+}
+
+
+def _resolve_enabled_toolsets(platform: str = "") -> set:
+    """返回指定平台启用的工具集（工具名集合）。空 platform = 全量。"""
+    if not platform:
+        return set()
+    # 平台特定裁剪：sandbox 等返回应禁用的工具
+    return _PLATFORM_TOOLSET.get(platform, set())
+
+
+def _apply_toolset_filter(all_tools, platform: str = "") -> list:
+    """按平台工具集裁剪工具列表。platform 为空时不裁剪（全量暴露）。"""
+    if not platform:
+        return all_tools
+    disabled = _resolve_enabled_toolsets(platform)
+    if not disabled:
+        return all_tools
+    return [t for t in all_tools if t.name not in disabled]
+
+
 # ── 沙盒管理器（由 run_react 设置，用于 write_file 路径重定向）──
 _active_sandbox_manager = None
 
@@ -2278,6 +2315,7 @@ class ToolRegistry:
         allowed: Optional[List[str]] = None,
         disallowed: Optional[List[str]] = None,
         tool_preference: Optional[set] = None,
+        platform: str = "",
     ) -> List[ToolDefinition]:
         """获取工具列表，应用 Agent 类型的 allowed/disallowed 约束
 
@@ -2286,6 +2324,7 @@ class ToolRegistry:
         1. 所有工具返回
         2. Agent 类型硬约束：allowed 白名单 + disallowed 黑名单
         3. tool_preference 服务器优先排序（Skill倾向优先）
+        4. platform 工具集裁剪（toolset 分组层，对齐 hermes toolsets.py）
         """
         if not self._initialized:
             return list(self._tools.values())[:max_tools]
@@ -2305,6 +2344,14 @@ class ToolRegistry:
         if disallowed is not None:
             disallowed_set = set(disallowed)
             all_tools = [t for t in all_tools if t.name not in disallowed_set]
+
+        # platform 工具集裁剪（toolset 分组层）
+        if platform:
+            _before = {t.name for t in all_tools}
+            all_tools = _apply_toolset_filter(all_tools, platform)
+            _removed = _before - {t.name for t in all_tools}
+            if _removed:
+                print(f"    \033[33m◇ Toolset: platform={platform} → 禁用 [{', '.join(sorted(_removed))}]\033[0m")
 
         # tool_preference 服务器优先排序（Skill倾向的服务器排前面）
         if tool_preference:

@@ -148,6 +148,17 @@ class PluginLoader:
                     results.setdefault(k, 0)
                     results[k] += v
 
+        # 收尾: agency-agents 插件自动注册专家人格（渐进披露技能）
+        # 不依赖 _load_sub_plugin 的 skills 列表，直接调 register() 补齐 base_skills 漏掉的专家。
+        if self.manifest.get("registration", {}).get("load_agency_agents", True):
+            try:
+                from plugin.agency_agents import register as _aa_register
+                _aa_count = _aa_register()
+                results.setdefault("agency_agents", _aa_count)
+                logger.info(f"🧠 agency-agents 插件注册 {_aa_count} 个专家人格")
+            except Exception as e:
+                logger.warning(f"agency-agents 插件注册失败: {e}")
+
         total = sum(len(v) for v in results.values() if isinstance(v, list))
         logger.info(f"✅ Plugin 系统加载完成: {len(sub_plugins)} 个子插件, {total} 组件")
         return results

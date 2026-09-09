@@ -1,0 +1,36 @@
+{
+  "skills_index_version": 1,
+  "built_at": "2026-09-09T00:17:28.361660+00:00",
+  "count": 2,
+  "sources": [
+    "prompts/agents",
+    "mcp/_impl",
+    "config/skill_agent_map.yaml"
+  ],
+  "audit": "tools/skills_ast_audit.py",
+  "skills": [
+    {
+      "name": "rag_search_handler",
+      "description": "mcp-tool: rag_search_handler",
+      "source": "mcp/_impl",
+      "identifier": "mcp/rag_search_handler.py",
+      "trust_level": "internal",
+      "path": "/Users/leiyuxuan/Desktop/小雷版agent_副本/mcp/_impl/rag_search_handler.py",
+      "tags": [
+        "mcp",
+        "tool"
+      ]
+    },
+    {
+      "name": "skill_agent_map",
+      "description": "",
+      "source": "skill_agent_map",
+      "identifier": "skill_agent_map",
+      "trust_level": "internal",
+      "path": "/Users/leiyuxuan/Desktop/小雷版agent_副本/config/skill_agent_map.yaml",
+      "tags": [
+        "skill-map"
+      ]
+    }
+  ]
+}

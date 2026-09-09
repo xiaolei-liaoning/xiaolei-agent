@@ -1,0 +1,31 @@
+{
+  "name": "agency-agents",
+  "version": "1.0.0",
+  "description": "专家角色插件 — 加载 agency-agents-zh 的 216 个专家人格（16 个 agent-dev-prompts 类目录），通过渐进披露方式暴露，供三层 SKILL 系统按需匹配",
+  "author": "系统默认",
+
+  "skills": [
+    {
+      "name": "agency-agents",
+      "keywords": [
+        "专家", "专家角色", "专业角色", "领域专家",
+        "agency", "persona", "agent persona",
+        "角色扮演", "扮演专家"
+      ],
+      "priority": 7,
+      "description": "领域专家人格库：从 agency-agents-zh 加载 216 个专家角色（工程/前端/后端/AI/安全/性能等），按任务匹配最合适的专家人格注入"
+    },
+    {
+      "name": "project_analyzer",
+      "keywords": ["分析项目", "分析代码", "看项目结构", "项目架构", "代码架构"],
+      "priority": 8,
+      "description": "项目结构分析专家 — 分析项目目录、技术栈、模块职责，输出完整项目分析报告"
+    },
+    {
+      "name": "code_review",
+      "keywords": ["审查代码", "代码审查", "评审代码", "code review", "review PR"],
+      "priority": 8,
+      "description": "代码审查专家 — 从架构、安全、可维护性多维度审查代码，输出审查报告"
+    }
+  ]
+}
