@@ -459,7 +459,10 @@ class SandboxExecutor:
         elif runtime == "node":
             cmd = ["node", str(target)]
         elif runtime == "shell":
-            cmd = target
+            # shell 命令走 /bin/sh -c：支持 pipe/分号/引号/重定向。
+            # 旧实现把整条命令字符串当 argv[0] 再空格 split——引号参数被切碎、
+            # `|`/`;` 变成文件名，导致 execute_shell 对复合命令必挂。
+            cmd = ["/bin/sh", "-c", target]
         else:
             raise ValueError(f"不支持的运行时: {runtime}")
         

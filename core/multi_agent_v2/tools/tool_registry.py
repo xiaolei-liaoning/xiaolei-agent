@@ -879,16 +879,18 @@ async def _handle_execute_shell(args: Dict) -> Dict:
                 err = sr.stderr if sr.stderr else ""
                 full = out[:8000] + ("\n" + err[:2000] if err else "")
                 return {
-                    "result": {"content": [{"text": f"[沙盒] ✅ 执行成功\n{full}"}]}
+                    "result": {"content": [{"text": f"[沙盒] ✅ 执行成功(退出码 {sr.exit_code})\n{full}"}]}
                 }
             # 沙盒执行失败，提示用 mode=local 重试
             return {
                 "result": {
                     "content": [
                         {
-                            "text": f"[沙盒] ❌ 执行失败: {sr.error_message or sr.stderr or '未知错误'}"
-                            f"\n\n💡 提示：如果命令包含 pipe(|)、重定向(>)、或使用 Python，"
-                            f"请设置 mode=local 在本地执行：execute_shell(command=..., mode='local')"[:5000]
+                            "text": f"[沙盒] ❌ 执行失败: {sr.error_message or sr.stderr or (f'退出码 {sr.exit_code}（无 stderr；grep类无匹配返回1属正常）' if sr.exit_code == 1 else '未知错误')}"
+                            f"\n\n💡 沙盒是隔离环境（cwd=/tmp/agent_sandbox，HOME 重定向）："
+                            f"\n• 访问项目文件请用【绝对路径】，或直接设置 mode=local 在项目目录本地执行："
+                            f"execute_shell(command=..., mode='local')"
+                            f"\n• 包含 pipe(|)、分号(;)、重定向(>) 的命令现在沙盒也支持，失败通常是文件路径问题"[:5000]
                         }
                     ]
                 }

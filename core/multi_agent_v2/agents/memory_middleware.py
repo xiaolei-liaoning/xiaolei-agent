@@ -15,6 +15,18 @@ from .middleware import BaseMiddleware, RunContext
 logger = logging.getLogger(__name__)
 
 
+def _memory_layer_stats(context: str) -> str:
+    """解析 <memory type=...> 标记，返回各层字符数统计（记忆分层显示）。"""
+    import re as _re
+    layers: dict = {}
+    for _m in _re.finditer(r"<memory type=(\w+)>\n(.*?)\n</memory>", context, _re.DOTALL):
+        _ly, _body = _m.group(1), _m.group(2)
+        layers[_ly] = layers.get(_ly, 0) + len(_body)
+    if not layers:
+        return ""
+    return " | ".join(f"{k}:{v}字" for k, v in layers.items())
+
+
 class MemoryMiddleware(BaseMiddleware):
     """记忆中间件 — V2 读写三层记忆（经 coordinator）"""
     HOOKS = ("on_llm_invoke", "on_tool_end", "on_finish")
@@ -54,7 +66,12 @@ class MemoryMiddleware(BaseMiddleware):
                     )
                     if len(ctx.knowledge_context) > 20000:
                         ctx.knowledge_context = ctx.knowledge_context[-20000:]
-                    print(f"    \033[1;35m🧠 记忆: {len(context)} 字符上下文已注入\033[0m")
+                    # 记忆分层显示（可观测性）: 解析 <memory type=...> 标记，统计各层字符数
+                    _detail = _memory_layer_stats(context)
+                    if _detail:
+                        print(f"    \033[1;35m🧠 记忆: {len(context)} 字符已注入 [分层] {_detail}\033[0m")
+                    else:
+                        print(f"    \033[1;35m🧠 记忆: {len(context)} 字符上下文已注入\033[0m")
                 else:
                     print(f"    \033[2;35m🧠 记忆: 无相关历史\033[0m")
             except Exception as e:

@@ -3,23 +3,19 @@
   "version": "3.4.0",
   "debug": true,
   "llm": {
-    "provider": "zhipuai",
-    "default_model": "glm-4-flash",
+    "provider": "agnes",
+    "default_model": "agnes-2.5-flash",
     "max_tokens": 4096,
     "temperature": 0.7,
     "timeout": 120,
     "max_retries": 3,
-    "rate_limit_rpm": 120,
+    "rate_limit_rpm": 20,
     "backoff_base": 1.0,
     "supported_models": [
-      "glm-4-flash",
-      "glm-4-plus",
-      "glm-4-air",
-      "glm-4-free",
-      "glm-3-turbo",
-      "free-glm-4",
-      "free-qwen",
-      "free-llama"
+      "agnes-2.5-flash",
+      "agnes-2.0-flash",
+      "openrouter/free",
+      "deepseek-v4-flash"
     ]
   },
   "database": {
@@ -48,7 +44,9 @@
     "host": "0.0.0.0",
     "port": 8001,
     "debug": false,
-    "cors_origins": ["*"],
+    "cors_origins": [
+      "*"
+    ],
     "api_prefix": "/api",
     "docs_url": "/docs",
     "redoc_url": "/redoc"

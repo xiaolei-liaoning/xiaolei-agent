@@ -38,15 +38,14 @@ def get_llm_config():
         except Exception:
             pass
     class FallbackLLMConfig:
-        default_model = "glm-4-flash"
+        default_model = "agnes-2.5-flash"
         max_retries = 3
         backoff_base = 2.0
         rate_limit_rpm = 300
         timeout = 30  # LLM 调用超时（秒），fallback 阶段可更快失败
         supported_models = [
-            "glm-4-flash", "glm-4-plus", "glm-4-air",
-            "glm-4.7-flash", "glm-4-free", "glm-3-turbo",
-            "deepseek-chat", "deepseek-v4-flash", "deepseek-v4-flash-free",
+            "agnes-2.5-flash", "agnes-2.0-flash", "openrouter/free",
+            "glm-4-flash", "deepseek-v4-flash",
         ]
     return FallbackLLMConfig()
 
@@ -176,6 +175,29 @@ class GLMBackend:
         self._init_client()
 
     def _init_client(self):
+        # ── Agnes 主后端（OpenAI 兼容，免费档 每5h 1500次/每周15000次）──
+        agnes_key = os.getenv("AGNES_API_KEY", os.getenv("OPENROUTER_API_KEY", ""))
+        use_agnes = (
+            "agnes" in str(getattr(llm_config, "default_model", "")).lower()
+            or "agnes" in str(getattr(llm_config, "provider", "")).lower()
+            or bool(agnes_key)
+            or (str(getattr(llm_config, "provider", "")).lower() == "openrouter" and bool(agnes_key))
+        )
+        if use_agnes and agnes_key:
+            try:
+                import openai
+                # 复用 openrouter_client 变量名 = Agnes 主后端（OpenAI 兼容 /v1）
+                self.openrouter_client = openai.AsyncOpenAI(
+                    api_key=agnes_key,
+                    base_url=os.getenv("AGNES_API_URL", "https://apihub.agnes-ai.com/v1"),
+                )
+                self.openrouter_model = os.getenv("AGNES_MODEL", "agnes-2.5-flash")
+                logger.info("Agnes 主后端初始化成功 (model=%s)", self.openrouter_model)
+            except ImportError:
+                logger.warning("openai 未安装，Agnes 客户端不可用")
+            except Exception as e:
+                logger.warning("Agnes 客户端初始化失败: %s", e)
+
         # 0. 初始化 DeepSeek (OpenAI 兼容)
         deepseek_key = os.getenv("DEEPSEEK_API_KEY", os.getenv("ANTHROPIC_AUTH_TOKEN", ""))
         if deepseek_key:
@@ -191,21 +213,28 @@ class GLMBackend:
             except Exception as e:
                 logger.warning("DeepSeek 客户端初始化失败: %s", e)
 
-        # 1. 初始化 OpenRouter (OpenAI 兼容)
-        openrouter_key = os.getenv("OPENROUTER_API_KEY", "")
-        if openrouter_key:
+        # ── Cloudflare Workers AI（OpenAI 兼容，免费 10000 neurons/天，不绑卡）──
+        cf_token = os.getenv("CLOUDFLARE_API_TOKEN", "")
+        cf_model = os.getenv("CLOUDFLARE_WORKERS_AI_MODEL", "@cf/zai-org/glm-4.7-flash")
+        self.cf_client = None
+        if cf_token:
             try:
                 import openai
-                self.openrouter_client = openai.AsyncOpenAI(
-                    api_key=openrouter_key,
-                    base_url="https://openrouter.ai/api/v1",
+                self.cf_client = openai.AsyncOpenAI(
+                    api_key=cf_token,
+                    base_url=os.getenv(
+                        "CLOUDFLARE_WORKERS_AI_BASE_URL",
+                        "https://api.cloudflare.com/client/v4/accounts/UNSET/ai/v1",
+                    ),
                 )
-                logger.info("OpenRouter 客户端初始化成功")
+                self.cf_model = cf_model
+                logger.info("Cloudflare Workers AI 客户端初始化成功 (model=%s)", cf_model)
             except ImportError:
-                logger.warning("openai 未安装，OpenRouter 客户端不可用")
+                logger.warning("openai 未安装，Cloudflare 客户端不可用")
             except Exception as e:
-                logger.warning("OpenRouter 客户端初始化失败: %s", e)
+                logger.warning("Cloudflare 客户端初始化失败: %s", e)
 
+        # 1. 初始化 OpenRouter 已有分支（保留原结构，兼容）
         # 2. 初始化 GLM API (fallback)
         if self.api_key:
             try:
@@ -280,8 +309,49 @@ class GLMBackend:
         logger.info("LLM.chat: api_key=%s client=%s tools=%s",
                      bool(self.api_key), bool(self.client), bool(tools))
 
-        # 0. DeepSeek (OpenAI 兼容) — 优先
-        if self.deepseek_client:
+        # 0. OpenRouter Free / Agnes (priority) — 自动切换免费模型
+        if self.openrouter_client:
+            try:
+                # 如果 model 以 "agnes" 开头，使用 Agnes 模型；否则使用 openrouter/free
+                _or_model = self.openrouter_model if self.openrouter_model.startswith("agnes") else "openrouter/free"
+                payload = dict(model=_or_model, messages=messages,
+                               temperature=temperature, max_tokens=max_tokens)
+                if tools:
+                    payload["tools"] = tools
+                    payload["tool_choice"] = "auto"
+
+                logger.info("LLM → OpenRouter/Agnes (model=%s, tools=%s)", _or_model, bool(tools))
+                response = await asyncio.wait_for(
+                    self.openrouter_client.chat.completions.create(**payload),
+                    timeout=180,
+                )
+                if hasattr(response, 'choices') and response.choices:
+                    message = response.choices[0].message
+                    content = getattr(message, 'content', None) or ""
+                    # Agnes/思考模型兜底：content 空时用 reasoning_content（避免回复被吞）
+                    if not content:
+                        content = getattr(message, 'reasoning_content', None) or ""
+                    tc = getattr(message, 'tool_calls', None)
+                    logger.info("LLM OpenRouter返回: content_len=%d tool_calls=%s", len(content), bool(tc))
+                    self._consecutive_failures = 0
+                    if tc:
+                        tc_list = [{"id": getattr(t, 'id', ''),
+                                    "type": getattr(t, 'type', 'function'),
+                                    "function": {"name": t.function.name,
+                                                 "arguments": t.function.arguments}}
+                                   for t in tc]
+                        return LLMResponse(content=content, tool_calls=tc_list)
+                    return LLMResponse(content=content or "")
+            except asyncio.TimeoutError:
+                logger.error("OpenRouter API 调用超时(25s)")
+            except Exception as e:
+                logger.error(f"OpenRouter API 调用异常: {e}")
+
+        # 1. DeepSeek (OpenAI 兼容)
+        _use_or = (
+            hasattr(self, "openrouter_client") and self.openrouter_client is not None
+        )
+        if self.deepseek_client and not _use_or:
             try:
                 # ponytail: DeepSeek thinking 模式要求保留 tool_calls + reasoning_content
                 _ds_msgs = []
@@ -336,25 +406,30 @@ class GLMBackend:
             except Exception as e:
                 logger.error(f"DeepSeek API 调用异常: {e}")
 
-        # 1. OpenRouter (OpenAI 兼容) — fallback
-        if self.openrouter_client:
+        # 2. Cloudflare Workers AI（OpenAI 兼容，免费额度）— fallback
+        if getattr(self, "cf_client", None):
             try:
-                payload = dict(model=self.openrouter_model, messages=messages,
-                               temperature=temperature, max_tokens=max_tokens)
+                payload = dict(model=getattr(self, "cf_model", "@cf/zai-org/glm-4.7-flash"),
+                               messages=messages, temperature=temperature, max_tokens=max_tokens)
                 if tools:
                     payload["tools"] = tools
                     payload["tool_choice"] = "auto"
 
-                logger.info("LLM → OpenRouter (model=%s, tools=%s)", self.openrouter_model, bool(tools))
+                logger.info("LLM → Cloudflare Workers AI (model=%s, tools=%s)",
+                            getattr(self, "cf_model", ""), bool(tools))
                 response = await asyncio.wait_for(
-                    self.openrouter_client.chat.completions.create(**payload),
+                    self.cf_client.chat.completions.create(**payload),
                     timeout=180,
                 )
+                self._record_usage(response)
                 if hasattr(response, 'choices') and response.choices:
                     message = response.choices[0].message
                     content = getattr(message, 'content', None) or ""
+                    # glm-4.7-flash 等思考模型：content 空时用 reasoning_content，避免回复被吞
+                    if not content:
+                        content = getattr(message, 'reasoning_content', None) or ""
                     tc = getattr(message, 'tool_calls', None)
-                    logger.info("LLM OpenRouter返回: content_len=%d tool_calls=%s", len(content), bool(tc))
+                    logger.info("LLM Cloudflare返回: content_len=%d tool_calls=%s", len(content), bool(tc))
                     self._consecutive_failures = 0
                     if tc:
                         tc_list = [{"id": getattr(t, 'id', ''),
@@ -365,11 +440,11 @@ class GLMBackend:
                         return LLMResponse(content=content, tool_calls=tc_list)
                     return LLMResponse(content=content or "")
             except asyncio.TimeoutError:
-                logger.error("OpenRouter API 调用超时(25s)")
+                logger.error("Cloudflare API 调用超时(25s)")
             except Exception as e:
-                logger.error(f"OpenRouter API 调用异常: {e}")
+                logger.error(f"Cloudflare API 调用异常: {e}")
 
-        # 2. GLM (ZhipuAI) — 最后 fallback
+        # 3. GLM (ZhipuAI) — 最后 fallback
         if self.client and self.api_key:
             try:
                 kwargs = dict(model="glm-4-flash", messages=messages,
@@ -437,14 +512,13 @@ class GLMBackend:
             yield "请求过于频繁"
             return
 
-        if self.client and self.api_key:
+        if self.openrouter_client:
             try:
-                response = await asyncio.to_thread(
-                    self.client.chat.completions.create,
-                    model="glm-4-flash", messages=messages,
+                response = await self.openrouter_client.chat.completions.create(
+                    model="openrouter/free", messages=messages,
                     temperature=temperature, max_tokens=max_tokens,
-                    stream=True, timeout=self.timeout)
-                for chunk in response:
+                    stream=True)
+                async for chunk in response:
                     if chunk.choices and chunk.choices[0].delta.content:
                         yield chunk.choices[0].delta.content
                 return
@@ -463,11 +537,24 @@ class GLMBackend:
                 return
             except Exception:
                 pass
+        if self.client and self.api_key:
+            try:
+                response = await asyncio.to_thread(
+                    self.client.chat.completions.create,
+                    model="glm-4-flash", messages=messages,
+                    temperature=temperature, max_tokens=max_tokens,
+                    stream=True, timeout=self.timeout)
+                for chunk in response:
+                    if chunk.choices and chunk.choices[0].delta.content:
+                        yield chunk.choices[0].delta.content
+                return
+            except Exception:
+                pass
 
         if self.openrouter_client:
             try:
                 response = await self.openrouter_client.chat.completions.create(
-                    model=self.openrouter_model, messages=messages,
+                    model="openrouter/free", messages=messages,
                     temperature=temperature, max_tokens=max_tokens,
                     stream=True)
                 async for chunk in response:
@@ -476,6 +563,7 @@ class GLMBackend:
                 return
             except Exception:
                 pass
+
         yield "流式响应不可用，请使用非流式接口"
 
     async def chat_structured_stream(self, messages, temperature=0.7, max_tokens=4096,
@@ -525,7 +613,69 @@ class GLMBackend:
         tool_call_buffers: Dict[int, Dict] = {}
         finish_reason = None
 
-        # ── DeepSeek (优先) ──
+        # ── OpenRouter Free / Agnes (priority) ──
+        if self.openrouter_client:
+            try:
+                # 如果 model 以 "agnes" 开头，使用 Agnes 模型；否则使用 openrouter/free
+                _or_model = self.openrouter_model if self.openrouter_model.startswith("agnes") else "openrouter/free"
+                payload = dict(model=_or_model, messages=messages,
+                               temperature=temperature, max_tokens=max_tokens,
+                               stream=True, stream_options={"include_usage": True})
+                if tools:
+                    payload["tools"] = tools
+                    payload["tool_choice"] = "auto"
+
+                logger.info("LLM → OpenRouter/Agnes(stream) (model=%s, tools=%s)", _or_model, bool(tools))
+                response = await self.openrouter_client.chat.completions.create(**payload)
+
+                async for chunk in response:
+                    if not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta
+                    finish_reason = chunk.choices[0].finish_reason
+
+                    if delta.content:
+                        full_content += delta.content
+                        if on_text:
+                            on_text(delta.content)
+
+                    if delta.tool_calls:
+                        for tc_delta in delta.tool_calls:
+                            idx = tc_delta.index
+                            if idx not in tool_call_buffers:
+                                tool_call_buffers[idx] = {"id": "", "function": {"name": "", "arguments": ""}}
+                            buf = tool_call_buffers[idx]
+                            if tc_delta.id:
+                                buf["id"] = tc_delta.id
+                            if tc_delta.function:
+                                if tc_delta.function.name:
+                                    buf["function"]["name"] += tc_delta.function.name
+                                if tc_delta.function.arguments:
+                                    buf["function"]["arguments"] += tc_delta.function.arguments
+
+                self._consecutive_failures = 0
+
+                tool_calls = []
+                if tool_call_buffers:
+                    for idx in sorted(tool_call_buffers.keys()):
+                        buf = tool_call_buffers[idx]
+                        tool_calls.append({
+                            "id": buf["id"] or f"call_{buf['function']['name']}_{int(time.time())}",
+                            "type": "function",
+                            "function": {"name": buf["function"]["name"], "arguments": buf["function"]["arguments"]},
+                        })
+
+                logger.info("LLM OpenRouter(stream)返回: content_len=%d tool_calls=%s finish=%s",
+                            len(full_content), bool(tool_calls), finish_reason)
+                return LLMResponse(content=full_content, tool_calls=tool_calls if tool_calls else None,
+                                   truncated=(finish_reason == 'length'))
+
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error(f"OpenRouter 流式调用异常: {e}")
+
+        # ── DeepSeek (secondary) ──
         if self.deepseek_client:
             try:
                 payload = dict(model=self.deepseek_model, messages=messages,
@@ -587,69 +737,6 @@ class GLMBackend:
                 raise
             except Exception as e:
                 logger.error(f"DeepSeek 流式调用异常: {e}")
-
-        # ── OpenRouter (fallback) ──
-        if self.openrouter_client:
-            try:
-                # 修复: 原实现误用 self.deepseek_model("deepseek-chat")——
-                # OpenRouter 要求完整模型 ID (deepseek/deepseek-chat),
-                # 裸 "deepseek-chat" 会被判 ambiguous 报 400 (与 342 行非流式路径不一致)。
-                payload = dict(model=self.openrouter_model, messages=messages,
-                               temperature=temperature, max_tokens=max_tokens,
-                               stream=True, stream_options={"include_usage": True})
-                if tools:
-                    payload["tools"] = tools
-                    payload["tool_choice"] = "auto"
-
-                logger.info("LLM → OpenRouter(stream) (tools=%s)", bool(tools))
-                response = await self.openrouter_client.chat.completions.create(**payload)
-
-                async for chunk in response:
-                    if not chunk.choices:
-                        continue
-                    delta = chunk.choices[0].delta
-                    finish_reason = chunk.choices[0].finish_reason
-
-                    if delta.content:
-                        full_content += delta.content
-                        if on_text:
-                            on_text(delta.content)
-
-                    if delta.tool_calls:
-                        for tc_delta in delta.tool_calls:
-                            idx = tc_delta.index
-                            if idx not in tool_call_buffers:
-                                tool_call_buffers[idx] = {"id": "", "function": {"name": "", "arguments": ""}}
-                            buf = tool_call_buffers[idx]
-                            if tc_delta.id:
-                                buf["id"] = tc_delta.id
-                            if tc_delta.function:
-                                if tc_delta.function.name:
-                                    buf["function"]["name"] += tc_delta.function.name
-                                if tc_delta.function.arguments:
-                                    buf["function"]["arguments"] += tc_delta.function.arguments
-
-                self._consecutive_failures = 0
-
-                tool_calls = []
-                if tool_call_buffers:
-                    for idx in sorted(tool_call_buffers.keys()):
-                        buf = tool_call_buffers[idx]
-                        tool_calls.append({
-                            "id": buf["id"] or f"call_{buf['function']['name']}_{int(time.time())}",
-                            "type": "function",
-                            "function": {"name": buf["function"]["name"], "arguments": buf["function"]["arguments"]},
-                        })
-
-                logger.info("LLM OpenRouter(stream)返回: content_len=%d tool_calls=%s finish=%s",
-                            len(full_content), bool(tool_calls), finish_reason)
-                return LLMResponse(content=full_content, tool_calls=tool_calls if tool_calls else None,
-                                   truncated=(finish_reason == 'length'))
-
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:
-                logger.error(f"OpenRouter 流式调用异常: {e}")
 
         # ── GLM (最后 fallback) ──
         if self.client and self.api_key:
