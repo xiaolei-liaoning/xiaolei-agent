@@ -234,7 +234,10 @@ class MemoryCoordinator:
                 if self._session_mgr is None:
                     from core.memory.session_manager import get_session_manager
                     self._session_mgr = get_session_manager()
-                block = self._session_mgr.build_context_block(n=3)
+                # 修复(跨用户泄漏): 历史会话块按 user_id 过滤，
+                # 防 A 用户的会话摘要注进 B 用户的上下文
+                self._session_mgr._owner_user_id = user_id
+                block = self._session_mgr.build_context_block(n=3, user_id=user_id)
                 if block:
                     self._cache_session_block = block
             except Exception:

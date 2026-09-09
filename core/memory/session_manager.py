@@ -41,6 +41,9 @@ class SessionManager:
     def __init__(self):
         self._index_path = SESSION_ROOT / "index.json"
         self._index: Dict[str, Any] = {}
+        # 修复(跨用户泄漏): 当前归属用户（由 coordinator 注入），
+        # create_session 时写入 entry.user_id
+        self._owner_user_id: str = ""
         self._stack: List[Dict[str, Any]] = []  # stack of {sid, dir}
         self._load_index()
 
@@ -83,6 +86,8 @@ class SessionManager:
             "artifacts": [],
             "status": "running",
             "summary": "",
+            # 修复(跨用户泄漏): 记录归属用户，get_recent_sessions 按此过滤
+            "user_id": str(getattr(self, "_owner_user_id", "") or ""),
         }
         self._index[session_id] = entry
         self._save_index()
@@ -162,13 +167,23 @@ class SessionManager:
             return str(Path(cur["dir"]) / "artifacts")
         return None
 
-    def get_recent_sessions(self, n: int = 5) -> List[Dict]:
+    def get_recent_sessions(self, n: int = 5, user_id: str = "") -> List[Dict]:
         entries = [e for e in self._index.values() if e.get("status") == "completed"]
+        # 修复(跨用户泄漏): session_id 没有用户字段，用 entry 里存的 user_id
+        # 过滤（写入时记录）；user_id 为空 = 不过滤（V1 兼容）
+        if user_id:
+            entries = [e for e in entries if e.get("user_id", "") == user_id]
         entries.sort(key=lambda e: e.get("created_at", ""), reverse=True)
         return entries[:n]
 
-    def build_context_block(self, n: int = 3) -> str:
-        recent = self.get_recent_sessions(n)
+    def build_context_block(self, n: int = 3, user_id: str = "") -> str:
+        """历史会话块（注入 LLM）
+
+        修复(跨用户泄漏): user_id 为空 = 全局索引（旧行为，V1 兼容）；
+        传入 user_id 时只列该用户的会话——测试/多用户隔离，防止 A 用户
+        的会话摘要被注进 B 用户的上下文（深度测试 dtest_edge 实测泄漏）。
+        """
+        recent = self.get_recent_sessions(n, user_id=user_id)
         if not recent:
             return ""
         lines = ["\n── 历史会话 ──"]
