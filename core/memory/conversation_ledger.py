@@ -20,11 +20,12 @@
 
 import json
 import logging
+import math
 import os
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -101,24 +102,90 @@ def _iter_entries(user_id: str, newest_first: bool = False):
 
 def search(query: str, user_id: str, limit: int = 10,
            role: str = "") -> List[Dict]:
-    """关键词搜索账本（大小写不敏感，多词 AND）
+    """关键词搜索账本（大小写不敏感，多词 AND，BM25 式相关度排序）
 
     这是 agent "翻老账本" 的主入口——被问"上次说了什么/之前给过什么建议"
     时调 search_history 工具，返回带时间戳和会话 id 的原文条目。
+
+    参考 Hermes hermes_state_search.py 的三件套（简化落地）：
+    1. 多词 OR 降级：AND 全命中无结果时，退回"命中词最多"的条目
+       （Hermes 教 agent 用 OR——这里直接内置，agent 不用学）
+    2. 相关度排序：score = Σ(词频 × IDF) × role权重，替代纯时间倒序，
+       治"高频词把真建议挤掉"
+    3. 0 命中引导：结果交给 format_hits 输出换词建议（学 Hermes 的
+       "No matching sessions found. FTS5 ANDs all terms..."）
     """
     if not query.strip():
         return []
     terms = [t.lower() for t in query.split() if t.strip()]
-    hits: List[Dict] = []
-    for e in _iter_entries(user_id, newest_first=True):
-        text = f"{e.get('content','')} {e.get('task','')}".lower()
+    if not terms:
+        return []
+
+    # ── 第一遍：全量扫描，收集候选 + 计算 IDF ──
+    # （3000 条 ~2ms 级，线性扫可承受；真到 GB 级再考虑 FTS5）
+    candidates: List[Dict] = []
+    doc_freq: Dict[str, int] = {}
+    for e in _iter_entries(user_id):
         if role and e.get("role", "") != role:
             continue
-        if all(t in text for t in terms):
-            hits.append(e)
-            if len(hits) >= limit:
-                break
+        text = f"{e.get('content','')} {e.get('task','')}".lower()
+        matched = [t for t in terms if t in text]
+        if not matched:
+            continue
+        candidates.append({"_entry": e, "_text": text, "_matched": matched})
+        for t in set(matched):
+            doc_freq[t] = doc_freq.get(t, 0) + 1
+
+    if not candidates:
+        return []
+
+    # ── 第二遍：打分排序 ──
+    # score = Σ_t (tf_t × idf_t) × role_boost × recency_boost
+    #   tf  = 该词在条目里出现次数（信息量）
+    #   idf = log(1 + N/df)  稀有词权重大（"redis" >> "优化"）
+    #   role_boost = 用户原话 ×1.3（"上次我说了什么"场景优先命中 user 行）
+    #   recency    = 越新 ×越高（同分时新的在前），上限 ×1.2 不喧宾夺主
+    total_docs = max(1, len(candidates))
+    newest_ts = candidates[-1]["_entry"].get("ts", "")
+    scored: List[Tuple[float, Dict[str, Any]]] = []
+    for c in candidates:
+        e, text = c["_entry"], c["_text"]
+        score = 0.0
+        for t in terms:
+            tf = text.count(t)
+            if tf == 0:
+                continue
+            idf = math.log(1 + total_docs / max(1, doc_freq.get(t, 1)))
+            score += tf * idf
+        if not score:
+            continue
+        if e.get("role") == "user":
+            score *= 1.3
+        ts = e.get("ts", "")
+        if ts and newest_ts and ts[:7] == newest_ts[:7]:
+            score *= 1.1
+        scored.append((score, c["_entry"]))
+
+    scored.sort(key=lambda x: -x[0])
+    hits = [e for _, e in scored[:limit]]
     return hits
+
+
+def search_or_fallback(query: str, user_id: str, limit: int = 10,
+                       role: str = "") -> List[Dict]:
+    """search 的 OR 降级版：AND 无结果时按"命中词数"再捞一轮
+
+    Hermes 的查询语法让 agent 自己写 OR；这里内置到代码里——
+    "数据库 太慢 优化" 搜不到（原文说"查询接口"）时，命中 1-2 个词的
+    条目仍能捞回来，弱化软肋1/软肋2（同义词/错别字）的伤害。
+    """
+    hits = search(query, user_id, limit=limit, role=role)
+    if hits:
+        return hits
+    terms = [t.lower() for t in query.split() if t.strip()]
+    if len(terms) <= 1:
+        return []
+    return search(" OR ".join(terms), user_id, limit=limit, role=role)
 
 
 def recent(user_id: str, limit: int = 20, session_id: str = "") -> List[Dict]:
@@ -142,11 +209,24 @@ def stats(user_id: str) -> Dict:
     return {"files": len(files), "entries": total, "span": span}
 
 
-def format_hits(hits: List[Dict]) -> str:
-    """把搜索结果格式化成 agent 可读的文本块"""
+def format_hits(hits: List[Dict], query: str = "") -> str:
+    """把搜索结果格式化成 agent 可读的文本块
+
+    0 命中时输出换词引导（学 Hermes："FTS5 ANDs all terms by default —
+    broaden with OR..."）——让 agent 自己换词重搜，而不是死心。
+    """
     if not hits:
-        return "(账本中未找到相关记录)"
-    lines = [f"找到 {len(hits)} 条历史记录:"]
+        guide = (
+            "(账本中未找到相关记录。搜索是多词 AND（全部命中才算），试试:\n"
+            "  1. 换成当时对话里的具体词: 专有名词/文件名/版本号/技术名（如 redis、fastapi、账本）\n"
+            "  2. 少用抽象大词（优化/改进/建议 单独搜会被大量流水淹没）\n"
+            "  3. 减少 关键词 个数——每多一个词命中的面越窄\n"
+            "  4. 用 role=\"user\" 只搜用户原话，避开大段回答)"
+        )
+        if query:
+            guide = f"(账本中未找到「{query[:60]}」的相关记录。{guide[1:]}"
+        return guide
+    lines = [f"找到 {len(hits)} 条历史记录（按相关度排序）:"]
     for e in hits:
         lines.append(
             f"[{e.get('ts','')}] 会话{str(e.get('session_id',''))[-8:]} "

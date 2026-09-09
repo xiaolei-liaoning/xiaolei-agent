@@ -1634,7 +1634,7 @@ async def _handle_search_history(args: Dict, ctx=None) -> Dict:
     被问"上次/之前说了什么"时用这个，不要靠 STM 注入猜。
     """
     from core.multi_agent_v2.tools.tool_result import ok, err
-    from core.memory.conversation_ledger import search, recent, stats, format_hits
+    from core.memory.conversation_ledger import search_or_fallback, recent, stats, format_hits
 
     action = args.get("action", "search")
     # user_id 与记忆链路同门: 优先运行时 ctx.user_id（run_react #003 透传），
@@ -1650,10 +1650,11 @@ async def _handle_search_history(args: Dict, ctx=None) -> Dict:
             query = str(args.get("query", ""))
             if not query.strip():
                 return err("需要 query 参数（关键词，多词空格分隔=AND）")
-            hits = search(query, user_id,
-                          limit=int(args.get("limit", 10)),
-                          role=str(args.get("role", "") or ""))
-            return ok(format_hits(hits))
+            # 参考 Hermes: AND 无结果时内置 OR 降级（agent 不用学 OR 语法）
+            hits = search_or_fallback(query, user_id,
+                                      limit=int(args.get("limit", 10)),
+                                      role=str(args.get("role", "") or ""))
+            return ok(format_hits(hits, query=query))
         elif action == "recent":
             items = recent(user_id, limit=int(args.get("limit", 20)),
                            session_id=str(args.get("session_id", "") or ""))

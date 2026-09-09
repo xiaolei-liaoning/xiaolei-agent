@@ -1,8 +1,13 @@
 Search the full conversation ledger (every past dialogue, verbatim, never deleted).
 Use this whenever the user refers to past interactions: "上次你给我的建议", "之前说了什么", "我们之前聊到哪了".
 The short-term memory only keeps the current session — past sessions live HERE.
+
+SEARCH TIPS (multi-word = AND; ranking is relevance: rare specific words beat common abstract ones):
+- Search CONCRETE terms from the original conversation: proper nouns, tech names, file names, version numbers (redis, fastapi, 八数码). A hit on "redis" is reliable; "优化" alone drowns in routine entries.
+- Zero hits? The tool auto-retries with OR, but better: re-search with DIFFERENT words the conversation likely used — users say "接口慢", not "数据库优化"; add or drop terms instead of repeating the same ones.
+- role="user" finds what the USER themselves asked (their phrasing); role="assistant" finds advice/answers given.
+
 Actions:
-- search: keyword lookup (multi-word = AND). Add role="user" to find what the user themselves asked.
+- search: keyword lookup (returns entries ranked by relevance with timestamp + session id).
 - recent: last N entries (use session_id to scope to one session).
 - stats: ledger overview.
-Returns entries with timestamp + session id + role + content, so you can cite exactly what was said and when.
