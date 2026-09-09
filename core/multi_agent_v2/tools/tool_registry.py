@@ -1627,6 +1627,45 @@ async def _handle_text_analyzer(args: Dict) -> Dict:
         return err(f"文本分析失败: {e}")
 
 
+async def _handle_search_history(args: Dict, ctx=None) -> Dict:
+    """全量对话账本搜索 — Hermes 式"翻老账本"
+
+    账本 append-only 存所有对话原文（STM 压缩撕掉的页这里都有）。
+    被问"上次/之前说了什么"时用这个，不要靠 STM 注入猜。
+    """
+    from core.multi_agent_v2.tools.tool_result import ok, err
+    from core.memory.conversation_ledger import search, recent, stats, format_hits
+
+    action = args.get("action", "search")
+    # user_id 与记忆链路同门: 优先运行时 ctx.user_id（run_react #003 透传），
+    # 再退环境缺省 default_user（写读同门）
+    user_id = str(args.get("user_id", "") or "")
+    if not user_id and ctx is not None:
+        user_id = str(getattr(ctx, 'user_id', '') or '')
+    if not user_id:
+        user_id = "default_user"
+
+    try:
+        if action == "search":
+            query = str(args.get("query", ""))
+            if not query.strip():
+                return err("需要 query 参数（关键词，多词空格分隔=AND）")
+            hits = search(query, user_id,
+                          limit=int(args.get("limit", 10)),
+                          role=str(args.get("role", "") or ""))
+            return ok(format_hits(hits))
+        elif action == "recent":
+            items = recent(user_id, limit=int(args.get("limit", 20)),
+                           session_id=str(args.get("session_id", "") or ""))
+            return ok(format_hits(items))
+        elif action == "stats":
+            return ok(f"账本概况: {stats(user_id)}")
+        else:
+            return err(f"未知 action: {action}（可用: search/recent/stats）")
+    except Exception as e:
+        return err(f"账本查询失败: {e}")
+
+
 async def _handle_skill(args: Dict) -> Dict:
     """Load skill content by name — OpenCode-style on-demand skill loading"""
     from core.multi_agent_v2.tools.tool_result import ok, err
@@ -1998,6 +2037,37 @@ _SANDBOX_TOOL_DEFS = [
             "required": ["name"],
         },
         handler=_handle_skill,
+    ),
+    ToolDefinition(
+        name="search_history",
+        server=SERVER_BUILTIN,
+        tags=["memory", "search"],
+        description=_builder.get_tool_desc("search_history"),
+        parameters={
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["search", "recent", "stats"],
+                    "description": "search=按关键词搜历史对话; recent=看最近对话; stats=账本概况"
+                },
+                "query": {
+                    "type": "string",
+                    "description": "search 必填: 关键词，多词空格分隔（AND 关系），如「项目 优化 建议」"
+                },
+                "role": {
+                    "type": "string",
+                    "enum": ["user", "assistant", "tool"],
+                    "description": "可选: 只搜某个角色的发言（如 role=user 找用户原话）"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "可选: 返回条数上限，默认 10"
+                },
+            },
+            "required": [],
+        },
+        handler=_handle_search_history,
     ),
     ToolDefinition(
         name="task",

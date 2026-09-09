@@ -70,6 +70,17 @@ _MAX_ROUNDS = 10
 # 提示词模块 — 按任务类型按需组装（从 prompts/ .txt 文件加载）
 # ═══════════════════════════════════════════════════════════════════
 
+def _ledger_log_module(user_id: str, session_id: str, role: str,
+                       content: str, task: str = "") -> None:
+    """模块级账本写入（供 middleware 类方法使用；run_react 内有闭包版 _ledger_log）"""
+    try:
+        from core.memory.conversation_ledger import append_entry
+        append_entry(user_id or "default_user", session_id, role, content,
+                     task=task[:200])
+    except Exception:
+        pass
+
+
 def _extract_text_from_json(s: str) -> str:
     """从带 tool_calls 的 JSON 回复中提取 content 文本"""
     try:
@@ -714,12 +725,22 @@ class ReActCoreMiddleware(BaseMiddleware):
                 _plan_done = ctx.plan and all(s.status == "done" for s in ctx.plan)
                 if _plan_done:
                     ctx.final_answer = _plain
+                    _ledger_log_module(
+                        str(getattr(ctx, 'user_id', '') or '') or "default_user",
+                        str(getattr(ctx, '_session_id', '') or ''),
+                        "assistant", (_plain or "")[:2000], ctx.task_description,
+                    )  # 账本: 最终回答落档
                     ctx.interrupted = True
                     ctx.exit_reason = "plan_completed"
                     break
                 # ponytail: 思考文本存入历史，续轮/兜底时可见（durable record）
                 if _plain and len(_plain) > 20:
                     ctx._conversation_history.append({"role": "assistant", "content": _plain[:2000]})
+                    _ledger_log_module(
+                        str(getattr(ctx, 'user_id', '') or '') or "default_user",
+                        str(getattr(ctx, '_session_id', '') or ''),
+                        "assistant", _plain[:2000], ctx.task_description,
+                    )  # 账本: 思考/回复落档
             except asyncio.TimeoutError:
                 logger.debug("LLM 调用超时 (60s)")
                 ctx.last_error = "LLM 调用超时"
@@ -1359,6 +1380,18 @@ async def run_react(
         except Exception:
             pass
 
+    # ── 全量对话账本（Hermes 模式）──
+    # session.json 只留最近 30 条、STM 会被压缩撕页，历史细节从这里翻回来。
+    # append-only：每次 LLM 有产出（思考/工具/回答）就落一条，永不删改。
+    def _ledger_log(role: str, content: str):
+        try:
+            from core.memory.conversation_ledger import append_entry
+            _uid = str(getattr(ctx, 'user_id', '') or '') or "default_user"
+            append_entry(_uid, _sid, role, content,
+                         task=task_description[:200])
+        except Exception:
+            pass
+
     while not ctx.interrupted and ctx.react_depth < ctx.max_iterations:
         round_idx = ctx.react_depth + 1
         if not prefix:
@@ -1424,6 +1457,8 @@ async def run_react(
                 print(f"{prefix}    \033[32m◇ All steps complete\033[0m")
                 ctx.interrupted = True
                 ctx.exit_reason = "plan_completed"
+                if ctx.final_answer:
+                    _ledger_log("assistant", ctx.final_answer[:2000])  # 账本: 最终回答落档
                 break
 
         # ── Agent 驱动状态声明（deepseek-harness update_goal 语义）──
@@ -1528,6 +1563,8 @@ async def run_react(
                 # 用已有数据产出报告。真实测试：agent 写作瘫痪时系统接管产出，而非纯暂停。
                 ctx.interrupted = True
                 ctx.exit_reason = "idle_round_limit"
+                if getattr(ctx, 'final_answer', ''):
+                    _ledger_log("assistant", ctx.final_answer[:2000])  # 账本: 已有回答落档
                 logger.info(
                     f"Stall guard: round_gap={_round_gap} stuck={_stuck} idle={_idle_guard} → pause, "
                     f"断点已存: {getattr(ctx, '_blocked_reason', '')[:60]}"
@@ -1601,6 +1638,7 @@ async def run_react(
                 # 转为续轮信号（deepseek Ralph：complete 需 evidence，进行中文本无效）
                 if _reply_text and _reply_text.strip() and not _ONGOING_INTENT_RE.search(_reply_text[:200]):
                     ctx.final_answer = _reply_text.strip()
+                    _ledger_log("assistant", ctx.final_answer[:2000])  # 账本: 最终回答落档
                     ctx.interrupted = True
                     ctx.exit_reason = "completed_with_answer"
                     break
@@ -1636,6 +1674,7 @@ async def run_react(
                 continue
             ctx.interrupted = True
             ctx.exit_reason = "completed_with_answer"
+            _ledger_log("assistant", ctx.final_answer[:2000])  # 账本: 最终回答落档
             break
 
         if ctx.react_depth >= 3 and ctx.plan:
@@ -1891,6 +1930,17 @@ async def run_react(
 
     # ── 搜索报告自动生成兜底 ──
     _save_history()
+    # 账本: 任务收口——用户原话 + 最终回答各落一条（B2 的 seed 在历史里，
+    # 但账本要有独立的 user 条目，跨会话搜索"我当时问了什么"才命中）
+    try:
+        from core.memory.conversation_ledger import append_entry as _lg_append
+        _uid_lg = str(getattr(ctx, 'user_id', '') or '') or "default_user"
+        _lg_append(_uid_lg, _sid, "user", task_description, task=task_description[:200])
+        if ctx.final_answer:
+            _lg_append(_uid_lg, _sid, "assistant", ctx.final_answer[:2000],
+                       task=task_description[:200])
+    except Exception:
+        pass
     # ponytail: blocker 语义 — 轮次耗尽时收尾必须可诊断（对齐 goal-round-driver 的 round-limit）
     _round_limit_hit = (
         not ctx.interrupted

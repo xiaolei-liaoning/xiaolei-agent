@@ -1,0 +1,8 @@
+Search the full conversation ledger (every past dialogue, verbatim, never deleted).
+Use this whenever the user refers to past interactions: "上次你给我的建议", "之前说了什么", "我们之前聊到哪了".
+The short-term memory only keeps the current session — past sessions live HERE.
+Actions:
+- search: keyword lookup (multi-word = AND). Add role="user" to find what the user themselves asked.
+- recent: last N entries (use session_id to scope to one session).
+- stats: ledger overview.
+Returns entries with timestamp + session id + role + content, so you can cite exactly what was said and when.
