@@ -755,7 +755,7 @@ class ReActCoreMiddleware(BaseMiddleware):
                 ctx.last_error = f"LLM 调用失败: {e}"
                 ctx.exit_reason = "llm_error"
                 ctx.interrupted = True
-                break
+                return  # 立即返回，避免累加 consecutive_idle_rounds
         # ponytail: 文本轮次记账（deepseek-harness: 无工具调用=完成的轮次，
         # 是否续轮由主循环 goal-round 逻辑决策，这里只做记录，不强制不限制）
         if _round_idle:
