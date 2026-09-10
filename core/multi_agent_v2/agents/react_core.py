@@ -1481,10 +1481,9 @@ async def run_react(
             step_idx = steps_in_round + 1
             if not prefix:
                 print(f"    \033[2mStep {step_idx}/{max_steps}\033[0m")
-            
+
             steps_in_round += 1
-            ctx.react_depth += 1
-            
+
             # LLM 调用
             hr_start = await chain.on_llm_invoke(ctx)
             if hr_start and hr_start.jump_to == "end":
@@ -1494,7 +1493,7 @@ async def run_react(
                 break
             if hr_start and hr_start.jump_to == "retry":
                 continue
-            
+
             # 工具执行
             hr_end = await chain.on_tool_invoke(ctx)
             if hr_end and hr_end.jump_to == "end":
@@ -1502,7 +1501,7 @@ async def run_react(
                 ctx.exit_reason = "middleware_kill_tool"
                 ctx.last_error = hr_end.reason or "中间件终止(think_end)"
                 break
-            
+
             # 更新 TaskProgress
             _tp = getattr(ctx, 'task_progress', None)
             if _tp is not None:
