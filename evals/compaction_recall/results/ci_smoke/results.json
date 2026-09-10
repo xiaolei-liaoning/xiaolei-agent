@@ -1,0 +1,17 @@
+{
+  "none": {
+    "retained_tokens_pct": 100.0,
+    "questions": 3,
+    "recall_pct": 0.0
+  },
+  "light": {
+    "retained_tokens_pct": 7.9,
+    "questions": 3,
+    "recall_pct": 0.0
+  },
+  "full": {
+    "retained_tokens_pct": 5.1,
+    "questions": 3,
+    "recall_pct": 0.0
+  }
+}

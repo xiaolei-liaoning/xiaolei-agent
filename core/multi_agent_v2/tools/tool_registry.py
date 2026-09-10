@@ -1431,12 +1431,32 @@ async def _handle_read_file(args: Dict) -> Dict:
         pass
 
     try:
+        # ponytail: 特殊文件防挂 — FIFO/socket/dev path read() 会永远阻塞
+        import stat as _stat
+        _mode = p.stat().st_mode
+        if _stat.S_ISFIFO(_mode) or _stat.S_ISSOCK(_mode) or not _stat.S_ISREG(_mode):
+            return err(f"非常规文件 (fifo/socket/device): {path} — read_file 不支持，请用 execute_shell cat 配合超时，或 os.read")
+
         text = p.read_text(encoding="utf-8")
     except UnicodeDecodeError:
-        return err(f"无法解码文件: {path}")
+        # ponytail: 二进制/非 UTF-8 → 明确拒绝, 不把字节流塞进 LLM
+        try:
+            size = p.stat().st_size
+            head = p.read_bytes()[:8]
+            _hex = head.hex()
+        except Exception:
+            size, _hex = -1, ""
+        return err(f"无法按文本解码文件: {path} (可能是二进制, 头部字节 {_hex}, {size}B)。如需 inspect 二进制, 用 execute_shell 配合 xxd/file 命令")
     lines = text.split("\n")
     offset = max(0, args.get("offset", 1) - 1)
     limit = args.get("limit", 2000)
+    # ponytail: offset 越界 — 返回明确提示而非空数据 + ok=True (LLM 无法判断是否挂)
+    # test_readtool_adversarial::test_read_past_eof_informative 守卫
+    if offset >= len(lines):
+        return err(
+            f"offset={offset+1} 超出文件 EOF（共 {len(lines)} 行）。\n"
+            f"提示: 用 offset={max(1, len(lines) - 100)} 读取末尾 100 行, 或不传 offset 从头读。"
+        )
     page = lines[offset:offset + limit]
     result = "\n".join(page)
     if offset > 0 or offset + limit < len(lines):
