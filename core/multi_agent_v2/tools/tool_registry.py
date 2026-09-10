@@ -1458,7 +1458,13 @@ async def _handle_read_file(args: Dict) -> Dict:
 
 
 async def _handle_edit_file(args: Dict) -> Dict:
-    """精确文本替换 + diff 预览"""
+    """智能文本替换 — 9级模糊匹配（edit.py SmartEditor）+ 精确替换安全网
+
+    2026-09-10 修复"功能断裂": edit.py 的 SmartEditor 有完整 9 级匹配引擎
+    （fuzzy/indentation/line_number/...）但从未被 _handle_edit_file 调用过，
+    导致编辑能力只有 20 行的 text.count() 精确替换 — 缩进/typo/空白差异全被拒。
+    现接线: 先 SmartEditor.auto 匹配, 异常/未命中时降级为原精确替换保底。
+    """
     import difflib
     from core.multi_agent_v2.tools.tool_result import err
 
@@ -1487,9 +1493,47 @@ async def _handle_edit_file(args: Dict) -> Dict:
         text = p.read_text(encoding="utf-8")
     except UnicodeDecodeError:
         return err(f"无法解码文件: {path}")
+
+    # ── 主路径: SmartEditor 9 级模糊匹配 ──
+    # ponytail: 多处匹配守卫必须在 SmartEditor 之前 — 它只改第一个,
+    # 会静默改错位置（test_multiple_matches_no_replace_all 回归守卫）。
+    # ponytail2: replace_all 与 SmartEditor 单点匹配语义冲突 → 走精确。
+    if not replace_all:
+        _n_matches = text.count(old)
+        if _n_matches > 1:
+            return err(f"找到 {_n_matches} 处匹配，请设置 replace_all=true 或提供更多上下文")
+        try:
+            from core.multi_agent_v2.tools.edit import SmartEditor
+            editor = SmartEditor(file_path=str(p))
+            editor.load(str(p))
+            er = await editor.edit(old_text=old, new_text=new, strategy="auto")
+            if er.success:
+                # ponytail: SmartEditor 是内存编辑 — save() 才落盘
+                editor.save(str(p))
+                # diff: 用 er 自带, 或从内存读取新内容做 unified_diff
+                rel_path = p.relative_to(Path.cwd()) if p.is_relative_to(Path.cwd()) else p
+                fdata = editor.original_content or ""
+                diff = getattr(er, "diff", "") or "\n".join(difflib.unified_diff(
+                    text.splitlines(), fdata.splitlines(),
+                    fromfile=str(rel_path), tofile=str(rel_path) + " (edited)", lineterm="",
+                ))
+                return {
+                    "ok": True,
+                    # ponytail: 文案保留"成功"字眼 — e2e_improvements 契约
+                    # assert "成功" in from_handler(edit_result)，data 前缀变化会破坏它
+                    "data": f"成功: ✓ 编辑完成 ({er.strategy.value if hasattr(er, 'strategy') else 'match'})",
+                    "diff": diff,
+                    "strategy": er.strategy.value if hasattr(er, "strategy") else "auto",
+                }
+            # SmartEditor 明确失败 → 落到下方精确替换保底
+            logger.debug(f"SmartEditor 未命中 ({getattr(er, 'error', '')}), 降级精确替换")
+        except Exception as _e:
+            logger.debug(f"SmartEditor 异常降级: {_e}")
+
+    # ── 保底: 原精确替换语义 ¬ replace_all 或 fuzzy 引擎不可用时 ──
     count = text.count(old)
     if count == 0:
-        return err("old_string 未在文件中找到")
+        return err("old_string 未在文件中找到 (SmartEditor 模糊与精确替换均未命中)")
     if not replace_all and count > 1:
         return err(f"找到 {count} 处匹配，请设置 replace_all=true 或提供更多上下文")
     new_text = text.replace(old, new, -1 if replace_all else 1)

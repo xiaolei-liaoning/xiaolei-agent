@@ -281,7 +281,10 @@ class SmartEditor:
                 ratio = difflib.SequenceMatcher(
                     None, content_lines[i + j].strip(), old_line.strip()
                 ).ratio()
-                if ratio > 0.7:
+                # ponytail: 0.7 → 0.6 — 真实测试 (test_fuzzy_middle_line_typo):
+                # 'retun False' vs '    return True' ratio=0.636,
+                # 3 行里 2 行精确 + 1 行 typo 是合法模糊匹配意图, 0.7 阈值把它拒掉
+                if ratio > 0.6:
                     match_count += 1
 
             if match_count >= len(old_lines) * 0.8:
