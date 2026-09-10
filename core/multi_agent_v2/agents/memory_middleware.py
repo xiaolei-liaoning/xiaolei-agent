@@ -130,8 +130,10 @@ class MemoryMiddleware(BaseMiddleware):
         is_subagent = getattr(ctx, '_is_subagent', False)
 
         await coordinator.finalize(
-            user_id=user_id,
-            task=ctx.task_description,
+            user_id=self._get_user_id(ctx),
+            # 修复(记账真相): 用户在 goal 续跑时原始输入被 goal_store 改写
+            # （如"你好"被拉成热搜任务），记忆里必须记用户真正说的话
+            task=str(getattr(ctx, '_raw_user_input', '') or ctx.task_description),
             final_answer=final_answer,
             is_subagent=is_subagent,
             # 修复(B1): finalize 写入 STM 时带上 session_id，

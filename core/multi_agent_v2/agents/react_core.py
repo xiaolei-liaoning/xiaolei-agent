@@ -1259,15 +1259,24 @@ async def run_react(
     # "继续"类恢复指令 → 直接改写 task_description 为原任务（generate_plan 只看任务本体，
     # 不看 forced_instructions — 只注入提示会生成"检查上下文"的错误计划，真实测试已验证）
     try:
-        from core.multi_agent_v2.agents.goal_store import load_unfinished_goal
+        from core.multi_agent_v2.agents.goal_store import (
+            load_unfinished_goal, _strip_resume_suffix,
+        )
         _prev_goal = load_unfinished_goal(task_description)
         if _prev_goal and not is_subagent:
-            _orig_task = str(_prev_goal.get('task', '')).strip()
+            # 修复(goal叠加): 先剥离上次注入的"（从上次断点继续…）"后缀再拼，
+            # 防止续跑链层层叠加（实测 goal 文件里后缀出现两次）
+            _orig_task = _strip_resume_suffix(
+                str(_prev_goal.get('task', '')).strip())
             if _orig_task:
                 ctx.task_description = (
                     f"{_orig_task}（从上次断点继续：已完成的部分不要重做，"
                     f"先检查已有产物再补齐缺失部分）"
                 )
+            # 修复(记账真相): 保存用户原始输入——finalize 落 STM/账本时用，
+            # 不然记忆里记的是被 goal 改写后的任务，用户原话被劫持
+            if not getattr(ctx, '_raw_user_input', ''):
+                ctx._raw_user_input = task_description
             ctx._goal_resumed = True
             ctx.forced_instructions = (
                 f"<goal_resume>\n"
@@ -1935,7 +1944,9 @@ async def run_react(
     try:
         from core.memory.conversation_ledger import append_entry as _lg_append
         _uid_lg = str(getattr(ctx, 'user_id', '') or '') or "default_user"
-        _lg_append(_uid_lg, _sid, "user", task_description, task=task_description[:200])
+        # 修复(记账真相): 账本记用户原始输入——goal 续跑会改写 task_description
+        raw_input = str(getattr(ctx, '_raw_user_input', '') or task_description)
+        _lg_append(_uid_lg, _sid, "user", raw_input, task=raw_input[:200])
         if ctx.final_answer:
             _lg_append(_uid_lg, _sid, "assistant", ctx.final_answer[:2000],
                        task=task_description[:200])

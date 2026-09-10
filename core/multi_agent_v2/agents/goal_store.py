@@ -117,13 +117,31 @@ def clear_unfinished_goal(task_description: str) -> None:
                 pass
 
 
+def _strip_resume_suffix(task: str) -> str:
+    """剥离续跑注入的后缀"（从上次断点继续：已完成的部分不要重做…）"
+
+    修复(goal叠加): 每次续跑 run_react 都会在 _orig_task 后拼这个后缀，
+    若 _orig_task 本身来自上一个续跑的 goal（已带后缀），会越叠越胖，
+    用户原话被淹没（实测: "(从上次断点继续…)"在 goal 文件里出现两次）。
+    """
+    marker = "（从上次断点继续"
+    idx = task.find(marker)
+    if idx > 0:
+        return task[:idx].strip()
+    return task
+
+
 def load_unfinished_goal(task_description: str = "") -> Optional[Dict]:
     """加载匹配的未完成目标。
 
-    匹配规则（修复 #011）：
+    匹配规则（修复 #011 + 修复(goal劫持)）:
       - task_description 为空 → 直接返回最近的（用于纯恢复命令）
       - 含续做词（继续/接着/continue/resume）→ 返回最近的
-      - 否则按 normalize 后的包含关系匹配（不是逐字精确）
+      - 否则按 normalize 后的包含关系匹配（不是逐字精确），
+        但短输入(≤6字)不参与包含匹配——修复目标劫持:
+        "你好"/"ok"/"嗯" normalize 后必是任何长目标全文的子串，
+        两字问候会把用户任务改成上轮的烂尾任务（实测"你好"被改写成
+        热搜报告续跑）。短输入只有显式续做词（is_resume 分支）才拉 goal。
     """
     if not os.path.exists(GOALS_DIR):
         return None
@@ -154,7 +172,7 @@ def load_unfinished_goal(task_description: str = "") -> Optional[Dict]:
         td_lower = td.lower()
         td_normalized = _normalize(td)
 
-        # 续做检测
+        # 续做检测（显式意图才放行——不受长度门槛限制）
         is_resume = (
             len(td) <= 12
             and any(kw in td_lower for kw in ("继续", "接着", "continue", "resume"))
@@ -162,6 +180,12 @@ def load_unfinished_goal(task_description: str = "") -> Optional[Dict]:
         if is_resume and goal_files:
             with open(goal_files[0][1], "r", encoding="utf-8") as f:
                 return json.load(f)
+
+        # 修复(goal劫持): 短输入不做包含匹配 —— "你好"/"嗯"/"ok"
+        # normalize 后必是任何长 goal 的子串，用户只是打招呼却被
+        # 改写成烂尾任务续跑。6 字以下（如"你好"）不放行包含匹配。
+        if len(td_normalized) <= 6:
+            return None
 
         # 包含关系匹配
         for _, path in goal_files:
