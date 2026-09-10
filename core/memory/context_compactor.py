@@ -220,7 +220,7 @@ class ContextCompactor:
             )
             self._total_compactions += 1
             self._total_tokens_saved += original_tokens - after_light
-            self._circuit_breaker.record_success()
+            self._circuit_breaker.sync_record_success()
             return messages
 
         # ---- LLM layers (L3 → L4) ----
@@ -244,7 +244,7 @@ class ContextCompactor:
             final_tokens = count_messages_tokens(rebuilt)
             self._total_compactions += 1
             self._total_tokens_saved += original_tokens - final_tokens
-            self._circuit_breaker.record_success()
+            self._circuit_breaker.sync_record_success()
 
             logger.info(
                 "Compaction: %d → %d tokens (saved %d, %d layers)",
@@ -255,7 +255,7 @@ class ContextCompactor:
 
         except Exception as e:
             logger.warning("Compaction: L3+L4 failed: %s", e)
-            self._circuit_breaker.record_failure()
+            self._circuit_breaker.sync_record_failure()
 
             # Fallback: session memory compaction (heuristic, no LLM)
             try:

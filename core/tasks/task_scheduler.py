@@ -70,7 +70,7 @@ class RateLimiter:
         return False
 
 
-from core.circuit_breaker import CircuitBreaker
+from core.circuit_breaker import CircuitBreaker, CircuitState
 
 class TaskScheduler:
     """任务调度器"""
@@ -325,7 +325,7 @@ class TaskScheduler:
             task.status = "completed"
             
             # 记录成功
-            self._record_success(task.type)
+            await self._record_success(task.type)
             duration = time.time() - start_time
             logger.info(f"任务执行成功: {task.id} - 耗时: {duration:.2f}s")
             
@@ -346,7 +346,7 @@ class TaskScheduler:
             duration = time.time() - start_time
             
             # 记录失败
-            self._record_failure(task.type)
+            await self._record_failure(task.type)
             logger.error(f"任务执行失败: {task.id} - {e} - 耗时: {duration:.2f}s")
             
             # 记录任务执行情况到监控系统
@@ -414,23 +414,15 @@ class TaskScheduler:
         
         return self.rate_limiters[service].allow()
     
-    def _record_success(self, service: str):
-        """记录服务成功
-        
-        Args:
-            service: 服务名称
-        """
+    async def _record_success(self, service: str):
+        """记录服务成功（异步版本）"""
         if service in self.circuit_breakers:
-            self.circuit_breakers[service].record_success()
-    
-    def _record_failure(self, service: str):
-        """记录服务失败
-        
-        Args:
-            service: 服务名称
-        """
+            await self.circuit_breakers[service].record_success()
+
+    async def _record_failure(self, service: str):
+        """记录服务失败（异步版本）"""
         if service in self.circuit_breakers:
-            self.circuit_breakers[service].record_failure()
+            await self.circuit_breakers[service].record_failure()
     
     def get_queue_status(self) -> Dict[str, int]:
         """获取队列状态

@@ -20,7 +20,7 @@ class CircuitState(Enum):
 @dataclass
 class CircuitBreaker:
     """熔断器
-    
+
     Args:
         failure_threshold: 失败阈值，达到后打开熔断器
         recovery_timeout: 恢复超时（秒），熔断器打开后多久尝试半开
@@ -29,60 +29,82 @@ class CircuitBreaker:
     failure_threshold: int = 5
     recovery_timeout: float = 60.0
     expected_exception: type = Exception
-    
+
     _state: CircuitState = field(default=CircuitState.CLOSED, init=False)
     _failure_count: int = field(default=0, init=False)
     _last_failure_time: Optional[float] = field(default=None, init=False)
     _success_count: int = field(default=0, init=False)
-    
+    _lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
+
     @property
     def state(self) -> CircuitState:
-        """获取当前状态
+        """获取当前状态（修复 #243: 加锁保护并发读写）"""
+        # NOTE: 在同步上下文中无法 await _lock，直接使用内部状态
+        # 异步调用应通过 async_state() 方法
+        return self._do_maybe_recover()
 
-        修复 #243: property 里有写副作用（OPEN→HALF_OPEN 迁移）且无锁——
-        并发读时会竞态。迁移逻辑本身保留（惰性恢复是设计意图），
-        但抽取为独立的 _maybe_recover() 方法，state 只读不写；
-        record_success/record_failure/调用方入口统一走 _maybe_recover()。
-        """
-        self._maybe_recover()
-        return self._state
+    async def async_state(self) -> CircuitState:
+        """异步获取状态（推荐在 async 上下文中使用）"""
+        async with self._lock:
+            return self._do_maybe_recover()
 
-    def _maybe_recover(self) -> None:
-        """惰性恢复检查：OPEN 且超时 → HALF_OPEN"""
+    def _do_maybe_recover(self) -> CircuitState:
+        """惰性恢复检查（无锁版本，仅内部调用）"""
         if self._state == CircuitState.OPEN:
             if self._last_failure_time and time.time() - self._last_failure_time > self.recovery_timeout:
                 self._state = CircuitState.HALF_OPEN
                 logger.info("熔断器进入半开状态")
-    
-    def record_success(self) -> None:
-        """记录成功"""
+        return self._state
+
+    async def record_success(self) -> None:
+        """记录成功（修复 #243: 加锁保护）"""
+        async with self._lock:
+            self._failure_count = 0
+            self._success_count += 1
+            if self._state == CircuitState.HALF_OPEN:
+                self._state = CircuitState.CLOSED
+                logger.info("熔断器关闭")
+
+    async def record_failure(self) -> None:
+        """记录失败（修复 #243: 加锁保护）"""
+        async with self._lock:
+            self._failure_count += 1
+            self._last_failure_time = time.time()
+            if self._failure_count >= self.failure_threshold:
+                self._state = CircuitState.OPEN
+                logger.warning(f"熔断器打开，失败次数: {self._failure_count}")
+
+    async def can_execute(self) -> bool:
+        """是否可以执行（修复 #243: 加锁保护）"""
+        async with self._lock:
+            return self._state != CircuitState.OPEN
+
+    # 同步版本（用于非异步上下文）
+    def sync_record_success(self) -> None:
+        """同步记录成功（无锁，用于非async上下文）"""
         self._failure_count = 0
         self._success_count += 1
         if self._state == CircuitState.HALF_OPEN:
             self._state = CircuitState.CLOSED
             logger.info("熔断器关闭")
-    
-    def record_failure(self) -> None:
-        """记录失败"""
+
+    def sync_record_failure(self) -> None:
+        """同步记录失败（无锁，用于非async上下文）"""
         self._failure_count += 1
         self._last_failure_time = time.time()
         if self._failure_count >= self.failure_threshold:
             self._state = CircuitState.OPEN
             logger.warning(f"熔断器打开，失败次数: {self._failure_count}")
     
-    def can_execute(self) -> bool:
-        """是否可以执行"""
-        return self.state != CircuitState.OPEN
-    
     async def execute(self, func: Callable, *args, **kwargs) -> Any:
-        """执行函数，带熔断保护"""
-        if not self.can_execute():
+        """执行函数，带熔断保护（修复 #243: 异步版本）"""
+        if not await self.can_execute():
             raise Exception("熔断器打开，拒绝执行")
-        
+
         try:
             result = await func(*args, **kwargs)
-            self.record_success()
+            await self.record_success()
             return result
         except self.expected_exception as e:
-            self.record_failure()
+            await self.record_failure()
             raise

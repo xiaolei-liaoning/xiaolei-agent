@@ -336,10 +336,10 @@ class ConcurrentTaskProcessor:
             async with self._scraper_semaphore:
                 self.scraper_queue.task_done()
                 result = await self._safe_execute(task, task_id)
-                self._circuit.record_success()
+                await self._circuit.record_success()
                 return result
         except Exception as e:
-            self._circuit.record_failure()
+            await self._circuit.record_failure()
             return {"success": False, "error": str(e), "tool_call": task.get("tool_call", {})}
         finally:
             async with self._scraper_lock:

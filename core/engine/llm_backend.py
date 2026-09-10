@@ -146,9 +146,18 @@ class RateLimiter:
 
     @property
     def available(self) -> int:
+        """当前可用速率槽位（注意：此 property 在异步上下文中可能竞态，
+        推荐使用 async_available()）"""
         now = time.time()
         self._timestamps = [t for t in self._timestamps if now - t < 60]
         return self._rpm - len(self._timestamps)
+
+    async def async_available(self) -> int:
+        """异步获取可用速率槽位（修复 #296: 加锁保护）"""
+        async with self._lock:
+            now = time.time()
+            self._timestamps = [t for t in self._timestamps if now - t < 60]
+            return self._rpm - len(self._timestamps)
 
 
 # ============================================================
@@ -168,7 +177,8 @@ class GLMBackend:
         self.openrouter_model = os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-v4-flash")
         self._token_stats = TokenStats()
         self._rate_limiter = RateLimiter(RATE_LIMIT_RPM)
-        self._model_lock = threading.Lock()
+        self._model_lock = threading.Lock()  # threading.Lock：switch_model 是同步方法
+        self._async_model_lock = asyncio.Lock()  # 新增：async 上下文使用
         self.timeout = llm_config.timeout
         self._consecutive_failures = 0  # 连续失败计数
         self._max_consecutive_failures = 10  # 超过此值认为 API 不可用
@@ -248,7 +258,17 @@ class GLMBackend:
     def switch_model(self, model: str) -> bool:
         if model not in SUPPORTED_MODELS:
             return False
+        # 注意：switch_model 是同步方法，_model_lock 保持 threading.Lock
+        # 如果需要在 async 上下文中切换模型，应通过 async_switch_model()
         with self._model_lock:
+            self.model = model
+        return True
+
+    async def async_switch_model(self, model: str) -> bool:
+        """异步版本：修复 #297，在 async 上下文中使用 asyncio.Lock"""
+        if model not in SUPPORTED_MODELS:
+            return False
+        async with self._async_model_lock:
             self.model = model
         return True
 

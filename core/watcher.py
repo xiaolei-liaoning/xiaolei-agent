@@ -169,11 +169,11 @@ class DynamicLoadHandler(FileSystemEventHandler):
     # ── 事件分发 ──────────────────────────────────────────────────────
 
     def _async_call(self, coro):
-        """安全地在主循环中调度协程"""
+        """安全地在主循环中调度协程（修复 #291: 捕获所有异常而非仅 RuntimeError）"""
         try:
             asyncio.run_coroutine_threadsafe(coro, self._loop)
-        except RuntimeError as e:
-            logger.warning("调度异步任务失败（loop 可能已关闭）: %s", e)
+        except Exception as e:
+            logger.warning("调度异步任务失败: %s", e)
 
     def on_created(self, event: FileSystemEvent):
         self._handle(event, "created")
