@@ -663,6 +663,14 @@ class ReActCoreMiddleware(BaseMiddleware):
                 reply = str(reply) if reply else ""
                 is_truncated = getattr(reply, 'truncated', False) if hasattr(reply, 'truncated') else False
 
+                # 防御：空响应视为 LLM 失败（如速率限制、超时、截断等）
+                if not reply and not tool_calls:
+                    logger.warning(f"LLM 第{ctx.react_depth}轮返回空响应，中断执行")
+                    ctx.last_error = "LLM 返回空响应"
+                    ctx.exit_reason = "llm_empty_response"
+                    ctx.interrupted = True
+                    return
+
                 # DEBUG: see what DeepSeek actually returned
                 reply_preview = reply[:500].replace("\n", "\\n")
                 logger.debug(f"LLM第{ctx.react_depth}轮回复({len(reply)}字符) truncated={is_truncated}")
