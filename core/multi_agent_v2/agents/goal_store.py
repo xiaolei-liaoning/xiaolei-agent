@@ -40,6 +40,15 @@ def _normalize(text: str) -> str:
     return re.sub(r"\s+", "", text.lower().strip())
 
 
+def _remove_goal_file(path: str) -> None:
+    """删除单个 goal 文件（失败静默——清理路径不允许抛错挡任务收尾）"""
+    try:
+        if os.path.exists(path):
+            os.remove(path)
+    except OSError as e:
+        logger.debug(f"删除 goal 文件失败 {path}: {e}")
+
+
 def _acquire_lock(path: str):
     """获取文件锁（跨进程安全）。失败时降级到无锁（单进程 OK）。"""
     try:
@@ -52,11 +61,37 @@ def _acquire_lock(path: str):
         return None
 
 
+def _is_junk_goal(state: Dict) -> bool:
+    """判定一个未完成目标是否为"垃圾"——不值得续跑、只会当匹配地雷。
+
+    修复(目标地雷): 首先看 task 与产物质量，垃圾任务入库后唯一的"贡献"
+    就是日后被包含匹配反向吞掉正常任务（实测: task='test' 4 字 goal
+    通过 "hello_test.html" 文件名字样子串劫持整个改文件任务）。
+    判垃圾条件（满足任一即不落盘）:
+      - normalize 后 task ≤ 8 字符（"test"/"你好"/"ok" 级别占位输入）
+      - resume 后缀本体（task 以"（从上次断点继续"开头 = 原文被注入吞掉）
+    注: 不看 files_written/rounds —— "test" 这类恰恰 rounds_done=1
+    且 files_written=[]，无产物无进度，没有续跑价值。
+    """
+    task = _strip_resume_suffix(str(state.get("task", "")).strip())
+    n = _normalize(task)
+    if len(n) <= 8:
+        return True
+    return False
+
+
 def save_unfinished_goal(state: Dict) -> bool:
     """保存未完成目标。返回 True 表示成功，False 表示失败（抛异常而非静默）。"""
     task_desc = str(state.get("task", ""))
     if not task_desc:
         raise ValueError("state 必须包含 'task' 字段")
+
+    # 修复(目标地雷): 垃圾任务不入库 —— 只有地雷价值没有续跑价值
+    if _is_junk_goal(state):
+        task_id = _task_id(task_desc)
+        _remove_goal_file(_goal_path(task_id))
+        logger.info(f"垃圾任务不落盘（已清除同 id 旧文件）: task={task_desc[:40]}")
+        return False
 
     task_id = _task_id(task_desc)
     path = _goal_path(task_id)
@@ -188,18 +223,27 @@ def load_unfinished_goal(task_description: str = "") -> Optional[Dict]:
             return None
 
         # 包含关系匹配
+        # 修复(目标地雷·匹配侧): saved 侧 normalize < 12 字的目标不参与
+        # `saved in td` 反向子串匹配（如 4 字 "test" 通过文件名 "hello_test.html"
+        # 劫持整个任务）——短 saved 只允许精确相等命中
+        # 修复(后缀污染): saved_task 先剥掉"（从上次断点继续…）"尾巴再归一化——
+        # 续跑过的 goal 尾巴会挡住自己的变体句匹配（实测: 含后缀时
+        # '重构...py的接口设计' 无法命中带后缀的 '重构...py'）
         for _, path in goal_files:
             try:
                 with open(path, "r", encoding="utf-8") as f:
                     state = json.load(f)
-                saved_task = str(state.get("task", ""))
+                saved_task = _strip_resume_suffix(str(state.get("task", "")))
                 if not saved_task:
                     continue
                 saved_normalized = _normalize(saved_task)
                 if (
                     saved_normalized == td_normalized
-                    or saved_normalized in td_normalized
-                    or td_normalized in saved_normalized
+                    or (
+                        len(saved_normalized) >= 12
+                        and (saved_normalized in td_normalized
+                             or td_normalized in saved_normalized)
+                    )
                 ):
                     return state
             except (OSError, json.JSONDecodeError) as e:
