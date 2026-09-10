@@ -627,8 +627,10 @@ class ReActCoreMiddleware(BaseMiddleware):
                     async with shimmer_spinner("Thinking…") as _shimmer:
                         # ponytail: 流式调用（token 逐个流出、连接持续活跃），
                         # 无动态超时收缩（deepseek-harness 原则：慢≠被杀）。
-                        # 仅保留 300s 兜底防空连接挂死。
-                        reply = await asyncio.wait_for(task, timeout=300)
+                        # 使用 config/app_config.json 中的 llm.timeout 配置
+                        from core.engine.llm_backend import llm_config
+                        _llm_timeout = getattr(llm_config, 'timeout', 120)
+                        reply = await asyncio.wait_for(task, timeout=_llm_timeout)
                 except asyncio.TimeoutError:
                     task.cancel()
                     try:
