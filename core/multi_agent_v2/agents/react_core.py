@@ -1603,9 +1603,26 @@ async def run_react(
                 or getattr(ctx, '_goal_resumed', False)
             )
             _deliv_guard = getattr(ctx, '_deliverable_verified', False) or _has_real_deliverable(_tp_guard)
-            if _prod_guard and not _deliv_guard and (
-                _round_gap >= 6 or _stuck >= 6 or _idle_guard >= 6
-            ):
+            # 熔断阈值: 4→3 (查询任务 60-70s/轮 × 4 > 用户等待)
+            _STALL_THRESHOLD = 3
+            # 非生产型任务熔断 (查询型: "查时间", "你好" 等)
+            # 原逻辑只检查 _prod_guard, 导致查询任务无界循环
+            _guard_hit = (
+                (_prod_guard and not _deliv_guard
+                 and (_round_gap >= 6 or _stuck >= 6 or _idle_guard >= 6))
+                or (not _prod_guard and (_round_gap >= _STALL_THRESHOLD or _idle_guard >= _STALL_THRESHOLD))
+            )
+            # 语义调和: 有实质文本则放行给 completed_with_answer
+            if _guard_hit and not _prod_guard:
+                _last_reply_txt = (getattr(ctx, '_pending_reply', '') or '').strip()
+                _ongoing_now = bool(_ONGOING_INTENT_RE.search(_last_reply_txt[:200]))
+                _exempt_now = bool(_last_reply_txt) and not _ongoing_now
+                if _exempt_now:
+                    _ex = getattr(ctx, '_exempt_streak', 0) + 1
+                    ctx._exempt_streak = _ex
+                    if _ex <= 1:  # 查询型任务最多放行 1 轮
+                        _guard_hit = False
+            if _guard_hit:
                 _stall_br = (
                     f"连续 {_round_gap} 轮无步骤推进（{_stuck} 轮 stuck / {_idle_guard} 轮无工具调用），"
                     f"交付物未写出。"

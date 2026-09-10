@@ -7,9 +7,11 @@
     → Layer 3: 加载 SKILL.md 执行指南
     → 返回: {personality, tool_pref, guidance}
 """
+import asyncio
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -252,6 +254,11 @@ class SkillSystem:
 
     async def _match_expert(self, task: str, base_id: str) -> Optional[dict]:
         """category 过滤 + LLM 全量选择"""
+        # 简单问候不触发专家匹配（避免误选 design-persona-walkthrough）
+        greeting_pattern = r'^\s*(你好|hello|hi|嘿|嗨|早上好|晚上好)?\s*$'
+        if re.match(greeting_pattern, task, re.IGNORECASE):
+            return None
+
         cats = BASE_TO_EXPERT_CATEGORIES.get(base_id, [])
         if not cats and base_id == "general":
             cats = list(self.experts.keys())
