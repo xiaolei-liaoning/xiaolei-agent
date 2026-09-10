@@ -17,7 +17,7 @@ def test_get_user_context_empty():
          patch("core.memory.vector_memory.VectorMemoryStore") as mock_vm:
         mock_profile.return_value.to_system_prompt_block.return_value = ""
         mock_vm.return_value.wait_for_collection.return_value = False
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             mw.get_user_context("test", "你好")
         )
         assert result == ""
@@ -42,7 +42,7 @@ def test_process_turn_stores_facts():
              patch("core.memory.user_profile.get_user_profile", return_value=mock_profile), \
              patch("core.memory.vector_memory.VectorMemoryStore", mock_vm):
 
-            asyncio.get_event_loop().run_until_complete(
+            asyncio.run(
                 mw.process_turn("test_user", "我叫小雷，是程序员", "你好小雷！")
             )
 

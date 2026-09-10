@@ -44,6 +44,7 @@ class ClaudeCodeWorkflow:
 
     def __init__(self, config: Optional[WorkflowConfig] = None):
         self.config = config or WorkflowConfig()
+        self._depth = 0  # 嵌套工作流深度（子工作流递增，上限 5）
         self._phase_records: list = []
         self._current_phase: Optional[str] = None
         self._log_buffer: list = []
@@ -582,8 +583,11 @@ class ClaudeCodeWorkflow:
                 # ponytail: 临时替换 _ipc_tasks 为空集，防子 workflow cleanup 误杀父任务
                 parent_ipc_tasks = self._ipc_tasks
                 self._ipc_tasks = set()
-                
+                # 深度递增（嵌套时 +1，子流程结束恢复）
+                self._depth += 1
+
                 sub_result = await self.run(script, args=wf_args)
+                self._depth -= 1
                 
                 # 保存子 workflow 结果
                 sub_phase = self._phase_records

@@ -60,6 +60,14 @@ class CircuitBreaker:
                 self._consecutive_failures,
             )
 
+    def sync_record_success(self) -> None:
+        """同步别名 — 与 core/circuit_breaker.py 接口对齐（f3a1905 引入了 sync_ 前缀但漏了这份）"""
+        self.record_success()
+
+    def sync_record_failure(self) -> None:
+        """同步别名 — 与 core/circuit_breaker.py 接口对齐"""
+        self.record_failure()
+
     @property
     def consecutive_failures(self) -> int:
         return self._consecutive_failures

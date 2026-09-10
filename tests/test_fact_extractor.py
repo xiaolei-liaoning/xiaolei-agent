@@ -13,7 +13,7 @@ def test_extractor_singleton():
 def test_no_llm_returns_empty():
     extractor = FactExtractor()
     extractor._llm = None
-    result = asyncio.get_event_loop().run_until_complete(
+    result = asyncio.run(
         extractor.extract("你好")
     )
     assert result == []
@@ -28,7 +28,7 @@ def test_extraction_with_mock_llm():
     ]))
     extractor._llm = mock_llm
 
-    result = asyncio.get_event_loop().run_until_complete(
+    result = asyncio.run(
         extractor.extract("我叫小雷，是个程序员")
     )
     assert len(result) == 2
@@ -45,7 +45,7 @@ def test_low_confidence_filtered():
     ]))
     extractor._llm = mock_llm
 
-    result = asyncio.get_event_loop().run_until_complete(
+    result = asyncio.run(
         extractor.extract("测试消息")
     )
     assert len(result) == 1
@@ -58,7 +58,7 @@ def test_empty_llm_response():
     mock_llm.simple_chat = AsyncMock(return_value="[]")
     extractor._llm = mock_llm
 
-    result = asyncio.get_event_loop().run_until_complete(
+    result = asyncio.run(
         extractor.extract("今天天气怎么样")
     )
     assert result == []

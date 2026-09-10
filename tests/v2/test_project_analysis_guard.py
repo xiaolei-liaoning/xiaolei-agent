@@ -2,6 +2,8 @@
 import pytest
 import json
 
+pytestmark = pytest.mark.real_llm
+
 
 @pytest.mark.asyncio
 async def test_guard_extracts_clean_text_from_tool_result():

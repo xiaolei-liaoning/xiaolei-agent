@@ -1,6 +1,8 @@
 """端到端测试：角色系统 + ReAct 循环"""
 import pytest
 
+pytestmark = pytest.mark.real_llm
+
 
 @pytest.mark.asyncio
 async def test_role_loader_loads():
