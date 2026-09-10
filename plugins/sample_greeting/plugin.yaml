@@ -1,0 +1,5 @@
+name: sample_greeting
+version: 1.0.0
+description: "示例插件: 注册一个问候工具, 验证 PluginManager 可插拔"
+pip_dependencies: []
+hooks: [on_session_end]
