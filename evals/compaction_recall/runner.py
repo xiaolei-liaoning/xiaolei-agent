@@ -54,26 +54,52 @@ MODEL_LIMIT_OVERRIDES: Dict[str, Optional[int]] = {
 
 
 def load_transcript(path: Path, max_tokens: int = 60000) -> List[Dict[str, Any]]:
-    """读 ~/.xiaolei/history JSONL → OpenAI chat 格式 messages"""
+    """加载会话 transcript — 支持 2 种格式：
+    1. JSONL 账本 (~/.小雷版小龙虾/history/*.jsonl): 每行 {ts,session_id,role,content,task}
+    2. Session JSON (~/.xiaolei/sessions/*.json): list[{role, content, tool_calls}]
+    按体量粗截到 max_tokens 附近"""
     if not path.exists():
-        raise FileNotFoundError(f"transcript 不存在: {path} (需先从 ~/.xiaolei/history 复制) ")
-    msgs = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line:
-            continue
+        raise FileNotFoundError(f"transcript 不存在: {path} (需先复制到临时目录)")
+    msgs: List[Dict[str, Any]] = []
+
+    if path.suffix == ".jsonl":
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            role = row.get("role") or ("user" if row.get("kind") == "user" else "assistant")
+            content = row.get("content") or row.get("text") or ""
+            msgs.append({"role": role, "content": content})
+    else:
+        # session JSON: 直接是 OpenAI 光架构 messages list
         try:
-            row = json.loads(line)
+            data = json.loads(path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
-            continue
-        role = row.get("role") or ("user" if row.get("kind") == "user" else "assistant")
-        content = row.get("content") or row.get("text") or ""
-        msgs.append({"role": role, "content": content})
-    # 截到 max_tokens 等量 (按体量粗截)
+            raise ValueError(".json transcript 必须是 messages 数组")
+        if isinstance(data, list):
+            for m in data:
+                if isinstance(m, dict) and m.get("role"):
+                    c = m.get("content")
+                    if not isinstance(c, str):
+                        # tool_calls 消息 content 为空 → 用 tool_calls 摘要代替
+                        if c is None and m.get("tool_calls"):
+                            tc = m["tool_calls"][0].get("function", {})
+                            c = f"[calls {tc.get('name','?')} {str(tc.get('arguments'))[:120]}]"
+                        else:
+                            c = str(c or "")
+                    msgs.append({"role": m.get("role", "assistant"), "content": c})
+        else:
+            raise ValueError("session JSON 不是 list，无法解析")
+
+    # 截到 ~max_tokens 等量 (从尾部保留最新)
     out, tok = [], 0
     for m in reversed(msgs):
         out.insert(0, m)
-        tok += count_messages_tokens([m])
+        tok += len(str(m.get("content", ""))) // 3
         if tok >= max_tokens:
             break
     return out
