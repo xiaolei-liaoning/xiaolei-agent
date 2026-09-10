@@ -1510,6 +1510,9 @@ async def run_react(
             # 步骤内检查：计划是否已完成
             if ctx.plan and all(s.status == "done" for s in ctx.plan):
                 break
+
+        # 每轮完成（步骤循环结束）→ 轮次推进
+        ctx.react_depth += 1
         
         # ── Agent 驱动状态声明（deepseek-harness update_goal 语义）──
         # 完成判定权在 agent：系统只校验证据，不再用启发式猜测。
