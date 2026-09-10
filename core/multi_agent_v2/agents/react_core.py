@@ -65,7 +65,7 @@ from .plan_manager import (
 logger = logging.getLogger(__name__)
 
 _MAX_ROUNDS = 10
-_MAX_STEPS_PER_ROUND = 5  # 每轮 ReAct 最大步骤数（LLM→工具循环）
+_MAX_STEPS_PER_ROUND = 15  # 每轮 ReAct 最大步骤数（LLM→工具循环）
 
 # ═══════════════════════════════════════════════════════════════════
 # 提示词模块 — 按任务类型按需组装（从 prompts/ .txt 文件加载）
