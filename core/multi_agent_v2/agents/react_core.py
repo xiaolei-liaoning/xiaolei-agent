@@ -65,6 +65,7 @@ from .plan_manager import (
 logger = logging.getLogger(__name__)
 
 _MAX_ROUNDS = 10
+_MAX_STEPS_PER_ROUND = 5  # 每轮 ReAct 最大步骤数（LLM→工具循环）
 
 # ═══════════════════════════════════════════════════════════════════
 # 提示词模块 — 按任务类型按需组装（从 prompts/ .txt 文件加载）
@@ -1403,9 +1404,13 @@ async def run_react(
 
     while not ctx.interrupted and ctx.react_depth < ctx.max_iterations:
         round_idx = ctx.react_depth + 1
+        # ── 每轮步骤限制 ──
+        steps_in_round = 0
+        max_steps = getattr(ctx, 'max_steps_per_round', _MAX_STEPS_PER_ROUND)
+
         if not prefix:
             bar = "─" * 30
-            print(f"\n  \033[1;37m◇ \033[0m\033[2mRound {round_idx}/{ctx.max_iterations} {bar}\033[0m")
+            print(f"\n  \033[1;37m◇ \033[0m\033[2mRound {round_idx}/{ctx.max_iterations} (max {max_steps} steps/round) {bar}\033[0m")
 
         if hasattr(ctx, '_fi_consumed'):
             delattr(ctx, '_fi_consumed')
@@ -1413,6 +1418,7 @@ async def run_react(
         if ctx.plan:
             display_plan(ctx, prefix=prefix)
 
+        # 步骤内检查：计划是否已完成
         if ctx.plan and all(s.status == "done" for s in ctx.plan):
             # 验证：产出型任务必须有 file_written 能力。
             # ponytail: 不信单一启发式（deepseek 精神）— 任务级关键词 + 步骤级工具绑定/描述动词，
@@ -1470,6 +1476,42 @@ async def run_react(
                     _ledger_log("assistant", ctx.final_answer[:2000])  # 账本: 最终回答落档
                 break
 
+        # ── 步骤循环：LLM → 工具 → 检查 ... 直到步骤耗尽或完成 ──
+        while steps_in_round < max_steps and not ctx.interrupted:
+            step_idx = steps_in_round + 1
+            if not prefix:
+                print(f"    \033[2mStep {step_idx}/{max_steps}\033[0m")
+            
+            steps_in_round += 1
+            ctx.react_depth += 1
+            
+            # LLM 调用
+            hr_start = await chain.on_llm_invoke(ctx)
+            if hr_start and hr_start.jump_to == "end":
+                ctx.interrupted = True
+                ctx.exit_reason = "middleware_kill_llm"
+                ctx.last_error = hr_start.reason or "中间件终止(think_start)"
+                break
+            if hr_start and hr_start.jump_to == "retry":
+                continue
+            
+            # 工具执行
+            hr_end = await chain.on_tool_invoke(ctx)
+            if hr_end and hr_end.jump_to == "end":
+                ctx.interrupted = True
+                ctx.exit_reason = "middleware_kill_tool"
+                ctx.last_error = hr_end.reason or "中间件终止(think_end)"
+                break
+            
+            # 更新 TaskProgress
+            _tp = getattr(ctx, 'task_progress', None)
+            if _tp is not None:
+                ctx.task_progress.update()
+            
+            # 步骤内检查：计划是否已完成
+            if ctx.plan and all(s.status == "done" for s in ctx.plan):
+                break
+        
         # ── Agent 驱动状态声明（deepseek-harness update_goal 语义）──
         # 完成判定权在 agent：系统只校验证据，不再用启发式猜测。
         _blocked_streak = getattr(ctx, '_blocked_streak', 0)
@@ -1696,138 +1738,6 @@ async def run_react(
 
         if ctx.react_depth == ctx.max_iterations - 1:
             print(f"{prefix}    \033[33m◇ Final round\033[0m")
-
-        ctx.react_depth += 1
-        hr_start = await chain.on_llm_invoke(ctx)
-        if hr_start and hr_start.jump_to == "end":
-            ctx.interrupted = True
-            ctx.exit_reason = "middleware_kill_llm"
-            ctx.last_error = hr_start.reason or "中间件终止(think_start)"
-            break
-        if hr_start and hr_start.jump_to == "retry":
-            continue
-
-        # ponytail: on_plan_check 补丁 — 启用循环检测+澄清中间件
-        hr_plan = await chain.on_plan_check(ctx)
-        if hr_plan and hr_plan.jump_to == "end":
-            ctx.interrupted = True
-            ctx.exit_reason = "middleware_kill_plan"
-            ctx.last_error = hr_plan.reason or "中间件终止(plan_check)"
-            break
-        if hr_plan and hr_plan.jump_to == "retry":
-            continue
-
-        hr_end = await chain.on_tool_invoke(ctx)
-        if hr_end and hr_end.jump_to == "end":
-            ctx.interrupted = True
-            ctx.exit_reason = "middleware_kill_tool"
-            ctx.last_error = hr_end.reason or "中间件终止(think_end)"
-            break
-
-        # ponytail: TaskProgress — 统一能力追踪，替代旧版 update_step_status
-        _tp = getattr(ctx, 'task_progress', None)
-        if _tp is not None:
-            ctx.task_progress.update()
-
-            # ponytail: 产出催促 — 数据已收集足够但仍未写交付物 → 强制 write_file
-            # 防止 agent 在"分析+报告"任务上反复跑代码/读文件却从不产出
-            if ctx.plan:
-                _pending = [s for s in ctx.plan if s.status == "pending"]
-                if _pending:
-                    _last = _pending[-1]
-                    _is_produce = any(
-                        kw in (_last.description or "").lower() for kw in
-                        ["写", "报告", "文件", "生成", "输出", "产出", "编写",
-                         "write", "report", "generate", "output", "save"]
-                    )
-                    _data_collected = sum(
-                        1 for c in _tp.completed_capabilities
-                        if c.kind in ("file_read", "web_search", "url_fetched", "code_executed", "tool_called")
-                    )
-                    _has_output = any(c.kind == "file_written" for c in _tp.completed_capabilities)
-                    if _is_produce and _data_collected >= 3 and not _has_output:
-                        # ponytail: 协作式提示（不硬限工具 — deepseek-harness 保持 agent 主动权）
-                        ctx.forced_instructions = (
-                            f"⚠️ 数据已收集足够（{_data_collected}项）。"
-                            f"立即调用 write_file 生成完整交付物：{_last.description[:50]}。"
-                            "不要再运行代码/读取/搜索了，直接写出完整内容！"
-                        )
-
-            # ponytail: 自适应重规划 — 卡住 5 轮后才重规划 (先让 forced_instructions 在 stuck>=4 有机会生效)
-            if ctx.task_progress.stuck_counter >= 5 and ctx.plan:
-                _pending = [s for s in ctx.plan if s.status == "pending"]
-                if _pending:
-                    replanned = await ctx.task_progress.adaptive_replan()
-                    if replanned:
-                        ctx.forced_instructions = ""
-                        print(f"{prefix}    \033[33m◇ Replanned remaining steps\033[0m")
-                        display_plan(ctx, prefix=prefix)
-
-            # ponytail: 硬限制工具 — 卡住 3+ 轮后强制引导
-            if ctx.task_progress.stuck_counter >= 3:
-                _pending_steps = [s for s in ctx.plan if s.status == "pending"]
-                if _pending_steps:
-                    _step_desc = _pending_steps[0].description
-                    _step_tool = _pending_steps[0].tool_names[0] if _pending_steps[0].tool_names else "write_file"
-                    _searches = sum(1 for r in ctx.tool_results if r.get("tool_call",{}).get("name") in ("web_search","fetch_url","hot_search"))
-                    _reads = sum(1 for r in ctx.tool_results if r.get("tool_call",{}).get("name") in ("read_file","search_files","codegraph_explore"))
-                    _hint = ""
-                    if _reads >= 5:
-                        _hint = f"你已经读了{_reads}个文件，不要再读了！用 task(explore) 委托子代理探索，你自己只负责写输出。"
-                    elif _searches >= 3:
-                        _hint = f"你已经搜了{_searches}次，数据足够。立即调用 {_step_tool} 输出结果，不要再搜了。"
-                    ctx.forced_instructions = (
-                        f"⚠️ 连续 {ctx.task_progress.stuck_counter} 轮没有实质进展！"
-                        f"{_hint}"
-                        f"当前还需完成：{_step_desc}。"
-                        f"请立即调用 {_step_tool} 输出结果，不要再搜索/阅读了。"
-                    )
-                    # ponytail: 卡了 6+ 轮 → 硬限制工具，只允许当前步骤需要的
-                    if ctx.task_progress.stuck_counter >= 6:
-                        _need = set(_pending_steps[0].tool_names) if _pending_steps[0].tool_names else {"write_file"}
-                        # 修复 #022: stuck==6 第一轮存的应该是"未限制"的工具集
-                        # 原 bug: 第一行 getattr(ctx, '_allow_restore', ctx.allowed_tools) 拿的是
-                        # ctx.allowed_tools，可能已被前面的硬限制污染（存的是"被限制的子集"）。
-                        # 新逻辑: 只在第一次进入 stuck==6 时保存；用 "hasattr 判断"避免重复保存。
-                        if ctx.task_progress.stuck_counter == 6 and not hasattr(ctx, '_allow_restore'):
-                            ctx._allow_restore = ctx.allowed_tools
-                        ctx.allowed_tools = list(_need)
-                        ctx._filtered_tools = None
-                        logger.info(f"Stuck {ctx.task_progress.stuck_counter} rounds, tools limited to {_need}")
-            elif hasattr(ctx, '_allow_restore'):
-                # stuck resolved → restore toolset
-                ctx.allowed_tools = ctx._allow_restore
-                ctx._allow_restore = None
-                ctx._filtered_tools = None
-        elif ctx.plan:
-            # fallback: 没有 task_progress 时用旧版 update_step_status
-            update_step_status(ctx, prefix)
-
-            # 计划强制执行：当前步骤要求 task/orchestrate 但 LLM 绕路时强制引导
-            _done_count = sum(1 for s in ctx.plan if s.status == "done")
-            if _done_count < len(ctx.plan):
-                _cur = ctx.plan[_done_count]
-                if _cur.tool_names and {"task", "orchestrate"} & set(_cur.tool_names):
-                    if ctx.react_depth >= 2 and not ctx.forced_instructions:
-                        _recent_tools = set(
-                            r.get("tool_call", {}).get("name", "")
-                            for r in (ctx.tool_results or [])[-4:]
-                        )
-                        if not (_recent_tools & {"task", "orchestrate"}):
-                            ctx.forced_instructions = (
-                                f"⚠️ 当前步骤「{_cur.description}」要求使用 task 或 orchestrate，"
-                                f"但你还没有调用。请立即调用 task 或 orchestrate 启动子代理，"
-                                f"不要再自己逐个文件读了。"
-                            )
-
-            failed_steps = [s for s in ctx.plan if s.status == "failed"]
-            for step in failed_steps:
-                retries = ctx._step_retries.get(step.index, 0)
-                if retries < 2:
-                    replanned = await replan_failed(ctx)
-                    if replanned:
-                        print(f"{prefix}    \033[33m◇ \033[0m\033[2mStep {step.index} failed, replanning\033[0m")
-                        break
 
         # ponytail: 交付物观察/验证 — 写完交付物后不能立即结束，必须先 observe 验证
         # 解决"agent 写完文件就跳过验证"的问题；observe 结果会回传 LLM 供自我修正
