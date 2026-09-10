@@ -1,9 +1,8 @@
 """
-测试新的 _llm_write_workflow prompt 稳定性
+测试 _llm_write_workflow prompt 稳定性 — pytest 化（2026-09-10）
 
-用法：
-    cd /Users/leiyuxuan/Desktop/小雷版agent
-    python3 tests/test_llm_workflow_prompt.py
+原为脚本型 main，现 pytest 收集。需要真实 LLM 评分，默认跳过:
+  XIAOLEI_REAL_LLM=1 python -m pytest tests/test_llm_workflow_prompt.py
 """
 
 import asyncio
@@ -12,8 +11,15 @@ import os
 import re
 import sys
 import textwrap
+from pathlib import Path
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+import pytest
+
+PROJECT_ROOT = Path(__file__).parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+pytestmark = [pytest.mark.asyncio, pytest.mark.real_llm]
 
 from core.engine.llm_backend import get_llm_router
 
@@ -118,10 +124,11 @@ def score_task_fit(expect_template: str, patterns: dict) -> tuple:
             return (2, f"⚠️ 只用了 {used_count} 种模式，编排过于简单")
 
 
-async def run_test():
+async def run_test_real_llm():
+    """原脚本入口 — pytest 化后作为 async 测试入口（XIAOLEI_REAL_LLM=1 才跑）"""
     router = get_llm_router()
     if not router or not router.is_available():
-        print("❌ LLM Router 不可用，跳过测试")
+        pytest.skip("LLM Router 不可用，跳过此真实 LLM 测试")
         return
 
     from cli.handlers.chat_handler import ChatHandler
@@ -212,5 +219,15 @@ async def run_test():
     return results
 
 
+@pytest.mark.real_llm
+async def test_llm_workflow_prompt_stability():
+    """pytest 收集入口：真实 LLM 调 _llm_write_workflow 生成 workflow 脚本"""
+    results = await run_test_real_llm()
+    # 断言核心 — 非 FAIL 数量大于 0（WARN 视为容忍，全 FAIL 才算挂）
+    if results:
+        fails = [r for r in results if r["status"] == "FAIL"]
+        assert len(fails) < len(results), f"全部 {len(results)} 个用例 FAIL，prompt 质量崩塌"
+
+
 if __name__ == "__main__":
-    asyncio.run(run_test())
+    asyncio.run(run_test_real_llm())
