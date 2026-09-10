@@ -209,8 +209,8 @@ class ShellGuard:
             r'>>\s*([^\s;|&]+)',  # 追加重定向
             r'cat\s+([^\s;|&]+)',  # cat 读取
             r'rm\s+([^\s;|&]+)',  # rm 删除
-            r'mv\s+([^\s;|&]+)',  # mv 移动
-            r'cp\s+([^\s;|&]+)',  # cp 复制
+            r'mv\s+(?:\S+\s+)?([^\s;|&]+)',  # mv 移动（源和目标都可能是敏感路径）
+            r'cp\s+(?:\S+\s+)?([^\s;|&]+)',  # cp 复制（源和目标）
         ]
 
         for pattern in path_patterns:
