@@ -1,65 +1,58 @@
-# Session Summary
+# 小雷版 Agent — 协作开发指南 (AGENTS.md)
 
-## Goal
-- Fix 11 critical ReAct loop bugs in xiaolei agent (empty-run protection, middleware dead code, error handling) and restore all 7 MCP server connections in opencode desktop.
+> 本文件供所有 AI 会话/协作者在改代码前必读。硬性规则，非建议。
 
-## Constraints & Preferences
-- All MCP servers (arbor, codegraph, context7, deepwiki, evermem_search, memsearch, playwright) must connect.
+## 测试纪律（读改前必跑）
 
-## Progress
-### Done
-- Fix 1-11: ReAct loop bugs (see previous sessions for details)
-- Fixes A-F: 项目分析截断修复 (see previous sessions for details)
+```bash
+scripts/run_tests.sh                      # 全套 (36 文件, ~45s, 必须 exit 0)
+scripts/run_tests.sh tests/v2/            # 单目录
+XIAOLEI_REAL_LLM=1 python -m pytest tests/v2/test_comprehensive_real.py  # 真LLM opt-in
+```
 
-### Session 3: KOF 工作流修复
-- Swap guard: explore→write swap 仅当 agent 已成功写过一个文件
-- Fallback guard: 不跳过未写的 write_file step，设 forced_instructions
-- Q1: read_file loop 检测扩展到 write 类任务
-- Q2: spawn.py `_extract_expected_files` — 工作流级输出验证，正则匹配中英文两种格式
-- Q3: plan 生成时自动插入 explore step 在 write_file 之前
-- 验证: 19/19 测试通过
-- KOF 首轮: DESIGN.md✅ engine.js✅ characters_mod 完成但 file 缺失 → Q2 修复
+- **基线 (2026-09-10)**: 493 passed / 35 skipped / 0 failed
+- 改代码前先跑，必须有绿基线。跑不绿 → 先修环境，不要在红基线上叠加改动
+- **真实 LLM 测试默认跳过**（`XIAOLEI_REAL_LLM=1` 才跑）— 无开关的"调真 LLM"测试曾导致套件挂死
 
-### Session 4: Root Cause — 完成契约 (PlanStep.postconditions)
-- 根因分析: 5 个系统性问题 (无完成契约、输出验证位置错、等价级联、无循环不变式、中间件无类型安全)
-- 修复: PlanStep 增加 `postconditions: List[str]` 字段
-  - "file_exists:/path" — 标记 done 前验证文件在磁盘上存在
-  - "tool_called:name" — 标记 done 前验证工具已成功调用
-- `_infer_postconditions()`: 从 plan 步骤的 tool_names + task_description 自动推导
-- `_verify_step_completion()`: 在 update_step_status 的每个 `status = "done"` 点前调用
-- 替代了 swap guard 中 `_ever_written` 的逻辑，postconditions 提供更精确的验证
-- 验证: 0 回归（15 pre-existing failures, 336 passed, 6 skipped）
+## 回归守卫约定 (最重要的规则)
 
-### In Progress
-- 4 MCP servers (arbor, codegraph, evermem_search, memsearch) disconnected in desktop UI → likely Electron $PATH issue
+> 参考 hermes-agent：**修一个 bug 必须**同时在 `tests/regress/` 提交 1 个最小回归测试。
+> 文件名：`test_regress_<来源编号或一句话>_<行为>.py`
 
-### Session 5: Root Cause — Python 3.14 `hasattr` 在 dataclass 动态属性上失效
-- **根因分析**: `RunContext` 是 `@dataclass`，`task_progress` 是动态赋值的属性。Python 3.14.5 上 `hasattr(ctx, 'task_progress')` 在 while 循环第二轮后始终返回 `False`，导致 `TaskProgress.update()` 只在 round=1 执行。
-- **修复**: 两处 `hasattr(ctx, 'task_progress')` 替换为 `getattr(ctx, 'task_progress', None) is not None`：
-  - `react_core.py:1169` — while 循环内的主调度
-  - `plan_manager.py:403` — `update_step_status` 调用路径
-- **验证**: `getattr` 修复后所有 6 轮都正确调用 `TaskProgress.update()`，`_match_steps` 每轮正常执行
-- **剩余问题**: Plan 仍可能卡在特定步骤（如 step 要求 `codegraph_explore` 但 `allowed_tools` 不含它）— 这是计划生成质量问题，非 TaskProgress 可用性问题
+- 修完 bug，测试**变绿**才允许 commit（TDD：先红后绿）
+- commit 单一语义：`fix(x): <根因>` 与守卫测试同一 commit
+- **永不删除回归测试**（代码语义变更时迁移并注明）
+- 详细约定：`tests/regress/README.md`
 
-### Session 6: 工具策略重构 — 参考 OpenCode 全量暴露 + Skill 系统
-- **OpenCode 设计分析**: OpenCode 不硬过滤工具，所有 built-in + MCP 全量暴露给 LLM，精度靠系统提示词引导 + LLM 推理，安全靠运行时权限系统 (deny/allow/ask)。
-- **allowed_tools → None**: `run_react()` 默认 `allowed_tools=None`（已有），不传即全量暴露。`get_tools_for_task()` 在 `allowed=None` 时不过滤。之前测试卡住是因为手动传了 `allowed_tools=['write_file','execute_shell','read_file']` 硬限制。
-  - 对比：不传 allowed_tools → 24 工具 → plan 2步 5轮完成；传 3 工具 → plan 6步 6轮卡死
-- **MCP 连接**: 确认 3/7 服务器连接正常 (codegraph, deepwiki, context7)，12 个 MCP 工具 + 12 内置工具 = 24 工具全暴露
-- **Skill 系统**: 照搬 OpenCode 模式，新增三个组件：
-  1. `skill_loader.py` — 从 `~/.opencode/skills/` + `~/.agents/skills/` 扫描 SKILL.md（34 个技能），解析 YAML frontmatter
-  2. `skill` 工具 — 注册到 ToolRegistry，按名加载 skill 内容返回给 LLM
-  3. System prompt 注入 — `<available_skills>` 列表（OpenCode 格式），LLM 按需调用 skill 工具
+示例（真实案例）:
+```
+2026-09-10 | shell_guard mv/cp 目标路径漏检 | tests/test_shell_guard_bounds.py::TestSensitivePaths
+2026-09-10 | edit_file 精确匹配占位 | 不调 SmartEngine 9级匹配 | tests/test_edit_file.py
+2026-09-10 | CircuitBreaker 缺 sync_* | context_compactor 调用崩溃 | tests/test_compaction_lifecycle.py
+```
 
-### Key Decisions
-- **Session 6**
-  - `allowed_tools` 不再硬过滤，改为 None（全量暴露）。stuck≥6 动态限制机制保留
-  - Skill 系统 = OpenCode 模式：system prompt 列出 + `skill` 工具按需加载
-  - MCP 工具已天然绕过白名单（`get_tools_for_task` 的 MCP 放行逻辑）
+## 硬性约束
 
-### Relevant Files
-- `core/multi_agent_v2/agents/react_core.py` — `hasattr`→`getattr` fix, skill system prompt injection (line ~378)
-- `core/multi_agent_v2/agents/plan_manager.py` — `hasattr`→`getattr` fix
-- `core/multi_agent_v2/agents/task_progress.py` — `_match_steps`, capability matching
-- `core/multi_agent_v2/tools/tool_registry.py` — `_handle_skill` handler, skill tool definition
-- `core/multi_agent_v2/skills/skill_loader.py` — **NEW** skill discovery + loading
+- **语法检查门禁**: 改 `.py` 后必须 `python -c "import ast; ast.parse(open(...).read())"`
+- **不动 `.venv`/`data`**：清缓存只删 `__pycache__`/`.pyc`/`.pytest_cache`
+- **绝对路径**: 用户态代码用 `os.path.expanduser("~/.xiaolei/...")`，测试必须用 `tmp_path` 或 `_hermetic_environment` 临时目录
+- **禁止在测试中真实写生产目录** `~/.xiaolei/`（conftest 写保护会拦截）
+- **禁止测试打非 localhost 外网**（conftest 网络守卫会拒绝，需 mock 或 `real_network` 标记）
+
+## ReAct 核心机制备忘
+
+- `_MAX_ROUNDS = 10`（全局轮次上限）、`_MAX_STEPS_PER_ROUND = 15`（每轮内步数上限）
+- `react_depth` 只在**步骤循环结束后 +1**（不要在步骤循环内递增——0d9af24 引入过这个 bug）
+- 每轮结构: `while react_depth < 10 { while steps < 15 { LLM → tool → check } react_depth += 1 }`
+
+## 关键架构入口
+
+- `core/multi_agent_v2/agents/react_core.py` — ReAct 主循环
+- `core/multi_agent_v2/tools/tool_registry.py` — 工具注册 + `_handle_edit_file`（**已是 SmartEditor 9级匹配**）
+- `core/multi_agent_v2/tools/shell_guard.py` — shell 命令安全边界（请勿绕过）
+- `core/memory/context_compactor.py` — 7 层压缩编排器（L0→L4 + 熔断）
+- `tests/conftest.py` — 测试封闭宇宙（凭据清空/生产目录写保护/外网阻断）
+
+---
+**历史会话记录** (KOF 修复/ReAct 11 bug/Postconditions/工具策略重构等):
+见 `docs/session_history_agenda.md`
