@@ -255,8 +255,10 @@ class SkillSystem:
     async def _match_expert(self, task: str, base_id: str) -> Optional[dict]:
         """category 过滤 + LLM 全量选择"""
         # 简单问候不触发专家匹配（避免误选 design-persona-walkthrough）
-        greeting_pattern = r'^\s*(你好|hello|hi|嘿|嗨|早上好|晚上好)?\s*$'
-        if re.match(greeting_pattern, task, re.IGNORECASE):
+        # 使用包含匹配: "xiaolei你好" / "你好呀" 都能识别
+        greeting_keywords = ['你好', 'hello', 'hi', '嘿', '嗨', '早上好', '晚上好']
+        task_lower = task.strip().lower()
+        if any(kw in task_lower for kw in greeting_keywords):
             return None
 
         cats = BASE_TO_EXPERT_CATEGORIES.get(base_id, [])
