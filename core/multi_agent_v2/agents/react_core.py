@@ -64,8 +64,8 @@ from .plan_manager import (
 
 logger = logging.getLogger(__name__)
 
-_MAX_ROUNDS = 10
-_MAX_STEPS_PER_ROUND = 15  # 每轮 ReAct 最大步骤数（LLM→工具循环）
+_MAX_ROUNDS = 3  # 进一步减少最大轮次
+_MAX_STEPS_PER_ROUND = 6  # 减少每轮步骤数
 
 # ═══════════════════════════════════════════════════════════════════
 # 提示词模块 — 按任务类型按需组装（从 prompts/ .txt 文件加载）
@@ -1980,9 +1980,9 @@ async def run_react(
                                 _router.chat(
                                     [{"role": "user", "content": _report_prompt}],
                                     temperature=0.3,
-                                    max_tokens=8000,
+                                    max_tokens=4096,  # 减少token数
                                 ),
-                                timeout=90,
+                                timeout=30,  # 报告生成30秒超时
                             )
                         _html_text = str(_html_resp) if _html_resp else ""
                         if "```html" in _html_text:

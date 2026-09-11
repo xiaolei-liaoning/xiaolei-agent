@@ -43,20 +43,20 @@ class BaseSkill:
 
 # BaseSkill → 相关的 Expert 类别（缩小216个的匹配范围）
 BASE_TO_EXPERT_CATEGORIES = {
-    "project_analyzer": ["engineering", "specialized", "backend", "fullstack", "system-architecture", "frontend", "database", "ai-ml", "generative-ai", "data-engineering", "devops-cloud", "security", "performance", "debugging-quality", "mobile", "context-engineering", "evaluation", "agent-workflows"],
-    "web_scraper":    ["engineering", "specialized", "marketing", "backend"],
-    "data_analyst":   ["engineering", "finance", "specialized", "supply_chain", "data-engineering", "evaluation", "database"],
-    "deep_thinker":   ["specialized", "product_design", "engineering", "strategy", "system-architecture", "generative-ai", "ai-ml"],
+    "project_analyzer": ["specialized", "backend", "fullstack", "system-architecture", "frontend", "database", "ai-ml", "generative-ai", "data-engineering", "devops-cloud", "security", "performance", "debugging-quality", "mobile", "context-engineering", "evaluation", "agent-workflows"],
+    "web_scraper":    ["specialized", "marketing", "backend"],
+    "data_analyst":   ["finance", "specialized", "supply_chain", "data-engineering", "evaluation", "database"],
+    "deep_thinker":   ["specialized", "product_design", "strategy", "system-architecture", "generative-ai", "ai-ml"],
     "translator":     ["specialized", "support"],
-    "weather_expert": ["specialized"],
-    "system_toolbox": ["engineering", "support", "security", "backend", "devops-cloud", "performance", "debugging-quality"],
+    "weather_expert": [""],
+    "system_toolbox": ["support", "security", "backend", "devops-cloud", "performance", "debugging-quality"],
     "creative":       ["design", "game_development", "marketing", "paid_media", "frontend", "fullstack"],
     "general":        [],
 }
 
 # YAML 分类名 → agency-agents-zh 目录名映射
 CATEGORY_TO_DIR = {
-    "engineering": "engineering",
+    "engineering": "backend",  # 修复：engineering 目录不存在，映射到 backend
     "marketing": "marketing",
     "product_design": "product",
     "design": "design",
@@ -165,6 +165,7 @@ class SkillSystem:
     async def match(self, task: str) -> SkillResult:
         """三层匹配"""
         result = SkillResult()
+        logger.info(f"Skill 匹配开始: task='{task[:50]}...'")
 
         # Layer 1: BaseSkill
         base = await self._match_base(task)
@@ -173,6 +174,7 @@ class SkillSystem:
             result.skill_name = base.name
             result.personality = base.role_prompt
             result.tool_preference = set(base.tools) if base.tools else set()
+            logger.info(f"Layer 1 BaseSkill: {base.id} ({base.name})")
 
         # Layer 2: Expert Persona（缩小到相关类别）
         expert = await self._match_expert(task, base.id if base else "general")
@@ -183,10 +185,12 @@ class SkillSystem:
             if md_content:
                 # 可观测性④: 显示命中专家 + 完整 MD 加载成功
                 print(f"    \033[36m🧠 Expert: 命中 '{expert.get('name','')}' ({expert.get('id','')}) 完整MD {len(md_content)}字\033[0m")
+                logger.info(f"Layer 2 Expert: {expert.get('id')} - 完整MD加载成功")
                 result.expert_personality = md_content
             else:
                 # 可观测性④: 显示命中专家但走了 description fallback（MD 缺失）
                 print(f"    \033[36m🧠 Expert: 命中 '{expert.get('name','')}' ({expert.get('id','')}) 无完整MD→160字描述\033[0m")
+                logger.warning(f"Layer 2 Expert: {expert.get('id')} - MD缺失，使用description fallback")
                 result.expert_personality = f"你的专业方向是：{expert.get('description', '')[:300]}"
 
         # Layer 3: Guidance
@@ -231,10 +235,20 @@ class SkillSystem:
     async def _match_base(self, task: str) -> Optional[BaseSkill]:
         from core.engine.llm_backend import get_llm_router
         router = get_llm_router()
+        logger.debug(f"Skill 匹配: router={router is not None}, available={router.is_available() if router else False}")
         if router and router.is_available():
             lines = [f"  {s.id}: {s.name}" + (f"  [{', '.join(s.tools[:3])}]" if s.tools else "") for s in sorted(self.base_skills.values(), key=lambda x: -x.priority)]
             prompt = f"任务：{task}\n\n选最匹配的 1 个角色：\n" + "\n".join(lines) + "\n\n只输出角色 ID。如果不确定，选 general。"
-            resp = (await router.simple_chat(prompt, temperature=0.2, max_tokens=64) or "").strip()
+            try:
+                logger.info(f"Skill 匹配: 调用 LLM 分类 task='{task[:50]}...'")
+                resp = (await asyncio.wait_for(
+                    router.simple_chat(prompt, temperature=0.2, max_tokens=64),
+                    timeout=10
+                ) or "").strip()
+                logger.info(f"Skill 匹配: LLM 返回 '{resp}'")
+            except (asyncio.TimeoutError, Exception) as e:
+                logger.warning(f"Skill 匹配 LLM 超时/失败: {e}，使用默认 general")
+                return self.base_skills.get("general")
             # ponytail: DeepSeek 常把输出放 reasoning_content，提取 content+reasoning
             if resp.startswith("{"):
                 try:
@@ -272,7 +286,9 @@ class SkillSystem:
 
         from core.engine.llm_backend import get_llm_router
         router = get_llm_router()
+        logger.debug(f"Expert 匹配: router={router is not None}, available={router.is_available() if router else False}")
         if not router or not router.is_available():
+            logger.warning(f"Expert 匹配: LLM不可用，使用默认候选 {candidates[0].get('id')}")
             return candidates[0]
 
         lines = []
@@ -285,11 +301,20 @@ class SkillSystem:
             + "\n".join(lines) +
             "\n\n仔细阅读任务和每个专家的描述，只输出专家 ID："
         )
-        resp = (await router.simple_chat(prompt, temperature=0.1, max_tokens=30) or "").strip().lower()
-        for a in candidates:
-            if a.get("id", "") in resp:
-                return a
-        return candidates[0]
+        try:
+            logger.info(f"Expert 匹配: 调用 LLM 分类 task='{task[:50]}...' candidates={len(candidates)}")
+            resp = (await asyncio.wait_for(
+                router.simple_chat(prompt, temperature=0.1, max_tokens=30),
+                timeout=10
+            ) or "").strip().lower()
+            logger.info(f"Expert 匹配: LLM 返回 '{resp}'")
+            for a in candidates:
+                if a.get("id", "") in resp:
+                    return a
+            return candidates[0]
+        except (asyncio.TimeoutError, Exception) as e:
+            logger.warning(f"Expert 匹配 LLM 超时/失败: {e}，使用默认候选")
+            return candidates[0]
 
     def _match_guidance(self, base_id: str) -> str:
         """根据 BaseSkill ID 找对应的 Guidance"""

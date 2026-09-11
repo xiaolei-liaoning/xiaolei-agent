@@ -74,6 +74,14 @@ class SystemInitializer:
             from core.plugin_loader import load_plugins
             await load_plugins()
             logger.info("Plugin 加载完成")
+
+            # 连接插件注册的 MCP 服务器
+            try:
+                from core.mcp.plugin_bridge import connect_all_plugin_mcp_servers
+                connected, failed = await connect_all_plugin_mcp_servers()
+                logger.info(f"插件MCP连接: {len(connected)} 成功, {len(failed)} 失败")
+            except Exception as e:
+                logger.warning(f"插件MCP桥接失败（非致命）: {e}")
         except Exception as e:
             logger.error("Plugin加载失败: %s", e, exc_info=True)
 
