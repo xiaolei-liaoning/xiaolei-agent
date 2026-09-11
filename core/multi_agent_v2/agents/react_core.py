@@ -939,8 +939,20 @@ class ReActCoreMiddleware(BaseMiddleware):
                 # ponytail + deepseek: 头尾保留 + 中间 marker（信任 tool_result.bound_result
                 # 已在注册表层做基础截断，这里只对 8K+ 的极端大结果再剪一遍并保头尾）
                 _tool_id = tc.get("id", f"call_{tool_name}_{ctx.react_depth}")
-                # 校验失败的结果不写入对话历史（已被 forced_instructions 处理，写进去只会污染）
+                # 校验失败时也写入对话历史（让LLM看到错误并修正参数）
+                # 之前跳过会导致LLM不知道为何失败，重复错误调用
                 if result.get("_validation_error"):
+                    # 记录错误结果到历史，但标记为失败
+                    _validation_err = str(result.get("error", "参数校验失败"))
+                    ctx._conversation_history.append({
+                        "role": "tool",
+                        "tool_call_id": _tool_id,
+                        "content": f"⚠️ 工具调用失败: {_validation_err[:500]}",
+                        "name": tool_name,
+                        "is_error": True,
+                    })
+                    # 重置空转计数（有工具调用，只是参数错误）
+                    ctx.consecutive_idle_rounds = 0
                     continue
                 _tool_content = result_text
                 if len(_tool_content) > 8192:
