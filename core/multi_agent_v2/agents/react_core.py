@@ -562,17 +562,21 @@ class ReActCoreMiddleware(BaseMiddleware):
             else:
                 messages.extend(_hist)
 
-        # RAG 检索增强
-        if ctx.react_depth <= 2:
+        # RAG 检索增强 - 只在首轮调用一次，结果注入 knowledge_context 供后续轮复用
+        if ctx.react_depth == 0 and not getattr(ctx, '_rag_injected', False):
             try:
                 rag_results = await self._rag_query(ctx.task_description)
                 if rag_results:
-                    messages[0]["content"] += f"\n\n【知识库参考】\n{rag_results}"
+                    ctx.knowledge_context += f"\n【知识库参考】\n{rag_results}"
+                    ctx._rag_injected = True  # 标记已注入，后续轮不再查询
                     # ponytail: RAG → web_search 串行：先用知识库回答，再用联网补充最新信息
                     if _task_flags.get("search"):
                         messages[0]["content"] += "\n\n【搜索策略】知识库提供了基础信息，但对最新/未收录的内容可能不全。先用知识库回答主体，再用 web_search 补充最新数据和细节。禁止一轮就结束。"
             except Exception:
                 pass
+        elif ctx.react_depth <= 2 and getattr(ctx, '_rag_injected', False):
+            # 后续轮复用已注入的知识
+            messages[0]["content"] += f"\n\n【知识库参考】\n{ctx.knowledge_context}"
 
         if plan_context:
             messages[0]["content"] += plan_context

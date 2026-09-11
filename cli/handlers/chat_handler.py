@@ -798,6 +798,13 @@ export default async function() {{
         if not request.strip():
             return
 
+        # 问候快速路径：不调用ReAct，直接返回简短回应
+        greeting_patterns = ['你好', 'hello', 'hi', '嘿', '嗨', '早上好', '晚上好', '早安', '晚安']
+        if any(p in request.lower() for p in greeting_patterns):
+            from cli.colors import print_success as ps
+            ps(f"   你好！有什么可以帮你的？")
+            return
+
         from cli.colors import print_error as pe, print_success as ps
         from cli.thinking_trace import get_trace
         from core.multi_agent_v2.agents.base.models import Task
