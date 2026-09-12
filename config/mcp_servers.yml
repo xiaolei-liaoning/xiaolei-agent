@@ -9,7 +9,13 @@
 #   auto_connect: 是否自动连接 (默认 true)
 
 servers:
-  # ── 本地 MCP 服务器 ──
+  webarena-browser-mcp:
+    command: python3
+    args: ["mcp/webarena_browser_mcp_server.py"]
+    description: "WebArena浏览器自动化：导航、点击、填表、截图、内容提取"
+    auto_connect: true
+
+  # ── 外部 MCP 服务器 ──
   calculator-mcp:
     command: python3
     args: ["mcp/calculator_mcp_server.py"]
