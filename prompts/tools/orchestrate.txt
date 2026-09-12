@@ -1,4 +1,4 @@
-@requires: agents/explore, agents/build, agents/analyze, agents/general
+@requires: agents/explore, agents/build, agents/analyze, agents/read_write, agents/general
 
 Run multiple tasks in parallel or with dependencies using sub-agents.
 
@@ -12,13 +12,22 @@ When to use:
 - Multiple independent research tasks (e.g., "explore codebase" + "search web" + "read docs")
 - Pipeline tasks where each step depends on the previous (e.g., "read file" → "analyze" → "summarize")
 - Mixed parallel + sequential workflows
+- Large projects requiring parallel analysis across multiple modules
 
 When NOT to use:
 - Single simple tasks (use the regular Task tool instead)
 - Tasks that need to share mutable state (they can't — each has its own session)
 
+Profile selection guide:
+- explore: read-only search, no file writes (find files, search code)
+- analyze: read-only analysis, produces findings但不写文件 (deep code analysis)
+- read_write: can read, write, AND spawn sub-agents (recommended for full report scenarios)
+- build: write code, fix bugs, no sub-agents (single implementation task)
+- general: all capabilities, no sub-agents (general purpose)
+
 Available agent types:
 {{agents/explore}}
 {{agents/build}}
 {{agents/analyze}}
+{{agents/read_write}}
 {{agents/general}}
