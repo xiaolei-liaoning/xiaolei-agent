@@ -11,12 +11,19 @@ WHEN TO USE (强烈推荐):
 - 子代理完成后你负责汇总结果，再继续下一步。
 - 多个独立模块可并发派多个子代理（一条消息里多次调用 task）。
 
-Profile 选择指南:
-- explore: 只读搜索，不写文件（找文件、搜代码）
-- analyze: 只读分析，产出发现但不写文件（深度代码分析）
-- read_write: 能读能写能派子代理（推荐用于完整分析报告场景）
-- build: 写代码、修bug，不能派子代理（单一实现任务）
-- general: 全能力，不能派子代理（通用任务）
+Profile 选择指南（按任务类型匹配）:
+- explore: 纯搜索/查找 — 找文件、搜代码、定位函数定义、搜索关键词。**不分析、不写代码**
+- analyze: 深度分析 — 理解代码架构、追踪执行流、分析 Bug 根因。**只读、只分析、不写文件**
+- read_write: 完整分析报告 — 读+分析+写报告/文档。**唯一能派子代理的profile（可嵌套）**
+- build: 写代码/修bug — 实现功能、修复缺陷、添加测试。**不能派子代理**
+- general: 通用任务 — 其他所有场景。**不能派子代理**
+
+决策规则：
+1. 需要写代码？→ build
+2. 需要写分析报告？→ read_write
+3. 只需要深入分析代码？→ analyze
+4. 只需要搜索/查找？→ explore
+5. 其他？→ general
 
 Usage notes:
 1. Launch multiple agents concurrently whenever possible — use a single message with multiple tool calls.
