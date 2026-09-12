@@ -79,9 +79,8 @@ class WorkAgent(BaseAgent):
     # ── 执行入口 ───────────────────────────────────────────────────────
 
     async def execute(self, task: Task) -> ActionResult:
-        """执行任务 - 统一执行入口（带全局超时）"""
-        # 全局超时：180秒，复杂任务（含报告生成）需要更多时间
-        return await asyncio.wait_for(self._execute_fast(task), timeout=180)
+        """执行任务 - 统一执行入口（无全局超时，由内部逻辑控制）"""
+        return await self._execute_fast(task)
 
     async def _execute_fast(self, task: Task) -> ActionResult:
         """轻量执行 — 直通 ReAct 快路径"""
