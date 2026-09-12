@@ -1,5 +1,5 @@
 {
-  "app_name": "小雷版小龙虾 AI Agent",
+  "app_name": "\u5c0f\u96f7\u7248\u5c0f\u9f99\u867e AI Agent",
   "version": "3.4.0",
   "debug": true,
   "llm": {
@@ -13,9 +13,7 @@
     "backoff_base": 1.0,
     "supported_models": [
       "agnes-2.5-flash",
-      "agnes-2.0-flash",
-      "openrouter/free",
-      "deepseek-v4-flash"
+      "agnes-2.0-flash"
     ]
   },
   "database": {

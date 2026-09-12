@@ -33,8 +33,12 @@ from core.multi_agent_v2.agents.task_progress import TaskProgress
 # ponytail: 进行时意图 — 含"现在我/接下来/让我"的文本是"宣布下一步"，不是完成声明。
 # deepseek Ralph 语义：complete 需要 evidence + 无 nextSteps；带进行时意图的文本
 # 不构成有效完成（真实测试：'文件已写入桌面。现在我验证 JS 逻辑...' 被误存为最终结果）
-_ONGOING_INTENT_RE = re.compile(
-    r"(现在我|接下来我?要?|让我|让我先|首先我|然后我|我(将|要|来|需要|打算|先)|"
+_PENDING_INTENT_RE = re.compile(
+    # 匹配进行时意图，但排除回答型句式（如"让我告诉你"/"I'll tell you"）
+    r"(?!(?:让我告诉你|I'll tell you)\b)"
+    r"(现在我|接下来我?要?|"
+    r"让我(?![告诉你])|"
+    r"让我先|首先我|然后我|我(将|要|来|需要|打算|先)|"
     r"我正在|我准备|I will|I'll|Let me|Now (let|I)|going to|about to)"
 )
 from core.multi_agent_v2.tools.json_util import safe_parse_json
@@ -1641,7 +1645,7 @@ async def run_react(
             # 语义调和: 有实质文本则放行给 completed_with_answer
             if _guard_hit and not _prod_guard:
                 _last_reply_txt = (getattr(ctx, '_pending_reply', '') or '').strip()
-                _ongoing_now = bool(_ONGOING_INTENT_RE.search(_last_reply_txt[:200]))
+                _ongoing_now = bool(_PENDING_INTENT_RE.search(_last_reply_txt[:200]))
                 _exempt_now = bool(_last_reply_txt) and not _ongoing_now
                 if _exempt_now:
                     _ex = getattr(ctx, '_exempt_streak', 0) + 1
@@ -1732,7 +1736,7 @@ async def run_react(
                 # 目标已达成 或 非产出型任务 → 文本即最终回答（no tool calls = completed）
                 # ponytail: 进行时意图文本（"现在我验证..."）是宣布下一步，不当最终回答 —
                 # 转为续轮信号（deepseek Ralph：complete 需 evidence，进行中文本无效）
-                if _reply_text and _reply_text.strip() and not _ONGOING_INTENT_RE.search(_reply_text[:200]):
+                if _reply_text and _reply_text.strip() and not _PENDING_INTENT_RE.search(_reply_text[:200]):
                     ctx.final_answer = _reply_text.strip()
                     _ledger_log("assistant", ctx.final_answer[:2000])  # 账本: 最终回答落档
                     ctx.interrupted = True
@@ -2030,7 +2034,7 @@ async def run_react(
             if extracted:
                 _last_reply = extracted
         # ponytail: 进行时意图文本（"现在我验证..."）不是完成声明，不入 final_answer
-        if _last_reply and len(_last_reply) > 20 and not _ONGOING_INTENT_RE.search(_last_reply[:200]):
+        if _last_reply and len(_last_reply) > 20 and not _PENDING_INTENT_RE.search(_last_reply[:200]):
             ctx.final_answer = _last_reply
 
     # 兜底：有工具结果但无 final_answer 时让 LLM 总结

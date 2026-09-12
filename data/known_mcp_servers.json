@@ -159,16 +159,7 @@
       "category": "搜索",
       "description": "Exa 搜索引擎 MCP"
     },
-    "cloudflare": {
-      "package": "cloudflare-mcp-server",
-      "install": "npx",
-      "command": "npx",
-      "args": ["-y", "cloudflare-mcp-server"],
-      "env": {"CLOUDFLARE_API_TOKEN": null},
-      "category": "云平台",
-      "description": "Cloudflare API MCP"
-    },
-    "supabase": {
+     "supabase": {
       "package": "supabase-mcp-server",
       "install": "npx",
       "command": "npx",

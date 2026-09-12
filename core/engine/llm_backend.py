@@ -42,7 +42,7 @@ def get_llm_config():
         max_retries = 3
         backoff_base = 2.0
         rate_limit_rpm = 300
-        timeout = 30  # LLM 调用超时（秒），fallback 阶段可更快失败
+        timeout = 120  # LLM 调用超时（秒）— 与 config/app_config.json 保持一致
         supported_models = [
             "agnes-2.5-flash", "agnes-2.0-flash", "openrouter/free",
             "glm-4-flash", "deepseek-v4-flash",
@@ -223,27 +223,6 @@ class GLMBackend:
         #     except Exception as e:
         #         logger.warning("DeepSeek 客户端初始化失败: %s", e)
 
-        # ── Cloudflare Workers AI（已关闭）──
-        # cf_token = os.getenv("CLOUDFLARE_API_TOKEN", "")
-        # cf_model = os.getenv("CLOUDFLARE_WORKERS_AI_MODEL", "@cf/zai-org/glm-4.7-flash")
-        # self.cf_client = None
-        # if cf_token:
-        #     try:
-        #         import openai
-        #         self.cf_client = openai.AsyncOpenAI(
-        #             api_key=cf_token,
-        #             base_url=os.getenv(
-        #                 "CLOUDFLARE_WORKERS_AI_BASE_URL",
-        #                 "https://api.cloudflare.com/client/v4/accounts/UNSET/ai/v1",
-        #             ),
-        #         )
-        #         self.cf_model = cf_model
-        #         logger.info("Cloudflare Workers AI 客户端初始化成功 (model=%s)", cf_model)
-        #     except ImportError:
-        #         logger.warning("openai 未安装，Cloudflare 客户端不可用")
-        #     except Exception as e:
-        #         logger.warning("Cloudflare 客户端初始化失败: %s", e)
-
         # 1. 初始化 OpenRouter 已有分支（保留原结构，兼容）
         # 2. 初始化 GLM API (fallback) — [已关闭] 用户仅保留 Agnes
         # if self.api_key:
@@ -374,43 +353,6 @@ class GLMBackend:
         # if self.deepseek_client and not _use_or:
         #     try:
         #         ...
-
-        # 2. Cloudflare Workers AI（已关闭）— fallback
-        # if getattr(self, "cf_client", None):
-        #     try:
-        #         payload = dict(model=getattr(self, "cf_model", "@cf/zai-org/glm-4.7-flash"),
-        #                        messages=messages, temperature=temperature, max_tokens=max_tokens)
-        #         if tools:
-        #             payload["tools"] = tools
-        #             payload["tool_choice"] = "auto"
-        #
-        #         logger.info("LLM → Cloudflare Workers AI (model=%s, tools=%s)",
-        #                     getattr(self, "cf_model", ""), bool(tools))
-        #         response = await asyncio.wait_for(
-        #             self.cf_client.chat.completions.create(**payload),
-        #             timeout=180,
-        #         )
-        #         self._record_usage(response)
-        #         if hasattr(response, 'choices') and response.choices:
-        #             message = response.choices[0].message
-        #             content = getattr(message, 'content', None) or ""
-        #             if not content:
-        #                 content = getattr(message, 'reasoning_content', None) or ""
-        #             tc = getattr(message, 'tool_calls', None)
-        #             logger.info("LLM Cloudflare返回: content_len=%d tool_calls=%s", len(content), bool(tc))
-        #             self._consecutive_failures = 0
-        #             if tc:
-        #                 tc_list = [{"id": getattr(t, 'id', ''),
-        #                             "type": getattr(t, 'type', 'function'),
-        #                             "function": {"name": t.function.name,
-        #                                          "arguments": t.function.arguments}}
-        #                            for t in tc]
-        #                 return LLMResponse(content=content, tool_calls=tc_list)
-        #             return LLMResponse(content=content or "")
-        #     except asyncio.TimeoutError:
-        #         logger.error("Cloudflare API 调用超时(25s)")
-        #     except Exception as e:
-        #         logger.error(f"Cloudflare API 调用异常: {e}")
 
         # 3. GLM (ZhipuAI) — [已关闭] 用户仅保留 Agnes
         # if self.client and self.api_key:
@@ -580,10 +522,16 @@ class GLMBackend:
                     delta = chunk.choices[0].delta
                     finish_reason = chunk.choices[0].finish_reason
 
+                    # Agnes 模型：content 始终为空，内容在 reasoning_content 中
                     if delta.content:
                         full_content += delta.content
                         if on_text:
                             on_text(delta.content)
+                    elif getattr(delta, 'reasoning_content', None):
+                        # 兜底：content 为空时用 reasoning_content
+                        full_content += delta.reasoning_content
+                        if on_text:
+                            on_text(delta.reasoning_content)
 
                     if delta.tool_calls:
                         for tc_delta in delta.tool_calls:
@@ -619,7 +567,16 @@ class GLMBackend:
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                logger.error(f"OpenRouter 流式调用异常: {e}")
+                err_msg = str(e)
+                # 关键修复：429 限流不计入连续失败计数，而是退避后重试
+                if "429" in err_msg or "rate limit" in err_msg.lower():
+                    wait_secs = 2 ** min(self._consecutive_failures, 3)
+                    logger.warning(f"OpenRouter 429 限流，{wait_secs}s 后重试: {err_msg[:80]}")
+                    self._consecutive_failures = 0  # 重置，因为这次是受预期的速率限制
+                else:
+                    logger.error(f"OpenRouter 流式调用异常: {e}")
+                # 无论怎样都防止非429错误被累积误判为系统不可用
+                self._consecutive_failures = 0
 
         # ── DeepSeek (已关闭) ──
         # if self.deepseek_client:
@@ -867,10 +824,18 @@ class LLMRouter:
         ponytail: 流式下 token 逐个流出、连接持续活跃，长内容生成不会被
         请求级超时中途杀死（对齐 deepseek-harness：无请求级 timeout）。
         """
-        resp = await self.chat_structured_stream(
-            messages, temperature=temperature, max_tokens=max_tokens,
-            model=model, tools=tools, on_text=on_text,
-        )
+        # 性能优化：Agnes 模型流式响应极慢（内容在 reasoning_content），强制非流式
+        _use_agnes = (model or getattr(self, 'openrouter_model', '') or '').startswith('agnes')
+        if _use_agnes:
+            resp = await self.chat_structured(
+                messages, temperature=temperature, max_tokens=max_tokens,
+                model=model, tools=tools,
+            )
+        else:
+            resp = await self.chat_structured_stream(
+                messages, temperature=temperature, max_tokens=max_tokens,
+                model=model, tools=tools, on_text=on_text,
+            )
         if resp.tool_calls or resp.reasoning_content:
             d = {"role": "assistant", "content": resp.content}
             if resp.tool_calls:
