@@ -19,6 +19,7 @@ class AgentProfile(str, Enum):
     BUILD = "build"
     GENERAL = "general"
     ANALYZE = "analyze"
+    READ_WRITE = "read_write"  # 分析+写报告，可派只读子代理
     ORCHESTRATOR = "orchestrator"
 
 
@@ -63,6 +64,13 @@ PROFILE_PERMISSIONS = {
         "allowed": None,
         "disallowed": ["write_file", "edit_file", "execute_shell", "execute_python"],
         "system_hint": _builder.get_agent_prompt("analyze"),
+    },
+    AgentProfile.READ_WRITE: {
+        # 读写分析型：能读能写能派子代理，但不能执行任意Python
+        # 适合需要产出报告的场景 — 自己读文件、派只读子代理分析、写最终报告
+        "allowed": None,
+        "disallowed": ["execute_python"],  # 禁高危执行，保留shell和文件操作
+        "system_hint": _builder.get_agent_prompt("read_write"),
     },
     AgentProfile.ORCHESTRATOR: {
         # 编排型：能调 task / orchestrate（核心能力），但本身不能写文件
