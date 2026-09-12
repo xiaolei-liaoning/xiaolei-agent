@@ -438,15 +438,8 @@ class ReActCoreMiddleware(BaseMiddleware):
         import os as _os
         system_content += f"\n<project_root>{_os.getcwd()}</project_root>"
 
-        # ponytail: 注入可用 skill 列表，LLM 按需调用 skill 工具加载
-        try:
-            from core.multi_agent_v2.skills.skill_loader import discover_skills, format_skills_xml
-            _skills = discover_skills()
-            if _skills:
-                system_content += "\n" + format_skills_xml(_skills)
-        except Exception:
-            pass
-
+        # Skill 系统改为纯文档层：不再注入 system prompt。
+        # LLM 通过 task/orchestrate 工具调度子代理，skill 仅在显式调用 skill(name) 时加载。
         # 注入强制指令（如：文件写入失败需要重试）
         if ctx.forced_instructions:
             system_content += f"\n\n<forced_instructions>\n{ctx.forced_instructions}\n</forced_instructions>"

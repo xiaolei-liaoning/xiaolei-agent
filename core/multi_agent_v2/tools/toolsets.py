@@ -5,14 +5,14 @@
 - 一个工具必须被 toolset 引用才**暴露**给 system prompt
 - 按回合动态裁剪 (per-platform / per-env / `XIAOLEI_TOOLSETS` 环境变量)
 
-小雷版 17 内置工具分为:
+小雷版 15 核心工具 + 2 可选工具:
   file: read_file/write_file/edit_file/search_files
   terminal: execute_shell/execute_python
   web: web_search/fetch_url
   agent_core: write_todos/update_goal/git
-  skills: skill/search_history
   subagent: task/orchestrate
   viz: arbor_viz/text_analyzer
+  skills (opt-in): skill/search_history
 """
 
 from __future__ import annotations
@@ -38,15 +38,23 @@ def _core_without(*excluded, keep: Optional[List[str]] = None) -> List[str]:
 # 核心 17 工具 (对标 hermes _HERMES_CORE_TOOLS)
 # ════════════════════════════════════════════════════════════════
 
+# 核心工具（默认暴露）
 CORE_TOOLS = [
     "write_todos", "update_goal", "write_file",
     "execute_python", "execute_shell",
     "git", "fetch_url", "web_search",
     "read_file", "edit_file", "search_files",
     "arbor_viz", "text_analyzer",
-    "skill", "search_history",
     "task", "orchestrate",
 ]
+
+# Skill 工具独立 toolset — 不污染核心，需显式启用
+OPTIONAL_TOOLSETS = {
+    "skills": {
+        "description": "Load skill documents on demand (opt-in)",
+        "tools": ["skill", "search_history"],
+    },
+}
 
 # 平台 / 安全子集
 _WEBHOOK_SAFE_TOOLS = ["web_search", "fetch_url", "text_analyzer"]
