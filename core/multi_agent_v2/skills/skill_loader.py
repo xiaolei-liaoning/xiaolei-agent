@@ -28,6 +28,8 @@ SKILL_DIRS = [
     # ponytail: 部分 skill 目录是 symlink，同时搜索真实路径
     os.path.expanduser("~/.config/opencode/.opencode/skills"),
     os.path.expanduser("~/.config/opencode/.agents/skills"),
+    # 项目内置 skills（hermes 模式）：skills/<category>/<name>/SKILL.md
+    os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), "skills"),
 ]
 
 _singleton: Optional[Dict[str, SkillInfo]] = None

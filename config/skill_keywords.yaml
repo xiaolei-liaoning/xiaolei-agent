@@ -1,0 +1,148 @@
+# Skill 关键词配置 — 供 SkillDispatcher 多因子评分使用
+# 字段说明：
+#   keywords: 强关键词（命中 +1.5 分）
+#   strong_patterns: 正则词组（命中 +2.0 分）
+#   weak_keywords: 弱信号词（命中 +0.3 分）
+#   x_keywords: 反向排除词（命中 -0.5 分）
+#   priority: 基础优先级（默认 5，范围 1-10）
+
+skills:
+  analyze:
+    keywords:
+      - "分析"
+      - "分析项目"
+      - "了解项目"
+      - "查看项目"
+      - "研究项目"
+      - "子代理"
+      - "parallel"
+      - "delegate"
+    strong_patterns:
+      - "使用.*子代理.*分析"
+      - "analyze.*project"
+      - "分析.*结构"
+    weak_keywords:
+      - "代码"
+      - "架构"
+      - "模块"
+    x_keywords: []
+    priority: 8
+    description: "分析项目代码结构和依赖关系，支持子代理并行"
+
+  project_analysis:
+    keywords:
+      - "项目分析"
+      - "分析项目结构"
+      - "理解项目"
+      - "项目概览"
+    strong_patterns:
+      - "分析.*结构"
+      - "项目.*架构"
+    weak_keywords:
+      - "代码库"
+      - "源码"
+    x_keywords: []
+    priority: 7
+    description: "深度分析项目架构和依赖"
+
+  creative_writing:
+    keywords:
+      - "写"
+      - "创建"
+      - "生成"
+      - "开发"
+      - "实现"
+    strong_patterns:
+      - "写一个.*游戏"
+      - "创建.*页面"
+    weak_keywords:
+      - "代码"
+      - "文件"
+    x_keywords: []
+    priority: 6
+    description: "创意写作和代码生成"
+
+  deep_thinking:
+    keywords:
+      - "深度思考"
+      - "自主搜索"
+      - "联网查询"
+      - "研究"
+    strong_patterns:
+      - "深度.*分析"
+      - "详细.*研究"
+    weak_keywords:
+      - "最新"
+      - "信息"
+    x_keywords: []
+    priority: 7
+    description: "深度思考和联网研究"
+
+  web_scraper:
+    keywords:
+      - "爬取"
+      - "抓取"
+      - "采集"
+      - "爬虫"
+    strong_patterns:
+      - "爬取.*数据"
+      - "抓取.*网页"
+    weak_keywords:
+      - "网站"
+      - "内容"
+    x_keywords: []
+    priority: 6
+    description: "网页爬取和数据采集"
+
+  weather:
+    keywords:
+      - "天气"
+      - "temperature"
+      - "气温"
+    strong_patterns: []
+    weak_keywords: []
+    x_keywords: []
+    priority: 5
+    description: "天气查询"
+
+  translator:
+    keywords:
+      - "翻译"
+      - "translate"
+    strong_patterns: []
+    weak_keywords: []
+    x_keywords: []
+    priority: 5
+    description: "文本翻译"
+
+  system_toolbox:
+    keywords:
+      - "系统工具"
+      - "工具箱"
+      - "系统操作"
+    strong_patterns: []
+    weak_keywords: []
+    x_keywords: []
+    priority: 5
+    description: "系统工具和操作"
+
+multi_step_indicators:
+  - "先"
+  - "然后"
+  - "接着"
+  - "再"
+  - "最后"
+
+lang_map:
+  英文: en
+  中文: zh
+
+intent_skill_map:
+  "code_analysis":
+    keywords: ["分析", "理解", "研究", "查看"]
+    skill: analyze
+    min_hits: 2
+  "content_generation":
+    keywords: ["写", "创建", "生成", "开发"]
+    skill: creative_writing
+    min_hits: 2
