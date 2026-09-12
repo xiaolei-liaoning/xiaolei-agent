@@ -43,20 +43,20 @@ class BaseSkill:
 
 # BaseSkill → 相关的 Expert 类别（缩小216个的匹配范围）
 BASE_TO_EXPERT_CATEGORIES = {
-    "project_analyzer": ["engineering", "specialized", "backend", "fullstack", "system-architecture", "frontend", "database", "ai-ml", "generative-ai", "data-engineering", "devops-cloud", "security", "performance", "debugging-quality", "mobile", "context-engineering", "evaluation", "agent-workflows"],
-    "web_scraper":    ["engineering", "specialized", "marketing", "backend"],
-    "data_analyst":   ["engineering", "finance", "specialized", "supply_chain", "data-engineering", "evaluation", "database"],
-    "deep_thinker":   ["specialized", "product_design", "engineering", "strategy", "system-architecture", "generative-ai", "ai-ml"],
+    "project_analyzer": ["specialized", "backend", "fullstack", "system-architecture", "frontend", "database", "ai-ml", "generative-ai", "data-engineering", "devops-cloud", "security", "performance", "debugging-quality", "mobile", "context-engineering", "evaluation", "agent-workflows"],
+    "web_scraper":    ["specialized", "marketing", "backend"],
+    "data_analyst":   ["finance", "specialized", "supply_chain", "data-engineering", "evaluation", "database"],
+    "deep_thinker":   ["specialized", "product_design", "strategy", "system-architecture", "generative-ai", "ai-ml"],
     "translator":     ["specialized", "support"],
     "weather_expert": ["specialized"],
-    "system_toolbox": ["engineering", "support", "security", "backend", "devops-cloud", "performance", "debugging-quality"],
+    "system_toolbox": ["support", "security", "backend", "devops-cloud", "performance", "debugging-quality"],
     "creative":       ["design", "game_development", "marketing", "paid_media", "frontend", "fullstack"],
     "general":        [],
 }
 
 # YAML 分类名 → agency-agents-zh 目录名映射
 CATEGORY_TO_DIR = {
-    "engineering": "engineering",
+    "engineering": "system-architecture",
     "marketing": "marketing",
     "product_design": "product",
     "design": "design",
