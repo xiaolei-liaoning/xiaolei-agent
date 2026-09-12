@@ -112,6 +112,10 @@ class RunContext:
     # 子代理标记（由 spawn.py 设置，用于区分主/子代理）
     _is_subagent: bool = False
 
+    # ── 记忆注入缓存（避免同 session 内重复查询 coordinator）──
+    # 记录上次注入记忆时的 tool_results 长度，只有当有新工具结果时才重新注入
+    _memory_injected_at_tool_count: int = 0
+
     # MiddlewareChain 引用（由 run_react 设置）
     _chain: Optional[Any] = None
     _pending_messages: Optional[List[Dict]] = None
