@@ -2138,13 +2138,7 @@ _SANDBOX_TOOL_DEFS = [
         name="task",
         server=SERVER_BUILTIN,
         tags=["subagent", "task"],
-        description="Launch a new agent to handle complex, multistep tasks autonomously.\n\n"
-                    "WHEN TO USE (强烈推荐): 复杂/多步任务、多文件代码库探索、项目分析、"
-                    "需要并行调研多个模块时，优先用 task 派子代理，别自己逐个 read_file 死磕。"
-                    "子代理完成后再汇总结果。\n"
-                    "Available agent types: explore, build, general, analyze.\n"
-                    "Use the explore agent for codebase exploration, build for editing, "
-                    "general for complex multi-step research, analyze for deep analysis.",
+        description=_builder.get_tool_desc("task"),
         parameters={
             "type": "object",
             "properties": {
@@ -2170,9 +2164,7 @@ _SANDBOX_TOOL_DEFS = [
         name="orchestrate",
         server=SERVER_BUILTIN,
         tags=["subagent", "orchestrate"],
-        description="Run multiple tasks in parallel or with dependencies using sub-agents.\n\n"
-                    "Use this for complex multi-step workflows. Each task can specify "
-                    "agent type, dependencies, and a detailed prompt.",
+        description=_builder.get_tool_desc("orchestrate"),
         parameters={
             "type": "object",
             "properties": {
