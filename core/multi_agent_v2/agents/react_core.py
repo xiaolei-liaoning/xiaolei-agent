@@ -34,12 +34,10 @@ from core.multi_agent_v2.agents.task_progress import TaskProgress
 # deepseek Ralph 语义：complete 需要 evidence + 无 nextSteps；带进行时意图的文本
 # 不构成有效完成（真实测试：'文件已写入桌面。现在我验证 JS 逻辑...' 被误存为最终结果）
 _PENDING_INTENT_RE = re.compile(
-    # 匹配进行时意图，但排除回答型句式（如"让我告诉你"/"I'll tell you"）
-    r"(?!(?:让我告诉你|I'll tell you)\b)"
-    r"(现在我|接下来我?要?|"
-    r"让我(?![告诉你])|"
-    r"让我先|首先我|然后我|我(将|要|来|需要|打算|先)|"
-    r"我正在|我准备|I will|I'll|Let me|Now (let|I)|going to|about to)"
+    # 匹配进行时意图，但排除回答型句式和解释性句式
+    # 负向前瞻：排除"让我告诉你"/"I'll tell you"/"我需要"/"I need to"/"Let me answer"/"Let me explain"
+    r"(?!(?:让我告诉你|I'll tell you|我需要|I need to|Let me answer|Let me explain|Let me tell)\b)"
+    r"(?:现在我|接下来我?要?|让我先|首先我|然后我|我正在|我准备|I will|I'm going to|I'm about to)"
 )
 from core.multi_agent_v2.tools.json_util import safe_parse_json
 from core.multi_agent_v2.prompts import get_builder
