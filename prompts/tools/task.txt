@@ -1,4 +1,4 @@
-@requires: agents/explore, agents/build, agents/analyze, agents/general
+@requires: agents/explore, agents/build, agents/analyze, agents/read_write, agents/general
 
 Launch a new agent to handle complex, multistep tasks autonomously.
 
@@ -7,9 +7,16 @@ When using the Task tool, you must specify a subagent_type parameter to select w
 WHEN TO USE (强烈推荐):
 - 复杂/多步任务、多文件代码库探索、项目分析、需要并行调研多个模块时，优先用 task 派子代理，不要自己逐个 read_file 死磕。
 - 用户明确要求"子代理"、"并行"、"delegate"时，必须使用 task 工具。
-- 分析类任务（analyze profile）：如果目标项目超过50个文件或有多模块，必须用 task 派子代理并行分析，不要串行读文件。
+- 分析类任务（analyze/read_write profile）：如果目标项目超过50个文件或有多模块，必须用 task 派子代理并行分析，不要串行读文件。
 - 子代理完成后你负责汇总结果，再继续下一步。
 - 多个独立模块可并发派多个子代理（一条消息里多次调用 task）。
+
+Profile 选择指南:
+- explore: 只读搜索，不写文件（找文件、搜代码）
+- analyze: 只读分析，产出发现但不写文件（深度代码分析）
+- read_write: 能读能写能派子代理（推荐用于完整分析报告场景）
+- build: 写代码、修bug，不能派子代理（单一实现任务）
+- general: 全能力，不能派子代理（通用任务）
 
 Usage notes:
 1. Launch multiple agents concurrently whenever possible — use a single message with multiple tool calls.
@@ -24,4 +31,5 @@ Available agent types:
 {{agents/explore}}
 {{agents/build}}
 {{agents/analyze}}
+{{agents/read_write}}
 {{agents/general}}
