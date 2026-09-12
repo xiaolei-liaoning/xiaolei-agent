@@ -65,6 +65,12 @@ class MemoryMiddleware(BaseMiddleware):
 
         if coordinator is not None:
             try:
+                # 缓存检查：只有当有新工具结果时（tool_results 长度变化）才重新注入
+                # 避免同 session 内多个 reasoning step 重复查询 coordinator
+                current_tool_count = len(ctx.tool_results)
+                if ctx._memory_injected_at_tool_count == current_tool_count:
+                    return  # 记忆未变化，跳过重复注入
+
                 # 修复(B1): 透传当前会话 id —— STM 注入只取当前会话条目，
                 # 跨会话烂尾任务不再复活
                 context = await coordinator.get_context_for_llm(
@@ -77,6 +83,8 @@ class MemoryMiddleware(BaseMiddleware):
                     )
                     if len(ctx.knowledge_context) > 20000:
                         ctx.knowledge_context = ctx.knowledge_context[-20000:]
+                    # 更新缓存：记录本次注入时的 tool_results 长度
+                    ctx._memory_injected_at_tool_count = current_tool_count
                     # 记忆分层显示（可观测性）: 解析 <memory type=...> 标记，统计各层字符数
                     _detail = _memory_layer_stats(context)
                     if _detail:
@@ -84,6 +92,8 @@ class MemoryMiddleware(BaseMiddleware):
                     else:
                         print(f"    \033[1;35m🧠 记忆: {len(context)} 字符上下文已注入\033[0m")
                 else:
+                    # 即使无记忆也更新缓存，避免每轮都查
+                    ctx._memory_injected_at_tool_count = current_tool_count
                     print(f"    \033[2;35m🧠 记忆: 无相关历史\033[0m")
             except Exception as e:
                 logger.debug(f"记忆检索失败: {e}")
